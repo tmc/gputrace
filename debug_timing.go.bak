@@ -1,0 +1,118 @@
+// +build ignore
+
+package main
+
+import (
+	"encoding/binary"
+	"fmt"
+	"log"
+	"os"
+
+	"github.com/tmc/mlx-go/experiments/gputrace"
+)
+
+func main() {
+	if len(os.Args) < 2 {
+		fmt.Fprintf(os.Stderr, "Usage: %s <path-to-.gputrace>\n", os.Args[0])
+		os.Exit(1)
+	}
+
+	tracePath := os.Args[1]
+
+	trace, err := gputrace.Open(tracePath)
+	if err != nil {
+		log.Fatalf("Failed to open trace: %v", err)
+	}
+
+	fmt.Printf("=== Debugging Timing Extraction ===\n\n")
+
+	for _, label := range trace.EncoderLabels {
+		fmt.Printf("Label: %q\n", label)
+
+		// Find label offset
+		offset := findLabelOffset(trace.CaptureData, label)
+		if offset == -1 {
+			fmt.Printf("  ERROR: Label not found in capture data\n\n")
+			continue
+		}
+
+		fmt.Printf("  Offset: 0x%x (%d)\n", offset, offset)
+
+		// Search for timestamps
+		fmt.Printf("  Searching for start timestamp (40-96 bytes before):\n")
+		startTime, startFound := findTimestampBefore(trace.CaptureData, offset, 40, 96)
+		if startFound {
+			fmt.Printf("    FOUND: %d (0x%x)\n", startTime, startTime)
+		} else {
+			fmt.Printf("    NOT FOUND\n")
+		}
+
+		fmt.Printf("  Searching for end timestamp (0-64 bytes after label end):\n")
+		endOffset := offset + len(label)
+		endTime, endFound := findTimestampAfter(trace.CaptureData, endOffset, 0, 64)
+		if endFound {
+			fmt.Printf("    FOUND: %d (0x%x)\n", endTime, endTime)
+		} else {
+			fmt.Printf("    NOT FOUND\n")
+		}
+
+		if startFound && endFound {
+			duration := endTime - startTime
+			durationMs := float64(duration) / 1e6
+			fmt.Printf("  Duration: %.2f ms\n", durationMs)
+		}
+
+		fmt.Println()
+	}
+}
+
+func findLabelOffset(data []byte, label string) int {
+	labelBytes := []byte(label)
+	for i := 0; i <= len(data)-len(labelBytes); i++ {
+		match := true
+		for j := 0; j < len(labelBytes); j++ {
+			if data[i+j] != labelBytes[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return i
+		}
+	}
+	return -1
+}
+
+func findTimestampBefore(data []byte, offset, minDelta, maxDelta int) (uint64, bool) {
+	for delta := minDelta; delta <= maxDelta; delta += 8 {
+		checkOffset := offset - delta
+		if checkOffset < 0 || checkOffset+8 > len(data) {
+			continue
+		}
+
+		val := binary.LittleEndian.Uint64(data[checkOffset : checkOffset+8])
+		if isValidMachTimestamp(val) {
+			return val, true
+		}
+	}
+	return 0, false
+}
+
+func findTimestampAfter(data []byte, offset, minDelta, maxDelta int) (uint64, bool) {
+	for delta := minDelta; delta <= maxDelta; delta += 8 {
+		checkOffset := offset + delta
+		if checkOffset < 0 || checkOffset+8 > len(data) {
+			continue
+		}
+
+		val := binary.LittleEndian.Uint64(data[checkOffset : checkOffset+8])
+		if isValidMachTimestamp(val) {
+			return val, true
+		}
+	}
+	return 0, false
+}
+
+func isValidMachTimestamp(val uint64) bool {
+	return val > 1000000000000000 && val < 10000000000000000000
+}
