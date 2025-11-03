@@ -542,6 +542,58 @@ func formatBufferCreation(w io.Writer, data []byte, startCallNum int) int {
 	return callNum
 }
 
+// parseCSRecordsFromInit parses CS records from init section to get encoder labels.
+func parseCSRecordsFromInit(data []byte) map[uint64]string {
+	labels := make(map[uint64]string)
+
+	// CS record structure:
+	// +0x00: size (4 bytes) - typically 0x08
+	// +0x04: "CS" magic (2 bytes) + padding (2 bytes)
+	// +0x08: address (8 bytes)
+	// +0x10: label string (null-terminated)
+
+	for i := 0; i < len(data)-20; i++ {
+		// Look for CS record marker
+		if data[i] == 0x43 && data[i+1] == 0x53 {
+			// Extract address (8 bytes after CS marker)
+			addressStart := i + 4
+			if addressStart+8 > len(data) {
+				continue
+			}
+			address := binary.LittleEndian.Uint64(data[addressStart : addressStart+8])
+
+			// Extract label (starts 12 bytes after CS marker)
+			labelStart := i + 12
+			if labelStart >= len(data) {
+				continue
+			}
+
+			// Find null terminator for label
+			labelEnd := labelStart
+			for labelEnd < len(data) && data[labelEnd] != 0 && labelEnd-labelStart < 128 {
+				labelEnd++
+			}
+
+			if labelEnd > labelStart {
+				labelBytes := data[labelStart:labelEnd]
+				// Check if it looks like a valid label (printable ASCII)
+				validLabel := true
+				for _, b := range labelBytes {
+					if b < 32 || b > 126 {
+						validLabel = false
+						break
+					}
+				}
+				if validLabel {
+					labels[address] = string(labelBytes)
+				}
+			}
+		}
+	}
+
+	return labels
+}
+
 // formatCommandBufferWithEncoders formats a command buffer with all encoders properly separated.
 func (t *Trace) formatCommandBufferWithEncoders(w io.Writer, data []byte, allCBs []*CommandBuffer, cbIdx int, startCallNum int) int {
 	cb := allCBs[cbIdx]
@@ -588,16 +640,17 @@ func (t *Trace) formatCommandBufferWithEncoders(w io.Writer, data []byte, allCBs
 	fmt.Fprintf(w, "#%d 0x%x = [0x%x commandBuffer]\n", callNum, cbAddr, queueAddr)
 	callNum++
 
-	// Parse all encoders (Cul markers)
-	encoders, _ := parseEncodersInRegion(cbData, cb.Offset)
+	// Use kernel names as encoder list (from init section parsing)
+	// Each kernel name represents an encoder with that label
+	numEncoders := len(t.KernelNames)
 
-	// If no encoders found, return early (shouldn't happen in valid traces)
-	if len(encoders) == 0 {
-		fmt.Fprintf(w, "#%d [commit]\n", callNum)
-		callNum++
-		fmt.Fprintf(w, "#%d [waitUntilCompleted]\n", callNum)
-		callNum++
-		return callNum
+	// If no kernel names, try to detect encoder count from dispatches
+	if numEncoders == 0 {
+		dispatches, _ := t.ParseDispatchInRegion(cbData, cb.Offset)
+		numEncoders = len(dispatches)
+		if numEncoders == 0 {
+			numEncoders = 1 // At least one encoder
+		}
 	}
 
 	// Parse all buffer bindings and dispatches
@@ -637,16 +690,16 @@ func (t *Trace) formatCommandBufferWithEncoders(w io.Writer, data []byte, allCBs
 	// Distribute bindings and dispatches across encoders
 	// Simple heuristic: divide evenly, with last encoder getting remainder
 	bindingsPerEncoder := 1
-	if len(encoders) > 0 {
-		bindingsPerEncoder = len(bindings) / len(encoders)
+	if numEncoders > 0 {
+		bindingsPerEncoder = len(bindings) / numEncoders
 		if bindingsPerEncoder == 0 {
 			bindingsPerEncoder = 1
 		}
 	}
 
 	dispatchesPerEncoder := 1
-	if len(encoders) > 0 {
-		dispatchesPerEncoder = len(dispatches) / len(encoders)
+	if numEncoders > 0 {
+		dispatchesPerEncoder = len(dispatches) / numEncoders
 		if dispatchesPerEncoder == 0 {
 			dispatchesPerEncoder = 1
 		}
@@ -656,7 +709,7 @@ func (t *Trace) formatCommandBufferWithEncoders(w io.Writer, data []byte, allCBs
 	dispatchIdx := 0
 
 	// Format each encoder
-	for encIdx, encoder := range encoders {
+	for encIdx := 0; encIdx < numEncoders; encIdx++ {
 		// Get label for this encoder
 		label := ""
 		if encIdx < len(t.KernelNames) {
@@ -667,7 +720,7 @@ func (t *Trace) formatCommandBufferWithEncoders(w io.Writer, data []byte, allCBs
 		if label != "" {
 			fmt.Fprintf(w, "\t#%d %s = [computeCommandEncoder]\n", callNum, label)
 		} else {
-			fmt.Fprintf(w, "\t#%d 0x%x = [computeCommandEncoder]\n", callNum, encoder.Address)
+			fmt.Fprintf(w, "\t#%d encoder_%d = [computeCommandEncoder]\n", callNum, encIdx)
 		}
 		callNum++
 
@@ -683,7 +736,7 @@ func (t *Trace) formatCommandBufferWithEncoders(w io.Writer, data []byte, allCBs
 
 		// Determine this encoder's bindings
 		endBindingIdx := bindingIdx + bindingsPerEncoder
-		if encIdx == len(encoders)-1 {
+		if encIdx == numEncoders-1 {
 			// Last encoder gets all remaining
 			endBindingIdx = len(bindings)
 		} else if endBindingIdx > len(bindings) {
@@ -701,7 +754,7 @@ func (t *Trace) formatCommandBufferWithEncoders(w io.Writer, data []byte, allCBs
 
 		// Determine this encoder's dispatches
 		endDispatchIdx := dispatchIdx + dispatchesPerEncoder
-		if encIdx == len(encoders)-1 {
+		if encIdx == numEncoders-1 {
 			endDispatchIdx = len(dispatches)
 		} else if endDispatchIdx > len(dispatches) {
 			endDispatchIdx = len(dispatches)
