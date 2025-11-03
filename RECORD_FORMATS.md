@@ -11,7 +11,18 @@ GPU trace directories contain:
 - `device-resources-0xADDRESS` - Device resource snapshots with MTSP format (1.6MB typical)
 - `delta-device-resources-0xADDRESS` - Delta/diff files (420B typical)
 - `MTLBuffer-XXXX-Y` - Metal buffer snapshots (Y=0 is data, Y=1,2 are symlinks)
-- Hex-named files (e.g., `FE52ED69B41ABB45`) - Additional resource files (varies, up to 2.8MB)
+- `store0` - zlib-compressed file (typically all zeros - no timing data stored)
+- Hex-named files (e.g., `FE52ED69B41ABB45`) - Metal shader libraries/pipeline states
+- `.gpuprofiler_raw/` - (Optional) Hardware performance counters if profiling enabled (~6GB)
+
+### ⚠️ Important: No Timing Data in Records
+
+**MTSP records contain command structure, NOT execution timing.**
+
+The records document what GPU commands were submitted, but not how long they took to execute. For timing information:
+- Xcode Instruments: Replays the workload with performance counters
+- This library: Uses kdebug events, signposts, or synthetic estimates
+- See [INSTRUMENTS_TIMING_INVESTIGATION.md](./INSTRUMENTS_TIMING_INVESTIGATION.md) for details
 
 ### Metadata File Format
 
@@ -126,7 +137,67 @@ Example from capture:
           ^^^^^^^^^^^ C  U  U  U
 ```
 
-### 4. "C" (0x43) Records - Encoder/Dispatch Records?
+### 4. "CS" - Command Submission Records ⭐ **Key Discovery**
+
+**CS records mark encoder boundaries and contain kernel names or pipeline state UUIDs.**
+
+```
+Format:
+[preceder: 4 bytes] [CS marker: 0x43 0x53 0x00 0x00] [address: 8 bytes] [identifier: null-terminated string]
+
+Preceder values:
+- 0x04000000 = Pipeline state UUID follows
+- 0x09100000 = Kernel name follows
+```
+
+**Example 1 - Kernel Name**:
+```
+00004fc0  00 00 00 00 00 00 00 00  00 00 00 00 09 10 00 00
+                                                ^^^^^^^^^^^ preceder
+00004fd0  43 53 00 00 00 5e c4 74  0a 00 00 00 76 73 5f 4d
+          C  S        ^^^^^^^^^^^^ address     v  s  _  M
+00004fe0  75 6c 74 69 70 6c 79 66  6c 6f 61 74 33 32 00 00
+          u  l  t  i  p  l  y  f   l  o  a  t  3  2  \0
+
+Kernel name: "vs_Multiplyfloat32"
+```
+
+**Example 2 - Pipeline UUID**:
+```
+000004a0  00 00 00 00 00 00 00 00  00 00 00 00 04 00 00 00
+                                                ^^^^^^^^^^^ preceder
+000004b0  43 53 00 00 40 63 c4 74  0a 00 00 00 33 42 30 32
+          C  S        ^^^^^^^^^^^^ address     3  B  0  2
+000004c0  36 34 30 39 2d 37 38 39  44 2d 33 36 39 36 2d 42
+          6  4  0  9  -  7  8  9   D  -  3  6  9  6  -  B
+000004d0  45 32 41 2d 35 30 34 32  42 30 41 42 30 37 37 44
+          E  2  A  -  5  0  4  2   B  0  A  B  0  7  7  D
+
+UUID: "3B026409-789D-3696-BE2A-5042B0AB077D"
+```
+
+**Usage**:
+- CS records appear at encoder submission boundaries
+- Kernel names identify compute shader functions
+- Pipeline UUIDs link to compiled pipeline states
+- Address field provides correlation with other records
+- Essential for matching encoders to actual GPU kernels
+
+**API**:
+```go
+// Parse all CS records
+records, _ := trace.ParseCSRecords()
+
+// Get only kernel names
+kernels, _ := trace.GetKernelNameCSRecords()
+
+// Get only pipeline UUIDs
+uuids, _ := trace.GetUUIDCSRecords()
+```
+
+See `cs_records.go` for implementation details.
+
+### 5. "C" (0x43) Records - Encoder/Dispatch Records
 ```
 Offset  Size  Description
 +0x00   4     Length (varies: 0x0E, 0x20, etc.)
@@ -147,10 +218,11 @@ Example from capture:
 
 | Marker | Hex | Purpose | Size Pattern |
 |--------|-----|---------|--------------|
-| MTSP | 4D 54 53 50 | File header | Fixed |
+| MTSP | 4D 74 53 50 | File header | Fixed |
 | Culul | 43 75 6c 75 6c | Command buffer | ~116 bytes |
 | CtU<b>ulul | 43 74 55 3c 62 3e 75 6c 75 6c | Buffer binding | Variable |
-| CUUU | 43 55 55 55 | Unknown | Variable |
+| CUUU | 43 55 55 55 | Command buffer UUID | Variable |
+| **CS** | **43 53 00 00** | **Command submission (kernel/pipeline)** | **Variable** |
 | C | 43 00 00 00 | Encoder/dispatch | Variable |
 
 ## Command Buffer Counting
