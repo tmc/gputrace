@@ -6,6 +6,8 @@ import (
 
 // ToPprof converts GPU trace timing directly to pprof format.
 // This uses the correct pprof API (strings are strings, not indices).
+//
+// Deprecated: Use ToPprofWithMetrics for better timing accuracy and aggregation.
 func (t *Trace) ToPprof(timings []*EncoderTiming) (*profile.Profile, error) {
 	prof := &profile.Profile{
 		SampleType: []*profile.ValueType{
