@@ -269,8 +269,9 @@ func (t *Trace) BuildHierarchicalProfile(timings []*EncoderTiming) string {
 	return output
 }
 
-// buildKernelMap maps encoder labels to kernel function names.
-func (t *Trace) buildKernelMap() map[string]string {
+// buildKernelMapTiming maps encoder labels to kernel function names (timing.go version).
+// Note: pprof_with_source.go has the canonical buildKernelMap implementation.
+func (t *Trace) buildKernelMapTiming() map[string]string {
 	// Based on our test data:
 	// Stage1_Normalize -> step1_normalize
 	// Stage2_ReLU -> step2_apply_relu
@@ -282,7 +283,7 @@ func (t *Trace) buildKernelMap() map[string]string {
 	for _, label := range t.EncoderLabels {
 		for _, kernel := range t.KernelNames {
 			// Check if kernel name is related to label
-			if matchesEncoderLabel(label, kernel) {
+			if matchesEncoderLabelTiming(label, kernel) {
 				m[label] = kernel
 				break
 			}
@@ -292,8 +293,8 @@ func (t *Trace) buildKernelMap() map[string]string {
 	return m
 }
 
-// matchesEncoderLabel checks if a kernel name matches an encoder label.
-func matchesEncoderLabel(label, kernel string) bool {
+// matchesEncoderLabelTiming checks if a kernel name matches an encoder label (timing.go version).
+func matchesEncoderLabelTiming(label, kernel string) bool {
 	// Stage1_Normalize -> step1_normalize
 	// Stage2_ReLU -> step2_apply_relu
 	// Stage3_Scale -> step3_scale_output

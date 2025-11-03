@@ -32,6 +32,76 @@ type MTSPRecord struct {
 	Values     []uint32 // Embedded values
 }
 
+// CtRecord represents a parsed Ct (Command) record containing
+// pipeline state, function, and buffer binding information.
+type CtRecord struct {
+	RecordSize     uint32   // Total record size in bytes
+	CommandFlags   uint32   // Command type/flags
+	PipelineAddr   uint64   // Pipeline state object address
+	FunctionAddr   uint64   // Metal function address
+	BindingCount   uint32   // Number of resource bindings
+	Stride         uint32   // Binding array stride (always 8)
+	BufferBindings []uint64 // Array of buffer addresses
+}
+
+// CiRecord represents a parsed Ci (Compute Indirect / ICB) record.
+// These records appear to reference indirect command buffers or command groups.
+// Always 52 bytes in size.
+type CiRecord struct {
+	RecordSize   uint32 // Total record size (always 52)
+	CommandFlags uint32 // Command type/flags
+	Field1       uint32 // Unknown field at offset 0x20
+	ICBAddr      uint64 // Indirect command buffer address at offset 0x28
+	Count        uint32 // Dispatch count or index at offset 0x30
+	Field2       uint32 // Unknown field at offset 0x34
+}
+
+// CululRecord represents a parsed Culul record.
+// These appear to be command buffer or indirect command buffer definitions.
+// Usually 160 bytes (sometimes 168).
+type CululRecord struct {
+	RecordSize     uint32   // Total record size (usually 160)
+	CommandFlags   uint32   // Command type/flags
+	MarkerCount    uint32   // Count at offset 0x20
+	ICBAddr        uint64   // ICB or buffer address at offset 0x28
+	Field1         uint32   // Unknown at offset 0x30
+	Field2         uint32   // Unknown at offset 0x34
+	Field3         uint32   // Unknown at offset 0x38
+	PayloadSize    uint32   // Size field at offset 0x40
+	PayloadAddr    uint64   // Payload address at offset 0x48
+	ArrayCount     uint32   // Number of array elements at offset 0x50
+	ArrayStride    uint32   // Array stride at offset 0x54
+	ArrayAddresses []uint64 // Array of addresses starting at offset 0x58
+}
+
+// CulRecord represents a parsed Cul record.
+// Variable size, appears to contain buffer or resource bindings.
+type CulRecord struct {
+	RecordSize     uint32   // Total record size
+	CommandFlags   uint32   // Command type/flags
+	MarkerCount    uint32   // Count at offset 0x20
+	BufferAddr     uint64   // Buffer address at offset 0x28
+	Field1         uint32   // Unknown at offset 0x30
+	Field2         uint32   // Unknown at offset 0x34
+	PayloadSize    uint32   // Size field (when present)
+	PayloadAddr    uint64   // Payload address (when present)
+	ArrayCount     uint32   // Number of array elements
+	ArrayStride    uint32   // Array stride
+	ArrayAddresses []uint64 // Array of addresses
+}
+
+// CuwRecord represents a parsed Cuw record.
+// Two common sizes: 56 bytes (66.4%) and 68 bytes (33.2%).
+// The 68-byte variant appears 4,397 times (same as Ci count).
+type CuwRecord struct {
+	RecordSize   uint32 // Total record size (56, 68, or 124)
+	CommandFlags uint32 // Command type/flags
+	MarkerCount  uint32 // Count at offset 0x20
+	BufferAddr   uint64 // Buffer address at offset 0x28
+	Field1       uint64 // Unknown at offset 0x30 (size 68+)
+	Field2       uint32 // Unknown (size 68+)
+}
+
 // ParseMTSPRecords parses records from the capture file.
 func (t *Trace) ParseMTSPRecords() ([]MTSPRecord, error) {
 	data := t.CaptureData
@@ -289,4 +359,249 @@ func (t *Trace) AnalyzeMTSPRecords() (string, error) {
 	}
 
 	return report, nil
+}
+
+// ParseCtRecord parses a Ct (Command) record to extract pipeline state,
+// function address, and buffer bindings.
+//
+// Ct Record Structure:
+//   Offset | Size | Type    | Field Name
+//   -------|------|---------|------------------
+//   0x00   | 4    | uint32  | record_size
+//   0x04   | 4    | uint32  | command_flags
+//   0x08   | 24   | bytes   | reserved
+//   0x20   | 4    | uint32  | marker1 (0x00000008)
+//   0x24   | 4    | char[4] | marker2 ("Ct\0\0")
+//   0x28   | 8    | uint64  | pipeline_addr
+//   0x30   | 8    | uint64  | function_addr
+//   0x38   | 4    | uint32  | binding_count
+//   0x3c   | 4    | uint32  | stride (always 8)
+//   0x40   | 8*N  | uint64[]| buffer_bindings
+func (r *MTSPRecord) ParseCtRecord() (*CtRecord, error) {
+	if r.Type != RecordTypeCt {
+		return nil, fmt.Errorf("not a Ct record (type=%s)", r.Type)
+	}
+
+	if len(r.Data) < 0x40 {
+		return nil, fmt.Errorf("Ct record too small: %d bytes (need at least 64)", len(r.Data))
+	}
+
+	ct := &CtRecord{
+		RecordSize:   binary.LittleEndian.Uint32(r.Data[0x00:0x04]),
+		CommandFlags: binary.LittleEndian.Uint32(r.Data[0x04:0x08]),
+		PipelineAddr: binary.LittleEndian.Uint64(r.Data[0x28:0x30]),
+		FunctionAddr: binary.LittleEndian.Uint64(r.Data[0x30:0x38]),
+		BindingCount: binary.LittleEndian.Uint32(r.Data[0x38:0x3c]),
+		Stride:       binary.LittleEndian.Uint32(r.Data[0x3c:0x40]),
+	}
+
+	// Validate stride (should always be 8 for uint64 addresses)
+	if ct.Stride != 8 && ct.Stride != 0 {
+		return nil, fmt.Errorf("unexpected stride value: %d (expected 8)", ct.Stride)
+	}
+
+	// Extract buffer bindings
+	ct.BufferBindings = make([]uint64, ct.BindingCount)
+	for i := uint32(0); i < ct.BindingCount; i++ {
+		offset := 0x40 + (i * 8)
+		if int(offset)+8 > len(r.Data) {
+			return nil, fmt.Errorf("binding %d out of bounds (offset=0x%x, data_len=%d)",
+				i, offset, len(r.Data))
+		}
+		ct.BufferBindings[i] = binary.LittleEndian.Uint64(r.Data[offset : offset+8])
+	}
+
+	// Validate record size matches expected size
+	expectedSize := 0x40 + (ct.BindingCount * 8)
+	if ct.RecordSize != expectedSize {
+		return nil, fmt.Errorf("record size mismatch: header says %d, expected %d (bindings=%d)",
+			ct.RecordSize, expectedSize, ct.BindingCount)
+	}
+
+	return ct, nil
+}
+
+// ParseCiRecord parses a Ci (Compute Indirect / ICB) record.
+//
+// Ci Record Structure (52 bytes):
+//   Offset | Size | Type    | Field Name
+//   -------|------|---------|------------------
+//   0x00   | 4    | uint32  | record_size (always 52)
+//   0x04   | 4    | uint32  | command_flags
+//   0x08   | 24   | bytes   | reserved
+//   0x20   | 4    | uint32  | field1
+//   0x24   | 4    | char[4] | marker ("Ci\0\0")
+//   0x28   | 8    | uint64  | icb_addr
+//   0x30   | 4    | uint32  | count
+//   0x34   | 4    | uint32  | field2
+func (r *MTSPRecord) ParseCiRecord() (*CiRecord, error) {
+	if r.Type != RecordTypeCi {
+		return nil, fmt.Errorf("not a Ci record (type=%s)", r.Type)
+	}
+
+	if len(r.Data) < 52 {
+		return nil, fmt.Errorf("Ci record too small: %d bytes (expected 52)", len(r.Data))
+	}
+
+	ci := &CiRecord{
+		RecordSize:   binary.LittleEndian.Uint32(r.Data[0x00:0x04]),
+		CommandFlags: binary.LittleEndian.Uint32(r.Data[0x04:0x08]),
+		Field1:       binary.LittleEndian.Uint32(r.Data[0x20:0x24]),
+		ICBAddr:      binary.LittleEndian.Uint64(r.Data[0x28:0x30]),
+		Count:        binary.LittleEndian.Uint32(r.Data[0x30:0x34]),
+		Field2:       binary.LittleEndian.Uint32(r.Data[0x34:0x38]),
+	}
+
+	if ci.RecordSize != 52 {
+		return nil, fmt.Errorf("unexpected Ci record size: %d (expected 52)", ci.RecordSize)
+	}
+
+	return ci, nil
+}
+
+// ParseCululRecord parses a Culul (Command Buffer / ICB Definition) record.
+//
+// Culul Record Structure (usually 160 bytes):
+//   Offset | Size | Type    | Field Name
+//   -------|------|---------|------------------
+//   0x00   | 4    | uint32  | record_size (160 or 168)
+//   0x04   | 4    | uint32  | command_flags
+//   0x08   | 24   | bytes   | reserved
+//   0x20   | 4    | uint32  | marker_count
+//   0x24   | 8    | char[]  | marker ("Culul\0\0\0")
+//   0x28   | 8    | uint64  | icb_addr
+//   0x30   | 4    | uint32  | field1
+//   0x34   | 4    | uint32  | field2
+//   0x38   | 4    | uint32  | field3
+//   0x40   | 4    | uint32  | payload_size
+//   0x48   | 8    | uint64  | payload_addr
+//   0x50   | 4    | uint32  | array_count
+//   0x54   | 4    | uint32  | array_stride
+//   0x58   | 8*N  | uint64[]| array_addresses
+func (r *MTSPRecord) ParseCululRecord() (*CululRecord, error) {
+	if r.Type != RecordTypeCulul {
+		return nil, fmt.Errorf("not a Culul record (type=%s)", r.Type)
+	}
+
+	if len(r.Data) < 0x58 {
+		return nil, fmt.Errorf("Culul record too small: %d bytes (need at least 88)", len(r.Data))
+	}
+
+	culul := &CululRecord{
+		RecordSize:   binary.LittleEndian.Uint32(r.Data[0x00:0x04]),
+		CommandFlags: binary.LittleEndian.Uint32(r.Data[0x04:0x08]),
+		MarkerCount:  binary.LittleEndian.Uint32(r.Data[0x20:0x24]),
+		ICBAddr:      binary.LittleEndian.Uint64(r.Data[0x28:0x30]),
+		Field1:       binary.LittleEndian.Uint32(r.Data[0x30:0x34]),
+		Field2:       binary.LittleEndian.Uint32(r.Data[0x34:0x38]),
+		Field3:       binary.LittleEndian.Uint32(r.Data[0x38:0x3c]),
+		PayloadSize:  binary.LittleEndian.Uint32(r.Data[0x40:0x44]),
+		PayloadAddr:  binary.LittleEndian.Uint64(r.Data[0x48:0x50]),
+		ArrayCount:   binary.LittleEndian.Uint32(r.Data[0x50:0x54]),
+		ArrayStride:  binary.LittleEndian.Uint32(r.Data[0x54:0x58]),
+	}
+
+	// Extract array addresses
+	culul.ArrayAddresses = make([]uint64, culul.ArrayCount)
+	for i := uint32(0); i < culul.ArrayCount; i++ {
+		offset := 0x58 + (i * 8)
+		if int(offset)+8 > len(r.Data) {
+			return nil, fmt.Errorf("array element %d out of bounds (offset=0x%x, data_len=%d)",
+				i, offset, len(r.Data))
+		}
+		culul.ArrayAddresses[i] = binary.LittleEndian.Uint64(r.Data[offset : offset+8])
+	}
+
+	return culul, nil
+}
+
+// ParseCulRecord parses a Cul (Command / Resource Binding) record.
+//
+// Cul Record Structure (variable size):
+//   Similar to Culul but with variable payload structure
+func (r *MTSPRecord) ParseCulRecord() (*CulRecord, error) {
+	if r.Type != RecordTypeCul {
+		return nil, fmt.Errorf("not a Cul record (type=%s)", r.Type)
+	}
+
+	if len(r.Data) < 0x38 {
+		return nil, fmt.Errorf("Cul record too small: %d bytes", len(r.Data))
+	}
+
+	cul := &CulRecord{
+		RecordSize:   binary.LittleEndian.Uint32(r.Data[0x00:0x04]),
+		CommandFlags: binary.LittleEndian.Uint32(r.Data[0x04:0x08]),
+		MarkerCount:  binary.LittleEndian.Uint32(r.Data[0x20:0x24]),
+		BufferAddr:   binary.LittleEndian.Uint64(r.Data[0x28:0x30]),
+		Field1:       binary.LittleEndian.Uint32(r.Data[0x30:0x34]),
+		Field2:       binary.LittleEndian.Uint32(r.Data[0x34:0x38]),
+	}
+
+	// For larger records, try to parse payload and array
+	if len(r.Data) >= 0x48 {
+		cul.PayloadSize = binary.LittleEndian.Uint32(r.Data[0x40:0x44])
+		if len(r.Data) >= 0x50 {
+			cul.PayloadAddr = binary.LittleEndian.Uint64(r.Data[0x48:0x50])
+		}
+	}
+
+	// Try to find array section
+	if len(r.Data) >= 0x58 {
+		cul.ArrayCount = binary.LittleEndian.Uint32(r.Data[0x50:0x54])
+		cul.ArrayStride = binary.LittleEndian.Uint32(r.Data[0x54:0x58])
+
+		// Extract array addresses if present
+		if cul.ArrayCount > 0 && cul.ArrayCount < 1024 {
+			cul.ArrayAddresses = make([]uint64, 0, cul.ArrayCount)
+			for i := uint32(0); i < cul.ArrayCount; i++ {
+				offset := 0x58 + (i * 8)
+				if int(offset)+8 <= len(r.Data) {
+					addr := binary.LittleEndian.Uint64(r.Data[offset : offset+8])
+					cul.ArrayAddresses = append(cul.ArrayAddresses, addr)
+				}
+			}
+		}
+	}
+
+	return cul, nil
+}
+
+// ParseCuwRecord parses a Cuw (Command Update/Write) record.
+//
+// Cuw Record Structure (56, 68, or 124 bytes):
+//   Offset | Size | Type    | Field Name
+//   -------|------|---------|------------------
+//   0x00   | 4    | uint32  | record_size
+//   0x04   | 4    | uint32  | command_flags
+//   0x08   | 24   | bytes   | reserved
+//   0x20   | 4    | uint32  | marker_count
+//   0x24   | ?    | char[]  | marker ("Cuw" or "Cuwuw")
+//   0x28   | 8    | uint64  | buffer_addr
+//   0x30   | 8    | uint64  | field1 (size 68+)
+//   0x38   | 4    | uint32  | field2 (size 68+)
+func (r *MTSPRecord) ParseCuwRecord() (*CuwRecord, error) {
+	if r.Type != RecordTypeCuw {
+		return nil, fmt.Errorf("not a Cuw record (type=%s)", r.Type)
+	}
+
+	if len(r.Data) < 0x30 {
+		return nil, fmt.Errorf("Cuw record too small: %d bytes", len(r.Data))
+	}
+
+	cuw := &CuwRecord{
+		RecordSize:   binary.LittleEndian.Uint32(r.Data[0x00:0x04]),
+		CommandFlags: binary.LittleEndian.Uint32(r.Data[0x04:0x08]),
+		MarkerCount:  binary.LittleEndian.Uint32(r.Data[0x20:0x24]),
+		BufferAddr:   binary.LittleEndian.Uint64(r.Data[0x28:0x30]),
+	}
+
+	// For size 68+ records, extract additional fields
+	if len(r.Data) >= 0x38 {
+		cuw.Field1 = binary.LittleEndian.Uint64(r.Data[0x30:0x38])
+	}
+	if len(r.Data) >= 0x3c {
+		cuw.Field2 = binary.LittleEndian.Uint32(r.Data[0x38:0x3c])
+	}
+
+	return cuw, nil
 }

@@ -277,7 +277,7 @@ func (te *TimingExtractorV2) ImprovedTimingReport(timings []*EncoderTiming) stri
 
 	for _, t := range sorted {
 		report += fmt.Sprintf("%-40s %9d ns %10.2f ms %7.1f%%\n",
-			truncate(t.Label, 40),
+			truncateV2(t.Label, 40),
 			t.DurationNs,
 			t.DurationMs,
 			t.Percentage)
@@ -338,7 +338,7 @@ func containsSubstring(s, substr string) bool {
 	return false
 }
 
-func truncate(s string, maxLen int) string {
+func truncateV2(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}

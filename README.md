@@ -21,6 +21,10 @@ This package provides utilities to extract detailed information from Metal GPU t
 - ✅ Extract buffer bindings with sizes
 - ✅ Build hierarchical execution structure
 - ✅ Convert to pprof format for analysis with standard Go tools
+- ✅ **Enhanced timing extraction** from multiple sources (kdebug, signposts, MTSP)
+- ✅ **Accurate GPU timing** using kernel debug events
+- ✅ **Shader-level profiling** with Metal AGX signposts
+- ✅ **Multi-source correlation** with quality indicators
 
 ### Output Formats
 - **pprof profiles** - Compatible with `go tool pprof`
@@ -87,17 +91,116 @@ go tool pprof -http=:8080 benchmark.pb
 
 ## Command-Line Tools
 
-### gputrace-to-pprof
+### gputrace2pprof
 
-Converts `.gputrace` files to pprof format:
+Converts `.gputrace` files to pprof format with shader-level timing breakdowns:
 
 ```bash
-go run ./cmd/gputrace-to-pprof <trace.gputrace> [output.pb]
+# Build the tool
+go build -o /tmp/gputrace2pprof ./cmd/gputrace2pprof
+
+# Convert single trace
+/tmp/gputrace2pprof trace.gputrace -o output.pprof.gz
+
+# Generate all formats (recommended)
+/tmp/gputrace2pprof trace.gputrace -all -prefix analysis
+
+# View with pprof
+go tool pprof -top analysis.gpu.pprof.gz
+go tool pprof -http=:8080 analysis.gpu.pprof.gz
 ```
 
 **Features:**
 - Extracts GPU kernel execution hierarchy
-- Creates pprof profiles with multiple sample types (`gpu_time`, `dispatches`)
+- Creates pprof profiles with shader timing breakdowns
+- Multiple output formats: hierarchical, flat, combined, text
+- Compatible with standard Go profiling tools
+- Shows which shaders consume the most GPU time
+
+See [SHADER_PPROF_GUIDE.md](./SHADER_PPROF_GUIDE.md) for complete usage guide.
+
+### enhanced-timing
+
+**NEW:** Extract accurate GPU timing using multiple data sources (kdebug, signposts, MTSP):
+
+```bash
+# Build the tool
+go build -o /tmp/enhanced-timing ./cmd/enhanced-timing
+
+# Analyze a trace with enhanced timing
+/tmp/enhanced-timing trace.gputrace
+```
+
+**Features:**
+- ✅ Accurate GPU timing from kernel debug events (most accurate)
+- ✅ Queue latency measurement (submission to execution)
+- ✅ Shader-level profiling from Metal AGX signposts
+- ✅ Multi-source correlation with quality indicators
+- ✅ Top N analysis by execution time
+
+**Example output:**
+```
+Enhanced GPU Timing Report
+==========================
+
+Total Encoders: 15
+Total Execution Time: 127.45 ms
+Total Queue Latency: 3.21 ms
+Average Execution: 8.50 ms
+Average Queue: 0.21 ms
+
+Timing Quality:
+  combined: 12  (kdebug + signpost + MTSP)
+  kdebug: 2     (kdebug only)
+  mtsp: 1       (MTSP fallback)
+
+Detailed Timing:
+Encoder                  Kernel                     Exec (ms)  Queue (ms)   Util %    Quality
+------------------------------------------------------------------------------------------------
+MatMulEncoder           affine_qmm_float16...         45.23        0.15     35.5%   combined
+SoftmaxEncoder          vv_Multiply_float16           32.10        0.28     25.2%   combined
+```
+
+See [ENHANCED_TIMING.md](./ENHANCED_TIMING.md) for complete documentation.
+
+### MTSP Analysis Tools
+
+A comprehensive suite of tools for analyzing Metal Trace Storage Protocol records:
+
+```bash
+# Parse all MTSP record types
+go run ./cmd/analyze-record-sequence trace.gputrace
+
+# Dump specific record types
+go run ./cmd/dump-record-type Ct trace.gputrace
+
+# Analyze command flags
+go run ./cmd/analyze-command-flags trace.gputrace
+
+# Count dispatches by flag type
+go run ./cmd/count-actual-dispatches trace.gputrace
+
+# Extract device resources (PSOs, functions, buffers)
+go run ./cmd/test-device-resources trace.gputrace
+
+# Performance counter analysis
+go run ./cmd/analyze-counter-structure trace.gputrace/.gpuprofiler_raw/Counters_f_0.raw
+```
+
+See [QUICK_REFERENCE.md](./QUICK_REFERENCE.md) for complete tool reference.
+
+### analyze
+
+Basic trace analysis tool:
+
+```bash
+go run ./cmd/analyze/main.go trace.gputrace
+```
+
+**Features:**
+- Lists all GPU kernel names
+- Shows encoder labels and execution order
+- Displays buffer bindings
 - Synthetic timing when real timing unavailable
 - Full compatibility with `go tool pprof`
 
@@ -234,12 +337,60 @@ Each record has:
 - Variable-length data
 
 **Record Types:**
-- `CS` - Command submission with kernel names
-- `Ct` - Command type/transition
-- `CU` - Command unknown/UUID
-- `Culul` - Command buffer marker
-- `Cuw` - Command write
-- `Ci` - Command info
+- `CS` - Command submission with encoder labels and kernel names
+- `Ct` - Compute command with pipeline state, thread groups, and buffer bindings
+- `Ci` - Indirect command buffer execution (ICB dispatch)
+- `Culul` - Indirect command buffer definition with array elements
+- `Cul` - Resource binding with buffer addresses
+- `Cuw` - Command update/write operations
+- `CU` - Command UUID/identifier
+
+**Ct Record Structure (Compute Command):**
+```
+Offset  Size  Description
+0x00    4     Record size
+0x04    4     Command flags (0xffffc01c=dispatch, 0xffffc02f=setup)
+0x28    8     Pipeline state object address
+0x30    8     Function address
+0x38    4     Buffer binding count
+0x3c    4     Stride (always 8)
+0x40    N×8   Buffer binding addresses
+```
+
+**Ci Record Structure (Indirect Command Buffer):**
+```
+Offset  Size  Description
+0x00    4     Record size (52 bytes)
+0x04    4     Command flags (0xffffc00d)
+0x28    8     ICB address
+0x30    4     Dispatch count (expands to multiple GPU dispatches)
+```
+
+See [mtsp_records.go](mtsp_records.go) for complete parsing implementation.
+
+### Performance Counter Files
+
+When traces are captured with performance counters enabled, a `.gpuprofiler_raw` directory is created containing:
+
+**Directory Structure:**
+```
+trace.gputrace.gpuprofiler_raw/
+└── Counters_f_0.raw through Counters_f_119.raw (120 files, ~6GB total)
+```
+
+**Counter File Format:**
+- Record marker: `0x4E 0x00 0x00 0x00`
+- ~20,000+ records per file
+- Variable record sizes: 69 bytes to 40KB
+- Contains GPU execution statistics:
+  - Aggregate dispatch counts (1043 total, 308 direct, 422 commands)
+  - Per-shader performance metrics
+  - Instruction counts per dispatch
+  - GPU execution timing
+
+**Key Finding:** Xcode's dispatch count (1043) comes from performance counter files, not MTSP records. MTSP tracks command submission (422 Ct records), while performance counters track GPU execution events (1043 actual dispatches after ICB expansion).
+
+See `/tmp/FINAL-DISPATCH-COUNT-ANALYSIS.md` for complete reverse engineering details.
 
 ### Buffer Entry Format
 
@@ -414,12 +565,42 @@ Contributions welcome! Areas of interest:
 - Performance optimizations
 - Documentation improvements
 
+## Documentation
+
+### Core Documentation (docs/)
+- [docs/QUICK_REFERENCE.md](./docs/QUICK_REFERENCE.md) - Quick reference for all tools
+- [docs/SHADER_PPROF_GUIDE.md](./docs/SHADER_PPROF_GUIDE.md) - Complete pprof conversion guide
+- [docs/SHADER_SOURCE_MAPPING.md](./docs/SHADER_SOURCE_MAPPING.md) - Link GPU kernels to Metal source files
+
+Documentation is also tracked in beads for better version control:
+- `bd show bd-89` - Quick reference guide
+- `bd show bd-90` - Shader pprof guide
+- `bd show bd-91` - Shader source mapping guide
+
+### Enhanced Timing System (Beads)
+
+The enhanced timing system provides:
+- Accurate GPU timing from kernel debug events
+- Queue latency measurement
+- Shader-level profiling from Metal AGX signposts
+- Multi-source correlation with quality indicators
+
+Documentation in beads:
+- `bd show bd-84` - Enhanced timing system (multi-source correlation)
+- `bd show bd-83` - kdebug code reference (15+ trace codes)
+- `bd show bd-85` - Instruments infrastructure analysis
+- `bd show bd-86` - Future enhancements roadmap
+- `bd show bd-87` - Exploration summary
+- `bd show bd-88` - Cleanup summary
+
 ## References
 
 - [Metal Performance Shaders Documentation](https://developer.apple.com/documentation/metalperformanceshaders)
 - [Metal Capture Manager](https://developer.apple.com/documentation/metal/mtlcapturemanager)
 - [pprof Documentation](https://github.com/google/pprof)
 - [Go pprof Package](https://pkg.go.dev/github.com/google/pprof/profile)
+- [kdebug man page](https://www.manpagez.com/man/1/kdebug/) - Kernel debug tracing
+- [xctrace man page](https://keith.github.io/xcode-man-pages/xctrace.1.html) - Xcode tracing tool
 
 ## License
 
