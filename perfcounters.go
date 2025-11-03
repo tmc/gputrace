@@ -71,9 +71,12 @@ func (t *Trace) ParsePerfCounters() (*PerfCounterStats, error) {
 		return nil, fmt.Errorf("no counter files found in %s", perfDir)
 	}
 
+	// Track metrics by pipeline state address
+	metricsMap := make(map[uint64]*ShaderHardwareMetrics)
+
 	// Parse each counter file
 	for _, file := range files {
-		fileStats, err := parseCounterFile(file)
+		fileStats, metrics, err := parseCounterFileWithMetrics(file)
 		if err != nil {
 			// Log but continue with other files
 			continue
@@ -81,6 +84,37 @@ func (t *Trace) ParsePerfCounters() (*PerfCounterStats, error) {
 
 		stats.TotalRecords += fileStats.TotalRecords
 		stats.FilesProcessed++
+
+		// Aggregate metrics by pipeline state
+		for _, metric := range metrics {
+			if metric.PipelineState != 0 {
+				if existing, exists := metricsMap[metric.PipelineState]; exists {
+					// Merge metrics for same pipeline state
+					existing.ExecutionCount += metric.ExecutionCount
+					existing.SIMDGroups += metric.SIMDGroups
+					// Take max for register counts (they should be the same)
+					if metric.AllocatedRegs > existing.AllocatedRegs {
+						existing.AllocatedRegs = metric.AllocatedRegs
+					}
+					if metric.HighRegister > existing.HighRegister {
+						existing.HighRegister = metric.HighRegister
+					}
+					existing.SpilledBytes += metric.SpilledBytes
+				} else {
+					metricsMap[metric.PipelineState] = metric
+				}
+			}
+		}
+	}
+
+	// Convert map to slice
+	for _, metric := range metricsMap {
+		stats.ShaderMetrics = append(stats.ShaderMetrics, *metric)
+	}
+
+	// Try to correlate with shader names from trace
+	if err := t.correlateShaderNames(stats); err == nil {
+		// Correlation succeeded, metrics now have shader names
 	}
 
 	// Set confidence based on number of files processed
@@ -103,21 +137,28 @@ type counterFileStats struct {
 	TotalRecords  int
 }
 
-// parseCounterFile parses a single performance counter file.
+// parseCounterFile parses a single performance counter file (legacy version).
 // Counter files contain GPU execution metrics in a binary format.
 func parseCounterFile(path string) (*counterFileStats, error) {
+	stats, _, err := parseCounterFileWithMetrics(path)
+	return stats, err
+}
+
+// parseCounterFileWithMetrics parses a counter file and returns both statistics and extracted metrics.
+func parseCounterFileWithMetrics(path string) (*counterFileStats, []*ShaderHardwareMetrics, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer f.Close()
 
 	data, err := io.ReadAll(f)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	stats := &counterFileStats{}
+	metrics := make([]*ShaderHardwareMetrics, 0)
 
 	// Find all records starting with 0x4E marker
 	recordStarts := findRecordBoundaries(data)
@@ -146,10 +187,52 @@ func parseCounterFile(path string) (*counterFileStats, error) {
 		// Extract metrics if this is a shader performance record
 		if record.ShaderMetric != nil {
 			stats.DispatchCount++
+			// Clone the metric to avoid pointer aliasing
+			metric := *record.ShaderMetric
+			metric.ExecutionCount = 1 // Each record represents one execution
+			metrics = append(metrics, &metric)
 		}
 	}
 
-	return stats, nil
+	return stats, metrics, nil
+}
+
+// correlateShaderNames attempts to match pipeline state addresses with shader names from the trace.
+func (t *Trace) correlateShaderNames(stats *PerfCounterStats) error {
+	// Parse command buffers to get encoder/shader information
+	commandBuffers, err := t.ParseCommandBuffers()
+	if err != nil {
+		return fmt.Errorf("parse command buffers: %w", err)
+	}
+
+	// Build map of pipeline state address to shader name
+	pipelineToName := make(map[uint64]string)
+
+	for _, cb := range commandBuffers {
+		dcb, err := t.ParseDetailedCommandBuffer(cb.Index)
+		if err != nil {
+			continue
+		}
+
+		for _, encoder := range dcb.Encoders {
+			if encoder.Address != 0 && encoder.Label != "" {
+				pipelineToName[encoder.Address] = encoder.Label
+			}
+		}
+	}
+
+	// Update shader metrics with names
+	for i := range stats.ShaderMetrics {
+		metric := &stats.ShaderMetrics[i]
+		if name, exists := pipelineToName[metric.PipelineState]; exists {
+			metric.ShaderName = name
+		} else {
+			// Use pipeline state address as fallback
+			metric.ShaderName = fmt.Sprintf("shader_0x%x", metric.PipelineState)
+		}
+	}
+
+	return nil
 }
 
 // parseCounterRecord parses a single counter record.
@@ -170,14 +253,50 @@ func parseCounterRecord(data []byte, offset int64) *CounterRecord {
 	record.RecordSize = uint32(len(data))
 
 	// Try to extract shader metrics if this looks like a shader performance record
-	// Based on Instruments data, we're looking for:
-	// - SIMD group count
-	// - Register allocation
-	// - Spill bytes
-	// These will be at specific offsets once we reverse engineer the full format
+	// Based on APS (Apple Performance Streaming) format discovered in GPUToolsReplayService
+	//
+	// The performance counter records contain hardware metrics collected by AGXGPURawCounter
+	// during shader execution. Key fields include:
+	// - SIMD group count (threadgroups executed)
+	// - Register allocation (number of registers allocated per thread)
+	// - High register (highest register index used)
+	// - Spilled bytes (register spills to memory)
+	// - ALU utilization, memory bandwidth, occupancy, etc.
+	//
+	// Format varies by record type and GPU architecture, but common patterns:
+	// - Record marker: 0x4E 0x00 0x00 0x00 at offset 0
+	// - Record type at offset 0x04 (varies by metric)
+	// - Pipeline state address typically in first 32 bytes
+	// - SIMD group counts often at fixed offsets for compute dispatch records
+	// - Register counts in shader-specific performance records
+	//
+	// Note: Full reverse engineering required for production use. This is a framework
+	// that can be extended once profiled traces are available for analysis.
 
-	// For now, just identify that this is a valid record
-	// TODO: Implement full field extraction once format is fully understood
+	// Attempt to extract metrics based on record type and size
+	if record.RecordType == 0x4E && len(data) >= 64 {
+		// This appears to be a performance metrics record
+		metrics := &ShaderHardwareMetrics{}
+
+		// Try to extract pipeline state address (commonly in first 32 bytes)
+		if len(data) >= 16 {
+			metrics.PipelineState = binary.LittleEndian.Uint64(data[8:16])
+		}
+
+		// These offsets are placeholders and need to be determined through
+		// analysis of actual .gpuprofiler_raw files from Xcode Instruments.
+		// The framework is in place to populate these fields once the format
+		// is reverse engineered:
+		//
+		// - Look for integer values in range 4-256 for register counts
+		// - Look for large values (1000s-100000s) for SIMD group counts
+		// - Look for values matching known shader configurations
+		//
+		// For now, return the record structure without populated metrics.
+		// This allows the parsing framework to work while we determine offsets.
+
+		record.ShaderMetric = metrics
+	}
 
 	return record
 }
@@ -227,4 +346,54 @@ func (t *Trace) GetDispatchCountMethod() string {
 		return "Performance Counters (100% accurate)"
 	}
 	return "MTSP Estimation (95%+ accuracy for standard workloads)"
+}
+
+// GetRegisterDataForShader returns register allocation data for a specific shader if available.
+// Returns (allocatedRegs, highRegister, spilledBytes, found).
+func (t *Trace) GetRegisterDataForShader(pipelineStateAddr uint64) (int, int, int, bool) {
+	if !t.HasPerfCounters() {
+		return 0, 0, 0, false
+	}
+
+	stats, err := t.ParsePerfCounters()
+	if err != nil {
+		return 0, 0, 0, false
+	}
+
+	// Find metrics for this pipeline state
+	for _, metric := range stats.ShaderMetrics {
+		if metric.PipelineState == pipelineStateAddr {
+			// Only return if we actually have register data
+			if metric.AllocatedRegs > 0 {
+				return metric.AllocatedRegs, metric.HighRegister, metric.SpilledBytes, true
+			}
+		}
+	}
+
+	return 0, 0, 0, false
+}
+
+// GetRegisterDataByName returns register allocation data for a shader by name.
+// Returns (allocatedRegs, highRegister, spilledBytes, found).
+func (t *Trace) GetRegisterDataByName(shaderName string) (int, int, int, bool) {
+	if !t.HasPerfCounters() {
+		return 0, 0, 0, false
+	}
+
+	stats, err := t.ParsePerfCounters()
+	if err != nil {
+		return 0, 0, 0, false
+	}
+
+	// Find metrics for this shader name
+	for _, metric := range stats.ShaderMetrics {
+		if metric.ShaderName == shaderName {
+			// Only return if we actually have register data
+			if metric.AllocatedRegs > 0 {
+				return metric.AllocatedRegs, metric.HighRegister, metric.SpilledBytes, true
+			}
+		}
+	}
+
+	return 0, 0, 0, false
 }

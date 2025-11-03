@@ -62,7 +62,8 @@ func runShaders(cmd *cobra.Command, args []string) error {
 	}
 
 	// Format as Xcode Instruments style output
-	gputrace.FormatShadersXcodeStyle(os.Stdout, report)
+	// Pass trace to enable real register data from performance counters when available
+	gputrace.FormatShadersXcodeStyle(os.Stdout, report, trace)
 
 	return nil
 }

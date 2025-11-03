@@ -588,7 +588,8 @@ func repeatStr(s string, n int) string {
 
 // FormatShadersXcodeStyle formats shader metrics in Xcode Instruments style.
 // Matches the format from GPU counters in Xcode's Instruments app.
-func FormatShadersXcodeStyle(w io.Writer, report *ShaderMetricsReport) error {
+// If trace is provided, real register data from performance counters will be used when available.
+func FormatShadersXcodeStyle(w io.Writer, report *ShaderMetricsReport, trace *Trace) error {
 	// Header matching Xcode format exactly
 	fmt.Fprintf(w, "%-8s%-60s%-12s%-24s%-16s%-24s%-16s%-16s\n",
 		"Cost", "Name", "Type", "Pipeline State",
@@ -613,24 +614,53 @@ func FormatShadersXcodeStyle(w io.Writer, report *ShaderMetricsReport) error {
 		// # SIMD Groups = total threadgroups dispatched
 		simdGroups := fmt.Sprintf("%d", metrics.TotalThreadgroups)
 
-		// Estimate allocated registers based on thread configuration
-		// Apple Silicon: ~32-256 registers depending on complexity
-		allocatedRegs := estimateAllocatedRegisters(metrics)
-		allocatedRegsStr := fmt.Sprintf("%d", allocatedRegs)
+		// Try to get real register data from performance counters
+		var allocatedRegs, highReg, spilledBytes int
+		var hasRealData bool
 
-		// High register = same as allocated for now (peak usage)
-		highReg := allocatedRegsStr
+		if trace != nil {
+			allocatedRegs, highReg, spilledBytes, hasRealData = trace.GetRegisterDataForShader(metrics.Address)
+		}
 
-		// Spilled bytes - assume 0 for now (would need actual profiler data)
-		spilledBytes := "0 bytes"
+		var allocatedRegsStr, highRegStr, spilledBytesStr string
+
+		if hasRealData {
+			// Use actual hardware-measured register data
+			allocatedRegsStr = fmt.Sprintf("%d", allocatedRegs)
+			highRegStr = fmt.Sprintf("%d", highReg)
+			if spilledBytes > 0 {
+				spilledBytesStr = formatSpilledBytes(spilledBytes)
+			} else {
+				spilledBytesStr = "0 bytes"
+			}
+		} else {
+			// Fall back to estimation
+			allocatedRegs = estimateAllocatedRegisters(metrics)
+			allocatedRegsStr = fmt.Sprintf("%d (est)", allocatedRegs)
+			highRegStr = allocatedRegsStr
+			spilledBytesStr = "0 bytes (est)"
+		}
 
 		// Print row matching Xcode format
 		fmt.Fprintf(w, "%-8s%-60s%-12s%-24s%-16s%-24s%-16s%-16s\n",
 			cost, name, shaderType, pipelineState,
-			simdGroups, allocatedRegsStr, highReg, spilledBytes)
+			simdGroups, allocatedRegsStr, highRegStr, spilledBytesStr)
 	}
 
 	return nil
+}
+
+// formatSpilledBytes formats spilled bytes in a human-readable format.
+func formatSpilledBytes(bytes int) string {
+	const KB = 1024
+	const MB = 1024 * KB
+
+	if bytes >= MB {
+		return fmt.Sprintf("%.2f MB", float64(bytes)/float64(MB))
+	} else if bytes >= KB {
+		return fmt.Sprintf("%.2f KB", float64(bytes)/float64(KB))
+	}
+	return fmt.Sprintf("%d bytes", bytes)
 }
 
 // estimateAllocatedRegisters estimates register usage based on shader characteristics.
