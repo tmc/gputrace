@@ -1,5 +1,5 @@
 # Binaries
-gputrace
+cmd/gputrace/gputrace$
 
 # Test binaries
 *.test
