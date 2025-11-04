@@ -25,14 +25,14 @@ func main() {
 		log.Fatalf("Failed to open trace: %v", err)
 	}
 
-	// Parse performance counters
-	stats, err := counter.ParsePerfCounters(t)
+	// Parse profiling metrics (where Kernel Occupancy is stored)
+	profilingMetrics, err := counter.ParseProfilingFiles(t)
 	if err != nil {
-		log.Fatalf("Failed to parse perf counters: %v", err)
+		log.Fatalf("Failed to parse profiling files: %v", err)
 	}
 
 	fmt.Printf("=== Extracted Kernel Occupancy from Binary ===\n\n")
-	fmt.Printf("Found %d shader metrics\n\n", len(stats.ShaderMetrics))
+	fmt.Printf("Found %d profiling metrics\n\n", len(profilingMetrics))
 
 	// Load CSV for comparison
 	csvData, err := loadKernelOccupancyFromCSV(csvPath)
@@ -42,10 +42,10 @@ func main() {
 	}
 
 	// Display results
-	fmt.Printf("%-40s %15s %15s %15s\n", "Shader", "Binary", "CSV", "Diff")
-	fmt.Printf("%s\n", repeatStr("-", 90))
+	fmt.Printf("%-40s %15s %15s %15s %15s\n", "Encoder", "Binary", "CSV", "Diff", "Confidence")
+	fmt.Printf("%s\n", repeatStr("-", 110))
 
-	for i, metric := range stats.ShaderMetrics {
+	for i, metric := range profilingMetrics {
 		csvValue := float64(-1)
 		if csvData != nil && i < len(csvData) {
 			csvValue = csvData[i]
@@ -64,11 +64,14 @@ func main() {
 			csvStr = fmt.Sprintf("%.2f%%", csvValue)
 		}
 
-		fmt.Printf("%-40s %14.2f%% %15s %15s\n",
-			truncate(metric.ShaderName, 40),
+		encoderName := fmt.Sprintf("Encoder_%d", metric.EncoderIndex)
+
+		fmt.Printf("%-40s %14.2f%% %15s %15s %14.2f\n",
+			truncate(encoderName, 40),
 			metric.KernelOccupancy,
 			csvStr,
-			diff)
+			diff,
+			metric.Confidence)
 	}
 
 	fmt.Printf("\n")
@@ -80,9 +83,9 @@ func main() {
 		totalDiff := 0.0
 		count := 0
 
-		for i := range stats.ShaderMetrics {
+		for i := range profilingMetrics {
 			if i < len(csvData) && csvData[i] >= 0 {
-				diff := abs(stats.ShaderMetrics[i].KernelOccupancy - csvData[i])
+				diff := abs(profilingMetrics[i].KernelOccupancy - csvData[i])
 				totalDiff += diff
 				count++
 
