@@ -56,7 +56,7 @@ func runShaders(cmd *cobra.Command, args []string) error {
 	defer trace.Close()
 
 	// Extract shader metrics
-	report, err := trace.ExtractShaderMetrics()
+	report, err := gputrace.ExtractShaderMetrics(trace)
 	if err != nil {
 		return fmt.Errorf("failed to extract shader metrics: %w", err)
 	}

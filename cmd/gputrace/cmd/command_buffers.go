@@ -71,7 +71,7 @@ func runCommandBuffers(cmd *cobra.Command, args []string) error {
 
 		if cmdBuffersVerbose || cmdBuffersDetailed {
 			// Get detailed information
-			dcb, err := trace.ParseDetailedCommandBuffer(cb.Index)
+			dcb, err := gputrace.ParseDetailedCommandBuffer(trace, cb.Index)
 			if err != nil {
 				fmt.Printf("  Error parsing details: %v\n", err)
 			} else {
@@ -87,7 +87,7 @@ func runCommandBuffers(cmd *cobra.Command, args []string) error {
 	if cmdBuffersDetailed {
 		fmt.Printf("\n=== Detailed Analysis ===\n\n")
 		for _, cb := range commandBuffers {
-			if err := trace.DumpCommandBuffer(cmd.OutOrStdout(), cb.Index); err != nil {
+			if err := gputrace.DumpCommandBuffer(trace, cmd.OutOrStdout(), cb.Index); err != nil {
 				fmt.Printf("Error dumping command buffer #%d: %v\n", cb.Index, err)
 			}
 		}
@@ -99,7 +99,7 @@ func runCommandBuffers(cmd *cobra.Command, args []string) error {
 		totalAPICalls := 0
 
 		for _, cb := range commandBuffers {
-			dcb, err := trace.ParseDetailedCommandBuffer(cb.Index)
+			dcb, err := gputrace.ParseDetailedCommandBuffer(trace, cb.Index)
 			if err == nil {
 				totalEncoders += len(dcb.Encoders)
 				totalAPICalls += len(dcb.Calls)

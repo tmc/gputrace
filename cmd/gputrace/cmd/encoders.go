@@ -75,7 +75,7 @@ func runEncoders(cmd *cobra.Command, args []string) error {
 			fmt.Printf("\n=== Per-Command-Buffer Breakdown ===\n\n")
 
 			for _, cb := range commandBuffers {
-				dcb, err := trace.ParseDetailedCommandBuffer(cb.Index)
+				dcb, err := gputrace.ParseDetailedCommandBuffer(trace, cb.Index)
 				if err != nil {
 					fmt.Printf("Command Buffer #%d: Error - %v\n", cb.Index, err)
 					continue

@@ -18,6 +18,7 @@
 package gputrace
 
 import (
+	"github.com/tmc/mlx-go/experiments/gputrace/internal/command"
 	"github.com/tmc/mlx-go/experiments/gputrace/internal/counter"
 	"github.com/tmc/mlx-go/experiments/gputrace/internal/export"
 	"github.com/tmc/mlx-go/experiments/gputrace/internal/shader"
@@ -73,6 +74,9 @@ var (
 	GenerateSyntheticTiming        = timing.GenerateSyntheticTiming
 	ExtractShaderMetrics           = shader.ExtractShaderMetrics
 	NewShaderSourceMapper          = shader.NewShaderSourceMapper
+	FormatShadersXcodeStyle        = shader.FormatShadersXcodeStyle
+	ParseDetailedCommandBuffer     = command.ParseDetailedCommandBuffer
+	DumpCommandBuffer              = command.DumpCommandBuffer
 	ToPprof                        = export.ToPprof
 )
 

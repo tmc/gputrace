@@ -74,10 +74,10 @@ type ShaderMetricsReport struct {
 
 // ExtractShaderMetrics extracts comprehensive performance metrics for all shaders in the trace.
 func ExtractShaderMetrics(t *trace.Trace) (*ShaderMetricsReport, error) {
-	// Parse command buffers and encoders
-	commandBuffers, err := t.ParseCommandBuffers()
+	// Use ParseComputeEncoders which actually works
+	encoders, err := t.ParseComputeEncoders()
 	if err != nil {
-		return nil, fmt.Errorf("parse command buffers: %w", err)
+		return nil, fmt.Errorf("parse compute encoders: %w", err)
 	}
 
 	report := &ShaderMetricsReport{
@@ -87,37 +87,29 @@ func ExtractShaderMetrics(t *trace.Trace) (*ShaderMetricsReport, error) {
 	// Track metrics per shader name
 	metricsMap := make(map[string]*ShaderMetrics)
 
-	// Process each command buffer
-	for _, cb := range commandBuffers {
-		dcb, err := command.ParseDetailedCommandBuffer(t, cb.Index)
-		if err != nil {
-			continue
+	// Process each encoder
+	for _, encoder := range encoders {
+		shaderName := encoder.Label
+		if shaderName == "" {
+			shaderName = fmt.Sprintf("shader_%d", encoder.Index)
 		}
 
-		// Process each encoder in the command buffer
-		for _, encoder := range dcb.Encoders {
-			shaderName := encoder.Label
-			if shaderName == "" {
-				shaderName = fmt.Sprintf("shader_%d", encoder.Index)
+		// Get or create metrics for this shader
+		metrics, exists := metricsMap[shaderName]
+		if !exists {
+			metrics = &ShaderMetrics{
+				Name:              shaderName,
+				Address:           encoder.Address,
+				Index:             len(metricsMap),
+				MinDurationNs:     ^uint64(0), // Max uint64
+				Bottlenecks:       make([]string, 0),
+				OptimizationHints: make([]string, 0),
 			}
-
-			// Get or create metrics for this shader
-			metrics, exists := metricsMap[shaderName]
-			if !exists {
-				metrics = &ShaderMetrics{
-					Name:              shaderName,
-					Address:           encoder.Address,
-					Index:             len(metricsMap),
-					MinDurationNs:     ^uint64(0), // Max uint64
-					Bottlenecks:       make([]string, 0),
-					OptimizationHints: make([]string, 0),
-				}
-				metricsMap[shaderName] = metrics
-			}
-
-			// Update invocation count
-			metrics.InvocationCount++
+			metricsMap[shaderName] = metrics
 		}
+
+		// Update invocation count
+		metrics.InvocationCount++
 	}
 
 	// Extract dispatch information to populate thread configuration
