@@ -137,16 +137,23 @@ func parseProfilingFile(path string, encoderIndex int) (*ProfilingMetrics, error
 // - Below 0.01 (1%): Too low to be meaningful kernel occupancy
 // - Above 1.0: Invalid (occupancy is a ratio)
 //
-// Returns all candidate values found in the file.
+// Key insight from frequency analysis (docs/KERNEL_OCCUPANCY_EXTRACTION_STATUS.md):
+// - Actual occupancy values are RARE (1-5 occurrences)
+// - Noise values are FREQUENT (50-100 occurrences, e.g., 0.125)
+// - Use frequency filtering to exclude noise before selection
+//
+// Returns only rare candidate values (likely actual occupancy).
 func extractOccupancyCandidates(data []byte) []float64 {
 	const (
-		minOccupancy = 0.01 // 1% minimum
-		maxOccupancy = 1.0  // 100% maximum
+		minOccupancy      = 0.01 // 1% minimum
+		maxOccupancy      = 1.0  // 100% maximum
+		noiseThreshold    = 20   // Values appearing >20 times are likely noise
+		minOccurrences    = 1    // Must appear at least once (obviously)
 	)
 
-	var candidates []float64
+	// First pass: Count frequency of each value
+	valueFrequency := make(map[float32]int)
 
-	// Scan through file at 4-byte intervals (float32 alignment)
 	for i := 0; i < len(data)-4; i += 4 {
 		bits := binary.LittleEndian.Uint32(data[i : i+4])
 		val := math.Float32frombits(bits)
@@ -155,12 +162,22 @@ func extractOccupancyCandidates(data []byte) []float64 {
 		if val >= minOccupancy && val <= maxOccupancy {
 			// Additional validation: check for NaN and Inf
 			if !math.IsNaN(float64(val)) && !math.IsInf(float64(val), 0) {
-				candidates = append(candidates, float64(val))
+				valueFrequency[val]++
 			}
 		}
 	}
 
-	return candidates
+	// Second pass: Filter out noise (frequent values)
+	// Keep only rare values that are likely actual occupancy measurements
+	var rareValues []float64
+	for val, count := range valueFrequency {
+		// Keep values that appear rarely (signal, not noise)
+		if count >= minOccurrences && count <= noiseThreshold {
+			rareValues = append(rareValues, float64(val))
+		}
+	}
+
+	return rareValues
 }
 
 // calculateMedian computes the median value from a slice of floats.
