@@ -14,6 +14,9 @@ type ReplayEngine struct {
 	Commands      []ReplayCommand
 	Encoders      []ReplayEncoderInfo
 	CommandQueue  CommandQueueInfo
+
+	// Counter sampling support (optional)
+	CounterSampler *CounterSampler
 }
 
 // ReplayCommand represents a reconstructed Metal command from the trace.
@@ -448,4 +451,223 @@ func (plan *ReplayPlan) GetUniqueFunctionAddresses() []uint64 {
 	})
 
 	return addresses
+}
+
+// EnableCounterSampling enables performance counter collection during replay.
+// This must be called before AnalyzeReplayWithCounters or ReplayWithCounters.
+func (re *ReplayEngine) EnableCounterSampling(config *CounterSamplingConfig) error {
+	if config == nil {
+		config = DefaultCounterSamplingConfig()
+	}
+
+	re.CounterSampler = NewCounterSampler(config)
+	return nil
+}
+
+// AnalyzeReplayWithCounters performs replay analysis and simulates counter sampling.
+// This shows where counter samples would be taken during actual GPU replay.
+func (re *ReplayEngine) AnalyzeReplayWithCounters() (*ReplayPlan, *CounterSamplingResult, error) {
+	// First analyze the replay plan
+	plan, err := re.AnalyzeReplay()
+	if err != nil {
+		return nil, nil, fmt.Errorf("analyze replay: %w", err)
+	}
+
+	// Check if counter sampling is enabled
+	if re.CounterSampler == nil {
+		return plan, nil, fmt.Errorf("counter sampling not enabled (call EnableCounterSampling first)")
+	}
+
+	// Simulate counter sample buffer creation
+	// Calculate max samples needed: 2 per encoder (start/end) + 2 per dispatch (start/end)
+	maxSamples := len(plan.Encoders) * 2
+	if re.CounterSampler.Config.SampleAtDispatchBoundaries {
+		maxSamples += plan.ComputeDispatches * 2
+	}
+
+	if err := re.CounterSampler.CreateCounterSampleBuffers(re.State.Device, maxSamples); err != nil {
+		return plan, nil, fmt.Errorf("create counter buffers: %w", err)
+	}
+
+	// Simulate counter sampling at encoder and dispatch boundaries
+	sampleIndex := 0
+
+	for i, encoder := range plan.Encoders {
+		// Sample at encoder start
+		if re.CounterSampler.Config.SampleAtEncoderBoundaries {
+			if err := re.CounterSampler.SampleCounters(nil, "encoder_start", i, -1); err != nil {
+				return plan, nil, fmt.Errorf("sample encoder start: %w", err)
+			}
+			sampleIndex++
+		}
+
+		// Sample at each dispatch within encoder
+		if re.CounterSampler.Config.SampleAtDispatchBoundaries {
+			encoderCommands := plan.GetEncoderCommands(i)
+			for j, cmd := range encoderCommands {
+				if cmd.Type == "compute_dispatch" {
+					// Sample before dispatch
+					if err := re.CounterSampler.SampleCounters(nil, "dispatch_start", i, j); err != nil {
+						return plan, nil, fmt.Errorf("sample dispatch start: %w", err)
+					}
+					sampleIndex++
+
+					// Sample after dispatch
+					if err := re.CounterSampler.SampleCounters(nil, "dispatch_end", i, j); err != nil {
+						return plan, nil, fmt.Errorf("sample dispatch end: %w", err)
+					}
+					sampleIndex++
+				}
+			}
+		}
+
+		// Sample at encoder end
+		if re.CounterSampler.Config.SampleAtEncoderBoundaries {
+			if err := re.CounterSampler.SampleCounters(nil, "encoder_end", i, encoder.CommandCount-1); err != nil {
+				return plan, nil, fmt.Errorf("sample encoder end: %w", err)
+			}
+			sampleIndex++
+		}
+	}
+
+	// Simulate counter resolution (in real implementation, this reads GPU data)
+	if err := re.CounterSampler.ResolveCounterSamples(); err != nil {
+		return plan, nil, fmt.Errorf("resolve counters: %w", err)
+	}
+
+	// Aggregate metrics (try to use perfcounter data if available)
+	encoderMetrics := re.CounterSampler.AggregateEncoderMetricsWithPerfData(plan, re.Trace)
+	dispatchMetrics := re.CounterSampler.AggregateDispatchMetrics(plan)
+
+	// Build result
+	result := &CounterSamplingResult{
+		TracePath:       plan.TraceePath,
+		Config:          re.CounterSampler.Config,
+		Samples:         re.CounterSampler.Samples,
+		EncoderMetrics:  encoderMetrics,
+		DispatchMetrics: dispatchMetrics,
+		SampleCount:     len(re.CounterSampler.Samples),
+		EncoderCount:    len(plan.Encoders),
+		DispatchCount:   plan.ComputeDispatches,
+	}
+
+	return plan, result, nil
+}
+
+// SimulateCounterSampling simulates the counter sampling process for documentation/planning.
+// This is useful for understanding the sampling overhead before actual implementation.
+func (re *ReplayEngine) SimulateCounterSampling() (*CounterSamplingSimulation, error) {
+	plan, err := re.AnalyzeReplay()
+	if err != nil {
+		return nil, fmt.Errorf("analyze replay: %w", err)
+	}
+
+	if re.CounterSampler == nil {
+		return nil, fmt.Errorf("counter sampling not enabled")
+	}
+
+	simulation := &CounterSamplingSimulation{
+		TracePath:     plan.TraceePath,
+		EncoderCount:  len(plan.Encoders),
+		DispatchCount: plan.ComputeDispatches,
+		Config:        re.CounterSampler.Config,
+	}
+
+	// Calculate sampling overhead
+	samplesPerEncoder := 0
+	if re.CounterSampler.Config.SampleAtEncoderBoundaries {
+		samplesPerEncoder = 2 // Start and end
+	}
+
+	samplesPerDispatch := 0
+	if re.CounterSampler.Config.SampleAtDispatchBoundaries {
+		samplesPerDispatch = 2 // Start and end
+	}
+
+	simulation.SamplesPerEncoder = samplesPerEncoder
+	simulation.SamplesPerDispatch = samplesPerDispatch
+	simulation.TotalSamples = (len(plan.Encoders) * samplesPerEncoder) +
+		(plan.ComputeDispatches * samplesPerDispatch)
+
+	// Estimate overhead (barrier synchronization cost)
+	// Typical barrier cost: ~100-500ns per sample on Apple Silicon
+	simulation.EstimatedBarrierOverheadNs = uint64(simulation.TotalSamples) * 250 // 250ns per sample
+	simulation.EstimatedBarrierOverheadMs = float64(simulation.EstimatedBarrierOverheadNs) / 1e6
+
+	// Calculate buffer sizes
+	// Each counter sample buffer needs storage for all samples
+	counterSetCount := len(re.CounterSampler.Config.EnabledCounterSets)
+	simulation.CounterSetsEnabled = counterSetCount
+
+	// Typical sample size: 64 bytes per counter × counters per set
+	// timestamp: 1 counter (8 bytes)
+	// stage_utilization: 3 counters (24 bytes)
+	// statistics: 2 counters (16 bytes)
+	bytesPerSample := 64 // Conservative estimate
+	simulation.BufferSizeBytes = uint64(simulation.TotalSamples) * uint64(counterSetCount) * uint64(bytesPerSample)
+	simulation.BufferSizeMB = float64(simulation.BufferSizeBytes) / (1024 * 1024)
+
+	return simulation, nil
+}
+
+// CounterSamplingSimulation contains simulation results for counter sampling overhead.
+type CounterSamplingSimulation struct {
+	TracePath     string
+	EncoderCount  int
+	DispatchCount int
+	Config        *CounterSamplingConfig
+
+	// Sampling counts
+	SamplesPerEncoder int
+	SamplesPerDispatch int
+	TotalSamples      int
+	CounterSetsEnabled int
+
+	// Overhead estimates
+	EstimatedBarrierOverheadNs uint64
+	EstimatedBarrierOverheadMs float64
+
+	// Memory requirements
+	BufferSizeBytes uint64
+	BufferSizeMB    float64
+}
+
+// FormatCounterSamplingSimulation generates a report of the simulation.
+func FormatCounterSamplingSimulation(sim *CounterSamplingSimulation) string {
+	output := "=== Counter Sampling Simulation ===\n\n"
+
+	output += fmt.Sprintf("Trace: %s\n\n", sim.TracePath)
+
+	output += "Workload:\n"
+	output += fmt.Sprintf("  Encoders: %d\n", sim.EncoderCount)
+	output += fmt.Sprintf("  Dispatches: %d\n\n", sim.DispatchCount)
+
+	output += "Sampling Configuration:\n"
+	output += fmt.Sprintf("  Sample at encoder boundaries: %v\n", sim.Config.SampleAtEncoderBoundaries)
+	output += fmt.Sprintf("  Sample at dispatch boundaries: %v\n", sim.Config.SampleAtDispatchBoundaries)
+	output += fmt.Sprintf("  Use barriers: %v\n", sim.Config.UseBarriers)
+	output += fmt.Sprintf("  Counter sets enabled: %d\n", sim.CounterSetsEnabled)
+	for _, set := range sim.Config.EnabledCounterSets {
+		output += fmt.Sprintf("    - %s\n", set)
+	}
+	output += "\n"
+
+	output += "Sampling Overhead:\n"
+	output += fmt.Sprintf("  Samples per encoder: %d\n", sim.SamplesPerEncoder)
+	output += fmt.Sprintf("  Samples per dispatch: %d\n", sim.SamplesPerDispatch)
+	output += fmt.Sprintf("  Total samples: %d\n", sim.TotalSamples)
+	output += fmt.Sprintf("  Estimated barrier overhead: %.3f ms\n\n", sim.EstimatedBarrierOverheadMs)
+
+	output += "Memory Requirements:\n"
+	output += fmt.Sprintf("  Counter buffer size: %.2f MB (%d bytes)\n",
+		sim.BufferSizeMB, sim.BufferSizeBytes)
+	output += "\n"
+
+	output += "Notes:\n"
+	output += "  - Barrier overhead assumes ~250ns per sample\n"
+	output += "  - Actual overhead may vary based on GPU workload\n"
+	output += "  - Buffer size is conservative estimate\n"
+	output += "  - This is a simulation; actual Metal implementation required\n"
+
+	return output
 }

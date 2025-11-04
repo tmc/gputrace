@@ -26,9 +26,13 @@ var timelineCmd = &cobra.Command{
 
 Output formats:
   - chrome: Chrome tracing format (chrome://tracing)
+  - html: Interactive standalone HTML timeline viewer
   - json: Raw timeline data in JSON format
 
 Examples:
+  # Generate interactive HTML timeline viewer
+  gputrace timeline trace.gputrace -o timeline.html --format html
+
   # Generate Chrome tracing format
   gputrace timeline trace.gputrace -o timeline.json
 
@@ -76,12 +80,16 @@ func runTimeline(cmd *cobra.Command, args []string) error {
 		if err := exportChromeTracing(timeline, timelineOutput); err != nil {
 			return fmt.Errorf("failed to export Chrome tracing: %w", err)
 		}
+	case "html":
+		if err := exportHTML(timeline, timelineOutput); err != nil {
+			return fmt.Errorf("failed to export HTML: %w", err)
+		}
 	case "json":
 		if err := exportTimelineJSON(timeline, timelineOutput); err != nil {
 			return fmt.Errorf("failed to export JSON: %w", err)
 		}
 	default:
-		return fmt.Errorf("unknown format: %s (supported: chrome, json)", timelineFormat)
+		return fmt.Errorf("unknown format: %s (supported: chrome, html, json)", timelineFormat)
 	}
 
 	fmt.Printf("✓ Timeline written to: %s\n", timelineOutput)
@@ -90,6 +98,9 @@ func runTimeline(cmd *cobra.Command, args []string) error {
 		fmt.Println("  1. Open chrome://tracing")
 		fmt.Println("  2. Click 'Load' and select", timelineOutput)
 		fmt.Println("  3. Use WASD to navigate, mouse wheel to zoom")
+	} else if timelineFormat == "html" {
+		fmt.Println("\nView timeline:")
+		fmt.Printf("  open %s\n", timelineOutput)
 	}
 
 	return nil
@@ -785,4 +796,736 @@ func exportTimelineJSON(timeline *Timeline, outputPath string) error {
 	encoder := json.NewEncoder(f)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(timeline)
+}
+
+// exportHTML exports an interactive standalone HTML timeline viewer.
+func exportHTML(timeline *Timeline, outputPath string) error {
+	f, err := os.Create(outputPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	// Serialize timeline data to JSON for embedding
+	timelineJSON, err := json.Marshal(timeline)
+	if err != nil {
+		return fmt.Errorf("marshal timeline: %w", err)
+	}
+
+	// Generate the HTML content
+	html := generateInteractiveHTML(string(timelineJSON))
+	_, err = f.WriteString(html)
+	return err
+}
+
+// generateInteractiveHTML creates a standalone interactive HTML timeline viewer.
+func generateInteractiveHTML(timelineJSON string) string {
+	return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GPU Timeline Viewer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1e1e1e;
+            color: #d4d4d4;
+            overflow: hidden;
+        }
+
+        #container {
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #header {
+            background: #252526;
+            padding: 12px 20px;
+            border-bottom: 1px solid #3e3e42;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        #header h1 {
+            font-size: 18px;
+            font-weight: 600;
+            color: #cccccc;
+        }
+
+        #controls {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+        }
+
+        .control-group {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        button {
+            background: #0e639c;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background: #1177bb;
+        }
+
+        button:active {
+            background: #0d5a8f;
+        }
+
+        #stats {
+            font-size: 12px;
+            color: #858585;
+        }
+
+        #main {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
+        }
+
+        #sidebar {
+            width: 250px;
+            background: #252526;
+            border-right: 1px solid #3e3e42;
+            overflow-y: auto;
+            padding: 15px;
+        }
+
+        #timeline-container {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+        }
+
+        #timeline-canvas {
+            width: 100%;
+            height: 100%;
+            cursor: grab;
+        }
+
+        #timeline-canvas:active {
+            cursor: grabbing;
+        }
+
+        .section-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: #cccccc;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .encoder-item {
+            padding: 8px 10px;
+            margin-bottom: 6px;
+            background: #2d2d30;
+            border-radius: 3px;
+            cursor: pointer;
+            border-left: 3px solid transparent;
+            transition: all 0.2s;
+        }
+
+        .encoder-item:hover {
+            background: #37373d;
+        }
+
+        .encoder-item.selected {
+            background: #37373d;
+            border-left-color: #0e639c;
+        }
+
+        .encoder-name {
+            font-size: 13px;
+            font-weight: 500;
+            margin-bottom: 4px;
+        }
+
+        .encoder-stats {
+            font-size: 11px;
+            color: #858585;
+        }
+
+        .counter-track {
+            padding: 6px 10px;
+            margin-bottom: 4px;
+            background: #2d2d30;
+            border-radius: 3px;
+            font-size: 12px;
+        }
+
+        .counter-name {
+            font-weight: 500;
+        }
+
+        .counter-unit {
+            color: #858585;
+            margin-left: 4px;
+        }
+
+        #tooltip {
+            position: absolute;
+            background: rgba(30, 30, 30, 0.95);
+            border: 1px solid #3e3e42;
+            border-radius: 4px;
+            padding: 10px 12px;
+            font-size: 12px;
+            pointer-events: none;
+            z-index: 1000;
+            display: none;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+            max-width: 300px;
+        }
+
+        #tooltip.visible {
+            display: block;
+        }
+
+        .tooltip-title {
+            font-weight: 600;
+            margin-bottom: 6px;
+            color: #cccccc;
+            font-size: 13px;
+        }
+
+        .tooltip-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 3px;
+            gap: 15px;
+        }
+
+        .tooltip-label {
+            color: #858585;
+        }
+
+        .tooltip-value {
+            color: #d4d4d4;
+            font-weight: 500;
+        }
+
+        #cursor-overlay {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 1px;
+            background: rgba(255, 255, 255, 0.5);
+            pointer-events: none;
+            display: none;
+        }
+
+        #cursor-overlay.visible {
+            display: block;
+        }
+
+        .counter-value-overlay {
+            position: absolute;
+            background: rgba(14, 99, 156, 0.9);
+            color: white;
+            padding: 3px 6px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: 600;
+            pointer-events: none;
+            white-space: nowrap;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="header">
+            <h1>GPU Timeline Viewer</h1>
+            <div id="controls">
+                <div class="control-group">
+                    <button id="zoom-in">Zoom In (+)</button>
+                    <button id="zoom-out">Zoom Out (-)</button>
+                    <button id="reset-view">Reset View</button>
+                </div>
+                <div id="stats"></div>
+            </div>
+        </div>
+
+        <div id="main">
+            <div id="sidebar">
+                <div class="section-title">Encoders</div>
+                <div id="encoder-list"></div>
+
+                <div class="section-title" style="margin-top: 20px;">Counter Tracks</div>
+                <div id="counter-list"></div>
+            </div>
+
+            <div id="timeline-container">
+                <canvas id="timeline-canvas"></canvas>
+                <div id="cursor-overlay"></div>
+                <div id="tooltip"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Embedded timeline data
+        const timelineData = ` + timelineJSON + `;
+
+        // Timeline viewer state
+        const state = {
+            timeline: timelineData,
+            zoom: 1.0,
+            panX: 0,
+            panY: 0,
+            selectedEncoder: null,
+            hoveredItem: null,
+            isDragging: false,
+            dragStartX: 0,
+            dragStartY: 0,
+            dragStartPanX: 0,
+            dragStartPanY: 0,
+        };
+
+        // Constants
+        const COLORS = {
+            encoder: '#0e639c',
+            encoderSelected: '#1177bb',
+            kernel: '#6a9955',
+            counter: '#ce9178',
+            grid: '#3e3e42',
+            text: '#d4d4d4',
+            textDim: '#858585',
+        };
+
+        const LAYOUT = {
+            headerHeight: 40,
+            trackHeight: 60,
+            trackPadding: 10,
+            minBarHeight: 20,
+            counterTrackHeight: 40,
+        };
+
+        // Get DOM elements
+        const canvas = document.getElementById('timeline-canvas');
+        const ctx = canvas.getContext('2d');
+        const tooltip = document.getElementById('tooltip');
+        const cursorOverlay = document.getElementById('cursor-overlay');
+        const statsEl = document.getElementById('stats');
+        const encoderList = document.getElementById('encoder-list');
+        const counterList = document.getElementById('counter-list');
+
+        // Initialize canvas
+        function resizeCanvas() {
+            const container = canvas.parentElement;
+            canvas.width = container.clientWidth * window.devicePixelRatio;
+            canvas.height = container.clientHeight * window.devicePixelRatio;
+            canvas.style.width = container.clientWidth + 'px';
+            canvas.style.height = container.clientHeight + 'px';
+            ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+            render();
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // Initialize sidebar
+        function initSidebar() {
+            // Populate encoder list
+            encoderList.innerHTML = '';
+            state.timeline.encoders.forEach((encoder, idx) => {
+                const item = document.createElement('div');
+                item.className = 'encoder-item';
+                item.innerHTML = ` + "`" + `
+                    <div class="encoder-name">${encoder.label || 'Encoder ' + idx}</div>
+                    <div class="encoder-stats">
+                        ${(encoder.duration / 1000000).toFixed(2)} ms
+                    </div>
+                ` + "`" + `;
+                item.addEventListener('click', () => selectEncoder(idx));
+                encoderList.appendChild(item);
+            });
+
+            // Populate counter list
+            counterList.innerHTML = '';
+            if (state.timeline.counter_tracks) {
+                state.timeline.counter_tracks.forEach(track => {
+                    const item = document.createElement('div');
+                    item.className = 'counter-track';
+                    item.innerHTML = ` + "`" + `
+                        <span class="counter-name">${track.name}</span>
+                        <span class="counter-unit">(${track.unit})</span>
+                    ` + "`" + `;
+                    counterList.appendChild(item);
+                });
+            }
+
+            updateStats();
+        }
+
+        function updateStats() {
+            const duration = (state.timeline.duration / 1000000).toFixed(2);
+            statsEl.textContent = ` + "`" + `${state.timeline.encoders.length} encoders | ${duration} ms | Zoom: ${(state.zoom * 100).toFixed(0)}%` + "`" + `;
+        }
+
+        function selectEncoder(idx) {
+            state.selectedEncoder = idx === state.selectedEncoder ? null : idx;
+
+            // Update UI
+            document.querySelectorAll('.encoder-item').forEach((item, i) => {
+                item.classList.toggle('selected', i === state.selectedEncoder);
+            });
+
+            render();
+        }
+
+        // Render timeline
+        function render() {
+            const w = canvas.width / window.devicePixelRatio;
+            const h = canvas.height / window.devicePixelRatio;
+
+            // Clear
+            ctx.fillStyle = '#1e1e1e';
+            ctx.fillRect(0, 0, w, h);
+
+            // Calculate timeline scale
+            const duration = state.timeline.duration;
+            const startTime = state.timeline.start_time;
+            const timeScale = (w - 100) / (duration / 1000000); // pixels per millisecond
+            const scaledTimeScale = timeScale * state.zoom;
+
+            // Draw time grid
+            drawTimeGrid(w, h, scaledTimeScale, startTime, duration);
+
+            // Draw encoder tracks
+            let y = LAYOUT.headerHeight;
+            state.timeline.encoders.forEach((encoder, idx) => {
+                const isSelected = idx === state.selectedEncoder;
+                const isHovered = state.hoveredItem?.type === 'encoder' && state.hoveredItem?.index === idx;
+
+                drawEncoderTrack(encoder, idx, y, scaledTimeScale, startTime, isSelected, isHovered);
+                y += LAYOUT.trackHeight;
+            });
+
+            // Draw counter tracks
+            if (state.timeline.counter_tracks) {
+                state.timeline.counter_tracks.forEach((track, idx) => {
+                    drawCounterTrack(track, idx, y, scaledTimeScale, startTime);
+                    y += LAYOUT.counterTrackHeight;
+                });
+            }
+        }
+
+        function drawTimeGrid(w, h, timeScale, startTime, duration) {
+            ctx.strokeStyle = COLORS.grid;
+            ctx.lineWidth = 1;
+            ctx.font = '11px -apple-system, sans-serif';
+            ctx.fillStyle = COLORS.textDim;
+
+            // Calculate tick interval (aim for ticks every ~100px)
+            const msPerPixel = 1 / timeScale;
+            const msPerTick = Math.pow(10, Math.floor(Math.log10(msPerPixel * 100)));
+            const pixelsPerTick = msPerTick * timeScale;
+
+            // Draw vertical grid lines
+            for (let ms = 0; ms < duration / 1000000; ms += msPerTick) {
+                const x = 50 + ms * timeScale + state.panX;
+                if (x < 50 || x > w) continue;
+
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, h);
+                ctx.stroke();
+
+                ctx.fillText(ms.toFixed(1) + ' ms', x + 3, 15);
+            }
+
+            // Draw left margin
+            ctx.fillStyle = '#252526';
+            ctx.fillRect(0, 0, 50, h);
+        }
+
+        function drawEncoderTrack(encoder, idx, y, timeScale, startTime, isSelected, isHovered) {
+            const w = canvas.width / window.devicePixelRatio;
+            const relStart = (encoder.start_time - startTime) / 1000000;
+            const duration = encoder.duration / 1000000;
+
+            const x = 50 + relStart * timeScale + state.panX;
+            const width = duration * timeScale;
+
+            // Draw track background
+            ctx.fillStyle = isHovered ? '#2d2d30' : '#252526';
+            ctx.fillRect(50, y, w - 50, LAYOUT.trackHeight);
+
+            // Draw encoder bar
+            const barHeight = LAYOUT.minBarHeight;
+            const barY = y + (LAYOUT.trackHeight - barHeight) / 2;
+
+            ctx.fillStyle = isSelected ? COLORS.encoderSelected : COLORS.encoder;
+            if (isHovered) {
+                ctx.fillStyle = '#1a7fc1';
+            }
+            ctx.fillRect(x, barY, Math.max(width, 2), barHeight);
+
+            // Draw label
+            ctx.fillStyle = COLORS.text;
+            ctx.font = '12px -apple-system, sans-serif';
+            ctx.fillText(encoder.label || 'Encoder ' + idx, 5, y + LAYOUT.trackHeight / 2 + 4);
+
+            // Draw duration text on bar if wide enough
+            if (width > 60) {
+                ctx.fillStyle = 'white';
+                ctx.font = '11px -apple-system, sans-serif';
+                const durationText = duration.toFixed(2) + ' ms';
+                const textWidth = ctx.measureText(durationText).width;
+                ctx.fillText(durationText, x + (width - textWidth) / 2, barY + barHeight / 2 + 4);
+            }
+
+            // Draw selection indicator
+            if (isSelected) {
+                ctx.strokeStyle = COLORS.encoderSelected;
+                ctx.lineWidth = 2;
+                ctx.strokeRect(x - 1, barY - 1, width + 2, barHeight + 2);
+            }
+        }
+
+        function drawCounterTrack(track, idx, y, timeScale, startTime) {
+            const w = canvas.width / window.devicePixelRatio;
+
+            // Draw track background
+            ctx.fillStyle = '#1a1a1a';
+            ctx.fillRect(50, y, w - 50, LAYOUT.counterTrackHeight);
+
+            // Draw track label
+            ctx.fillStyle = COLORS.textDim;
+            ctx.font = '11px -apple-system, sans-serif';
+            ctx.fillText(track.name, 5, y + 12);
+
+            if (!track.samples || track.samples.length === 0) return;
+
+            // Draw counter line
+            ctx.strokeStyle = COLORS.counter;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+
+            const range = track.max_value - track.min_value;
+            const heightScale = (LAYOUT.counterTrackHeight - 10) / (range || 1);
+
+            let firstPoint = true;
+            track.samples.forEach(sample => {
+                const relTime = (sample.ts - startTime) / 1000000;
+                const x = 50 + relTime * timeScale + state.panX;
+                const normalizedValue = (sample.value - track.min_value) / (range || 1);
+                const plotY = y + LAYOUT.counterTrackHeight - 5 - (normalizedValue * heightScale);
+
+                if (firstPoint) {
+                    ctx.moveTo(x, plotY);
+                    firstPoint = false;
+                } else {
+                    ctx.lineTo(x, plotY);
+                }
+            });
+
+            ctx.stroke();
+
+            // Fill area under curve
+            const firstSample = track.samples[0];
+            const lastSample = track.samples[track.samples.length - 1];
+            const firstX = 50 + ((firstSample.ts - startTime) / 1000000) * timeScale + state.panX;
+            const lastX = 50 + ((lastSample.ts - startTime) / 1000000) * timeScale + state.panX;
+
+            ctx.lineTo(lastX, y + LAYOUT.counterTrackHeight - 5);
+            ctx.lineTo(firstX, y + LAYOUT.counterTrackHeight - 5);
+            ctx.closePath();
+
+            ctx.fillStyle = COLORS.counter + '20';
+            ctx.fill();
+        }
+
+        // Hit testing
+        function hitTest(x, y) {
+            const timeScale = ((canvas.width / window.devicePixelRatio - 100) / (state.timeline.duration / 1000000)) * state.zoom;
+            const startTime = state.timeline.start_time;
+
+            let trackY = LAYOUT.headerHeight;
+
+            // Test encoders
+            for (let i = 0; i < state.timeline.encoders.length; i++) {
+                const encoder = state.timeline.encoders[i];
+                const relStart = (encoder.start_time - startTime) / 1000000;
+                const duration = encoder.duration / 1000000;
+                const barX = 50 + relStart * timeScale + state.panX;
+                const barWidth = duration * timeScale;
+                const barHeight = LAYOUT.minBarHeight;
+                const barY = trackY + (LAYOUT.trackHeight - barHeight) / 2;
+
+                if (x >= barX && x <= barX + barWidth && y >= barY && y <= barY + barHeight) {
+                    return { type: 'encoder', index: i, data: encoder };
+                }
+
+                trackY += LAYOUT.trackHeight;
+            }
+
+            return null;
+        }
+
+        // Event handlers
+        canvas.addEventListener('mousedown', (e) => {
+            state.isDragging = true;
+            state.dragStartX = e.clientX;
+            state.dragStartY = e.clientY;
+            state.dragStartPanX = state.panX;
+            state.dragStartPanY = state.panY;
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+
+            if (state.isDragging) {
+                state.panX = state.dragStartPanX + (e.clientX - state.dragStartX);
+                state.panY = state.dragStartPanY + (e.clientY - state.dragStartY);
+                render();
+            } else {
+                // Update hover
+                const hit = hitTest(x, y);
+                state.hoveredItem = hit;
+
+                if (hit && hit.type === 'encoder') {
+                    showTooltip(e.clientX, e.clientY, hit.data, hit.index);
+                    cursorOverlay.style.left = x + 'px';
+                    cursorOverlay.classList.add('visible');
+                } else {
+                    hideTooltip();
+                    cursorOverlay.classList.remove('visible');
+                }
+
+                render();
+            }
+        });
+
+        canvas.addEventListener('mouseup', () => {
+            state.isDragging = false;
+        });
+
+        canvas.addEventListener('mouseleave', () => {
+            state.isDragging = false;
+            state.hoveredItem = null;
+            hideTooltip();
+            cursorOverlay.classList.remove('visible');
+            render();
+        });
+
+        canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const delta = e.deltaY > 0 ? 0.9 : 1.1;
+            state.zoom = Math.max(0.1, Math.min(100, state.zoom * delta));
+            updateStats();
+            render();
+        });
+
+        canvas.addEventListener('click', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            const hit = hitTest(x, y);
+
+            if (hit && hit.type === 'encoder') {
+                selectEncoder(hit.index);
+            }
+        });
+
+        // Tooltip
+        function showTooltip(x, y, data, index) {
+            const duration = (data.duration / 1000000).toFixed(3);
+            const startTime = (data.start_time / 1000000).toFixed(3);
+
+            tooltip.innerHTML = ` + "`" + `
+                <div class="tooltip-title">${data.label || 'Encoder ' + index}</div>
+                <div class="tooltip-row">
+                    <span class="tooltip-label">Duration:</span>
+                    <span class="tooltip-value">${duration} ms</span>
+                </div>
+                <div class="tooltip-row">
+                    <span class="tooltip-label">Start:</span>
+                    <span class="tooltip-value">${startTime} ms</span>
+                </div>
+                <div class="tooltip-row">
+                    <span class="tooltip-label">Type:</span>
+                    <span class="tooltip-value">${data.type || 'compute'}</span>
+                </div>
+            ` + "`" + `;
+
+            tooltip.style.left = (x + 15) + 'px';
+            tooltip.style.top = (y + 15) + 'px';
+            tooltip.classList.add('visible');
+        }
+
+        function hideTooltip() {
+            tooltip.classList.remove('visible');
+        }
+
+        // Controls
+        document.getElementById('zoom-in').addEventListener('click', () => {
+            state.zoom *= 1.5;
+            updateStats();
+            render();
+        });
+
+        document.getElementById('zoom-out').addEventListener('click', () => {
+            state.zoom /= 1.5;
+            updateStats();
+            render();
+        });
+
+        document.getElementById('reset-view').addEventListener('click', () => {
+            state.zoom = 1.0;
+            state.panX = 0;
+            state.panY = 0;
+            updateStats();
+            render();
+        });
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.key === '+' || e.key === '=') {
+                state.zoom *= 1.2;
+                updateStats();
+                render();
+            } else if (e.key === '-' || e.key === '_') {
+                state.zoom /= 1.2;
+                updateStats();
+                render();
+            } else if (e.key === 'r' || e.key === 'R') {
+                state.zoom = 1.0;
+                state.panX = 0;
+                state.panY = 0;
+                updateStats();
+                render();
+            }
+        });
+
+        // Initialize
+        initSidebar();
+        render();
+    </script>
+</body>
+</html>
+`;
 }
