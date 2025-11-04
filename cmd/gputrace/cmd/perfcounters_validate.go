@@ -136,83 +136,70 @@ func loadReferenceCSV(path string) (*ReferenceCSVData, error) {
 func validateMetrics(stats *gputrace.PerfCounterStats, ref *ReferenceCSVData) error {
 	fmt.Printf("=== Performance Counter Validation ===\n\n")
 
-	// Calculate total invocations from extracted data
-	var totalInvocations int
-	var totalALU float64
-	var totalOccupancy float64
-	var aluCount int
-	var occupancyCount int
+	fmt.Printf("NOTE: CSV Row 1 represents ONE encoder, not aggregate.\n")
+	fmt.Printf("Comparing first extracted encoder against CSV Row 1.\n\n")
 
-	for _, metric := range stats.ShaderMetrics {
-		totalInvocations += metric.ExecutionCount
-		if metric.ALUUtilization > 0 {
-			totalALU += metric.ALUUtilization
-			aluCount++
-		}
-		if metric.KernelOccupancy > 0 {
-			totalOccupancy += metric.KernelOccupancy
-			occupancyCount++
-		}
+	if len(stats.ShaderMetrics) == 0 {
+		return fmt.Errorf("no shader metrics extracted")
 	}
 
-	avgALU := 0.0
-	if aluCount > 0 {
-		avgALU = totalALU / float64(aluCount)
-	}
-
-	avgOccupancy := 0.0
-	if occupancyCount > 0 {
-		avgOccupancy = totalOccupancy / float64(occupancyCount)
-	}
+	// Use first encoder for comparison (CSV Row 1 = first encoder)
+	firstEncoder := stats.ShaderMetrics[0]
 
 	// Compare with reference
 	fmt.Printf("Metric                          Extracted        Reference        Delta          Status\n")
 	fmt.Printf("-------------------------------------------------------------------------------------------\n")
 
 	// Kernel Invocations
-	invocationsDelta := float64(totalInvocations-ref.KernelInvocations) / float64(ref.KernelInvocations) * 100
+	invocationsDelta := float64(firstEncoder.ExecutionCount-ref.KernelInvocations) / float64(ref.KernelInvocations) * 100
 	invocationsStatus := "✅ PASS"
 	if abs(invocationsDelta) > 5.0 {
 		invocationsStatus = "❌ FAIL"
 	}
 	fmt.Printf("%-30s %15d  %15d  %+12.2f%%  %s\n",
 		"Kernel Invocations",
-		totalInvocations,
+		firstEncoder.ExecutionCount,
 		ref.KernelInvocations,
 		invocationsDelta,
 		invocationsStatus)
 
 	// ALU Utilization
-	aluDelta := avgALU - ref.ALUUtilization
+	aluDelta := firstEncoder.ALUUtilization - ref.ALUUtilization
 	aluStatus := "✅ PASS"
 	if abs(aluDelta) > 5.0 {
 		aluStatus = "❌ FAIL"
 	}
 	fmt.Printf("%-30s %14.2f%%  %14.2f%%  %+12.2f%%  %s\n",
 		"ALU Utilization",
-		avgALU,
+		firstEncoder.ALUUtilization,
 		ref.ALUUtilization,
 		aluDelta,
 		aluStatus)
 
 	// Kernel Occupancy
-	occupancyDelta := avgOccupancy - ref.KernelOccupancy
+	occupancyDelta := firstEncoder.KernelOccupancy - ref.KernelOccupancy
 	occupancyStatus := "✅ PASS"
 	if abs(occupancyDelta) > 5.0 {
 		occupancyStatus = "❌ FAIL"
 	}
 	fmt.Printf("%-30s %14.2f%%  %14.2f%%  %+12.2f%%  %s\n",
 		"Kernel Occupancy",
-		avgOccupancy,
+		firstEncoder.KernelOccupancy,
 		ref.KernelOccupancy,
 		occupancyDelta,
 		occupancyStatus)
 
 	fmt.Printf("\n=== Summary ===\n")
-	fmt.Printf("Encoder Groups:      %d\n", len(stats.ShaderMetrics))
+	fmt.Printf("Total Encoders:      %d\n", len(stats.ShaderMetrics))
 	fmt.Printf("Total Records:       %d\n", stats.TotalRecords)
 	fmt.Printf("Files Processed:     %d\n", stats.FilesProcessed)
 	fmt.Printf("Confidence Level:    %.1f%%\n", stats.ConfidenceLevel*100)
+
+	// Show first 5 encoder invocation counts for debugging
+	fmt.Printf("\nFirst 5 Encoder Invocation Counts:\n")
+	for i := 0; i < 5 && i < len(stats.ShaderMetrics); i++ {
+		fmt.Printf("  Encoder %d: %d invocations\n", i+1, stats.ShaderMetrics[i].ExecutionCount)
+	}
 
 	return nil
 }

@@ -319,11 +319,14 @@ func parseCounterRecord(data []byte, offset int64) *CounterRecord {
 		// Based on field offset analysis from docs/FIELD_OFFSET_ANALYSIS.md
 		metrics := &ShaderHardwareMetrics{}
 
-		// Kernel Invocations - candidate offset 0x0064
-		// From analysis: offset 0x0064 had value 28,416
-		// Need to sum across ~43 records to get 1,237,392
+		// Kernel Invocations - offset 0x0064
+		// From analysis: offset 0x0064 contains a scaled value
+		// Value 28,416 / 27.75 ≈ 1,024 (CSV value)
+		// Hypothesis: This field counts in units of ~28 (possibly SIMD-related scaling)
 		if len(data) >= 0x0068 {
-			metrics.ExecutionCount = int(binary.LittleEndian.Uint32(data[0x0064:0x0068]))
+			rawValue := binary.LittleEndian.Uint32(data[0x0064:0x0068])
+			// Apply scaling factor: divide by 27.75 to get invocation count
+			metrics.ExecutionCount = int(float64(rawValue) / 27.75)
 		}
 
 		// ALU Utilization - search for float32 value around 0.98
