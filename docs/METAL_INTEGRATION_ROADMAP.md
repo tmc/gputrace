@@ -63,11 +63,12 @@ cmdBuffer.Commit()
 cmdBuffer.WaitUntilCompleted()
 ```
 
-### 🔨 Phase 2: ReplayEngine Integration (NEXT)
+### ✅ Phase 2: ReplayEngine Integration (COMPLETE)
 
 **Bead:** gputrace-70
-**Status:** Open (Ready to start)
+**Status:** ✅ Complete
 **Priority:** P1
+**Commit:** 299f1cf
 
 **Goal:** Connect Metal Bridge with ReplayEngine for actual GPU execution
 
@@ -129,12 +130,23 @@ func (re *ReplayEngine) ExecuteWithMetal(bridge *MetalBridge) error {
 }
 ```
 
+**Achievements:**
+- ✅ MetalReplayEngine implemented (replay_metal.go, 435 lines)
+- ✅ Buffer restoration with RestoreBuffersToMetal() and address correlation
+- ✅ Shader compilation with RestoreFunctionsToMetal() and pipeline creation
+- ✅ Command encoding with encodeCommand() supporting compute dispatches
+- ✅ GPU execution with ExecuteReplayPlan() and encoder grouping
+- ✅ Validation framework with ValidateExecution() and buffer comparison
+- ✅ CLI command with replay-metal --validate --verbose flags
+- ✅ Comprehensive test suite (5 tests, all passing)
+- ✅ Real GPU execution validated (256-element vector addition)
+
 **Acceptance Criteria:**
-- ✓ Trace buffers restored to Metal
-- ✓ Shaders compiled and pipelines created
-- ✓ Commands executed on GPU
-- ✓ Results match expected outputs
-- ✓ No crashes or memory leaks
+- ✅ Trace buffers restored to Metal
+- ✅ Shaders compiled and pipelines created
+- ✅ Commands executed on GPU
+- ✅ Results match expected outputs
+- ✅ No crashes or memory leaks
 
 ### 🔬 Phase 3: Counter Sampling (PLANNED)
 
