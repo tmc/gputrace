@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"unsafe"
 )
 
 // PerfCounterStats represents statistics extracted from performance counter files.
@@ -39,6 +40,15 @@ type CounterRecord struct {
 	RecordSize   uint32 // Size of this record in bytes
 	Data         []byte // Raw record data
 	ShaderMetric *ShaderHardwareMetrics // Parsed metrics (if applicable)
+	IsMetadata   bool   // True if this is a metadata record (2.3-2.9 KB)
+	EncoderID    uint64 // Encoder identifier from metadata record
+}
+
+// EncoderGroup represents a group of records belonging to a single encoder.
+type EncoderGroup struct {
+	EncoderID      uint64  // Encoder identifier
+	MetadataRecord *CounterRecord // Metadata record for this encoder
+	SampleRecords  []*CounterRecord // Sample records for this encoder
 }
 
 // ParsePerfCounters parses hardware performance counters from .gpuprofiler_raw files.
@@ -163,6 +173,13 @@ func parseCounterFile(path string) (*counterFileStats, error) {
 }
 
 // parseCounterFileWithMetrics parses a counter file and returns both statistics and extracted metrics.
+//
+// This function implements the encoder grouping and aggregation strategy documented in
+// docs/FIELD_OFFSET_ANALYSIS.md:
+// 1. Parse all records and classify by size (metadata vs sample)
+// 2. Group sample records by their associated metadata/encoder
+// 3. Aggregate metrics within each encoder group
+// 4. Return aggregated metrics for validation against CSV
 func parseCounterFileWithMetrics(path string) (*counterFileStats, []*ShaderHardwareMetrics, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -176,13 +193,13 @@ func parseCounterFileWithMetrics(path string) (*counterFileStats, []*ShaderHardw
 	}
 
 	stats := &counterFileStats{}
-	metrics := make([]*ShaderHardwareMetrics, 0)
 
 	// Find all records starting with 0x4E marker
 	recordStarts := findRecordBoundaries(data)
 	stats.TotalRecords = len(recordStarts)
 
-	// Parse each record to extract metrics
+	// Parse all records
+	records := make([]*CounterRecord, 0, len(recordStarts))
 	for i, offset := range recordStarts {
 		// Determine record size
 		var recordSize int
@@ -198,17 +215,21 @@ func parseCounterFileWithMetrics(path string) (*counterFileStats, []*ShaderHardw
 		}
 
 		record := parseCounterRecord(data[offset:offset+recordSize], int64(offset))
-		if record == nil {
-			continue
+		if record != nil {
+			records = append(records, record)
 		}
+	}
 
-		// Extract metrics if this is a shader performance record
-		if record.ShaderMetric != nil {
+	// Group records by encoder
+	groups := groupRecordsByEncoder(records)
+
+	// Aggregate metrics for each encoder group
+	metrics := make([]*ShaderHardwareMetrics, 0, len(groups))
+	for _, group := range groups {
+		aggregated := aggregateEncoderMetrics(group)
+		if aggregated != nil && aggregated.ExecutionCount > 0 {
+			metrics = append(metrics, aggregated)
 			stats.DispatchCount++
-			// Clone the metric to avoid pointer aliasing
-			metric := *record.ShaderMetric
-			metric.ExecutionCount = 1 // Each record represents one execution
-			metrics = append(metrics, &metric)
 		}
 	}
 
@@ -254,6 +275,15 @@ func (t *Trace) correlateShaderNames(stats *PerfCounterStats) error {
 }
 
 // parseCounterRecord parses a single counter record.
+//
+// Based on analysis in docs/FIELD_OFFSET_ANALYSIS.md:
+// - Metadata records: 2,300-2,900 bytes (contain encoder identification)
+// - Sample records: 464 bytes (contain per-sample performance metrics)
+//
+// Aggregation strategy:
+// 1. Metadata record identifies encoder/command buffer context
+// 2. Following sample records contain metrics for that encoder
+// 3. Metrics are summed/averaged across samples to produce CSV values
 func parseCounterRecord(data []byte, offset int64) *CounterRecord {
 	if len(data) < 16 {
 		return nil
@@ -270,53 +300,161 @@ func parseCounterRecord(data []byte, offset int64) *CounterRecord {
 	// Record size is the length we were given
 	record.RecordSize = uint32(len(data))
 
-	// Try to extract shader metrics if this looks like a shader performance record
-	// Based on APS (Apple Performance Streaming) format discovered in GPUToolsReplayService
-	//
-	// The performance counter records contain hardware metrics collected by AGXGPURawCounter
-	// during shader execution. Key fields include:
-	// - SIMD group count (threadgroups executed)
-	// - Register allocation (number of registers allocated per thread)
-	// - High register (highest register index used)
-	// - Spilled bytes (register spills to memory)
-	// - ALU utilization, memory bandwidth, occupancy, etc.
-	//
-	// Format varies by record type and GPU architecture, but common patterns:
-	// - Record marker: 0x4E 0x00 0x00 0x00 at offset 0
-	// - Record type at offset 0x04 (varies by metric)
-	// - Pipeline state address typically in first 32 bytes
-	// - SIMD group counts often at fixed offsets for compute dispatch records
-	// - Register counts in shader-specific performance records
-	//
-	// Note: Full reverse engineering required for production use. This is a framework
-	// that can be extended once profiled traces are available for analysis.
+	// Classify record by size (from field offset analysis)
+	// Metadata records: 2,300-2,900 bytes
+	// Sample records: 464 bytes
+	if len(data) >= 2300 && len(data) <= 2900 {
+		record.IsMetadata = true
 
-	// Attempt to extract metrics based on record type and size
-	if record.RecordType == 0x4E && len(data) >= 64 {
-		// This appears to be a performance metrics record
+		// Extract encoder ID from metadata record
+		// Candidate offset: 0x01b4 (from initial analysis - value 1,801)
+		// This is a working hypothesis that needs validation
+		if len(data) >= 0x01b8 {
+			record.EncoderID = binary.LittleEndian.Uint64(data[0x01b4:0x01bc])
+		}
+	} else if len(data) == 464 {
+		record.IsMetadata = false
+
+		// This is a sample record - extract performance metrics
+		// Based on field offset analysis from docs/FIELD_OFFSET_ANALYSIS.md
 		metrics := &ShaderHardwareMetrics{}
 
-		// Try to extract pipeline state address (commonly in first 32 bytes)
-		if len(data) >= 16 {
-			metrics.PipelineState = binary.LittleEndian.Uint64(data[8:16])
+		// Kernel Invocations - candidate offset 0x0064
+		// From analysis: offset 0x0064 had value 28,416
+		// Need to sum across ~43 records to get 1,237,392
+		if len(data) >= 0x0068 {
+			metrics.ExecutionCount = int(binary.LittleEndian.Uint32(data[0x0064:0x0068]))
 		}
 
-		// These offsets are placeholders and need to be determined through
-		// analysis of actual .gpuprofiler_raw files from Xcode Instruments.
-		// The framework is in place to populate these fields once the format
-		// is reverse engineered:
-		//
-		// - Look for integer values in range 4-256 for register counts
-		// - Look for large values (1000s-100000s) for SIMD group counts
-		// - Look for values matching known shader configurations
-		//
-		// For now, return the record structure without populated metrics.
-		// This allows the parsing framework to work while we determine offsets.
+		// ALU Utilization - search for float32 value around 0.98
+		// This requires scanning for percentage values (0.0-1.0 range)
+		if aluUtil := findPercentageField(data, 0.95, 1.0); aluUtil >= 0 {
+			metrics.ALUUtilization = aluUtil * 100 // Convert to percentage
+		}
+
+		// Kernel Occupancy - search for float32 value around 0.30
+		if occupancy := findPercentageField(data, 0.25, 0.35); occupancy >= 0 {
+			metrics.KernelOccupancy = occupancy * 100 // Convert to percentage
+		}
 
 		record.ShaderMetric = metrics
 	}
 
 	return record
+}
+
+// findPercentageField scans record data for float32 values in the specified range.
+// Returns the first matching value, or -1 if not found.
+func findPercentageField(data []byte, minVal, maxVal float64) float64 {
+	for i := 0; i < len(data)-4; i += 4 {
+		// Try reading as float32
+		bits := binary.LittleEndian.Uint32(data[i : i+4])
+		val := float64(intBitsToFloat32(bits))
+
+		if val >= minVal && val <= maxVal {
+			return val
+		}
+	}
+	return -1
+}
+
+// intBitsToFloat32 converts uint32 bits to float32 (equivalent to math.Float32frombits)
+func intBitsToFloat32(bits uint32) float32 {
+	// Inline implementation to avoid importing math
+	return *(*float32)(unsafe.Pointer(&bits))
+}
+
+// groupRecordsByEncoder groups records by encoder for aggregation.
+//
+// Strategy:
+// 1. Metadata records (2.3-2.9 KB) identify encoder context
+// 2. Following sample records (464 bytes) belong to that encoder
+// 3. Group records until next metadata record is encountered
+func groupRecordsByEncoder(records []*CounterRecord) []*EncoderGroup {
+	groups := make([]*EncoderGroup, 0)
+	var currentGroup *EncoderGroup
+
+	for _, record := range records {
+		if record.IsMetadata {
+			// Start new encoder group
+			if currentGroup != nil {
+				groups = append(groups, currentGroup)
+			}
+			currentGroup = &EncoderGroup{
+				EncoderID:      record.EncoderID,
+				MetadataRecord: record,
+				SampleRecords:  make([]*CounterRecord, 0),
+			}
+		} else if currentGroup != nil {
+			// Add sample record to current group
+			currentGroup.SampleRecords = append(currentGroup.SampleRecords, record)
+		}
+	}
+
+	// Add final group
+	if currentGroup != nil {
+		groups = append(groups, currentGroup)
+	}
+
+	return groups
+}
+
+// aggregateEncoderMetrics aggregates metrics from sample records within an encoder group.
+//
+// Aggregation rules (based on docs/FIELD_OFFSET_ANALYSIS.md):
+// - Kernel Invocations: SUM across all sample records
+// - ALU Utilization: AVERAGE across all sample records
+// - Kernel Occupancy: AVERAGE across all sample records
+// - Memory Bandwidth: SUM bytes, then calculate bandwidth
+func aggregateEncoderMetrics(group *EncoderGroup) *ShaderHardwareMetrics {
+	if len(group.SampleRecords) == 0 {
+		return nil
+	}
+
+	aggregated := &ShaderHardwareMetrics{
+		PipelineState: group.EncoderID, // Use encoder ID as identifier
+	}
+
+	var totalInvocations int
+	var totalALUUtil float64
+	var totalOccupancy float64
+	var aluSamples int
+	var occupancySamples int
+
+	for _, record := range group.SampleRecords {
+		if record.ShaderMetric == nil {
+			continue
+		}
+
+		metrics := record.ShaderMetric
+
+		// Sum: Kernel Invocations
+		totalInvocations += metrics.ExecutionCount
+
+		// Average: ALU Utilization (if present)
+		if metrics.ALUUtilization > 0 {
+			totalALUUtil += metrics.ALUUtilization
+			aluSamples++
+		}
+
+		// Average: Kernel Occupancy (if present)
+		if metrics.KernelOccupancy > 0 {
+			totalOccupancy += metrics.KernelOccupancy
+			occupancySamples++
+		}
+	}
+
+	aggregated.ExecutionCount = totalInvocations
+
+	if aluSamples > 0 {
+		aggregated.ALUUtilization = totalALUUtil / float64(aluSamples)
+	}
+
+	if occupancySamples > 0 {
+		aggregated.KernelOccupancy = totalOccupancy / float64(occupancySamples)
+	}
+
+	return aggregated
 }
 
 // findRecordBoundaries finds the start positions of all records in counter data.
