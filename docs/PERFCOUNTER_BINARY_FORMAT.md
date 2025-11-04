@@ -317,3 +317,68 @@ if __name__ == '__main__':
 **Next Action:** Run analysis scripts to find Kernel Invocations field offset
 
 **Estimated Time:** 2-3 days for Phase 1 (5-10 metrics)
+
+## Critical Discovery: Aggregation Required
+
+**Date:** 2025-11-03 (continued analysis)
+
+### Finding
+
+The relationship between binary records and CSV rows is **NOT 1:1**:
+
+- **Binary Data**: 1,598 records in Counters_f_0.raw alone (40 files total)
+- **CSV Output**: 10 data rows
+- **Implication**: Instruments **aggregates** thousands of per-sample records into summary statistics
+
+### Record Structure Variation
+
+Distances between 0x4E markers vary:
+```
+Position   Distance   Notes
+0xf85      2898      Large gap (header/metadata?)
+0x1ad7     464       Standard record
+0x1ca7     2409      Large gap
+0x2610     464       Standard record
+0x27e0     464       Standard record
+```
+
+**Hypothesis**: Two record types:
+1. **Metadata records** (~2400-2900 bytes) - Frame/encoder context
+2. **Sample records** (464 bytes) - Individual counter samples
+
+### Aggregation Logic
+
+To match Xcode's CSV output, we need to:
+
+1. **Group records** by encoder/command buffer
+2. **Aggregate samples** within each group:
+   - Sum counts (Kernel Invocations)
+   - Average rates (ALU Utilization, Occupancy)
+   - Sum bandwidth (Memory Bandwidth)
+3. **Export** one CSV row per encoder
+
+### Why Values Weren't Found
+
+The hexdump search failed because:
+- Binary contains **raw samples** (e.g., ALU util per sample: 0.01, 0.02, ...)
+- CSV contains **aggregated values** (e.g., average ALU util: 0.98)
+- Need to sum/average hundreds of samples to get CSV values
+
+### Implementation Complexity Increase
+
+**Original estimate**: 2-3 days for field extraction
+**Revised estimate**: 5-7 days including:
+- Record type identification
+- Grouping logic by encoder
+- Aggregation functions per metric type
+- Validation against CSV
+
+### Next Steps
+
+1. Identify metadata vs sample records
+2. Find encoder ID field in records
+3. Implement grouping by encoder
+4. Implement aggregation for each metric type
+5. Validate sums/averages match CSV
+
+This significantly increases the complexity of Phase 1 implementation.
