@@ -355,10 +355,3 @@ func (te *TimingExtractorProfilerRaw) ProfilerRawTimingReport(timings []*Encoder
 
 	return report
 }
-
-func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen-3] + "..."
-}

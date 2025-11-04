@@ -353,14 +353,6 @@ func truncateV2(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
-func repeatChar(c byte, n int) string {
-	result := make([]byte, n)
-	for i := 0; i < n; i++ {
-		result[i] = c
-	}
-	return string(result)
-}
-
 func maxInt(a, b int) int {
 	if a > b {
 		return a
