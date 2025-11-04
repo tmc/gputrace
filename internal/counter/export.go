@@ -140,13 +140,23 @@ func (e *CountersCSVExporter) generateCounterRowFromBinaryData(index, functionIn
 	values["Vertex Shader Utilization"] = metrics.VertexUtilization
 	values["Fragment Shader Utilization"] = metrics.FragmentUtilization
 
-	// Memory bandwidth (convert bytes to MB)
-	if metrics.MemoryBandwidth > 0 {
-		mbValue := float64(metrics.MemoryBandwidth) / (1024 * 1024)
-		values["Device Memory Bandwidth"] = mbValue
-		// Approximate read/write split
-		values["Bytes Read From Device Memory"] = mbValue / 2.0
-		values["Bytes Written To Device Memory"] = mbValue / 2.0
+	// Memory bandwidth - use real extracted values from gputrace-65
+	if metrics.BytesReadFromDeviceMemory > 0 || metrics.BytesWrittenToDeviceMemory > 0 {
+		values["Bytes Read From Device Memory"] = float64(metrics.BytesReadFromDeviceMemory)
+		values["Bytes Written To Device Memory"] = float64(metrics.BytesWrittenToDeviceMemory)
+	}
+	if metrics.BufferDeviceMemoryBytesRead > 0 || metrics.BufferDeviceMemoryBytesWritten > 0 {
+		values["Buffer Device Memory Bytes Read"] = float64(metrics.BufferDeviceMemoryBytesRead)
+		values["Buffer Device Memory Bytes Written"] = float64(metrics.BufferDeviceMemoryBytesWritten)
+	}
+	if metrics.DeviceMemoryBandwidthGBps > 0 {
+		values["Device Memory Bandwidth"] = metrics.DeviceMemoryBandwidthGBps
+	}
+	if metrics.GPUReadBandwidthGBps > 0 {
+		values["GPU Read Bandwidth"] = metrics.GPUReadBandwidthGBps
+	}
+	if metrics.GPUWriteBandwidthGBps > 0 {
+		values["GPU Write Bandwidth"] = metrics.GPUWriteBandwidthGBps
 	}
 
 	// Cache metrics

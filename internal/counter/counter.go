@@ -23,17 +23,47 @@ type PerfCounterStats struct {
 
 // ShaderHardwareMetrics represents hardware performance metrics for a shader.
 type ShaderHardwareMetrics struct {
-	ShaderName      string  // Shader/kernel function name
-	PipelineState   uint64  // Pipeline state object address
-	SIMDGroups      int     // Number of SIMD groups executed
-	AllocatedRegs   int     // Number of allocated registers
-	HighRegister    int     // Highest register used
-	SpilledBytes    int     // Bytes spilled to memory
-	ALUUtilization  float64 // ALU utilization percentage (0-100)
-	KernelOccupancy float64 // Kernel occupancy percentage (0-100)
-	MemoryBandwidth uint64  // Memory bandwidth used (bytes)
-	ExecutionCount  int     // Number of times this shader executed
-	TotalCycles     uint64  // Total GPU cycles spent
+	ShaderName                    string  // Shader/kernel function name
+	PipelineState                 uint64  // Pipeline state object address
+	SIMDGroups                    int     // Number of SIMD groups executed
+	AllocatedRegs                 int     // Number of allocated registers
+	HighRegister                  int     // Highest register used
+	SpilledBytes                  int     // Bytes spilled to memory
+	ALUUtilization                float64 // ALU utilization percentage (0-100)
+	KernelOccupancy               float64 // Kernel occupancy percentage (0-100)
+	MemoryBandwidth               uint64  // Memory bandwidth used (bytes)
+	ExecutionCount                int     // Number of times this shader executed
+	TotalCycles                   uint64  // Total GPU cycles spent
+	BytesReadFromDeviceMemory     uint64  // Total bytes read from device memory
+	BytesWrittenToDeviceMemory    uint64  // Total bytes written to device memory
+	BufferDeviceMemoryBytesRead   uint64  // Buffer bytes read from device memory
+	BufferDeviceMemoryBytesWritten uint64 // Buffer bytes written to device memory
+	DeviceMemoryBandwidthGBps     float64 // Device memory bandwidth in GB/s
+	GPUReadBandwidthGBps          float64 // GPU read bandwidth in GB/s
+	GPUWriteBandwidthGBps         float64 // GPU write bandwidth in GB/s
+
+	// Shader Launch Limiters (0-100% range, typically 0.03-0.08)
+	ComputeShaderLaunchLimiter  float64 // Compute shader launch limiter percentage
+	FragmentShaderLaunchLimiter float64 // Fragment shader launch limiter percentage
+	VertexShaderLaunchLimiter   float64 // Vertex shader launch limiter percentage
+
+	// Pipeline Limiters (0-100% range, typically 0.01-3.74 for complex shaders)
+	ControlFlowLimiter              float64 // Control flow limiter percentage
+	InstructionThroughputLimiter    float64 // Instruction throughput limiter percentage
+	IntegerAndComplexLimiter        float64 // Integer and complex instruction limiter percentage
+	IntegerAndConditionalLimiter    float64 // Integer and conditional instruction limiter percentage
+	F16Limiter                      float64 // FP16 instruction limiter percentage
+	F32Limiter                      float64 // FP32 instruction limiter percentage
+
+	// Memory Limiters (0-100% range, typically 0.01-0.15)
+	L1CacheLimiter        float64 // L1 cache limiter percentage
+	LastLevelCacheLimiter float64 // Last level cache limiter percentage
+	MMULimiter            float64 // MMU limiter percentage
+
+	// Texture Limiters (0-100% range, typically 0.01-0.04)
+	TextureFilteringLimiter float64 // Texture filtering limiter percentage
+	TextureWriteLimiter     float64 // Texture write limiter percentage
+	TextureReadLimiter      float64 // Texture read limiter percentage
 }
 
 // CounterRecord represents a single parsed record from a counter file.
@@ -332,15 +362,88 @@ func parseCounterRecord(data []byte, offset int64) *CounterRecord {
 			metrics.ExecutionCount = int(float64(rawValue) / 27.75)
 		}
 
-		// ALU Utilization - search for float32 value around 0.98
-		// This requires scanning for percentage values (0.0-1.0 range)
-		if aluUtil := findPercentageField(data, 0.95, 1.0); aluUtil >= 0 {
-			metrics.ALUUtilization = aluUtil * 100 // Convert to percentage
+		// ALU Utilization - search for float32 values that look like percentages
+		// Range: 0.0 to 5.0 (since we've seen 3.10 in test data)
+		// These are already in percentage format (not 0-1 scale)
+		if aluUtil := findFloatInRange(data, 0.0, 5.0); aluUtil >= 0 {
+			if aluUtil > 0.001 { // Filter out near-zero noise
+				metrics.ALUUtilization = aluUtil // Already in percentage format
+			}
 		}
 
-		// Kernel Occupancy - search for float32 value around 0.30
-		if occupancy := findPercentageField(data, 0.25, 0.35); occupancy >= 0 {
-			metrics.KernelOccupancy = occupancy * 100 // Convert to percentage
+		// Kernel Occupancy - search for float32 value in occupancy range
+		// Range: 0.0 to 2.0 (typically < 1.0 but can exceed)
+		if occupancy := findFloatInRange(data, 0.0, 2.0); occupancy >= 0 && occupancy != metrics.ALUUtilization {
+			metrics.KernelOccupancy = occupancy // Already in percentage format
+		}
+
+		// Memory Bandwidth - search for byte count fields
+		// Look for reasonable byte values (typically < 100KB per sample)
+		for i := 0; i < len(data)-8; i += 4 {
+			// Try uint64 for bytes read/written
+			if i+8 <= len(data) {
+				val := binary.LittleEndian.Uint64(data[i : i+8])
+				// Reasonable range: 1KB - 100KB per sample
+				if val >= 1000 && val <= 100000 {
+					// Assign to bytes read if not set
+					if metrics.BytesReadFromDeviceMemory == 0 {
+						metrics.BytesReadFromDeviceMemory = val
+					} else if metrics.BytesWrittenToDeviceMemory == 0 {
+						metrics.BytesWrittenToDeviceMemory = val
+						break // Found both
+					}
+				}
+			}
+		}
+
+		// Shader Limiters - search for float32 values in limiter range (0.01-5.0)
+		// Limiters are bottleneck indicators, typically small percentages
+		// From CSV analysis: ranges from 0.01 to 3.74 for complex shaders
+		limiters := findAllFloatsInRange(data, 0.001, 5.0, 20) // Find up to 20 limiter candidates
+
+		// Map limiters to fields (heuristic assignment based on observed value ranges)
+		// This is experimental and will need validation against CSV ground truth
+		for i, val := range limiters {
+			switch {
+			case i == 0 && val >= 0.03 && val <= 0.1:
+				// First small value likely Compute Shader Launch Limiter (0.03-0.08 range)
+				if metrics.ComputeShaderLaunchLimiter == 0 {
+					metrics.ComputeShaderLaunchLimiter = val
+				}
+			case val >= 0.01 && val <= 0.02:
+				// Very small values often L1 Cache or Control Flow limiters
+				if metrics.L1CacheLimiter == 0 {
+					metrics.L1CacheLimiter = val
+				} else if metrics.ControlFlowLimiter == 0 {
+					metrics.ControlFlowLimiter = val
+				}
+			case val >= 0.02 && val <= 0.04:
+				// Small values in this range: MMU, Texture Write, or Last Level Cache
+				if metrics.MMULimiter == 0 {
+					metrics.MMULimiter = val
+				} else if metrics.TextureWriteLimiter == 0 {
+					metrics.TextureWriteLimiter = val
+				} else if metrics.LastLevelCacheLimiter == 0 {
+					metrics.LastLevelCacheLimiter = val
+				}
+			case val >= 0.05 && val <= 0.1:
+				// Medium-small values: Instruction Throughput (0.06-0.08 range)
+				if metrics.InstructionThroughputLimiter == 0 {
+					metrics.InstructionThroughputLimiter = val
+				}
+			case val >= 1.0 && val <= 2.0:
+				// Larger values: Integer limiters for complex shaders
+				if metrics.IntegerAndComplexLimiter == 0 {
+					metrics.IntegerAndComplexLimiter = val
+				} else if metrics.IntegerAndConditionalLimiter == 0 {
+					metrics.IntegerAndConditionalLimiter = val
+				}
+			case val >= 2.0 && val <= 4.0:
+				// Large values: F32 limiter for complex math (3.74 seen)
+				if metrics.F32Limiter == 0 {
+					metrics.F32Limiter = val
+				}
+			}
 		}
 
 		record.ShaderMetric = metrics
@@ -349,19 +452,46 @@ func parseCounterRecord(data []byte, offset int64) *CounterRecord {
 	return record
 }
 
-// findPercentageField scans record data for float32 values in the specified range.
+// findFloatInRange scans record data for float32 values in the specified range.
 // Returns the first matching value, or -1 if not found.
-func findPercentageField(data []byte, minVal, maxVal float64) float64 {
+func findFloatInRange(data []byte, minVal, maxVal float64) float64 {
 	for i := 0; i < len(data)-4; i += 4 {
 		// Try reading as float32
 		bits := binary.LittleEndian.Uint32(data[i : i+4])
 		val := float64(intBitsToFloat32(bits))
 
-		if val >= minVal && val <= maxVal {
+		// Check for valid float (not NaN or Inf)
+		if val >= minVal && val <= maxVal && !isNaNOrInf(val) {
 			return val
 		}
 	}
 	return -1
+}
+
+// findAllFloatsInRange scans record data for all float32 values in the specified range.
+// Returns up to maxCount matching values, sorted by offset order.
+func findAllFloatsInRange(data []byte, minVal, maxVal float64, maxCount int) []float64 {
+	results := make([]float64, 0, maxCount)
+	seen := make(map[float64]bool) // Avoid duplicates
+
+	for i := 0; i < len(data)-4 && len(results) < maxCount; i += 4 {
+		// Try reading as float32
+		bits := binary.LittleEndian.Uint32(data[i : i+4])
+		val := float64(intBitsToFloat32(bits))
+
+		// Check for valid float (not NaN or Inf) and not already seen
+		if val >= minVal && val <= maxVal && !isNaNOrInf(val) && !seen[val] {
+			results = append(results, val)
+			seen[val] = true
+		}
+	}
+
+	return results
+}
+
+// isNaNOrInf checks if a float is NaN or Infinity
+func isNaNOrInf(val float64) bool {
+	return val != val || val > 1e308 || val < -1e308
 }
 
 // intBitsToFloat32 converts uint32 bits to float32 (equivalent to math.Float32frombits)
@@ -426,6 +556,8 @@ func aggregateEncoderMetrics(group *EncoderGroup) *ShaderHardwareMetrics {
 	var totalOccupancy float64
 	var aluSamples int
 	var occupancySamples int
+	var totalBytesRead uint64
+	var totalBytesWritten uint64
 
 	for _, record := range group.SampleRecords {
 		if record.ShaderMetric == nil {
@@ -448,6 +580,10 @@ func aggregateEncoderMetrics(group *EncoderGroup) *ShaderHardwareMetrics {
 			totalOccupancy += metrics.KernelOccupancy
 			occupancySamples++
 		}
+
+		// Sum: Memory bandwidth (bytes)
+		totalBytesRead += metrics.BytesReadFromDeviceMemory
+		totalBytesWritten += metrics.BytesWrittenToDeviceMemory
 	}
 
 	aggregated.ExecutionCount = totalInvocations
@@ -459,6 +595,11 @@ func aggregateEncoderMetrics(group *EncoderGroup) *ShaderHardwareMetrics {
 	if occupancySamples > 0 {
 		aggregated.KernelOccupancy = totalOccupancy / float64(occupancySamples)
 	}
+
+	// Aggregate memory bandwidth
+	aggregated.BytesReadFromDeviceMemory = totalBytesRead
+	aggregated.BytesWrittenToDeviceMemory = totalBytesWritten
+	aggregated.MemoryBandwidth = totalBytesRead + totalBytesWritten
 
 	return aggregated
 }

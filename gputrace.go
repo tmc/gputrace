@@ -18,6 +18,8 @@
 package gputrace
 
 import (
+	"github.com/tmc/mlx-go/experiments/gputrace/internal/counter"
+	"github.com/tmc/mlx-go/experiments/gputrace/internal/export"
 	"github.com/tmc/mlx-go/experiments/gputrace/internal/shader"
 	"github.com/tmc/mlx-go/experiments/gputrace/internal/timing"
 	"github.com/tmc/mlx-go/experiments/gputrace/internal/trace"
@@ -25,13 +27,19 @@ import (
 
 // Re-export main types from internal packages
 type (
-	Trace               = trace.Trace
-	Metadata            = trace.Metadata
-	RecordType          = trace.RecordType
-	EncoderTiming       = trace.EncoderTiming
-	ShaderSourceMapper  = shader.ShaderSourceMapper
-	ShaderMetrics       = shader.ShaderMetrics
-	ShaderMetricsReport = shader.ShaderMetricsReport
+	Trace                  = trace.Trace
+	Metadata               = trace.Metadata
+	RecordType             = trace.RecordType
+	EncoderTiming          = trace.EncoderTiming
+	Store0TimingData       = timing.Store0TimingData
+	Store0Encoder          = timing.Store0Encoder
+	ShaderSourceMapper     = shader.ShaderSourceMapper
+	ShaderMetrics          = shader.ShaderMetrics
+	ShaderMetricsReport    = shader.ShaderMetricsReport
+	PerfCounterStats       = counter.PerfCounterStats
+	ShaderHardwareMetrics  = counter.ShaderHardwareMetrics
+	XcodeCounterData       = counter.XcodeCounterData
+	XcodeEncoderCounters   = counter.XcodeEncoderCounters
 )
 
 // Re-export constants
@@ -59,10 +67,13 @@ const (
 
 // Re-export functions
 var (
-	ExtractTimingData       = timing.ExtractTimingData
-	GenerateSyntheticTiming = timing.GenerateSyntheticTiming
-	ExtractShaderMetrics    = shader.ExtractShaderMetrics
-	NewShaderSourceMapper   = shader.NewShaderSourceMapper
+	ExtractTimingData              = timing.ExtractTimingData
+	ExtractStore0Timing            = timing.ExtractStore0Timing
+	ConvertStore0ToEncoderTimings  = timing.ConvertStore0ToEncoderTimings
+	GenerateSyntheticTiming        = timing.GenerateSyntheticTiming
+	ExtractShaderMetrics           = shader.ExtractShaderMetrics
+	NewShaderSourceMapper          = shader.NewShaderSourceMapper
+	ToPprof                        = export.ToPprof
 )
 
 // Open opens and parses a .gputrace bundle.

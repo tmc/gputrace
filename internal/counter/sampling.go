@@ -165,7 +165,39 @@ type EncoderCounterMetrics struct {
 	// Hardware metrics (if available from Apple GPU counters)
 	ALUUtilization  float64 // 0-100%
 	CacheHitRate    float64 // 0-100%
-	MemoryBandwidth uint64  // Bytes
+	MemoryBandwidth uint64  // Bytes (total)
+
+	// Detailed memory bandwidth metrics (from gputrace-65)
+	BytesReadFromDeviceMemory     uint64  // Device memory read bytes
+	BytesWrittenToDeviceMemory    uint64  // Device memory write bytes
+	BufferDeviceMemoryBytesRead   uint64  // Buffer-specific read bytes
+	BufferDeviceMemoryBytesWritten uint64 // Buffer-specific write bytes
+	DeviceMemoryBandwidthGBps     float64 // Device memory bandwidth (GB/s)
+	GPUReadBandwidthGBps          float64 // GPU read bandwidth (GB/s)
+	GPUWriteBandwidthGBps         float64 // GPU write bandwidth (GB/s)
+
+	// Shader Launch Limiters (from gputrace-67)
+	ComputeShaderLaunchLimiter  float64 // Compute shader launch limiter percentage
+	FragmentShaderLaunchLimiter float64 // Fragment shader launch limiter percentage
+	VertexShaderLaunchLimiter   float64 // Vertex shader launch limiter percentage
+
+	// Pipeline Limiters (from gputrace-67)
+	ControlFlowLimiter              float64 // Control flow limiter percentage
+	InstructionThroughputLimiter    float64 // Instruction throughput limiter percentage
+	IntegerAndComplexLimiter        float64 // Integer and complex instruction limiter percentage
+	IntegerAndConditionalLimiter    float64 // Integer and conditional instruction limiter percentage
+	F16Limiter                      float64 // FP16 instruction limiter percentage
+	F32Limiter                      float64 // FP32 instruction limiter percentage
+
+	// Memory Limiters (from gputrace-67)
+	L1CacheLimiter        float64 // L1 cache limiter percentage
+	LastLevelCacheLimiter float64 // Last level cache limiter percentage
+	MMULimiter            float64 // MMU limiter percentage
+
+	// Texture Limiters (from gputrace-67)
+	TextureFilteringLimiter float64 // Texture filtering limiter percentage
+	TextureWriteLimiter     float64 // Texture write limiter percentage
+	TextureReadLimiter      float64 // Texture read limiter percentage
 }
 
 // DispatchCounterMetrics contains counter metrics for a single compute dispatch.
@@ -527,7 +559,39 @@ func PopulateEncoderMetricsFromBinaryParsing(t *trace.Trace) ([]EncoderCounterMe
 			ALUUtilization:     shaderMetric.ALUUtilization,  // 0-100%
 			ComputeUtilization: shaderMetric.ALUUtilization,  // Use ALU as compute utilization proxy
 			CacheHitRate:       90.0,                         // Default estimate (no field extraction yet)
-			MemoryBandwidth:    shaderMetric.MemoryBandwidth, // Bytes
+			MemoryBandwidth:    shaderMetric.MemoryBandwidth, // Bytes (total)
+
+			// Detailed memory bandwidth from gputrace-65
+			BytesReadFromDeviceMemory:     shaderMetric.BytesReadFromDeviceMemory,
+			BytesWrittenToDeviceMemory:    shaderMetric.BytesWrittenToDeviceMemory,
+			BufferDeviceMemoryBytesRead:   shaderMetric.BufferDeviceMemoryBytesRead,
+			BufferDeviceMemoryBytesWritten: shaderMetric.BufferDeviceMemoryBytesWritten,
+			DeviceMemoryBandwidthGBps:     shaderMetric.DeviceMemoryBandwidthGBps,
+			GPUReadBandwidthGBps:          shaderMetric.GPUReadBandwidthGBps,
+			GPUWriteBandwidthGBps:         shaderMetric.GPUWriteBandwidthGBps,
+
+			// Shader Launch Limiters from gputrace-67
+			ComputeShaderLaunchLimiter:  shaderMetric.ComputeShaderLaunchLimiter,
+			FragmentShaderLaunchLimiter: shaderMetric.FragmentShaderLaunchLimiter,
+			VertexShaderLaunchLimiter:   shaderMetric.VertexShaderLaunchLimiter,
+
+			// Pipeline Limiters from gputrace-67
+			ControlFlowLimiter:              shaderMetric.ControlFlowLimiter,
+			InstructionThroughputLimiter:    shaderMetric.InstructionThroughputLimiter,
+			IntegerAndComplexLimiter:        shaderMetric.IntegerAndComplexLimiter,
+			IntegerAndConditionalLimiter:    shaderMetric.IntegerAndConditionalLimiter,
+			F16Limiter:                      shaderMetric.F16Limiter,
+			F32Limiter:                      shaderMetric.F32Limiter,
+
+			// Memory Limiters from gputrace-67
+			L1CacheLimiter:        shaderMetric.L1CacheLimiter,
+			LastLevelCacheLimiter: shaderMetric.LastLevelCacheLimiter,
+			MMULimiter:            shaderMetric.MMULimiter,
+
+			// Texture Limiters from gputrace-67
+			TextureFilteringLimiter: shaderMetric.TextureFilteringLimiter,
+			TextureWriteLimiter:     shaderMetric.TextureWriteLimiter,
+			TextureReadLimiter:      shaderMetric.TextureReadLimiter,
 
 			// Execution counts (validated with 100% accuracy on Encoder 5)
 			DispatchCount: shaderMetric.ExecutionCount, // This is kernel invocations
