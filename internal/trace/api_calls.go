@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
 )
 
 // InitCall represents an initialization API call before the first command buffer.
@@ -100,7 +101,7 @@ func (t *Trace) ParseAPICallList() (*APICallList, error) {
 	callNum = nextCallNum
 
 	// Parse all command buffers
-	commandBuffers, err := t.ParseCommandBuffers(t)
+	commandBuffers, err := t.ParseCommandBuffers()
 	if err != nil {
 		return nil, fmt.Errorf("parse command buffers: %w", err)
 	}
@@ -333,7 +334,7 @@ func parseCommandBufferCalls(data []byte, cb *CommandBuffer, startCallNum int) (
 	}
 
 	// Parse dispatches
-	dispatches, err := ParseDispatchInRegion(nil, data, 0)
+	dispatches, err := (&Trace{}).ParseDispatchInRegion(data, 0)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -479,7 +480,7 @@ func (t *Trace) FormatAPICallList(w io.Writer) error {
 	}
 
 	// Parse command buffers to get structure
-	commandBuffers, err := t.ParseCommandBuffers(t)
+	commandBuffers, err := t.ParseCommandBuffers()
 	if err != nil {
 		return fmt.Errorf("parse command buffers: %w", err)
 	}
@@ -646,7 +647,7 @@ func (t *Trace) formatCommandBufferWithEncoders(w io.Writer, data []byte, allCBs
 
 	// If no kernel names, try to detect encoder count from dispatches
 	if numEncoders == 0 {
-		dispatches, _ := ParseDispatchInRegion(t, cbData, cb.Offset)
+		dispatches, _ := t.ParseDispatchInRegion(cbData, cb.Offset)
 		numEncoders = len(dispatches)
 		if numEncoders == 0 {
 			numEncoders = 1 // At least one encoder
@@ -655,7 +656,7 @@ func (t *Trace) formatCommandBufferWithEncoders(w io.Writer, data []byte, allCBs
 
 	// Parse all buffer bindings and dispatches
 	bindings, _ := parseBufferBindings(cbData)
-	dispatches, _ := ParseDispatchInRegion(t, cbData, cb.Offset)
+	dispatches, _ := t.ParseDispatchInRegion(cbData, cb.Offset)
 
 	// Parse pipeline state addresses from Ct records (type 14)
 	pipelineAddrs := []uint64{}

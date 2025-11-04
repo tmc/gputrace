@@ -41,16 +41,7 @@ type APICall struct {
 }
 
 // DispatchThreads represents a dispatchThreads or dispatchThreadgroups call.
-type DispatchThreads struct {
-	// Thread dimensions
-	ThreadsX, ThreadsY, ThreadsZ uint64
-
-	// Threads per threadgroup dimensions
-	ThreadsPerGroupX, ThreadsPerGroupY, ThreadsPerGroupZ uint64
-
-	// Offset in capture file
-	Offset int64
-}
+type DispatchThreads = trace.DispatchThreads
 
 // ParseDetailedCommandBuffer extracts all API calls from a specific command buffer.
 func (t *trace.Trace) ParseDetailedCommandBuffer(cbIndex int) (*DetailedCommandBuffer, error) {
@@ -197,54 +188,6 @@ func parseEncodersInRegion(data []byte, baseOffset int64) ([]*ComputeEncoder, er
 }
 
 // ParseDispatchInRegion parses dispatch calls within a command buffer region.
-func (t *trace.Trace) ParseDispatchInRegion(data []byte, baseOffset int64) ([]DispatchThreads, error) {
-	var dispatches []DispatchThreads
-	dispatchMarker := []byte("ul@3")
-
-	offset := 0
-	for {
-		pos := bytes.Index(data[offset:], dispatchMarker)
-		if pos == -1 {
-			break
-		}
-
-		absolutePos := offset + pos
-
-		// Dispatch structure (discovered by reverse engineering):
-		// +0x00: "ul@3" marker (4 bytes)
-		// +0x04: variable data
-		// +0x11: threadsX (uint64, 8 bytes)
-		// +0x19: threadsY (uint64, 8 bytes)
-		// +0x21: threadsZ (uint64, 8 bytes)
-		// +0x29: threadsPerGroupX (uint64, 8 bytes)
-		// +0x31: threadsPerGroupY (uint64, 8 bytes)
-		// +0x39: threadsPerGroupZ (uint64, 8 bytes)
-
-		if absolutePos+0x41 <= len(data) {
-			threadsX := binary.LittleEndian.Uint64(data[absolutePos+0x11 : absolutePos+0x19])
-			threadsY := binary.LittleEndian.Uint64(data[absolutePos+0x19 : absolutePos+0x21])
-			threadsZ := binary.LittleEndian.Uint64(data[absolutePos+0x21 : absolutePos+0x29])
-
-			threadsPerGroupX := binary.LittleEndian.Uint64(data[absolutePos+0x29 : absolutePos+0x31])
-			threadsPerGroupY := binary.LittleEndian.Uint64(data[absolutePos+0x31 : absolutePos+0x39])
-			threadsPerGroupZ := binary.LittleEndian.Uint64(data[absolutePos+0x39 : absolutePos+0x41])
-
-			dispatches = append(dispatches, DispatchThreads{
-				ThreadsX:         threadsX,
-				ThreadsY:         threadsY,
-				ThreadsZ:         threadsZ,
-				ThreadsPerGroupX: threadsPerGroupX,
-				ThreadsPerGroupY: threadsPerGroupY,
-				ThreadsPerGroupZ: threadsPerGroupZ,
-				Offset:           baseOffset + int64(absolutePos),
-			})
-		}
-
-		offset += pos + 4
-	}
-
-	return dispatches, nil
-}
 
 // FormatCommandBuffer returns a human-readable representation of a command buffer.
 func (dcb *DetailedCommandBuffer) FormatCommandBuffer() string {

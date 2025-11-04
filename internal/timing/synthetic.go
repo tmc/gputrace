@@ -4,11 +4,13 @@ import (
 	"fmt"
 
 	"github.com/google/pprof/profile"
+
+	"github.com/tmc/mlx-go/experiments/gputrace/internal/trace"
 )
 
 // GenerateSyntheticTiming creates timing data from kernel names when no real timing is available.
 // This is useful for qualitative analysis even when performance counters weren't captured.
-func (t *Trace) GenerateSyntheticTiming() []*EncoderTiming {
+func (t *trace.Trace) GenerateSyntheticTiming() []*EncoderTiming {
 	if len(t.KernelNames) == 0 {
 		return nil
 	}
@@ -114,7 +116,7 @@ func estimateKernelDuration(kernelName string) uint64 {
 }
 
 // ToPprofWithSynthetic creates a pprof profile, using synthetic timing if needed.
-func (t *Trace) ToPprofWithSynthetic(timings []*EncoderTiming) (*profile.Profile, error) {
+func (t *trace.Trace) ToPprofWithSynthetic(timings []*EncoderTiming) (*profile.Profile, error) {
 	// If no timing data, generate synthetic timing from kernel names
 	if len(timings) == 0 && len(t.KernelNames) > 0 {
 		timings = t.GenerateSyntheticTiming()

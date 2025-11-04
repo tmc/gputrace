@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/tmc/mlx-go/experiments/gputrace/internal/timing"
 )
 
 // KDebugEvent represents a kernel debug trace event.
@@ -254,7 +253,7 @@ func CorrelateGPUExecution(events []*KDebugEvent) []*GPUExecutionInterval {
 }
 
 // EnhancedTimingFromKDebug creates enhanced timing data from kdebug events.
-func (p *KDebugParser) EnhancedTimingFromKDebug() ([]*timing.EncoderTiming, error) {
+func (p *KDebugParser) EnhancedTimingFromKDebug() ([]*EncoderTiming, error) {
 	events, err := p.ParseKDebugEvents()
 	if err != nil {
 		return nil, err
@@ -263,7 +262,7 @@ func (p *KDebugParser) EnhancedTimingFromKDebug() ([]*timing.EncoderTiming, erro
 	intervals := CorrelateGPUExecution(events)
 
 	// Convert to EncoderTiming format
-	timings := make([]*timing.EncoderTiming, 0, len(intervals))
+	timings := make([]*EncoderTiming, 0, len(intervals))
 
 	for i, interval := range intervals {
 		if interval.StartEvent == nil || interval.EndEvent == nil {

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/tmc/mlx-go/experiments/gputrace/internal/trace"
 )
 
 // Store0TimingData contains timing information extracted from store0.
@@ -24,7 +26,7 @@ type Store0Encoder struct {
 
 // ExtractStore0Timing attempts to extract timing data from store0 file.
 // This implements a heuristic parser for the Instruments timeline format.
-func (t *Trace) ExtractStore0Timing() (*Store0TimingData, error) {
+func (t *trace.Trace) ExtractStore0Timing() (*Store0TimingData, error) {
 	// Check if store0 exists
 	store0Path := filepath.Join(t.Path, "store0")
 	if _, err := os.Stat(store0Path); os.IsNotExist(err) {
@@ -143,7 +145,7 @@ func groupTimestampsIntoEncoders(timestamps []timestampCandidate, kernelCount in
 }
 
 // ConvertStore0ToEncoderTimings converts Store0TimingData to EncoderTiming for pprof generation.
-func (t *Trace) ConvertStore0ToEncoderTimings(store0Data *Store0TimingData) []*EncoderTiming {
+func (t *trace.Trace) ConvertStore0ToEncoderTimings(store0Data *Store0TimingData) []*EncoderTiming {
 	timings := make([]*EncoderTiming, 0, len(store0Data.Encoders))
 
 	for _, enc := range store0Data.Encoders {

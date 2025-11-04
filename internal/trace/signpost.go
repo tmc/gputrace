@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/tmc/mlx-go/experiments/gputrace/internal/timing"
 )
 
 // SignpostInterval represents a Metal signpost interval.
@@ -236,7 +235,7 @@ func (p *SignpostParser) ExtractShaderTimeline() ([]*SignpostInterval, error) {
 // CorrelateSignpostsWithEncoders matches signpost intervals with encoder timings.
 func CorrelateSignpostsWithEncoders(
 	signposts []*SignpostInterval,
-	encoders []*timing.EncoderTiming,
+	encoders []*EncoderTiming,
 ) map[string]*SignpostInterval {
 
 	correlation := make(map[string]*SignpostInterval)
@@ -259,13 +258,13 @@ func CorrelateSignpostsWithEncoders(
 }
 
 // EnhancedTimingFromSignposts creates enhanced timing data from signposts.
-func (p *SignpostParser) EnhancedTimingFromSignposts() ([]*timing.EncoderTiming, error) {
+func (p *SignpostParser) EnhancedTimingFromSignposts() ([]*EncoderTiming, error) {
 	intervals, err := p.ParseMetalSignposts()
 	if err != nil {
 		return nil, err
 	}
 
-	timings := make([]*timing.EncoderTiming, 0, len(intervals))
+	timings := make([]*EncoderTiming, 0, len(intervals))
 
 	for i, interval := range intervals {
 		timing := &EncoderTiming{

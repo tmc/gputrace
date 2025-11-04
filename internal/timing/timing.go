@@ -4,20 +4,15 @@ import (
 	"encoding/binary"
 	"fmt"
 	"strings"
+
+	"github.com/tmc/mlx-go/experiments/gputrace/internal/trace"
 )
 
-// EncoderTiming represents GPU timing information for a compute encoder.
-type EncoderTiming struct {
-	Label          string
-	StartTimestamp uint64  // Mach absolute time
-	EndTimestamp   uint64  // Mach absolute time
-	DurationNs     uint64  // Duration in nanoseconds
-	DurationMs     float64 // Duration in milliseconds
-	Percentage     float32 // Percentage of total GPU time
-}
+// EncoderTiming is an alias to trace.EncoderTiming for backwards compatibility.
+type EncoderTiming = trace.EncoderTiming
 
 // ExtractTimingData extracts timing information for all encoders from capture data.
-func (t *Trace) ExtractTimingData() ([]*EncoderTiming, error) {
+func (t *trace.Trace) ExtractTimingData() ([]*EncoderTiming, error) {
 	var timings []*EncoderTiming
 
 	// For each encoder label we found, look for timestamps at fixed offsets
@@ -190,7 +185,7 @@ func findLabelOffset(data []byte, label string) int {
 
 // ConvertToInstrumentsDeepCopy converts GPU trace timing to Instruments Deep Copy format
 // which can be piped to instrumentsToPprof.
-func (t *Trace) ConvertToInstrumentsDeepCopy(timings []*EncoderTiming) string {
+func (t *trace.Trace) ConvertToInstrumentsDeepCopy(timings []*EncoderTiming) string {
 	// Instruments Deep Copy format:
 	// Weight          Self Weight             Symbol Name
 	// 100.0 ms  100%  50.0 ms                 ProcessName (pid)
@@ -232,7 +227,7 @@ func (t *Trace) ConvertToInstrumentsDeepCopy(timings []*EncoderTiming) string {
 
 // BuildHierarchicalProfile builds a hierarchical profile matching the structure
 // seen in Xcode Instruments, with kernel names as leaf nodes.
-func (t *Trace) BuildHierarchicalProfile(timings []*EncoderTiming) string {
+func (t *trace.Trace) BuildHierarchicalProfile(timings []*EncoderTiming) string {
 	output := "Weight\tSelf Weight\t\tSymbol Name\n"
 
 	var totalMs float64
@@ -278,7 +273,7 @@ func (t *Trace) BuildHierarchicalProfile(timings []*EncoderTiming) string {
 
 // buildKernelMapTiming maps encoder labels to kernel function names (timing.go version).
 // Note: pprof_with_source.go has the canonical buildKernelMap implementation.
-func (t *Trace) buildKernelMapTiming() map[string]string {
+func (t *trace.Trace) buildKernelMapTiming() map[string]string {
 	// Based on our test data:
 	// Stage1_Normalize -> step1_normalize
 	// Stage2_ReLU -> step2_apply_relu
