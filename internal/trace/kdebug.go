@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-
 )
 
 // KDebugEvent represents a kernel debug trace event.

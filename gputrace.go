@@ -18,14 +18,20 @@
 package gputrace
 
 import (
+	"github.com/tmc/mlx-go/experiments/gputrace/internal/shader"
+	"github.com/tmc/mlx-go/experiments/gputrace/internal/timing"
 	"github.com/tmc/mlx-go/experiments/gputrace/internal/trace"
 )
 
-// Re-export main types from internal/trace package
+// Re-export main types from internal packages
 type (
-	Trace      = trace.Trace
-	Metadata   = trace.Metadata
-	RecordType = trace.RecordType
+	Trace               = trace.Trace
+	Metadata            = trace.Metadata
+	RecordType          = trace.RecordType
+	EncoderTiming       = trace.EncoderTiming
+	ShaderSourceMapper  = shader.ShaderSourceMapper
+	ShaderMetrics       = shader.ShaderMetrics
+	ShaderMetricsReport = shader.ShaderMetricsReport
 )
 
 // Re-export constants
@@ -49,6 +55,14 @@ const (
 	MagicMTSP   = trace.MagicMTSP
 	MagicXDIC   = trace.MagicXDIC
 	MagicBPList = trace.MagicBPList
+)
+
+// Re-export functions
+var (
+	ExtractTimingData       = timing.ExtractTimingData
+	GenerateSyntheticTiming = timing.GenerateSyntheticTiming
+	ExtractShaderMetrics    = shader.ExtractShaderMetrics
+	NewShaderSourceMapper   = shader.NewShaderSourceMapper
 )
 
 // Open opens and parses a .gputrace bundle.

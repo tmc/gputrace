@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
 )
 
 // InitCall represents an initialization API call before the first command buffer.

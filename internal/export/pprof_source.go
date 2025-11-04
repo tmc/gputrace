@@ -3,15 +3,19 @@ package export
 import (
 	"strings"
 
-	"github.com/tmc/mlx-go/experiments/gputrace/internal/trace"
-
 	"github.com/google/pprof/profile"
+
+	"github.com/tmc/mlx-go/experiments/gputrace/internal/shader"
+	"github.com/tmc/mlx-go/experiments/gputrace/internal/trace"
 )
+
+// Type aliases
+type ShaderSourceMapper = shader.ShaderSourceMapper
 
 // ToPprofWithSource converts GPU trace to pprof format with Metal shader source mapping.
 // This version includes file paths and line numbers for kernels, enabling source code
 // navigation in pprof tools.
-func (t *trace.Trace) ToPprofWithSource(timings []*EncoderTiming, mapper *ShaderSourceMapper) (*profile.Profile, error) {
+func ToPprofWithSource(t *trace.Trace, timings []*EncoderTiming, mapper *ShaderSourceMapper) (*profile.Profile, error) {
 	prof := &profile.Profile{
 		SampleType: []*profile.ValueType{
 			{Type: "gpu_time", Unit: "nanoseconds"},
@@ -68,7 +72,7 @@ func (t *trace.Trace) ToPprofWithSource(timings []*EncoderTiming, mapper *Shader
 	locID := uint64(3)
 
 	// Map encoders to kernels
-	kernelMap := t.buildKernelMap()
+	kernelMap := buildKernelMap(t)
 
 	// Add encoder and kernel samples with source mapping
 	for _, timing := range timings {
@@ -157,7 +161,7 @@ func (t *trace.Trace) ToPprofWithSource(timings []*EncoderTiming, mapper *Shader
 }
 
 // buildKernelMap creates a mapping from encoder labels to kernel names.
-func (t *trace.Trace) buildKernelMap() map[string]string {
+func buildKernelMap(t *trace.Trace) map[string]string {
 	m := make(map[string]string)
 
 	// Simple heuristic: match by numbers or keywords

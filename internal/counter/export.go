@@ -4,6 +4,14 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
+
+	"github.com/tmc/mlx-go/experiments/gputrace/internal/trace"
+)
+
+// Type aliases
+type (
+	Trace          = trace.Trace
+	ComputeEncoder = trace.ComputeEncoder
 )
 
 // CountersCSVExporter exports performance counter data in Xcode Counters.csv format.

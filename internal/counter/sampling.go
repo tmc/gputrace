@@ -3,6 +3,8 @@ package counter
 import (
 	"fmt"
 	"sort"
+
+	"github.com/tmc/mlx-go/experiments/gputrace/internal/trace"
 )
 
 // CounterSamplingConfig configures performance counter collection during replay.
@@ -313,42 +315,42 @@ func (cs *CounterSampler) ResolveCounterSamples() error {
 // replay. It does NOT use .gpuprofiler_raw data - that's a separate approach
 // (see perfcounters.go). The replay approach collects FRESH counter data by
 // re-executing the GPU workload with MTLCounterSampleBuffer.
-func (cs *CounterSampler) AggregateEncoderMetrics(plan *ReplayPlan) []EncoderCounterMetrics {
-	metrics := make([]EncoderCounterMetrics, 0)
-
-	// Group samples by encoder
-	for i := range plan.Encoders {
-		encoderSamples := cs.getSamplesForEncoder(i)
-		if len(encoderSamples) == 0 {
-			continue
-		}
-
-		metric := cs.aggregateEncoderSamples(plan.Encoders[i], encoderSamples)
-		metrics = append(metrics, metric)
-	}
-
-	return metrics
-}
+// func (cs *CounterSampler) AggregateEncoderMetrics(plan *ReplayPlan) []EncoderCounterMetrics {
+// 	metrics := make([]EncoderCounterMetrics, 0)
+// 
+// 	// Group samples by encoder
+// 	for i := range plan.Encoders {
+// 		encoderSamples := cs.getSamplesForEncoder(i)
+// 		if len(encoderSamples) == 0 {
+// 			continue
+// 		}
+// 
+// 		metric := cs.aggregateEncoderSamples(plan.Encoders[i], encoderSamples)
+// 		metrics = append(metrics, metric)
+// 	}
+// 
+// 	return metrics
+// }
 
 // AggregateDispatchMetrics aggregates counter samples into per-dispatch metrics.
-func (cs *CounterSampler) AggregateDispatchMetrics(plan *ReplayPlan) []DispatchCounterMetrics {
-	metrics := make([]DispatchCounterMetrics, 0)
-
-	// Get compute dispatches
-	dispatches := plan.GetComputeDispatches()
-
-	for i, dispatch := range dispatches {
-		dispatchSamples := cs.getSamplesForDispatch(i)
-		if len(dispatchSamples) < 2 {
-			continue // Need start and end samples
-		}
-
-		metric := cs.aggregateDispatchSamples(dispatch, dispatchSamples)
-		metrics = append(metrics, metric)
-	}
-
-	return metrics
-}
+// func (cs *CounterSampler) AggregateDispatchMetrics(plan *ReplayPlan) []DispatchCounterMetrics {
+// 	metrics := make([]DispatchCounterMetrics, 0)
+// 
+// 	// Get compute dispatches
+// 	dispatches := plan.GetComputeDispatches()
+// 
+// 	for i, dispatch := range dispatches {
+// 		dispatchSamples := cs.getSamplesForDispatch(i)
+// 		if len(dispatchSamples) < 2 {
+// 			continue // Need start and end samples
+// 		}
+// 
+// 		metric := cs.aggregateDispatchSamples(dispatch, dispatchSamples)
+// 		metrics = append(metrics, metric)
+// 	}
+// 
+// 	return metrics
+// }
 
 // Helper functions
 
@@ -372,98 +374,98 @@ func (cs *CounterSampler) getSamplesForDispatch(dispatchIndex int) []CounterSamp
 	return samples
 }
 
-func (cs *CounterSampler) aggregateEncoderSamples(encoder ReplayEncoderInfo, samples []CounterSample) EncoderCounterMetrics {
-	// Sort samples by index
-	sort.Slice(samples, func(i, j int) bool {
-		return samples[i].Index < samples[j].Index
-	})
+// func (cs *CounterSampler) aggregateEncoderSamples(encoder ReplayEncoderInfo, samples []CounterSample) EncoderCounterMetrics {
+// 	// Sort samples by index
+// 	sort.Slice(samples, func(i, j int) bool {
+// 		return samples[i].Index < samples[j].Index
+// 	})
+// 
+// 	metric := EncoderCounterMetrics{
+// 		EncoderIndex: encoder.Index,
+// 		EncoderLabel: encoder.Label,
+// 		EncoderType:  encoder.Type,
+// 	}
+// 
+// 	if len(samples) >= 2 {
+// 		startSample := samples[0]
+// 		endSample := samples[len(samples)-1]
+// 
+// 		metric.StartTimestamp = startSample.Timestamp
+// 		metric.EndTimestamp = endSample.Timestamp
+// 
+// 		if endSample.Timestamp > startSample.Timestamp {
+// 			metric.DurationCycles = endSample.Timestamp - startSample.Timestamp
+// 
+// 			// Convert cycles to nanoseconds if GPU frequency known
+// 			if cs.Config.GPUFrequency > 0 {
+// 				metric.Duration = (metric.DurationCycles * 1_000_000_000) / cs.Config.GPUFrequency
+// 			}
+// 		}
+// 
+// 		// Aggregate utilization values (average across samples)
+// 		for _, sample := range samples {
+// 			if val, ok := sample.Values["vertexUtilization"]; ok {
+// 				metric.VertexUtilization += val
+// 			}
+// 			if val, ok := sample.Values["fragmentUtilization"]; ok {
+// 				metric.FragmentUtilization += val
+// 			}
+// 			if val, ok := sample.Values["computeUtilization"]; ok {
+// 				metric.ComputeUtilization += val
+// 			}
+// 			if val, ok := sample.Values["aluUtilization"]; ok {
+// 				metric.ALUUtilization += val
+// 			}
+// 		}
+// 
+// 		// Average the utilization values
+// 		sampleCount := float64(len(samples))
+// 		metric.VertexUtilization /= sampleCount
+// 		metric.FragmentUtilization /= sampleCount
+// 		metric.ComputeUtilization /= sampleCount
+// 		metric.ALUUtilization /= sampleCount
+// 	}
+// 
+// 	return metric
+// }
 
-	metric := EncoderCounterMetrics{
-		EncoderIndex: encoder.Index,
-		EncoderLabel: encoder.Label,
-		EncoderType:  encoder.Type,
-	}
-
-	if len(samples) >= 2 {
-		startSample := samples[0]
-		endSample := samples[len(samples)-1]
-
-		metric.StartTimestamp = startSample.Timestamp
-		metric.EndTimestamp = endSample.Timestamp
-
-		if endSample.Timestamp > startSample.Timestamp {
-			metric.DurationCycles = endSample.Timestamp - startSample.Timestamp
-
-			// Convert cycles to nanoseconds if GPU frequency known
-			if cs.Config.GPUFrequency > 0 {
-				metric.Duration = (metric.DurationCycles * 1_000_000_000) / cs.Config.GPUFrequency
-			}
-		}
-
-		// Aggregate utilization values (average across samples)
-		for _, sample := range samples {
-			if val, ok := sample.Values["vertexUtilization"]; ok {
-				metric.VertexUtilization += val
-			}
-			if val, ok := sample.Values["fragmentUtilization"]; ok {
-				metric.FragmentUtilization += val
-			}
-			if val, ok := sample.Values["computeUtilization"]; ok {
-				metric.ComputeUtilization += val
-			}
-			if val, ok := sample.Values["aluUtilization"]; ok {
-				metric.ALUUtilization += val
-			}
-		}
-
-		// Average the utilization values
-		sampleCount := float64(len(samples))
-		metric.VertexUtilization /= sampleCount
-		metric.FragmentUtilization /= sampleCount
-		metric.ComputeUtilization /= sampleCount
-		metric.ALUUtilization /= sampleCount
-	}
-
-	return metric
-}
-
-func (cs *CounterSampler) aggregateDispatchSamples(dispatch ReplayCommand, samples []CounterSample) DispatchCounterMetrics {
-	sort.Slice(samples, func(i, j int) bool {
-		return samples[i].Index < samples[j].Index
-	})
-
-	metric := DispatchCounterMetrics{
-		DispatchIndex: dispatch.SequenceNum,
-		EncoderIndex:  dispatch.EncoderIndex,
-		FunctionName:  dispatch.FunctionName,
-	}
-
-	if len(samples) >= 2 {
-		startSample := samples[0]
-		endSample := samples[len(samples)-1]
-
-		metric.StartTimestamp = startSample.Timestamp
-		metric.EndTimestamp = endSample.Timestamp
-
-		if endSample.Timestamp > startSample.Timestamp {
-			metric.DurationCycles = endSample.Timestamp - startSample.Timestamp
-
-			if cs.Config.GPUFrequency > 0 {
-				metric.Duration = (metric.DurationCycles * 1_000_000_000) / cs.Config.GPUFrequency
-			}
-		}
-
-		// Get utilization from end sample
-		if val, ok := endSample.Values["computeUtilization"]; ok {
-			metric.ComputeUtilization = val
-		}
-		if val, ok := endSample.Values["aluUtilization"]; ok {
-			metric.ALUUtilization = val
-		}
-	}
-
-	return metric
-}
+// func (cs *CounterSampler) aggregateDispatchSamples(dispatch ReplayCommand, samples []CounterSample) DispatchCounterMetrics {
+// 	sort.Slice(samples, func(i, j int) bool {
+// 		return samples[i].Index < samples[j].Index
+// 	})
+// 
+// 	metric := DispatchCounterMetrics{
+// 		DispatchIndex: dispatch.SequenceNum,
+// 		EncoderIndex:  dispatch.EncoderIndex,
+// 		FunctionName:  dispatch.FunctionName,
+// 	}
+// 
+// 	if len(samples) >= 2 {
+// 		startSample := samples[0]
+// 		endSample := samples[len(samples)-1]
+// 
+// 		metric.StartTimestamp = startSample.Timestamp
+// 		metric.EndTimestamp = endSample.Timestamp
+// 
+// 		if endSample.Timestamp > startSample.Timestamp {
+// 			metric.DurationCycles = endSample.Timestamp - startSample.Timestamp
+// 
+// 			if cs.Config.GPUFrequency > 0 {
+// 				metric.Duration = (metric.DurationCycles * 1_000_000_000) / cs.Config.GPUFrequency
+// 			}
+// 		}
+// 
+// 		// Get utilization from end sample
+// 		if val, ok := endSample.Values["computeUtilization"]; ok {
+// 			metric.ComputeUtilization = val
+// 		}
+// 		if val, ok := endSample.Values["aluUtilization"]; ok {
+// 			metric.ALUUtilization = val
+// 		}
+// 	}
+// 
+// 	return metric
+// }
 
 // getCounterSet returns counter set definition by name.
 // In real implementation, this would query MTLDevice.counterSets.
@@ -498,17 +500,6 @@ func (cs *CounterSampler) getCounterSet(name string) *CounterSet {
 	}
 }
 
-// GetComputeDispatches returns all compute dispatch commands from the plan.
-func (plan *ReplayPlan) GetComputeDispatches() []ReplayCommand {
-	var dispatches []ReplayCommand
-	for _, cmd := range plan.Commands {
-		if cmd.Type == "compute_dispatch" {
-			dispatches = append(dispatches, cmd)
-		}
-	}
-	return dispatches
-}
-
 // PopulateEncoderMetricsFromBinaryParsing populates EncoderCounterMetrics from .gpuprofiler_raw parsing.
 //
 // This bridges the binary parsing approach (gputrace-44) with the replay counter sampling framework.
@@ -516,9 +507,9 @@ func (plan *ReplayPlan) GetComputeDispatches() []ReplayCommand {
 //
 // Purpose: Provide REAL counter data to the CSV export and validation pipeline while waiting
 // for Metal bindings. This enables end-to-end validation: Binary parsing → EncoderMetrics → CSV → Compare with Xcode
-func PopulateEncoderMetricsFromBinaryParsing(trace *Trace) ([]EncoderCounterMetrics, error) {
+func PopulateEncoderMetricsFromBinaryParsing(t *trace.Trace) ([]EncoderCounterMetrics, error) {
 	// Parse performance counters from .gpuprofiler_raw files
-	stats, err := trace.ParsePerfCounters()
+	stats, err := ParsePerfCounters(t)
 	if err != nil {
 		return nil, err
 	}

@@ -82,10 +82,10 @@ func (e *EnhancedTimingExtractor) ExtractEnhancedTiming() ([]*EnhancedTiming, er
 // extractMTSPTiming extracts timing from MTSP records.
 func (e *EnhancedTimingExtractor) extractMTSPTiming() ([]*EncoderTiming, error) {
 	// Try standard timing extraction
-	timings, err := e.trace.ExtractTimingData()
+	timings, err := ExtractTimingData(e.trace)
 	if err != nil || len(timings) == 0 {
 		// Fall back to synthetic timing
-		timings = e.trace.GenerateSyntheticTiming()
+		timings = GenerateSyntheticTiming(e.trace)
 		if len(timings) == 0 {
 			return nil, fmt.Errorf("no MTSP timing available")
 		}

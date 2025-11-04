@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"unsafe"
 
+	"github.com/tmc/mlx-go/experiments/gputrace/internal/command"
 	"github.com/tmc/mlx-go/experiments/gputrace/internal/trace"
 )
 
@@ -62,7 +63,7 @@ type EncoderGroup struct {
 // - Memory bandwidth usage
 //
 // Returns PerfCounterStats with hardware metrics, or error if parsing fails.
-func (t *trace.Trace) ParsePerfCounters() (*PerfCounterStats, error) {
+func ParsePerfCounters(t *trace.Trace) (*PerfCounterStats, error) {
 	// Find .gpuprofiler_raw directory (adjacent or inside trace bundle)
 	perfDir := t.Path + ".gpuprofiler_raw"
 	if _, err := os.Stat(perfDir); os.IsNotExist(err) {
@@ -143,7 +144,7 @@ func (t *trace.Trace) ParsePerfCounters() (*PerfCounterStats, error) {
 	}
 
 	// Try to correlate with shader names from trace
-	if err := t.correlateShaderNames(stats); err == nil {
+	if err := correlateShaderNames(t, stats); err == nil {
 		// Correlation succeeded, metrics now have shader names
 	}
 
@@ -157,8 +158,8 @@ func (t *trace.Trace) ParsePerfCounters() (*PerfCounterStats, error) {
 
 // CountFromPerfCounters attempts to count dispatches from performance counter files.
 // Deprecated: Use ParsePerfCounters() instead for full hardware metrics.
-func (t *trace.Trace) CountFromPerfCounters() (*PerfCounterStats, error) {
-	return t.ParsePerfCounters()
+func CountFromPerfCounters(t *trace.Trace) (*PerfCounterStats, error) {
+	return ParsePerfCounters(t)
 }
 
 // counterFileStats represents statistics from a single counter file.
@@ -239,7 +240,7 @@ func parseCounterFileWithMetrics(path string) (*counterFileStats, []*ShaderHardw
 }
 
 // correlateShaderNames attempts to match pipeline state addresses with shader names from the trace.
-func (t *trace.Trace) correlateShaderNames(stats *PerfCounterStats) error {
+func correlateShaderNames(t *trace.Trace, stats *PerfCounterStats) error {
 	// Parse command buffers to get encoder/shader information
 	commandBuffers, err := t.ParseCommandBuffers()
 	if err != nil {
@@ -250,7 +251,7 @@ func (t *trace.Trace) correlateShaderNames(stats *PerfCounterStats) error {
 	pipelineToName := make(map[uint64]string)
 
 	for _, cb := range commandBuffers {
-		dcb, err := t.ParseDetailedCommandBuffer(cb.Index)
+		dcb, err := command.ParseDetailedCommandBuffer(t, cb.Index)
 		if err != nil {
 			continue
 		}
@@ -478,7 +479,7 @@ func findRecordBoundaries(data []byte) []int {
 }
 
 // HasPerfCounters returns true if the trace has performance counter data.
-func (t *trace.Trace) HasPerfCounters() bool {
+func HasPerfCounters(t *trace.Trace) bool {
 	// Check for .gpuprofiler_raw directory adjacent to trace
 	perfDir := t.Path + ".gpuprofiler_raw"
 	if info, err := os.Stat(perfDir); err == nil && info.IsDir() {
@@ -502,7 +503,7 @@ func (t *trace.Trace) HasPerfCounters() bool {
 }
 
 // GetDispatchCountMethod returns a description of which method will be used to count dispatches.
-func (t *trace.Trace) GetDispatchCountMethod() string {
+func GetDispatchCountMethod(t *trace.Trace) string {
 	if t.HasPerfCounters() {
 		return "Performance Counters (100% accurate)"
 	}
@@ -511,12 +512,12 @@ func (t *trace.Trace) GetDispatchCountMethod() string {
 
 // GetRegisterDataForShader returns register allocation data for a specific shader if available.
 // Returns (allocatedRegs, highRegister, spilledBytes, found).
-func (t *trace.Trace) GetRegisterDataForShader(pipelineStateAddr uint64) (int, int, int, bool) {
+func GetRegisterDataForShader(t *trace.Trace, pipelineStateAddr uint64) (int, int, int, bool) {
 	if !t.HasPerfCounters() {
 		return 0, 0, 0, false
 	}
 
-	stats, err := t.ParsePerfCounters()
+	stats, err := ParsePerfCounters(t)
 	if err != nil {
 		return 0, 0, 0, false
 	}
@@ -536,12 +537,12 @@ func (t *trace.Trace) GetRegisterDataForShader(pipelineStateAddr uint64) (int, i
 
 // GetRegisterDataByName returns register allocation data for a shader by name.
 // Returns (allocatedRegs, highRegister, spilledBytes, found).
-func (t *trace.Trace) GetRegisterDataByName(shaderName string) (int, int, int, bool) {
+func GetRegisterDataByName(t *trace.Trace, shaderName string) (int, int, int, bool) {
 	if !t.HasPerfCounters() {
 		return 0, 0, 0, false
 	}
 
-	stats, err := t.ParsePerfCounters()
+	stats, err := ParsePerfCounters(t)
 	if err != nil {
 		return 0, 0, 0, false
 	}

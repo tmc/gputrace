@@ -34,7 +34,7 @@ type TraceStatistics struct {
 }
 
 // ExtractStatistics analyzes a trace and extracts comprehensive statistics.
-func (t *trace.Trace) ExtractStatistics() (*TraceStatistics, error) {
+func ExtractStatistics(t *trace.Trace) (*TraceStatistics, error) {
 	stats := &TraceStatistics{
 		RecordTypes: make(map[string]int),
 	}
@@ -53,7 +53,7 @@ func (t *trace.Trace) ExtractStatistics() (*TraceStatistics, error) {
 	}
 
 	// Extract buffer usage from device resources
-	bufferUsage, uniqueBuffers := t.extractBufferUsage()
+	bufferUsage, uniqueBuffers := extractBufferUsage(t)
 	stats.BufferUsageBytes = bufferUsage
 	stats.BufferUsageGB = float64(bufferUsage) / (1024 * 1024 * 1024)
 	stats.UniqueBuffers = uniqueBuffers
@@ -83,7 +83,7 @@ func (t *trace.Trace) ExtractStatistics() (*TraceStatistics, error) {
 }
 
 // extractBufferUsage calculates total buffer memory usage from MTLBuffer files in the trace directory.
-func (t *trace.Trace) extractBufferUsage() (totalBytes uint64, uniqueBuffers int) {
+func extractBufferUsage(t *trace.Trace) (totalBytes uint64, uniqueBuffers int) {
 	// Scan for MTLBuffer-*-0 files (base buffers, symlinks point to these)
 	entries, err := os.ReadDir(t.Path)
 	if err != nil {

@@ -7,6 +7,8 @@ import (
 	"io"
 	"sort"
 
+	"github.com/tmc/mlx-go/experiments/gputrace/internal/command"
+	"github.com/tmc/mlx-go/experiments/gputrace/internal/timing"
 	"github.com/tmc/mlx-go/experiments/gputrace/internal/trace"
 )
 
@@ -71,7 +73,7 @@ type ShaderMetricsReport struct {
 }
 
 // ExtractShaderMetrics extracts comprehensive performance metrics for all shaders in the trace.
-func (t *trace.Trace) ExtractShaderMetrics() (*ShaderMetricsReport, error) {
+func ExtractShaderMetrics(t *trace.Trace) (*ShaderMetricsReport, error) {
 	// Parse command buffers and encoders
 	commandBuffers, err := t.ParseCommandBuffers()
 	if err != nil {
@@ -87,7 +89,7 @@ func (t *trace.Trace) ExtractShaderMetrics() (*ShaderMetricsReport, error) {
 
 	// Process each command buffer
 	for _, cb := range commandBuffers {
-		dcb, err := t.ParseDetailedCommandBuffer(cb.Index)
+		dcb, err := command.ParseDetailedCommandBuffer(t, cb.Index)
 		if err != nil {
 			continue
 		}
@@ -119,12 +121,12 @@ func (t *trace.Trace) ExtractShaderMetrics() (*ShaderMetricsReport, error) {
 	}
 
 	// Extract dispatch information to populate thread configuration
-	if err := t.populateThreadMetrics(metricsMap); err != nil {
+	if err := populateThreadMetrics(t, metricsMap); err != nil {
 		return nil, fmt.Errorf("populate thread metrics: %w", err)
 	}
 
 	// Estimate timing information
-	if err := t.estimateTimingMetrics(metricsMap); err != nil {
+	if err := estimateTimingMetrics(t, metricsMap); err != nil {
 		return nil, fmt.Errorf("estimate timing metrics: %w", err)
 	}
 
@@ -188,21 +190,21 @@ func (t *trace.Trace) ExtractShaderMetrics() (*ShaderMetricsReport, error) {
 }
 
 // populateThreadMetrics extracts thread configuration from dispatch calls.
-func (t *trace.Trace) populateThreadMetrics(metricsMap map[string]*ShaderMetrics) error {
+func populateThreadMetrics(t *trace.Trace, metricsMap map[string]*ShaderMetrics) error {
 	commandBuffers, err := t.ParseCommandBuffers()
 	if err != nil {
 		return err
 	}
 
 	for _, cb := range commandBuffers {
-		dcb, err := t.ParseDetailedCommandBuffer(cb.Index)
+		dcb, err := command.ParseDetailedCommandBuffer(t, cb.Index)
 		if err != nil {
 			continue
 		}
 
 		// Get dispatch data for this command buffer
-		data, err := t.readCaptureFile()
-		if err != nil {
+		data := t.CaptureData
+		if data == nil {
 			continue
 		}
 
@@ -244,13 +246,13 @@ func (t *trace.Trace) populateThreadMetrics(metricsMap map[string]*ShaderMetrics
 }
 
 // estimateTimingMetrics uses the timing extractor to populate duration information.
-func (t *trace.Trace) estimateTimingMetrics(metricsMap map[string]*ShaderMetrics) error {
-	// Use the timing extractor to get duration estimates
-	extractor := NewTimingExtractor(t)
-	timings, err := extractor.ExtractTimingV2()
+func estimateTimingMetrics(t *trace.Trace, metricsMap map[string]*ShaderMetrics) error {
+	// TODO: Use proper timing extraction when available
+	// For now, extract timing data directly
+	timings, err := timing.ExtractTimingData(t)
 	if err != nil {
 		// Fall back to synthetic timing if extraction fails
-		timings = extractor.extractSynthetic()
+		timings = timing.GenerateSyntheticTiming(t)
 	}
 
 	// Map timings to metrics
@@ -422,10 +424,6 @@ func identifyBottlenecks(metrics *ShaderMetrics) {
 	}
 }
 
-// readCaptureFile is a helper to read the capture file.
-func (t *trace.Trace) readCaptureFile() ([]byte, error) {
-	return t.CaptureData, nil
-}
 
 // FormatShaderMetricsReport formats the shader metrics report as a human-readable string.
 func FormatShaderMetricsReport(report *ShaderMetricsReport) string {
@@ -617,31 +615,18 @@ func FormatShadersXcodeStyle(w io.Writer, report *ShaderMetricsReport, trace *Tr
 		simdGroups := fmt.Sprintf("%d", metrics.TotalThreadgroups)
 
 		// Try to get real register data from performance counters
-		var allocatedRegs, highReg, spilledBytes int
-		var hasRealData bool
+		// TODO: Implement GetRegisterDataForShader method
+		// var allocatedRegs, highReg, spilledBytes int
+		// var hasRealData bool
+		// if trace != nil {
+		// 	allocatedRegs, highReg, spilledBytes, hasRealData = trace.GetRegisterDataForShader(metrics.Address)
+		// }
 
-		if trace != nil {
-			allocatedRegs, highReg, spilledBytes, hasRealData = trace.GetRegisterDataForShader(metrics.Address)
-		}
-
-		var allocatedRegsStr, highRegStr, spilledBytesStr string
-
-		if hasRealData {
-			// Use actual hardware-measured register data
-			allocatedRegsStr = fmt.Sprintf("%d", allocatedRegs)
-			highRegStr = fmt.Sprintf("%d", highReg)
-			if spilledBytes > 0 {
-				spilledBytesStr = formatSpilledBytes(spilledBytes)
-			} else {
-				spilledBytesStr = "0 bytes"
-			}
-		} else {
-			// Fall back to estimation
-			allocatedRegs = estimateAllocatedRegisters(metrics)
-			allocatedRegsStr = fmt.Sprintf("%d (est)", allocatedRegs)
-			highRegStr = allocatedRegsStr
-			spilledBytesStr = "0 bytes (est)"
-		}
+		// For now, always use estimation
+		allocatedRegs := estimateAllocatedRegisters(metrics)
+		allocatedRegsStr := fmt.Sprintf("%d (est)", allocatedRegs)
+		highRegStr := allocatedRegsStr
+		spilledBytesStr := "0 bytes (est)"
 
 		// Print row matching Xcode format
 		fmt.Fprintf(w, "%-8s%-60s%-12s%-24s%-16s%-24s%-16s%-16s\n",

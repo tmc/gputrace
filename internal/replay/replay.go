@@ -3,6 +3,36 @@ package replay
 import (
 	"fmt"
 	"sort"
+
+	"github.com/tmc/mlx-go/experiments/gputrace/internal/counter"
+	"github.com/tmc/mlx-go/experiments/gputrace/internal/trace"
+)
+
+// Type aliases for commonly used types from other packages
+type (
+	Trace                 = trace.Trace
+	CounterSampler        = counter.CounterSampler
+	CounterSamplingConfig = counter.CounterSamplingConfig
+	CounterSamplingResult = counter.CounterSamplingResult
+	RecordType            = trace.RecordType
+)
+
+// Re-export common record type constants from mtsp.go
+const (
+	RecordTypeCt     = "Ct"
+	RecordTypeCi     = "Ci"
+	RecordTypeCS     = "CS"
+	RecordTypeCulul  = "Culul"
+	RecordTypeCU     = "CU"
+	RecordTypeCul    = "Cul"
+	RecordTypeCut    = "Cut"
+	RecordTypeCuw    = "Cuw"
+)
+
+// Function aliases from counter package
+var (
+	DefaultCounterSamplingConfig = counter.DefaultCounterSamplingConfig
+	NewCounterSampler            = counter.NewCounterSampler
 )
 
 // ReplayEngine orchestrates GPU trace replay from .gputrace files.
@@ -216,6 +246,17 @@ type ReplayPlan struct {
 	TotalEncoders     int
 	ComputeDispatches int
 	ICBExecutions     int
+}
+
+// GetComputeDispatches returns all compute dispatch commands from the plan.
+func (plan *ReplayPlan) GetComputeDispatches() []ReplayCommand {
+	var dispatches []ReplayCommand
+	for _, cmd := range plan.Commands {
+		if cmd.Type == "compute_dispatch" {
+			dispatches = append(dispatches, cmd)
+		}
+	}
+	return dispatches
 }
 
 // ValidateReplay checks if the trace can be replayed.
@@ -539,9 +580,11 @@ func (re *ReplayEngine) AnalyzeReplayWithCounters() (*ReplayPlan, *CounterSampli
 	}
 
 	// Aggregate metrics from counter samples
-	// These samples would contain fresh data from MTLCounterSampleBuffer after replay
-	encoderMetrics := re.CounterSampler.AggregateEncoderMetrics(plan)
-	dispatchMetrics := re.CounterSampler.AggregateDispatchMetrics(plan)
+	// TODO: These functions are commented out in counter package due to import cycle
+	// encoderMetrics := re.CounterSampler.AggregateEncoderMetrics(plan)
+	// dispatchMetrics := re.CounterSampler.AggregateDispatchMetrics(plan)
+	var encoderMetrics []counter.EncoderCounterMetrics
+	var dispatchMetrics []counter.DispatchCounterMetrics
 
 	// Build result
 	result := &CounterSamplingResult{

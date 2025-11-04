@@ -10,7 +10,7 @@ import (
 
 // GenerateSyntheticTiming creates timing data from kernel names when no real timing is available.
 // This is useful for qualitative analysis even when performance counters weren't captured.
-func (t *trace.Trace) GenerateSyntheticTiming() []*EncoderTiming {
+func GenerateSyntheticTiming(t *trace.Trace) []*EncoderTiming {
 	if len(t.KernelNames) == 0 {
 		return nil
 	}
@@ -116,15 +116,17 @@ func estimateKernelDuration(kernelName string) uint64 {
 }
 
 // ToPprofWithSynthetic creates a pprof profile, using synthetic timing if needed.
-func (t *trace.Trace) ToPprofWithSynthetic(timings []*EncoderTiming) (*profile.Profile, error) {
+func ToPprofWithSynthetic(t *trace.Trace, timings []*EncoderTiming) (*profile.Profile, error) {
 	// If no timing data, generate synthetic timing from kernel names
 	if len(timings) == 0 && len(t.KernelNames) > 0 {
-		timings = t.GenerateSyntheticTiming()
+		timings = GenerateSyntheticTiming(t)
 		if len(timings) == 0 {
 			return nil, fmt.Errorf("no timing data and unable to generate synthetic timing")
 		}
 	}
 
+	// TODO: Re-enable when ToPprof is properly defined
 	// Use the regular ToPprof function
-	return t.ToPprof(timings)
+	// return t.ToPprof(timings)
+	return nil, fmt.Errorf("ToPprof not yet implemented")
 }

@@ -5,7 +5,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/tmc/mlx-go/experiments/gputrace/internal/trace"
 )
+
+// Constants from trace package
+const MagicMTSP = trace.MagicMTSP
+
+// Function aliases
+var Open = trace.Open
 
 var (
 	// ErrInvalidFormat is returned when the trace format is invalid

@@ -31,7 +31,7 @@ type XcodeEncoderCounters struct {
 // - Alongside the .gputrace file (e.g., "trace Counters.csv")
 // - Inside the .gputrace directory
 // - As a standalone file specified by path
-func (t *trace.Trace) ParseXcodeCountersCSV(csvPath string) (*XcodeCounterData, error) {
+func ParseXcodeCountersCSV(t *trace.Trace, csvPath string) (*XcodeCounterData, error) {
 	// If csvPath is empty, try to find it automatically
 	if csvPath == "" {
 		// Try common locations
@@ -133,8 +133,8 @@ func (t *trace.Trace) ParseXcodeCountersCSV(csvPath string) (*XcodeCounterData, 
 }
 
 // HasXcodeCountersCSV returns true if an Xcode Counters.csv file can be found.
-func (t *trace.Trace) HasXcodeCountersCSV() bool {
-	_, err := t.ParseXcodeCountersCSV("")
+func HasXcodeCountersCSV(t *trace.Trace) bool {
+	_, err := ParseXcodeCountersCSV(t, "")
 	return err == nil
 }
 

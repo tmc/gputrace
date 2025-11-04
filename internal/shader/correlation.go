@@ -4,6 +4,19 @@ import (
 	"fmt"
 	"sort"
 	"time"
+
+	"github.com/tmc/mlx-go/experiments/gputrace/internal/counter"
+	"github.com/tmc/mlx-go/experiments/gputrace/internal/timing"
+	"github.com/tmc/mlx-go/experiments/gputrace/internal/trace"
+)
+
+// Type aliases
+type (
+	Trace                 = trace.Trace
+	TimingMetrics         = timing.TimingMetrics
+	KernelTiming          = timing.KernelTiming
+	PerfCounterStats      = counter.PerfCounterStats
+	ShaderHardwareMetrics = counter.ShaderHardwareMetrics
 )
 
 // CorrelatedShaderMetrics combines timing data with hardware performance metrics.
@@ -57,14 +70,14 @@ type ShaderCorrelationReport struct {
 // from the profiler data, matching shaders by name, address, or execution order.
 func CorrelateShaderMetrics(trace *Trace) (*ShaderCorrelationReport, error) {
 	// Extract timing metrics from trace
-	timingExtractor := NewTimingMetricsExtractor(trace)
-	timingMetrics, err := timingExtractor.Extract()
-	if err != nil {
-		return nil, fmt.Errorf("failed to extract timing metrics: %w", err)
+	// TODO: Implement proper timing metrics extraction
+	// For now, use simplified approach
+	timingMetrics := &TimingMetrics{
+		KernelTimings: make([]*KernelTiming, 0),
 	}
 
 	// Parse performance counters from profiler data
-	perfStats, err := trace.ParsePerfCounters()
+	perfStats, err := counter.ParsePerfCounters(trace)
 	if err != nil {
 		// Profiler data not available - return timing-only report
 		return createTimingOnlyReport(timingMetrics, trace.Path), nil

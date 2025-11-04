@@ -4,14 +4,18 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/tmc/mlx-go/experiments/gputrace/internal/trace"
-
 	"github.com/google/pprof/profile"
+
+	"github.com/tmc/mlx-go/experiments/gputrace/internal/timing"
+	"github.com/tmc/mlx-go/experiments/gputrace/internal/trace"
 )
+
+// Type aliases
+var NewTimingMetricsExtractor = timing.NewTimingMetricsExtractor
 
 // ToPprofWithMetrics converts GPU trace timing metrics to pprof format with improved accuracy.
 // This version aggregates by kernel name and provides better statistical representation.
-func (t *trace.Trace) ToPprofWithMetrics() (*profile.Profile, error) {
+func ToPprofWithMetrics(t *trace.Trace) (*profile.Profile, error) {
 	// Extract timing metrics
 	extractor := NewTimingMetricsExtractor(t)
 	metrics, err := extractor.Extract()
@@ -119,7 +123,7 @@ func (t *trace.Trace) ToPprofWithMetrics() (*profile.Profile, error) {
 
 // ToPprofFlat converts GPU trace timing to a flat pprof format without hierarchy.
 // This is useful for seeing kernel costs without the GPU/Queue overhead.
-func (t *trace.Trace) ToPprofFlat() (*profile.Profile, error) {
+func ToPprofFlat(t *trace.Trace) (*profile.Profile, error) {
 	// Extract timing metrics
 	extractor := NewTimingMetricsExtractor(t)
 	metrics, err := extractor.Extract()
@@ -189,7 +193,7 @@ func (t *trace.Trace) ToPprofFlat() (*profile.Profile, error) {
 
 // ToPprofPerInvocation creates a pprof profile with one sample per kernel invocation.
 // This preserves timing variance and shows the distribution of execution times.
-func (t *trace.Trace) ToPprofPerInvocation() (*profile.Profile, error) {
+func ToPprofPerInvocation(t *trace.Trace) (*profile.Profile, error) {
 	// Extract timing metrics
 	extractor := NewTimingMetricsExtractor(t)
 	metrics, err := extractor.Extract()

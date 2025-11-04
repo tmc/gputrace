@@ -30,7 +30,7 @@ type DispatchCounts struct {
 }
 
 // CountDispatches analyzes a trace and counts dispatches using multiple methods.
-func (t *trace.Trace) CountDispatches() (*DispatchCounts, error) {
+func CountDispatches(t *trace.Trace) (*DispatchCounts, error) {
 	records, err := t.ParseMTSPRecords()
 	if err != nil {
 		return nil, err
@@ -41,9 +41,9 @@ func (t *trace.Trace) CountDispatches() (*DispatchCounts, error) {
 	}
 
 	for _, rec := range records {
-		if rec.Type == RecordTypeCi {
+		if rec.Type == trace.RecordTypeCi {
 			counts.ICBExecutions++
-		} else if rec.Type == RecordTypeCt {
+		} else if rec.Type == trace.RecordTypeCt {
 			ct, err := rec.ParseCtRecord()
 			if err != nil {
 				continue

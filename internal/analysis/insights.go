@@ -5,8 +5,18 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/tmc/mlx-go/experiments/gputrace/internal/shader"
 	"github.com/tmc/mlx-go/experiments/gputrace/internal/trace"
 )
+
+// Type aliases
+type (
+	ShaderMetrics       = shader.ShaderMetrics
+	ShaderMetricsReport = shader.ShaderMetricsReport
+)
+
+// Function aliases
+var ExtractShaderMetrics = shader.ExtractShaderMetrics
 
 // InsightType represents the type of performance insight.
 type InsightType string
@@ -53,13 +63,13 @@ type InsightsReport struct {
 }
 
 // GenerateInsights analyzes trace data and generates actionable performance insights.
-func (t *trace.Trace) GenerateInsights() (*InsightsReport, error) {
+func GenerateInsights(t *trace.Trace) (*InsightsReport, error) {
 	report := &InsightsReport{
 		Insights: make([]*PerformanceInsight, 0),
 	}
 
 	// Extract shader metrics
-	shaderMetrics, err := t.ExtractShaderMetrics()
+	shaderMetrics, err := ExtractShaderMetrics(t)
 	if err != nil {
 		return nil, fmt.Errorf("extract shader metrics: %w", err)
 	}
@@ -69,17 +79,17 @@ func (t *trace.Trace) GenerateInsights() (*InsightsReport, error) {
 	// Analyze each shader for insights
 	for _, shader := range shaderMetrics.Shaders {
 		// Bottleneck detection
-		t.detectBottlenecks(shader, report)
+		detectBottlenecks(shader, report)
 
 		// Optimization opportunities
-		t.detectOptimizations(shader, report)
+		detectOptimizations(t, shader, report)
 
 		// Anti-pattern detection
-		t.detectAntiPatterns(shader, report)
+		detectAntiPatterns(t, shader, report)
 	}
 
 	// Overall analysis
-	t.detectOverallPatterns(shaderMetrics, report)
+	detectOverallPatterns(t, shaderMetrics, report)
 
 	// Calculate severity counts
 	for _, insight := range report.Insights {
@@ -111,7 +121,7 @@ func (t *trace.Trace) GenerateInsights() (*InsightsReport, error) {
 }
 
 // detectBottlenecks identifies memory-bound vs compute-bound shaders.
-func (t *trace.Trace) detectBottlenecks(shader *ShaderMetrics, report *InsightsReport) {
+func detectBottlenecks(shader *ShaderMetrics, report *InsightsReport) {
 	// High GPU time percentage indicates a bottleneck
 	if shader.PercentOfTotal > 20.0 {
 		insight := &PerformanceInsight{
@@ -176,7 +186,7 @@ func (t *trace.Trace) detectBottlenecks(shader *ShaderMetrics, report *InsightsR
 }
 
 // detectOptimizations identifies optimization opportunities.
-func (t *trace.Trace) detectOptimizations(shader *ShaderMetrics, report *InsightsReport) {
+func detectOptimizations(t *trace.Trace, shader *ShaderMetrics, report *InsightsReport) {
 	// Low occupancy detection
 	threadsPerGroup := shader.ThreadsPerGroupX * shader.ThreadsPerGroupY * shader.ThreadsPerGroupZ
 
@@ -257,7 +267,7 @@ func (t *trace.Trace) detectOptimizations(shader *ShaderMetrics, report *Insight
 }
 
 // detectAntiPatterns identifies common performance anti-patterns.
-func (t *trace.Trace) detectAntiPatterns(shader *ShaderMetrics, report *InsightsReport) {
+func detectAntiPatterns(t *trace.Trace, shader *ShaderMetrics, report *InsightsReport) {
 	// Unbalanced threadgroups (not using all dimensions effectively)
 	threadsX := shader.ThreadsPerGroupX
 	threadsY := shader.ThreadsPerGroupY
@@ -320,7 +330,7 @@ func (t *trace.Trace) detectAntiPatterns(shader *ShaderMetrics, report *Insights
 }
 
 // detectOverallPatterns identifies patterns across all shaders.
-func (t *trace.Trace) detectOverallPatterns(metrics *ShaderMetricsReport, report *InsightsReport) {
+func detectOverallPatterns(t *trace.Trace, metrics *ShaderMetricsReport, report *InsightsReport) {
 	// Too many unique shaders (might indicate poor kernel reuse)
 	if metrics.TotalShaders > 50 {
 		insight := &PerformanceInsight{

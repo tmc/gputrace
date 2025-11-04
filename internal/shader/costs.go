@@ -6,7 +6,12 @@ import (
 	"io"
 	"strconv"
 	"strings"
+
+	"github.com/tmc/mlx-go/experiments/gputrace/internal/trace"
 )
+
+// Type alias
+type EncoderTiming = trace.EncoderTiming
 
 // ShaderCost represents the cost/timing data for a single shader invocation.
 type ShaderCost struct {

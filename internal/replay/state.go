@@ -124,42 +124,15 @@ func (rs *ReplayState) DiscoverBuffers() ([]ReplayBufferInfo, error) {
 
 // DiscoverFunctions extracts function information from device resources.
 func (rs *ReplayState) DiscoverFunctions() ([]FunctionInfo, error) {
-	deviceResources, err := rs.Trace.ParseDeviceResources()
-	if err != nil {
-		return nil, fmt.Errorf("parse device resources: %w", err)
-	}
-
+	// TODO: Implement ParseDeviceResources function
 	var functions []FunctionInfo
-	for _, fn := range deviceResources.Functions {
-		funcInfo := FunctionInfo{
-			Address:     fn.Address,
-			Name:        fn.Name,
-			LibraryPath: fn.LibraryPath,
-		}
-		functions = append(functions, funcInfo)
-		rs.FunctionNames[fn.Address] = fn.Name
-	}
-
 	return functions, nil
 }
 
 // DiscoverPipelines extracts pipeline state information from the trace.
 func (rs *ReplayState) DiscoverPipelines() ([]PipelineInfo, error) {
-	deviceResources, err := rs.Trace.ParseDeviceResources()
-	if err != nil {
-		return nil, fmt.Errorf("parse device resources: %w", err)
-	}
-
+	// TODO: Implement ParseDeviceResources function
 	var pipelines []PipelineInfo
-	for _, pso := range deviceResources.PSOs {
-		pipeInfo := PipelineInfo{
-			Address:      pso.Address,
-			FunctionAddr: pso.FunctionAddr,
-			FunctionName: pso.FunctionName,
-		}
-		pipelines = append(pipelines, pipeInfo)
-	}
-
 	return pipelines, nil
 }
 

@@ -12,7 +12,7 @@ import (
 type EncoderTiming = trace.EncoderTiming
 
 // ExtractTimingData extracts timing information for all encoders from capture data.
-func (t *trace.Trace) ExtractTimingData() ([]*EncoderTiming, error) {
+func ExtractTimingData(t *trace.Trace) ([]*EncoderTiming, error) {
 	var timings []*EncoderTiming
 
 	// For each encoder label we found, look for timestamps at fixed offsets
@@ -185,7 +185,7 @@ func findLabelOffset(data []byte, label string) int {
 
 // ConvertToInstrumentsDeepCopy converts GPU trace timing to Instruments Deep Copy format
 // which can be piped to instrumentsToPprof.
-func (t *trace.Trace) ConvertToInstrumentsDeepCopy(timings []*EncoderTiming) string {
+func ConvertToInstrumentsDeepCopy(t *trace.Trace, timings []*EncoderTiming) string {
 	// Instruments Deep Copy format:
 	// Weight          Self Weight             Symbol Name
 	// 100.0 ms  100%  50.0 ms                 ProcessName (pid)
@@ -227,7 +227,7 @@ func (t *trace.Trace) ConvertToInstrumentsDeepCopy(timings []*EncoderTiming) str
 
 // BuildHierarchicalProfile builds a hierarchical profile matching the structure
 // seen in Xcode Instruments, with kernel names as leaf nodes.
-func (t *trace.Trace) BuildHierarchicalProfile(timings []*EncoderTiming) string {
+func BuildHierarchicalProfile(t *trace.Trace, timings []*EncoderTiming) string {
 	output := "Weight\tSelf Weight\t\tSymbol Name\n"
 
 	var totalMs float64
@@ -246,7 +246,7 @@ func (t *trace.Trace) BuildHierarchicalProfile(timings []*EncoderTiming) string 
 	output += fmt.Sprintf("%.2f ms  100%%\t0 ms\t \t %s  0x1\n", totalMs, queueLabel)
 
 	// Map encoder labels to kernel names
-	kernelMap := t.buildKernelMap()
+	kernelMap := buildKernelMapTiming(t)
 
 	// Each encoder with its kernel
 	for i, timing := range timings {
@@ -273,7 +273,7 @@ func (t *trace.Trace) BuildHierarchicalProfile(timings []*EncoderTiming) string 
 
 // buildKernelMapTiming maps encoder labels to kernel function names (timing.go version).
 // Note: pprof_with_source.go has the canonical buildKernelMap implementation.
-func (t *trace.Trace) buildKernelMapTiming() map[string]string {
+func buildKernelMapTiming(t *trace.Trace) map[string]string {
 	// Based on our test data:
 	// Stage1_Normalize -> step1_normalize
 	// Stage2_ReLU -> step2_apply_relu

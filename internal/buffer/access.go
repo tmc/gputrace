@@ -40,14 +40,14 @@ type BufferAccessAnalysis struct {
 // - Buffer reuse frequency across encoders
 // - Memory aliasing (multiple buffer names for same address)
 // - Unused buffers (allocated but never accessed)
-func (t *trace.Trace) AnalyzeBufferAccess() (*BufferAccessAnalysis, error) {
+func AnalyzeBufferAccess(t *trace.Trace) (*BufferAccessAnalysis, error) {
 	analysis := &BufferAccessAnalysis{
 		Patterns:       make(map[uint64]*BufferAccessPattern),
 		AliasedBuffers: make(map[uint64][]string),
 	}
 
 	// Build address-to-name mapping from capture file (CtU<b>ulul records)
-	addrToNames, err := t.buildBufferAddressMapping()
+	addrToNames, err := buildBufferAddressMapping(t)
 	if err != nil {
 		return nil, fmt.Errorf("build address mapping: %w", err)
 	}
@@ -60,7 +60,7 @@ func (t *trace.Trace) AnalyzeBufferAccess() (*BufferAccessAnalysis, error) {
 
 	// Parse Ctulul records (buffer bindings) from capture file
 	// These are the actual buffer binding calls
-	bindings, err := t.parseAllBufferBindings()
+	bindings, err := parseAllBufferBindings(t)
 	if err != nil {
 		return nil, fmt.Errorf("parse buffer bindings: %w", err)
 	}
@@ -169,7 +169,7 @@ type BufferAccessBinding struct {
 }
 
 // parseAllBufferBindings parses all Ctulul records to extract buffer bindings.
-func (t *trace.Trace) parseAllBufferBindings() ([]BufferAccessBinding, error) {
+func parseAllBufferBindings(t *trace.Trace) ([]BufferAccessBinding, error) {
 	var bindings []BufferAccessBinding
 
 	// Pattern: "Ctulul" (6 bytes)
@@ -216,7 +216,7 @@ func (t *trace.Trace) parseAllBufferBindings() ([]BufferAccessBinding, error) {
 
 // buildBufferAddressMapping builds a map from buffer addresses to buffer names.
 // Returns map[address][]names (can have multiple names for same address due to aliasing).
-func (t *trace.Trace) buildBufferAddressMapping() (map[uint64][]string, error) {
+func buildBufferAddressMapping(t *trace.Trace) (map[uint64][]string, error) {
 	addrToNames := make(map[uint64][]string)
 
 	// Parse CtU<b>ulul records from capture file
@@ -263,7 +263,7 @@ func (t *trace.Trace) buildBufferAddressMapping() (map[uint64][]string, error) {
 }
 
 // FormatBufferAccessReport generates a human-readable report of buffer access patterns.
-func (t *trace.Trace) FormatBufferAccessReport(analysis *BufferAccessAnalysis) string {
+func FormatBufferAccessReport(t *trace.Trace, analysis *BufferAccessAnalysis) string {
 	report := "=== Buffer Access Pattern Analysis ===\n\n"
 
 	report += fmt.Sprintf("Total Buffers: %d\n", analysis.TotalBuffers)

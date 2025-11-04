@@ -40,7 +40,7 @@ func DefaultPprofOptions() PprofOptions {
 }
 
 // ToPprofV2 creates an improved pprof profile with enhanced metadata.
-func (t *trace.Trace) ToPprofV2(timings []*EncoderTiming, opts PprofOptions) (*profile.Profile, error) {
+func ToPprofV2(t *trace.Trace, timings []*EncoderTiming, opts PprofOptions) (*profile.Profile, error) {
 	// Calculate timing statistics
 	var totalNs uint64
 	var minNs, maxNs uint64
@@ -185,7 +185,7 @@ func (t *trace.Trace) ToPprofV2(timings []*EncoderTiming, opts PprofOptions) (*p
 	queueLoc := getLocation(queueLabel, "GPU")
 
 	// Map encoders to kernels
-	kernelMap := t.buildKernelMapV2()
+	kernelMap := buildKernelMapV2(t)
 
 	// Extract buffer info for memory samples
 	var bufferMap map[string]uint64
@@ -263,7 +263,7 @@ func (t *trace.Trace) ToPprofV2(timings []*EncoderTiming, opts PprofOptions) (*p
 }
 
 // buildKernelMapV2 creates a mapping from encoder labels to kernel names.
-func (t *trace.Trace) buildKernelMapV2() map[string]string {
+func buildKernelMapV2(t *trace.Trace) map[string]string {
 	m := make(map[string]string)
 
 	// Try to match encoder labels to kernel names by content
@@ -310,10 +310,42 @@ func matchesLabelV2(label, kernel string) bool {
 	return false
 }
 
-// Helper function
+// Helper functions
 func containsString(slice []string, item string) bool {
 	for _, s := range slice {
 		if s == item {
+			return true
+		}
+	}
+	return false
+}
+
+func toLowerSimple(s string) string {
+	b := make([]byte, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			b[i] = c + ('a' - 'A')
+		} else {
+			b[i] = c
+		}
+	}
+	return string(b)
+}
+
+func containsSubstring(s, substr string) bool {
+	if len(substr) > len(s) {
+		return false
+	}
+	for i := 0; i <= len(s)-len(substr); i++ {
+		match := true
+		for j := 0; j < len(substr); j++ {
+			if s[i+j] != substr[j] {
+				match = false
+				break
+			}
+		}
+		if match {
 			return true
 		}
 	}

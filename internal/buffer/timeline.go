@@ -7,8 +7,12 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/tmc/mlx-go/experiments/gputrace/internal/timing"
 	"github.com/tmc/mlx-go/experiments/gputrace/internal/trace"
 )
+
+// Type aliases
+var NewTimingMetricsExtractor = timing.NewTimingMetricsExtractor
 
 // BufferEvent represents a buffer lifecycle event.
 type BufferEvent struct {
@@ -49,7 +53,7 @@ type BufferTimeline struct {
 }
 
 // ExtractBufferTimeline analyzes buffer allocations and usage across the trace.
-func (t *trace.Trace) ExtractBufferTimeline() (*BufferTimeline, error) {
+func ExtractBufferTimeline(t *trace.Trace) (*BufferTimeline, error) {
 	timeline := &BufferTimeline{
 		Buffers: make([]*BufferLifetime, 0),
 		Events:  make([]BufferEvent, 0),
@@ -123,7 +127,7 @@ func (t *trace.Trace) ExtractBufferTimeline() (*BufferTimeline, error) {
 	timeline.Duration = timeline.EndTime - timeline.StartTime
 
 	// Parse buffer bindings to get usage events
-	if err := t.populateBufferUsage(bufferMap, &timeline.Events); err != nil {
+	if err := populateBufferUsage(t, bufferMap, &timeline.Events); err != nil {
 		// Not fatal - continue with what we have
 	}
 
@@ -165,7 +169,7 @@ func (t *trace.Trace) ExtractBufferTimeline() (*BufferTimeline, error) {
 }
 
 // populateBufferUsage fills in buffer usage information from bindings.
-func (t *trace.Trace) populateBufferUsage(bufferMap map[string]*BufferLifetime, events *[]BufferEvent) error {
+func populateBufferUsage(t *trace.Trace, bufferMap map[string]*BufferLifetime, events *[]BufferEvent) error {
 	// Read capture file
 	capturePath := filepath.Join(t.Path, "capture")
 	captureData, err := os.ReadFile(capturePath)
@@ -381,6 +385,16 @@ func FormatBufferTimelineSummary(timeline *BufferTimeline) string {
 	}
 
 	return output
+}
+
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	if maxLen <= 3 {
+		return s[:maxLen]
+	}
+	return s[:maxLen-3] + "..."
 }
 
 func formatBytes(bytes uint64) string {

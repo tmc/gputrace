@@ -47,9 +47,9 @@ type SourceLineAttribution struct {
 }
 
 // ExtractShaderSourceAttribution extracts source-level performance attribution for a specific shader.
-func (t *trace.Trace) ExtractShaderSourceAttribution(shaderName string) (*ShaderSourceAttribution, error) {
+func ExtractShaderSourceAttribution(t *trace.Trace, shaderName string) (*ShaderSourceAttribution, error) {
 	// Get shader metrics
-	metricsReport, err := t.ExtractShaderMetrics()
+	metricsReport, err := ExtractShaderMetrics(t)
 	if err != nil {
 		return nil, fmt.Errorf("extract shader metrics: %w", err)
 	}

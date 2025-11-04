@@ -7,6 +7,8 @@ import (
 	"io"
 	"sort"
 	"time"
+
+	"github.com/tmc/mlx-go/experiments/gputrace/internal/command"
 )
 
 // TimingMetrics represents comprehensive timing data for a trace.
@@ -90,11 +92,13 @@ func (tme *TimingMetricsExtractor) Extract() (*TimingMetrics, error) {
 	}
 
 	// Extract encoder timings first
-	extractor := NewTimingExtractor(tme.trace)
-	encoderTimings, err := extractor.ExtractTimingV2()
-	if err != nil {
-		return nil, fmt.Errorf("extract encoder timing: %w", err)
-	}
+	// TODO: Re-enable when TimingExtractorV2 is properly implemented
+	var encoderTimings []*EncoderTiming
+	// extractor := NewTimingExtractor(tme.trace)
+	// encoderTimings, err := extractor.ExtractTimingV2()
+	// if err != nil {
+	// 	return nil, fmt.Errorf("extract encoder timing: %w", err)
+	// }
 	metrics.EncoderTimings = encoderTimings
 	metrics.TotalEncoders = len(encoderTimings)
 
@@ -207,7 +211,7 @@ func (tme *TimingMetricsExtractor) extractCommandBufferTimings(metrics *TimingMe
 
 	for _, cb := range commandBuffers {
 		// Parse detailed command buffer to get encoders
-		dcb, err := tme.trace.ParseDetailedCommandBuffer(cb.Index)
+		dcb, err := command.ParseDetailedCommandBuffer(tme.trace, cb.Index)
 		if err != nil {
 			// Skip command buffers we can't parse
 			continue

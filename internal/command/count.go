@@ -44,7 +44,7 @@ type APICall struct {
 type DispatchThreads = trace.DispatchThreads
 
 // ParseDetailedCommandBuffer extracts all API calls from a specific command buffer.
-func (t *trace.Trace) ParseDetailedCommandBuffer(cbIndex int) (*DetailedCommandBuffer, error) {
+func ParseDetailedCommandBuffer(t *trace.Trace, cbIndex int) (*DetailedCommandBuffer, error) {
 	capturePath := filepath.Join(t.Path, "capture")
 
 	data, err := os.ReadFile(capturePath)
@@ -203,8 +203,8 @@ func (dcb *DetailedCommandBuffer) FormatCommandBuffer() string {
 }
 
 // DumpCommandBuffer writes a detailed command buffer dump similar to Instruments output.
-func (t *trace.Trace) DumpCommandBuffer(w io.Writer, cbIndex int) error {
-	dcb, err := t.ParseDetailedCommandBuffer(cbIndex)
+func DumpCommandBuffer(t *trace.Trace, w io.Writer, cbIndex int) error {
+	dcb, err := ParseDetailedCommandBuffer(t, cbIndex)
 	if err != nil {
 		return err
 	}
@@ -284,4 +284,14 @@ func (t *trace.Trace) DumpCommandBuffer(w io.Writer, cbIndex int) error {
 	fmt.Fprintf(w, "#%d [commit]\n", callIdx)
 
 	return nil
+}
+
+// isPrintableBytes checks if a byte slice contains only printable ASCII characters.
+func isPrintableBytes(b []byte) bool {
+	for _, c := range b {
+		if c < 32 || c > 126 {
+			return false
+		}
+	}
+	return len(b) > 0
 }

@@ -8,6 +8,9 @@ import (
 	"github.com/tmc/mlx-go/experiments/gputrace/internal/trace"
 )
 
+// Type aliases
+type Trace = trace.Trace
+
 // PipelineStateObject represents a Metal compute pipeline state object (PSO).
 type PipelineStateObject struct {
 	Address         uint64    // PSO address in memory
@@ -44,7 +47,7 @@ type DeviceResources struct {
 
 // ParseDeviceResources parses all device-resources-* files from the trace
 // and extracts PSO information from the capture file.
-func (t *trace.Trace) ParseDeviceResources() (*DeviceResources, error) {
+func ParseDeviceResources(t *trace.Trace) (*DeviceResources, error) {
 	dr := &DeviceResources{
 		psoByAddr:      make(map[uint64]*PipelineStateObject),
 		functionByAddr: make(map[uint64]*DeviceFunction),
@@ -69,7 +72,7 @@ func (t *trace.Trace) ParseDeviceResources() (*DeviceResources, error) {
 // parseDeviceResourcesData parses a single device-resources MTSP file.
 func (dr *DeviceResources) parseDeviceResourcesData(data []byte, deviceAddr string) error {
 	// Verify MTSP header
-	if len(data) < 16 || string(data[0:4]) != MagicMTSP {
+	if len(data) < 16 || string(data[0:4]) != trace.MagicMTSP {
 		return fmt.Errorf("invalid MTSP magic")
 	}
 
@@ -153,7 +156,7 @@ func (dr *DeviceResources) parsePSOsFromCapture(t *Trace) error {
 
 	// Extract PSOs from Ct records
 	for _, record := range records {
-		if record.Type != RecordTypeCt {
+		if record.Type != trace.RecordTypeCt {
 			continue
 		}
 
@@ -190,6 +193,16 @@ func (dr *DeviceResources) parsePSOsFromCapture(t *Trace) error {
 	}
 
 	return nil
+}
+
+// isPrintable checks if a string contains only printable ASCII characters.
+func isPrintable(s string) bool {
+	for _, c := range s {
+		if c < 32 || c > 126 {
+			return false
+		}
+	}
+	return len(s) > 0
 }
 
 // parseBuffersSection extracts buffer metadata from device resources.

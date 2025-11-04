@@ -6,11 +6,16 @@ import (
 	"github.com/tmc/mlx-go/experiments/gputrace/internal/trace"
 )
 
+// Type aliases for commonly used types
+type (
+	EncoderTiming = trace.EncoderTiming
+)
+
 // ToPprof converts GPU trace timing directly to pprof format.
 // This uses the correct pprof API (strings are strings, not indices).
 //
 // Deprecated: Use ToPprofWithMetrics for better timing accuracy and aggregation.
-func (t *trace.Trace) ToPprof(timings []*EncoderTiming) (*profile.Profile, error) {
+func ToPprof(t *trace.Trace, timings []*EncoderTiming) (*profile.Profile, error) {
 	prof := &profile.Profile{
 		SampleType: []*profile.ValueType{
 			{Type: "cpu", Unit: "nanoseconds"},

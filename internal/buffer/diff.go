@@ -5,6 +5,8 @@ import (
 	"os"
 	"sort"
 	"strings"
+
+	"github.com/tmc/mlx-go/experiments/gputrace/internal/trace"
 )
 
 // BufferDiff represents the differences between two buffer sets.
@@ -200,11 +202,11 @@ func formatSizeDelta(delta int64) string {
 }
 
 // ExtractBufferSizes extracts buffer ID -> size mapping from a trace.
-func ExtractBufferSizes(trace *Trace) (map[string]uint64, error) {
+func ExtractBufferSizes(t *trace.Trace) (map[string]uint64, error) {
 	buffers := make(map[string]uint64)
 
 	// Look for buffer files in trace directory
-	entries, err := os.ReadDir(trace.Path)
+	entries, err := os.ReadDir(t.Path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read trace directory: %w", err)
 	}
