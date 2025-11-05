@@ -2,6 +2,7 @@ package counter
 
 import (
 	"fmt"
+	"os"
 	"sort"
 
 	"github.com/tmc/mlx-go/experiments/gputrace/internal/trace"
@@ -164,6 +165,7 @@ type EncoderCounterMetrics struct {
 
 	// Hardware metrics (if available from Apple GPU counters)
 	ALUUtilization  float64 // 0-100%
+	KernelOccupancy float64 // 0-100% (kernel occupancy percentage)
 	CacheHitRate    float64 // 0-100%
 	MemoryBandwidth uint64  // Bytes (total)
 
@@ -540,23 +542,44 @@ func (cs *CounterSampler) getCounterSet(name string) *CounterSet {
 // Purpose: Provide REAL counter data to the CSV export and validation pipeline while waiting
 // for Metal bindings. This enables end-to-end validation: Binary parsing → EncoderMetrics → CSV → Compare with Xcode
 func PopulateEncoderMetricsFromBinaryParsing(t *trace.Trace) ([]EncoderCounterMetrics, error) {
-	// Parse performance counters from .gpuprofiler_raw files
+	// Parse performance counters from Counters_f_*.raw files
 	stats, err := ParsePerfCounters(t)
 	if err != nil {
 		return nil, err
+	}
+
+	// Also parse Kernel Occupancy from Profiling_f_*.raw files (gputrace-78)
+	profilingMetrics, err := ParseProfilingFiles(t)
+	if err != nil {
+		// Profiling data is optional - if not available, continue without it
+		fmt.Fprintf(os.Stderr, "DEBUG: Could not parse profiling files: %v\n", err)
+		profilingMetrics = nil
+	} else {
+		fmt.Fprintf(os.Stderr, "DEBUG: Parsed %d profiling metrics successfully\n", len(profilingMetrics))
+		for _, pm := range profilingMetrics {
+			fmt.Fprintf(os.Stderr, "DEBUG:   Encoder %d: Occupancy=%.2f%%, Samples=%d\n",
+				pm.EncoderIndex, pm.KernelOccupancy, pm.SampleCount)
+		}
+	}
+
+	// Create a map of encoder index to profiling metrics for easy lookup
+	profilingByEncoder := make(map[int]*ProfilingMetrics)
+	for _, pm := range profilingMetrics {
+		profilingByEncoder[pm.EncoderIndex] = pm
 	}
 
 	metrics := make([]EncoderCounterMetrics, 0, len(stats.ShaderMetrics))
 
 	// Convert ShaderHardwareMetrics to EncoderCounterMetrics
 	for i, shaderMetric := range stats.ShaderMetrics {
+		// Start with base metrics from Counters files
 		metric := EncoderCounterMetrics{
 			EncoderIndex: i,
 			EncoderLabel: shaderMetric.ShaderName,
 			EncoderType:  "compute", // Most traces are compute-heavy
 
 			// From binary parsing (gputrace-44 validated approach)
-			ALUUtilization:     shaderMetric.ALUUtilization,  // 0-100%
+			ALUUtilization:     shaderMetric.ALUUtilization,  // 0-100% (from Counters files - heuristic)
 			ComputeUtilization: shaderMetric.ALUUtilization,  // Use ALU as compute utilization proxy
 			CacheHitRate:       90.0,                         // Default estimate (no field extraction yet)
 			MemoryBandwidth:    shaderMetric.MemoryBandwidth, // Bytes (total)
@@ -599,6 +622,15 @@ func PopulateEncoderMetricsFromBinaryParsing(t *trace.Trace) ([]EncoderCounterMe
 			// Timing (estimate from cycles if available)
 			DurationCycles: shaderMetric.TotalCycles,
 			Duration:       estimateDurationNs(shaderMetric.TotalCycles),
+		}
+
+		// Override Kernel Occupancy with real data from Profiling files if available (gputrace-78)
+		// Profiling_f_*.raw files contain accurate Kernel Occupancy using frequency-based extraction
+		if profilingData, found := profilingByEncoder[i]; found {
+			metric.KernelOccupancy = profilingData.KernelOccupancy // Already in 0-100 percentage format
+		} else {
+			// Fallback to heuristic from Counters files (less reliable)
+			metric.KernelOccupancy = shaderMetric.KernelOccupancy
 		}
 
 		metrics = append(metrics, metric)

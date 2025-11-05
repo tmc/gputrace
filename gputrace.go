@@ -46,6 +46,12 @@ type (
 	TraceStatistics         = analysis.TraceStatistics
 	TimingMetricsExtractor  = timing.TimingMetricsExtractor
 
+	// Buffer access analysis types (gputrace-93)
+	BufferAccessAnalysis = analysis.BufferAccessAnalysis
+	BufferAccessInfo     = analysis.BufferAccessInfo
+	EncoderAccessInfo    = analysis.EncoderAccessInfo
+	BufferAlias          = analysis.BufferAlias
+
 	// Counter export types (gputrace-101)
 	CountersCSVExporter = counter.CountersCSVExporter
 
@@ -116,6 +122,10 @@ var (
 	ExtractStatistics              = analysis.ExtractStatistics
 	NewTimingMetricsExtractor      = timing.NewTimingMetricsExtractor
 	ParsePerfCounters              = counter.ParsePerfCounters
+
+	// Buffer access analysis functions (gputrace-93)
+	AnalyzeBufferAccess      = analysis.AnalyzeBufferAccess
+	FormatBufferAccessReport = analysis.FormatBufferAccessReport
 
 	// Counter export functions (gputrace-101)
 	NewCountersCSVExporter = counter.NewCountersCSVExporter

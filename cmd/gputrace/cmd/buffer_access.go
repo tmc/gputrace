@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
+
 	"github.com/tmc/mlx-go/experiments/gputrace"
 )
 
@@ -55,59 +56,16 @@ func runBufferAccess(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to open trace: %w", err)
 	}
-	defer trace.Close()
 
 	// Analyze buffer access patterns
-	fmt.Println("Analyzing buffer access patterns...")
-	analysis, err := trace.AnalyzeBufferAccess()
+	analysis, err := gputrace.AnalyzeBufferAccess(trace)
 	if err != nil {
 		return fmt.Errorf("failed to analyze buffer access: %w", err)
 	}
 
-	// Generate and print report
-	report := trace.FormatBufferAccessReport(analysis)
+	// Format and display report
+	report := gputrace.FormatBufferAccessReport(analysis, bufferAccessVerbose)
 	fmt.Print(report)
-
-	if bufferAccessVerbose {
-		// Show additional statistics
-		fmt.Println("=== Additional Statistics ===\n")
-		fmt.Printf("Aliased Addresses: %d\n", len(analysis.AliasedBuffers))
-
-		// Calculate average access count
-		totalAccesses := 0
-		for _, pattern := range analysis.Patterns {
-			totalAccesses += pattern.AccessCount
-		}
-		if len(analysis.Patterns) > 0 {
-			avgAccesses := float64(totalAccesses) / float64(len(analysis.Patterns))
-			fmt.Printf("Average Accesses per Buffer: %.1f\n", avgAccesses)
-		}
-
-		// Show access count distribution
-		fmt.Println("\nAccess Count Distribution:")
-		distribution := make(map[int]int) // count -> frequency
-		for _, pattern := range analysis.Patterns {
-			distribution[pattern.AccessCount]++
-		}
-
-		// Show histogram for access counts 1-10
-		for i := 1; i <= 10; i++ {
-			if freq, ok := distribution[i]; ok {
-				fmt.Printf("  %2d accesses: %4d buffers\n", i, freq)
-			}
-		}
-
-		// Show 11+ accesses
-		manyAccesses := 0
-		for count, freq := range distribution {
-			if count > 10 {
-				manyAccesses += freq
-			}
-		}
-		if manyAccesses > 0 {
-			fmt.Printf("  11+ accesses: %4d buffers\n", manyAccesses)
-		}
-	}
 
 	return nil
 }
