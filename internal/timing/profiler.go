@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -213,65 +214,50 @@ func (te *TimingExtractorProfilerRaw) estimateRecordSize(data []byte, offset int
 
 // parseCounterRecord attempts to extract timing data from a counter record.
 //
-// Strategy:
-// 1. Look for GPU cycle counts (uint64 values in reasonable ranges)
-// 2. Look for timestamp-like values (mach_absolute_time format)
-// 3. Correlate with known encoder/kernel structure from trace
+// NOTE: The .gpuprofiler_raw files contain performance counter samples, not direct timing data.
+// Xcode Instruments calculates shader timing by analyzing:
+// 1. GPU cycle counts across multiple counter samples
+// 2. Timestamp correlation with command buffer execution
+// 3. Shader limiter percentages (which indicate relative cost)
 //
-// Returns nil if no timing data found in this record.
+// This implementation uses shader limiter data as a proxy for relative timing,
+// since absolute timing requires Xcode's private GPU profiling APIs.
+//
+// Returns nil if no usable timing proxy data found in this record.
 func (te *TimingExtractorProfilerRaw) parseCounterRecord(record *ProfilerCounterRecord) *ProfilerRawTiming {
 	data := record.Data
 
-	if len(data) < 32 {
+	// Only process sample records (464 bytes) which contain performance metrics
+	// Metadata records (2300-2900 bytes) don't have timing data
+	if len(data) != 464 {
 		return nil
 	}
 
-	// Search for potential GPU cycle counts or timing values
-	// These are typically uint64 values in the range:
-	// - GPU cycles: 1000 to 100,000,000 (for reasonable kernel duration)
-	// - Timestamps: 1e15 to 1e18 (mach_absolute_time)
+	// Extract shader limiter values as proxy for relative cost
+	// Higher limiter values indicate the shader spent more time in that bottleneck
+	// We sum all limiters to get a relative "cost" metric
+	limiters := findAllFloatsInRange(data, 0.001, 10.0, 30) // Find up to 30 limiter values
 
-	var gpuCycles uint64
-	var durationNs uint64
-
-	// Scan through record looking for timing values
-	for i := 8; i < len(data)-8; i += 8 {
-		val := binary.LittleEndian.Uint64(data[i : i+8])
-
-		// Check if this looks like GPU cycles (1K - 100M range)
-		if val >= 1000 && val <= 100000000 {
-			if gpuCycles == 0 || val > gpuCycles {
-				gpuCycles = val
-			}
-		}
-
-		// Check if this looks like a duration in nanoseconds
-		// Reasonable range: 100ns to 10 seconds
-		if val >= 100 && val <= 10000000000 {
-			if durationNs == 0 || (val > durationNs && val < 10000000000) {
-				durationNs = val
-			}
-		}
-	}
-
-	// Need at least one valid value to create timing
-	if gpuCycles == 0 && durationNs == 0 {
+	if len(limiters) == 0 {
 		return nil
 	}
 
-	// If we have GPU cycles but no duration, estimate duration
-	// Typical GPU frequency: ~1.4 GHz for Apple Silicon
-	// Duration (ns) = (GPU cycles / frequency) * 1e9
-	if durationNs == 0 && gpuCycles > 0 {
-		const estimatedGPUFrequencyHz = 1_400_000_000 // 1.4 GHz
-		durationNs = (gpuCycles * 1_000_000_000) / estimatedGPUFrequencyHz
+	// Sum all limiter percentages to get relative cost
+	// This is a heuristic: shaders with more bottlenecks take longer
+	var totalLimiterCost float64
+	for _, val := range limiters {
+		totalLimiterCost += val
 	}
+
+	// Convert limiter cost to relative duration (arbitrary units)
+	// We'll normalize these later based on total GPU time
+	relativeDuration := uint64(totalLimiterCost * 1_000_000) // Scale to microseconds
 
 	return &ProfilerRawTiming{
-		GPUCycles:  gpuCycles,
-		DurationNs: durationNs,
-		DurationMs: float64(durationNs) / 1e6,
-		Confidence: 0.5, // Medium confidence - needs validation
+		GPUCycles:  0, // Not extractable from counter files
+		DurationNs: relativeDuration,
+		DurationMs: float64(relativeDuration) / 1e6,
+		Confidence: 0.3, // Low confidence - this is an approximation
 	}
 }
 
@@ -354,4 +340,29 @@ func (te *TimingExtractorProfilerRaw) ProfilerRawTimingReport(timings []*Encoder
 	}
 
 	return report
+}
+
+// findAllFloatsInRange scans record data for all float32 values in the specified range.
+// Returns up to maxCount matching values, sorted by offset order.
+func findAllFloatsInRange(data []byte, minVal, maxVal float64, maxCount int) []float64 {
+	results := make([]float64, 0, maxCount)
+	seen := make(map[float64]bool) // Avoid duplicates
+
+	for i := 0; i < len(data)-4; i += 4 {
+		// Read as float32
+		bits := binary.LittleEndian.Uint32(data[i : i+4])
+		val := float64(math.Float32frombits(bits))
+
+		// Check if in range and not already seen
+		if val >= minVal && val <= maxVal && !seen[val] {
+			results = append(results, val)
+			seen[val] = true
+
+			if len(results) >= maxCount {
+				break
+			}
+		}
+	}
+
+	return results
 }

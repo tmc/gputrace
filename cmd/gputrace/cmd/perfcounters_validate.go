@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
 	"github.com/tmc/mlx-go/experiments/gputrace"
 )
 
@@ -34,7 +35,7 @@ Used to validate replay engine accuracy by cross-checking against ground truth.`
 		}
 
 		// Parse performance counters
-		stats, err := trace.ParsePerfCounters()
+		stats, err := gputrace.ParsePerfCounters(trace)
 		if err != nil {
 			return fmt.Errorf("parse perfcounters: %w", err)
 		}

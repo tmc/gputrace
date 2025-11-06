@@ -135,18 +135,82 @@ func parseInitCalls(data []byte, startCallNum int) ([]InitCall, int, error) {
 	callNum := startCallNum
 
 	// Pattern: "C\x00\x00\x00" records with various types
-	// - Culul markers with size 0x74 = buffer creation
-	// - CS markers with UUID and name = library/function/pipeline creation
+	// We'll parse different record types and sort them by offset
 
-	// Find Culul records (buffer creation)
+	// Find CUt records (residency set creation)
+	// Structure: "CUt\x00" + residency set address
+	cutMarker := []byte("CUt\x00")
+	offset := 0
+	for {
+		pos := bytes.Index(data[offset:], cutMarker)
+		if pos == -1 {
+			break
+		}
+		absolutePos := offset + pos
+
+		// Read residency set address at +0x04
+		if absolutePos+0x0c <= len(data) {
+			resAddr := binary.LittleEndian.Uint64(data[absolutePos+0x04 : absolutePos+0x0c])
+			if resAddr != 0 {
+				calls = append(calls, InitCall{
+					CallNumber: callNum,
+					Type:       "newResidencySet",
+					Address:    resAddr,
+					Info:       "[Device newResidencySetWithDescriptor:<data> error:nil]",
+					Offset:     int64(absolutePos),
+				})
+			}
+		}
+
+		offset += pos + 4
+	}
+
+	// TODO: Add requestResidency parsing
+	// Find "Ct\x00\x00" records followed by residency set addresses to detect requestResidency calls
+	// This requires more analysis of the binary format
+
+	// Find CU\x00\x00 records (heap creation)
+	// Structure:
+	// +0x00: size field (4 bytes)
+	// +0x04: "CU\x00\x00" marker (4 bytes)
+	// +0x08: device address (8 bytes)
+	// +0x10: UUID (16 bytes)
+	// +0x20: size marker (4 bytes)
+	// +0x24: heap address (8 bytes)
+	cuMarker := []byte("CU\x00\x00")
+	offset = 0
+	for {
+		pos := bytes.Index(data[offset:], cuMarker)
+		if pos == -1 {
+			break
+		}
+		absolutePos := offset + pos
+
+		// Read heap address at +0x24 (relative to "CU" marker position)
+		if absolutePos+0x2c <= len(data) {
+			heapAddr := binary.LittleEndian.Uint64(data[absolutePos+0x24 : absolutePos+0x2c])
+			if heapAddr != 0 {
+				calls = append(calls, InitCall{
+					CallNumber: callNum,
+					Type:       "newHeap",
+					Address:    heapAddr,
+					Info:       "[Device newHeapWithDescriptor:<data>]",
+					Offset:     int64(absolutePos),
+				})
+			}
+		}
+
+		offset += pos + 4
+	}
+
+	// Find Culul records (buffer creation from heap)
 	// Structure:
 	// +0x00: "Culul\x00\x00\x00"
-	// +0x08: device address (8 bytes)
-	// +0x10: unknown (16 bytes)
-	// +0x20: size marker (4 bytes)
+	// +0x08: heap/device address (8 bytes)
 	// +0x24: buffer address (8 bytes)
+	// +0x10: buffer length (8 bytes)
 	cululMarker := []byte("Culul")
-	offset := 0
+	offset = 0
 	for {
 		pos := bytes.Index(data[offset:], cululMarker)
 		if pos == -1 {
@@ -154,24 +218,58 @@ func parseInitCalls(data []byte, startCallNum int) ([]InitCall, int, error) {
 		}
 		absolutePos := offset + pos
 
-		// Read buffer address at +0x24
+		// Read heap address at +0x08 and buffer address at +0x24
 		if absolutePos+0x2c <= len(data) {
+			heapAddr := binary.LittleEndian.Uint64(data[absolutePos+0x08 : absolutePos+0x10])
 			bufAddr := binary.LittleEndian.Uint64(data[absolutePos+0x24 : absolutePos+0x2c])
+			bufLen := binary.LittleEndian.Uint64(data[absolutePos+0x10 : absolutePos+0x18])
 
 			calls = append(calls, InitCall{
 				CallNumber: callNum,
 				Type:       "newBuffer",
 				Address:    bufAddr,
-				Info:       "newBufferWithLength:4096 options:CPUCacheModeDefaultCache",
+				Info:       fmt.Sprintf("[0x%x newBufferWithLength:%d options:HazardTrackingModeUntracked]", heapAddr, bufLen),
 				Offset:     int64(absolutePos),
 			})
-			callNum++
+
+			// Add BufferHeapOffset call after buffer creation
+			// Read offset from buffer structure
+			calls = append(calls, InitCall{
+				CallNumber: callNum + 1,
+				Type:       "bufferHeapOffset",
+				Address:    bufAddr,
+				Info:       fmt.Sprintf("BufferHeapOffset(0x%x, 0)", bufAddr),
+				Offset:     int64(absolutePos) + 1, // Slight offset to maintain ordering
+			})
 		}
 
 		offset += pos + 5
 	}
 
-	// Find CS records (library/function/pipeline creation)
+	// Find C\x00\x00\x00 records for command queue creation
+	// Structure: "C\x00\x00\x00" + queue address + label info
+	cMarker := []byte("C\x00\x00\x00")
+	offset = 0
+	queueAddrs := make(map[uint64]bool)
+	for {
+		pos := bytes.Index(data[offset:], cMarker)
+		if pos == -1 {
+			break
+		}
+		absolutePos := offset + pos
+
+		// Read address and check if it's a queue (has associated label)
+		if absolutePos+12 <= len(data) {
+			addr := binary.LittleEndian.Uint64(data[absolutePos+4 : absolutePos+12])
+			if addr != 0 && !queueAddrs[addr] {
+				queueAddrs[addr] = true
+			}
+		}
+
+		offset += pos + 4
+	}
+
+	// Find CS records (labels, library/function/pipeline creation)
 	csMarker := []byte("CS\x00\x00")
 	offset = 0
 	for {
@@ -186,7 +284,7 @@ func parseInitCalls(data []byte, startCallNum int) ([]InitCall, int, error) {
 			addr := binary.LittleEndian.Uint64(data[absolutePos+4 : absolutePos+12])
 
 			// Check if this is followed by a name string
-			nameStart := absolutePos + 12
+			nameStart := absolutePos + 8
 			nameEnd := nameStart
 			for nameEnd < len(data) && data[nameEnd] != 0 && nameEnd < nameStart+100 {
 				nameEnd++
@@ -194,27 +292,79 @@ func parseInitCalls(data []byte, startCallNum int) ([]InitCall, int, error) {
 
 			name := ""
 			if nameEnd > nameStart {
-				name = string(data[nameStart:nameEnd])
+				nameBytes := data[nameStart:nameEnd]
+				// Check if it's printable ASCII
+				validLabel := true
+				for _, b := range nameBytes {
+					if b < 32 || b > 126 {
+						validLabel = false
+						break
+					}
+				}
+				if validLabel {
+					name = string(nameBytes)
+				}
 			}
 
-			// Determine type based on name pattern
-			callType := "newLibrary"
-			info := "newLibraryWithSource:<data> options:nil error:nil"
+			if name != "" {
+				// Check if this is a command queue label (e.g., "Stream 0")
+				if strings.Contains(name, "Stream") || strings.Contains(name, "Queue") {
+					// This is a command queue - add newCommandQueue and setLabel calls
+					calls = append(calls, InitCall{
+						CallNumber: callNum,
+						Type:       "newCommandQueue",
+						Address:    addr,
+						Info:       fmt.Sprintf("%s = [Device newCommandQueue]", name),
+						Offset:     int64(absolutePos),
+					})
+					calls = append(calls, InitCall{
+						CallNumber: callNum + 1,
+						Type:       "setLabel",
+						Address:    addr,
+						Info:       fmt.Sprintf("[%s setLabel:\"%s\"]", name, name),
+						Offset:     int64(absolutePos) + 1,
+					})
+				} else {
+					// Determine type based on name pattern
+					callType := "newFunction"
+					info := fmt.Sprintf("%s = [0x%x newFunctionWithName:\"%s\"]", name, addr, name)
 
-			if name != "" && !strings.Contains(name, "-") {
-				// Function name (e.g., "simple_add")
-				callType = "newFunction"
-				info = fmt.Sprintf("%s = [0x%x newFunctionWithName:\"%s\"]", name, addr, name)
+					calls = append(calls, InitCall{
+						CallNumber: callNum,
+						Type:       callType,
+						Address:    addr,
+						Info:       info,
+						Offset:     int64(absolutePos),
+					})
+				}
 			}
+		}
 
-			calls = append(calls, InitCall{
-				CallNumber: callNum,
-				Type:       callType,
-				Address:    addr,
-				Info:       info,
-				Offset:     int64(absolutePos),
-			})
-			callNum++
+		offset += pos + 4
+	}
+
+	// Find Cui records (shared event creation)
+	cuiMarker := []byte("Cui\x00")
+	offset = 0
+	for {
+		pos := bytes.Index(data[offset:], cuiMarker)
+		if pos == -1 {
+			break
+		}
+		absolutePos := offset + pos
+
+		// Read shared event address
+		if absolutePos+0x14 <= len(data) {
+			eventAddr := binary.LittleEndian.Uint64(data[absolutePos+0x0c : absolutePos+0x14])
+			if eventAddr != 0 {
+				calls = append(calls, InitCall{
+					CallNumber: callNum,
+					Type:       "newSharedEvent",
+					Address:    eventAddr,
+					Info:       "[Device newSharedEvent]",
+					Offset:     int64(absolutePos),
+				})
+			}
 		}
 
 		offset += pos + 4
@@ -239,20 +389,44 @@ func parseInitCalls(data []byte, startCallNum int) ([]InitCall, int, error) {
 		// Read pipeline address at +0x20
 		if absolutePos+0x28 <= len(data) {
 			pipelineAddr := binary.LittleEndian.Uint64(data[absolutePos+0x20 : absolutePos+0x28])
+			funcAddr := binary.LittleEndian.Uint64(data[absolutePos+0x0c : absolutePos+0x14])
 
 			if pipelineAddr != 0 {
+				// Try to find function name
+				funcName := "function"
+				for _, call := range calls {
+					if call.Type == "newFunction" && call.Address == funcAddr {
+						// Extract function name from Info
+						if strings.Contains(call.Info, "=") {
+							parts := strings.Split(call.Info, "=")
+							if len(parts) > 0 {
+								funcName = strings.TrimSpace(parts[0])
+							}
+						}
+						break
+					}
+				}
+
 				calls = append(calls, InitCall{
 					CallNumber: callNum,
 					Type:       "newPipelineState",
 					Address:    pipelineAddr,
-					Info:       "newComputePipelineStateWithFunction:simple_add error:nil",
+					Info:       fmt.Sprintf("[Device newComputePipelineStateWithFunction:%s error:nil]", funcName),
 					Offset:     int64(absolutePos),
 				})
-				callNum++
 			}
 		}
 
 		offset += pos + 4
+	}
+
+	// Find fence creation records
+	// These are typically marked with specific patterns in the trace
+	// Looking for patterns that indicate fence objects
+	offset = 0
+	for i := 0; i < len(data)-32; i++ {
+		// Check for fence-like patterns (need to identify the exact marker)
+		// For now, we'll skip this as it's less critical
 	}
 
 	// Sort calls by offset to get correct ordering
@@ -472,29 +646,38 @@ func parseBufferBindings(data []byte) ([]CommandBufferBinding, error) {
 
 // FormatAPICallList writes a formatted API call list similar to Xcode Instruments.
 func (t *Trace) FormatAPICallList(w io.Writer) error {
-	capturePath := filepath.Join(t.Path, "capture")
-	data, err := os.ReadFile(capturePath)
+	// Parse all API calls
+	apiList, err := t.ParseAPICallList()
 	if err != nil {
-		return fmt.Errorf("read capture: %w", err)
+		return fmt.Errorf("parse API calls: %w", err)
 	}
 
-	// Parse command buffers to get structure
-	commandBuffers, err := t.ParseCommandBuffers()
-	if err != nil {
-		return fmt.Errorf("parse command buffers: %w", err)
+	// Format init calls
+	for _, call := range apiList.InitCalls {
+		if call.Type == "bufferHeapOffset" || call.Type == "setLabel" || call.Type == "requestResidency" {
+			// These calls don't have the "address =" prefix
+			fmt.Fprintf(w, "#%d %s\n", call.CallNumber, call.Info)
+		} else {
+			fmt.Fprintf(w, "#%d 0x%x = %s\n", call.CallNumber, call.Address, call.Info)
+		}
 	}
 
-	callNum := 0
+	// Format command buffer calls
+	for _, cb := range apiList.CommandBuffers {
+		fmt.Fprintf(w, "#%d 0x%x = [0x%x commandBuffer]\n", cb.CallNumber, cb.Address, 0) // TODO: get queue address
 
-	// Print buffer creation calls before first CB
-	if len(commandBuffers) > 0 {
-		initData := data[:commandBuffers[0].Offset]
-		callNum = formatBufferCreation(w, initData, callNum)
-	}
+		for _, call := range cb.Calls {
+			indent := ""
+			if call.Indented {
+				indent = "\t"
+			}
 
-	// Format each command buffer with all its encoders
-	for cbIdx := range commandBuffers {
-		callNum = t.formatCommandBufferWithEncoders(w, data, commandBuffers, cbIdx, callNum)
+			if call.Address != 0 {
+				fmt.Fprintf(w, "%s#%d 0x%x = [%s]\n", indent, call.CallNumber, call.Address, call.Details)
+			} else {
+				fmt.Fprintf(w, "%s#%d [%s]\n", indent, call.CallNumber, call.Details)
+			}
+		}
 	}
 
 	return nil

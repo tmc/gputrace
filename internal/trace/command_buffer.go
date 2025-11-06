@@ -168,33 +168,19 @@ func (t *Trace) ParseDispatchCalls() ([]*DispatchCall, error) {
 		return nil, fmt.Errorf("read capture file: %w", err)
 	}
 
+	// Use ParseDispatchInRegion on the entire capture file
+	dispatchThreads, err := t.ParseDispatchInRegion(data, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert DispatchThreads to DispatchCall
 	var dispatches []*DispatchCall
-	offset := int64(0)
-	index := 0
-
-	// Look for dispatch markers - these are "Ct" records with type 01
-	// Structure: "Ct" + type (1 byte) + data
-	marker := []byte("Ct")
-
-	for {
-		pos := bytes.Index(data[offset:], marker)
-		if pos == -1 {
-			break
-		}
-
-		absolutePos := offset + int64(pos)
-
-		// Check if this is a dispatch record (type 01)
-		if absolutePos+3 <= int64(len(data)) && data[absolutePos+2] == 0x01 {
-			dispatch := &DispatchCall{
-				Index:  index,
-				Offset: absolutePos,
-			}
-			dispatches = append(dispatches, dispatch)
-			index++
-		}
-
-		offset = absolutePos + 2
+	for i, dt := range dispatchThreads {
+		dispatches = append(dispatches, &DispatchCall{
+			Index:  i,
+			Offset: dt.Offset,
+		})
 	}
 
 	return dispatches, nil

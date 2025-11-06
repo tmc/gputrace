@@ -3,6 +3,7 @@ package counter
 import (
 	"bytes"
 	"encoding/csv"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -98,6 +99,13 @@ func TestExportSixEncoders(t *testing.T) {
 		t.Fatalf("Export failed: %v", err)
 	}
 
+	// Write to file for manual inspection
+	if err := os.WriteFile("/tmp/gputrace-81-export.csv", buf.Bytes(), 0644); err != nil {
+		t.Logf("Warning: Could not write CSV to file: %v", err)
+	} else {
+		t.Logf("CSV written to /tmp/gputrace-81-export.csv")
+	}
+
 	// Parse the generated CSV
 	reader := csv.NewReader(strings.NewReader(buf.String()))
 	rows, err := reader.ReadAll()
@@ -114,11 +122,27 @@ func TestExportSixEncoders(t *testing.T) {
 		colIdx[col] = i
 	}
 
+	// Verify key columns from gputrace-68
+	if header[13] != "ALU Utilization" {
+		t.Errorf("Column 13 should be 'ALU Utilization', got '%s'", header[13])
+	}
+	if header[107] != "Kernel Invocations" {
+		t.Errorf("Column 107 should be 'Kernel Invocations', got '%s'", header[107])
+	}
+	if header[108] != "Kernel Occupancy" {
+		t.Errorf("Column 108 should be 'Kernel Occupancy', got '%s'", header[108])
+	}
+
 	// Check each encoder row
 	for i := 1; i < len(rows); i++ {
 		row := rows[i]
 		encoderLabel := row[colIdx["Encoder Label"]]
 		t.Logf("\nEncoder %d: %s", i-1, encoderLabel)
+
+		// gputrace-81: Check key validated metrics
+		t.Logf("  ALU Utilization (col 13): %s", row[13])
+		t.Logf("  Kernel Invocations (col 107): %s", row[107])
+		t.Logf("  Kernel Occupancy (col 108): %s", row[108])
 
 		if idx, ok := colIdx["Bytes Read From Device Memory"]; ok && idx < len(row) {
 			t.Logf("  Bytes Read: %s", row[idx])
