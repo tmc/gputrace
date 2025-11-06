@@ -52,6 +52,17 @@ type (
 	EncoderAccessInfo    = analysis.EncoderAccessInfo
 	BufferAlias          = analysis.BufferAlias
 
+	// Buffer timeline types (gputrace-94)
+	BufferTimelineAnalysis = analysis.BufferTimelineAnalysis
+	BufferLifecycle        = analysis.BufferLifecycle
+	BufferTimelineEvent    = analysis.BufferTimelineEvent
+
+	// Buffer diff types (gputrace-95)
+	BufferSizeInfo = analysis.BufferSizeInfo
+	BufferMetadata = analysis.BufferMetadata
+	BufferDiff     = analysis.BufferDiff
+	BufferChange   = analysis.BufferChange
+
 	// Counter export types (gputrace-101)
 	CountersCSVExporter = counter.CountersCSVExporter
 
@@ -126,6 +137,16 @@ var (
 	// Buffer access analysis functions (gputrace-93)
 	AnalyzeBufferAccess      = analysis.AnalyzeBufferAccess
 	FormatBufferAccessReport = analysis.FormatBufferAccessReport
+
+	// Buffer timeline functions (gputrace-94)
+	ExtractBufferTimeline       = analysis.ExtractBufferTimeline
+	FormatBufferTimelineASCII   = analysis.FormatBufferTimelineASCII
+	FormatBufferTimelineSummary = analysis.FormatBufferTimelineSummary
+
+	// Buffer diff functions (gputrace-95)
+	ExtractBufferSizes = analysis.ExtractBufferSizes
+	CompareBuffers     = analysis.CompareBuffers
+	FormatBufferDiff   = analysis.FormatBufferDiff
 
 	// Counter export functions (gputrace-101)
 	NewCountersCSVExporter = counter.NewCountersCSVExporter

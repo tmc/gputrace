@@ -1,11 +1,11 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
+
 	"github.com/tmc/mlx-go/experiments/gputrace"
 )
 
@@ -76,64 +76,31 @@ func runBufferTimeline(cmd *cobra.Command, args []string) error {
 	}
 
 	// Extract buffer timeline
-	timeline, err := trace.ExtractBufferTimeline()
+	timeline, err := gputrace.ExtractBufferTimeline(trace)
 	if err != nil {
 		return fmt.Errorf("failed to extract buffer timeline: %w", err)
 	}
 
 	// Generate output based on format
 	var output string
-	var data interface{}
-
 	switch bufferTimelineFormat {
 	case "ascii":
 		output = gputrace.FormatBufferTimelineASCII(timeline, bufferTimelineWidth)
-
 	case "summary":
 		output = gputrace.FormatBufferTimelineSummary(timeline)
-
 	case "chrome":
-		data = gputrace.ExportBufferTimelineToChrome(timeline)
-
+		return fmt.Errorf("chrome trace format not yet implemented")
 	case "json":
-		data = timeline
-
+		return fmt.Errorf("json export not yet implemented")
 	default:
 		return fmt.Errorf("unknown format: %s (valid: ascii, summary, chrome, json)", bufferTimelineFormat)
 	}
 
-	// Write output
+	// Output to file or stdout
 	if bufferTimelineOutput != "" {
-		f, err := os.Create(bufferTimelineOutput)
-		if err != nil {
-			return fmt.Errorf("failed to create output file: %w", err)
-		}
-		defer f.Close()
-
-		if output != "" {
-			if _, err := f.WriteString(output); err != nil {
-				return fmt.Errorf("failed to write output: %w", err)
-			}
-		} else {
-			encoder := json.NewEncoder(f)
-			encoder.SetIndent("", "  ")
-			if err := encoder.Encode(data); err != nil {
-				return fmt.Errorf("failed to write JSON: %w", err)
-			}
-		}
-
-		fmt.Fprintf(os.Stderr, "✓ Written to: %s\n", bufferTimelineOutput)
-	} else {
-		if output != "" {
-			fmt.Print(output)
-		} else {
-			encoder := json.NewEncoder(os.Stdout)
-			encoder.SetIndent("", "  ")
-			if err := encoder.Encode(data); err != nil {
-				return fmt.Errorf("failed to write JSON: %w", err)
-			}
-		}
+		return os.WriteFile(bufferTimelineOutput, []byte(output), 0644)
 	}
 
+	fmt.Print(output)
 	return nil
 }

@@ -2,7 +2,6 @@ package counter
 
 import (
 	"fmt"
-	"os"
 	"sort"
 
 	"github.com/tmc/mlx-go/experiments/gputrace/internal/trace"
@@ -170,13 +169,13 @@ type EncoderCounterMetrics struct {
 	MemoryBandwidth uint64  // Bytes (total)
 
 	// Detailed memory bandwidth metrics (from gputrace-65)
-	BytesReadFromDeviceMemory     uint64  // Device memory read bytes
-	BytesWrittenToDeviceMemory    uint64  // Device memory write bytes
-	BufferDeviceMemoryBytesRead   uint64  // Buffer-specific read bytes
-	BufferDeviceMemoryBytesWritten uint64 // Buffer-specific write bytes
-	DeviceMemoryBandwidthGBps     float64 // Device memory bandwidth (GB/s)
-	GPUReadBandwidthGBps          float64 // GPU read bandwidth (GB/s)
-	GPUWriteBandwidthGBps         float64 // GPU write bandwidth (GB/s)
+	BytesReadFromDeviceMemory      uint64  // Device memory read bytes
+	BytesWrittenToDeviceMemory     uint64  // Device memory write bytes
+	BufferDeviceMemoryBytesRead    uint64  // Buffer-specific read bytes
+	BufferDeviceMemoryBytesWritten uint64  // Buffer-specific write bytes
+	DeviceMemoryBandwidthGBps      float64 // Device memory bandwidth (GB/s)
+	GPUReadBandwidthGBps           float64 // GPU read bandwidth (GB/s)
+	GPUWriteBandwidthGBps          float64 // GPU write bandwidth (GB/s)
 
 	// Shader Launch Limiters (from gputrace-67)
 	ComputeShaderLaunchLimiter  float64 // Compute shader launch limiter percentage
@@ -184,12 +183,12 @@ type EncoderCounterMetrics struct {
 	VertexShaderLaunchLimiter   float64 // Vertex shader launch limiter percentage
 
 	// Pipeline Limiters (from gputrace-67)
-	ControlFlowLimiter              float64 // Control flow limiter percentage
-	InstructionThroughputLimiter    float64 // Instruction throughput limiter percentage
-	IntegerAndComplexLimiter        float64 // Integer and complex instruction limiter percentage
-	IntegerAndConditionalLimiter    float64 // Integer and conditional instruction limiter percentage
-	F16Limiter                      float64 // FP16 instruction limiter percentage
-	F32Limiter                      float64 // FP32 instruction limiter percentage
+	ControlFlowLimiter           float64 // Control flow limiter percentage
+	InstructionThroughputLimiter float64 // Instruction throughput limiter percentage
+	IntegerAndComplexLimiter     float64 // Integer and complex instruction limiter percentage
+	IntegerAndConditionalLimiter float64 // Integer and conditional instruction limiter percentage
+	F16Limiter                   float64 // FP16 instruction limiter percentage
+	F32Limiter                   float64 // FP32 instruction limiter percentage
 
 	// Memory Limiters (from gputrace-67)
 	L1CacheLimiter        float64 // L1 cache limiter percentage
@@ -351,38 +350,38 @@ func (cs *CounterSampler) ResolveCounterSamples() error {
 // re-executing the GPU workload with MTLCounterSampleBuffer.
 // func (cs *CounterSampler) AggregateEncoderMetrics(plan *ReplayPlan) []EncoderCounterMetrics {
 // 	metrics := make([]EncoderCounterMetrics, 0)
-// 
+//
 // 	// Group samples by encoder
 // 	for i := range plan.Encoders {
 // 		encoderSamples := cs.getSamplesForEncoder(i)
 // 		if len(encoderSamples) == 0 {
 // 			continue
 // 		}
-// 
+//
 // 		metric := cs.aggregateEncoderSamples(plan.Encoders[i], encoderSamples)
 // 		metrics = append(metrics, metric)
 // 	}
-// 
+//
 // 	return metrics
 // }
 
 // AggregateDispatchMetrics aggregates counter samples into per-dispatch metrics.
 // func (cs *CounterSampler) AggregateDispatchMetrics(plan *ReplayPlan) []DispatchCounterMetrics {
 // 	metrics := make([]DispatchCounterMetrics, 0)
-// 
+//
 // 	// Get compute dispatches
 // 	dispatches := plan.GetComputeDispatches()
-// 
+//
 // 	for i, dispatch := range dispatches {
 // 		dispatchSamples := cs.getSamplesForDispatch(i)
 // 		if len(dispatchSamples) < 2 {
 // 			continue // Need start and end samples
 // 		}
-// 
+//
 // 		metric := cs.aggregateDispatchSamples(dispatch, dispatchSamples)
 // 		metrics = append(metrics, metric)
 // 	}
-// 
+//
 // 	return metrics
 // }
 
@@ -413,29 +412,29 @@ func (cs *CounterSampler) getSamplesForDispatch(dispatchIndex int) []CounterSamp
 // 	sort.Slice(samples, func(i, j int) bool {
 // 		return samples[i].Index < samples[j].Index
 // 	})
-// 
+//
 // 	metric := EncoderCounterMetrics{
 // 		EncoderIndex: encoder.Index,
 // 		EncoderLabel: encoder.Label,
 // 		EncoderType:  encoder.Type,
 // 	}
-// 
+//
 // 	if len(samples) >= 2 {
 // 		startSample := samples[0]
 // 		endSample := samples[len(samples)-1]
-// 
+//
 // 		metric.StartTimestamp = startSample.Timestamp
 // 		metric.EndTimestamp = endSample.Timestamp
-// 
+//
 // 		if endSample.Timestamp > startSample.Timestamp {
 // 			metric.DurationCycles = endSample.Timestamp - startSample.Timestamp
-// 
+//
 // 			// Convert cycles to nanoseconds if GPU frequency known
 // 			if cs.Config.GPUFrequency > 0 {
 // 				metric.Duration = (metric.DurationCycles * 1_000_000_000) / cs.Config.GPUFrequency
 // 			}
 // 		}
-// 
+//
 // 		// Aggregate utilization values (average across samples)
 // 		for _, sample := range samples {
 // 			if val, ok := sample.Values["vertexUtilization"]; ok {
@@ -451,7 +450,7 @@ func (cs *CounterSampler) getSamplesForDispatch(dispatchIndex int) []CounterSamp
 // 				metric.ALUUtilization += val
 // 			}
 // 		}
-// 
+//
 // 		// Average the utilization values
 // 		sampleCount := float64(len(samples))
 // 		metric.VertexUtilization /= sampleCount
@@ -459,7 +458,7 @@ func (cs *CounterSampler) getSamplesForDispatch(dispatchIndex int) []CounterSamp
 // 		metric.ComputeUtilization /= sampleCount
 // 		metric.ALUUtilization /= sampleCount
 // 	}
-// 
+//
 // 	return metric
 // }
 
@@ -467,28 +466,28 @@ func (cs *CounterSampler) getSamplesForDispatch(dispatchIndex int) []CounterSamp
 // 	sort.Slice(samples, func(i, j int) bool {
 // 		return samples[i].Index < samples[j].Index
 // 	})
-// 
+//
 // 	metric := DispatchCounterMetrics{
 // 		DispatchIndex: dispatch.SequenceNum,
 // 		EncoderIndex:  dispatch.EncoderIndex,
 // 		FunctionName:  dispatch.FunctionName,
 // 	}
-// 
+//
 // 	if len(samples) >= 2 {
 // 		startSample := samples[0]
 // 		endSample := samples[len(samples)-1]
-// 
+//
 // 		metric.StartTimestamp = startSample.Timestamp
 // 		metric.EndTimestamp = endSample.Timestamp
-// 
+//
 // 		if endSample.Timestamp > startSample.Timestamp {
 // 			metric.DurationCycles = endSample.Timestamp - startSample.Timestamp
-// 
+//
 // 			if cs.Config.GPUFrequency > 0 {
 // 				metric.Duration = (metric.DurationCycles * 1_000_000_000) / cs.Config.GPUFrequency
 // 			}
 // 		}
-// 
+//
 // 		// Get utilization from end sample
 // 		if val, ok := endSample.Values["computeUtilization"]; ok {
 // 			metric.ComputeUtilization = val
@@ -497,7 +496,7 @@ func (cs *CounterSampler) getSamplesForDispatch(dispatchIndex int) []CounterSamp
 // 			metric.ALUUtilization = val
 // 		}
 // 	}
-// 
+//
 // 	return metric
 // }
 
@@ -552,14 +551,7 @@ func PopulateEncoderMetricsFromBinaryParsing(t *trace.Trace) ([]EncoderCounterMe
 	profilingMetrics, err := ParseProfilingFiles(t)
 	if err != nil {
 		// Profiling data is optional - if not available, continue without it
-		fmt.Fprintf(os.Stderr, "DEBUG: Could not parse profiling files: %v\n", err)
 		profilingMetrics = nil
-	} else {
-		fmt.Fprintf(os.Stderr, "DEBUG: Parsed %d profiling metrics successfully\n", len(profilingMetrics))
-		for _, pm := range profilingMetrics {
-			fmt.Fprintf(os.Stderr, "DEBUG:   Encoder %d: Occupancy=%.2f%%, Samples=%d\n",
-				pm.EncoderIndex, pm.KernelOccupancy, pm.SampleCount)
-		}
 	}
 
 	// Create a map of encoder index to profiling metrics for easy lookup
@@ -585,13 +577,13 @@ func PopulateEncoderMetricsFromBinaryParsing(t *trace.Trace) ([]EncoderCounterMe
 			MemoryBandwidth:    shaderMetric.MemoryBandwidth, // Bytes (total)
 
 			// Detailed memory bandwidth from gputrace-65
-			BytesReadFromDeviceMemory:     shaderMetric.BytesReadFromDeviceMemory,
-			BytesWrittenToDeviceMemory:    shaderMetric.BytesWrittenToDeviceMemory,
-			BufferDeviceMemoryBytesRead:   shaderMetric.BufferDeviceMemoryBytesRead,
+			BytesReadFromDeviceMemory:      shaderMetric.BytesReadFromDeviceMemory,
+			BytesWrittenToDeviceMemory:     shaderMetric.BytesWrittenToDeviceMemory,
+			BufferDeviceMemoryBytesRead:    shaderMetric.BufferDeviceMemoryBytesRead,
 			BufferDeviceMemoryBytesWritten: shaderMetric.BufferDeviceMemoryBytesWritten,
-			DeviceMemoryBandwidthGBps:     shaderMetric.DeviceMemoryBandwidthGBps,
-			GPUReadBandwidthGBps:          shaderMetric.GPUReadBandwidthGBps,
-			GPUWriteBandwidthGBps:         shaderMetric.GPUWriteBandwidthGBps,
+			DeviceMemoryBandwidthGBps:      shaderMetric.DeviceMemoryBandwidthGBps,
+			GPUReadBandwidthGBps:           shaderMetric.GPUReadBandwidthGBps,
+			GPUWriteBandwidthGBps:          shaderMetric.GPUWriteBandwidthGBps,
 
 			// Shader Launch Limiters from gputrace-67
 			ComputeShaderLaunchLimiter:  shaderMetric.ComputeShaderLaunchLimiter,
@@ -599,12 +591,12 @@ func PopulateEncoderMetricsFromBinaryParsing(t *trace.Trace) ([]EncoderCounterMe
 			VertexShaderLaunchLimiter:   shaderMetric.VertexShaderLaunchLimiter,
 
 			// Pipeline Limiters from gputrace-67
-			ControlFlowLimiter:              shaderMetric.ControlFlowLimiter,
-			InstructionThroughputLimiter:    shaderMetric.InstructionThroughputLimiter,
-			IntegerAndComplexLimiter:        shaderMetric.IntegerAndComplexLimiter,
-			IntegerAndConditionalLimiter:    shaderMetric.IntegerAndConditionalLimiter,
-			F16Limiter:                      shaderMetric.F16Limiter,
-			F32Limiter:                      shaderMetric.F32Limiter,
+			ControlFlowLimiter:           shaderMetric.ControlFlowLimiter,
+			InstructionThroughputLimiter: shaderMetric.InstructionThroughputLimiter,
+			IntegerAndComplexLimiter:     shaderMetric.IntegerAndComplexLimiter,
+			IntegerAndConditionalLimiter: shaderMetric.IntegerAndConditionalLimiter,
+			F16Limiter:                   shaderMetric.F16Limiter,
+			F32Limiter:                   shaderMetric.F32Limiter,
 
 			// Memory Limiters from gputrace-67
 			L1CacheLimiter:        shaderMetric.L1CacheLimiter,
