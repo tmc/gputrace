@@ -14,6 +14,7 @@ type TraceStatistics struct {
 	// Memory usage
 	BufferUsageBytes uint64
 	BufferUsageGB    float64
+	BufferSizeSum    uint64 // Sum of all buffer sizes (same as BufferUsageBytes for non-heap buffers)
 	UniqueBuffers    int
 
 	// Kernels
@@ -56,6 +57,7 @@ func ExtractStatistics(t *trace.Trace) (*TraceStatistics, error) {
 	bufferUsage, uniqueBuffers := extractBufferUsage(t)
 	stats.BufferUsageBytes = bufferUsage
 	stats.BufferUsageGB = float64(bufferUsage) / (1024 * 1024 * 1024)
+	stats.BufferSizeSum = bufferUsage // Currently the same as BufferUsageBytes
 	stats.UniqueBuffers = uniqueBuffers
 
 	// Kernel statistics
@@ -123,6 +125,7 @@ func (stats *TraceStatistics) FormatStatistics() string {
 	// Memory usage
 	report += "Memory Usage:\n"
 	report += fmt.Sprintf("  Total Buffer Size: %.2f GiB (%d bytes)\n", stats.BufferUsageGB, stats.BufferUsageBytes)
+	report += fmt.Sprintf("  Buffer Size Sum:   %d bytes\n", stats.BufferSizeSum)
 	report += fmt.Sprintf("  Unique Buffers:    %d\n", stats.UniqueBuffers)
 	report += "\n"
 
