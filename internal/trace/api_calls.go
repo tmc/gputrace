@@ -187,9 +187,12 @@ func (t *Trace) ParseAPICallList() (*APICallList, error) {
 		}
 
 		// Apply labels to encoder calls within this command buffer
+		// Only apply if the call doesn't already have a label (encoder calls already have labels from CS records)
 		for j := range cbCalls.Calls {
-			if label, exists := cbLabelMap[cbCalls.Calls[j].Address]; exists {
-				cbCalls.Calls[j].Label = label
+			if cbCalls.Calls[j].Label == "" {
+				if label, exists := cbLabelMap[cbCalls.Calls[j].Address]; exists {
+					cbCalls.Calls[j].Label = label
+				}
 			}
 		}
 
@@ -482,6 +485,15 @@ func parseInitCalls(data []byte, startCallNum int, csRecords []FunctionRecord, l
 	return calls, callNum, nil
 }
 
+// EncoderSection represents a compute encoder and its associated calls.
+type EncoderSection struct {
+	Label        string
+	Address      uint64
+	PipelineAddr uint64
+	StartOffset  int64
+	EndOffset    int64 // Offset where this encoder ends (next encoder or end of CB)
+}
+
 // parseCommandBufferCalls parses all API calls within a command buffer.
 func parseCommandBufferCalls(data []byte, cb *CommandBuffer, startCallNum int, initCalls []InitCall) (*CommandBufferCalls, int, error) {
 	cbCalls := &CommandBufferCalls{
@@ -525,103 +537,189 @@ func parseCommandBufferCalls(data []byte, cb *CommandBuffer, startCallNum int, i
 	// Command buffer creation
 	callNum++
 
-	// Find encoder address from C records
-	// The third C record (after queue and CB) has encoder address
-	encoderAddr := uint64(0)
+	// Find all CS records within the command buffer to identify encoders
+	// CS records mark encoder boundaries and contain labels
+	// The first CS record is the command buffer label, subsequent ones are encoders
+	csMarker := []byte("CS\x00\x00")
+	var allCSRecords []EncoderSection
+
 	offset = 0
-	for i := 0; i < 3; i++ {
-		pos := bytes.Index(data[offset:], cMarker)
+	for {
+		pos := bytes.Index(data[offset:], csMarker)
 		if pos == -1 {
 			break
 		}
 		absolutePos := offset + pos
 
-		if i == 2 && absolutePos+12 <= len(data) {
-			encoderAddr = binary.LittleEndian.Uint64(data[absolutePos+4 : absolutePos+12])
+		// Read CS address at +0x04
+		if absolutePos+12 > len(data) {
+			break
+		}
+		csAddr := binary.LittleEndian.Uint64(data[absolutePos+4 : absolutePos+12])
+
+		// Read label (null-terminated string starting at +0x0c)
+		labelStart := absolutePos + 12
+		labelEnd := labelStart
+		for labelEnd < len(data) && data[labelEnd] != 0 {
+			labelEnd++
+		}
+
+		if labelEnd > len(data) {
+			break
+		}
+
+		label := string(data[labelStart:labelEnd])
+
+		allCSRecords = append(allCSRecords, EncoderSection{
+			Label:       label,
+			Address:     csAddr,
+			StartOffset: int64(absolutePos),
+		})
+
+		offset += pos + 4
+	}
+
+	// The first CS record is the command buffer label
+	// All subsequent CS records are encoders
+	var encoders []EncoderSection
+	if len(allCSRecords) > 1 {
+		encoders = allCSRecords[1:]
+	}
+
+	// Sort encoders by start offset to ensure correct ordering
+	sort.Slice(encoders, func(i, j int) bool {
+		return encoders[i].StartOffset < encoders[j].StartOffset
+	})
+
+	// Set end offsets for each encoder
+	for i := range encoders {
+		if i < len(encoders)-1 {
+			encoders[i].EndOffset = encoders[i+1].StartOffset
+		} else {
+			encoders[i].EndOffset = int64(len(data))
+		}
+	}
+
+	// Parse Ct records to find pipeline state bindings for each encoder
+	// Ct record structure:
+	// +0x00: "Ct\x00\x00" (4 bytes)
+	// +0x04: encoder address (8 bytes)
+	// +0x0c: pipeline state address (8 bytes)
+	ctMarker := []byte("Ct\x00\x00")
+	offset = 0
+	for {
+		pos := bytes.Index(data[offset:], ctMarker)
+		if pos == -1 {
+			break
+		}
+		absolutePos := offset + pos
+
+		if absolutePos+20 <= len(data) {
+			encoderAddr := binary.LittleEndian.Uint64(data[absolutePos+4 : absolutePos+12])
+			pipelineAddr := binary.LittleEndian.Uint64(data[absolutePos+12 : absolutePos+20])
+
+			// Match this pipeline state to the encoder with this address
+			for i := range encoders {
+				if encoders[i].Address == encoderAddr && encoders[i].PipelineAddr == 0 {
+					encoders[i].PipelineAddr = pipelineAddr
+					break
+				}
+			}
 		}
 
 		offset += pos + 4
 	}
 
-	// Parse dispatches
-	dispatches, err := (&Trace{}).ParseDispatchInRegion(data, 0)
+	// Parse all buffer bindings and dispatches first
+	allBufferBindings, err := parseBufferBindings(data)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	// Find pipeline state address from init calls
-	// Use the first pipeline state found in init section
-	pipelineAddr := uint64(0)
-	for _, call := range initCalls {
-		if call.Type == "newPipelineState" {
-			pipelineAddr = call.Address
-			break
-		}
+	allDispatches, err := (&Trace{}).ParseDispatchInRegion(data, 0)
+	if err != nil {
+		return nil, 0, err
 	}
 
-	// Create encoder call
-	if encoderAddr != 0 {
+	// Generate calls for each encoder
+	for _, encoder := range encoders {
+		// Create encoder call with label
+		encoderPrefix := encoder.Label
+		if encoderPrefix == "" {
+			encoderPrefix = fmt.Sprintf("0x%x", encoder.Address)
+		}
+
 		cbCalls.Calls = append(cbCalls.Calls, FormattedAPICall{
 			CallNumber: callNum,
 			Indented:   true,
 			Type:       "encoder",
-			Address:    encoderAddr,
+			Address:    encoder.Address,
 			Details:    "computeCommandEncoder",
+			Label:      encoderPrefix,
 		})
 		callNum++
-	}
 
-	// Add setComputePipelineState call with address
-	if pipelineAddr != 0 {
+		// Add setLabel call
+		if encoder.Label != "" {
+			cbCalls.Calls = append(cbCalls.Calls, FormattedAPICall{
+				CallNumber: callNum,
+				Indented:   true,
+				Type:       "setLabel",
+				Details:    fmt.Sprintf("setLabel:\"%s\"", encoder.Label),
+			})
+			callNum++
+		}
+
+		// Add setComputePipelineState call
+		if encoder.PipelineAddr != 0 {
+			cbCalls.Calls = append(cbCalls.Calls, FormattedAPICall{
+				CallNumber: callNum,
+				Indented:   true,
+				Type:       "setPipelineState",
+				Details:    fmt.Sprintf("setComputePipelineState:0x%x", encoder.PipelineAddr),
+			})
+			callNum++
+		}
+
+		// Add buffer bindings that fall within this encoder's range
+		for _, binding := range allBufferBindings {
+			if binding.Offset >= encoder.StartOffset && binding.Offset < encoder.EndOffset {
+				cbCalls.Calls = append(cbCalls.Calls, FormattedAPICall{
+					CallNumber: callNum,
+					Indented:   true,
+					Type:       "setBuffer",
+					Details:    fmt.Sprintf("setBuffer:0x%x offset:0 atIndex:%d", binding.BufferAddr, binding.Index),
+					Offset:     binding.Offset,
+				})
+				callNum++
+			}
+		}
+
+		// Add dispatches that fall within this encoder's range
+		for _, dispatch := range allDispatches {
+			if dispatch.Offset >= encoder.StartOffset && dispatch.Offset < encoder.EndOffset {
+				cbCalls.Calls = append(cbCalls.Calls, FormattedAPICall{
+					CallNumber: callNum,
+					Indented:   true,
+					Type:       "dispatch",
+					Details: fmt.Sprintf("dispatchThreads:{%d, %d, %d} threadsPerThreadgroup:{%d, %d, %d}",
+						dispatch.ThreadsX, dispatch.ThreadsY, dispatch.ThreadsZ,
+						dispatch.ThreadsPerGroupX, dispatch.ThreadsPerGroupY, dispatch.ThreadsPerGroupZ),
+					Offset: dispatch.Offset,
+				})
+				callNum++
+			}
+		}
+
+		// Add endEncoding for this encoder
 		cbCalls.Calls = append(cbCalls.Calls, FormattedAPICall{
 			CallNumber: callNum,
 			Indented:   true,
-			Type:       "setPipelineState",
-			Details:    fmt.Sprintf("setComputePipelineState:0x%x", pipelineAddr),
+			Type:       "endEncoding",
+			Details:    "endEncoding",
 		})
 		callNum++
 	}
-
-	// Parse buffer bindings (CtU<b>ulul records)
-	bufferBindings, err := parseBufferBindings(data)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	// Add setBuffer calls with actual buffer addresses
-	for _, binding := range bufferBindings {
-		cbCalls.Calls = append(cbCalls.Calls, FormattedAPICall{
-			CallNumber: callNum,
-			Indented:   true,
-			Type:       "setBuffer",
-			Details:    fmt.Sprintf("setBuffer:0x%x offset:0 atIndex:%d", binding.BufferAddr, binding.Index),
-			Offset:     binding.Offset,
-		})
-		callNum++
-	}
-
-	// Add dispatch calls
-	for _, dispatch := range dispatches {
-		cbCalls.Calls = append(cbCalls.Calls, FormattedAPICall{
-			CallNumber: callNum,
-			Indented:   true,
-			Type:       "dispatch",
-			Details: fmt.Sprintf("dispatchThreads:{%d, %d, %d} threadsPerThreadgroup:{%d, %d, %d}",
-				dispatch.ThreadsX, dispatch.ThreadsY, dispatch.ThreadsZ,
-				dispatch.ThreadsPerGroupX, dispatch.ThreadsPerGroupY, dispatch.ThreadsPerGroupZ),
-			Offset: dispatch.Offset,
-		})
-		callNum++
-	}
-
-	// Add endEncoding
-	cbCalls.Calls = append(cbCalls.Calls, FormattedAPICall{
-		CallNumber: callNum,
-		Indented:   true,
-		Type:       "endEncoding",
-		Details:    "endEncoding",
-	})
-	callNum++
 
 	// Add commit
 	cbCalls.Calls = append(cbCalls.Calls, FormattedAPICall{
@@ -753,12 +851,6 @@ func (t *Trace) FormatAPICallList(w io.Writer) error {
 				}
 				fmt.Fprintf(w, "%s#%d %s = [%s]\n", indent, displayCallNum, callPrefix, call.Details)
 				displayCallNum++
-
-				// Add setLabel call if encoder has a label
-				if call.Type == "encoder" && call.Label != "" {
-					fmt.Fprintf(w, "%s#%d [setLabel:\"%s\"]\n", indent, displayCallNum, call.Label)
-					displayCallNum++
-				}
 			} else {
 				fmt.Fprintf(w, "%s#%d [%s]\n", indent, displayCallNum, call.Details)
 				displayCallNum++
@@ -828,11 +920,6 @@ func (t *Trace) FormatAPICallListFull(w io.Writer) error {
 					callPrefix = call.Label
 				}
 				fmt.Fprintf(w, "%s#%d %s = [%s]\n", indent, call.CallNumber, callPrefix, call.Details)
-
-				// Show encoder setLabel if label exists
-				if call.Indented && call.Label != "" && call.Type == "encoder" {
-					fmt.Fprintf(w, "%s#%d [setLabel:\"%s\"]\n", indent, call.CallNumber+1, call.Label)
-				}
 			} else {
 				fmt.Fprintf(w, "%s#%d [%s]\n", indent, call.CallNumber, call.Details)
 			}
@@ -852,9 +939,6 @@ func (t *Trace) FormatAPICallListFull(w io.Writer) error {
 					callPrefix = call.Label
 				}
 				fmt.Fprintf(w, "#%d %s = [%s]\n", call.CallNumber, callPrefix, call.Details)
-				if call.Label != "" && call.Type == "encoder" {
-					fmt.Fprintf(w, "#%d [setLabel:\"%s\"]\n", call.CallNumber+1, call.Label)
-				}
 			} else {
 				fmt.Fprintf(w, "#%d [%s]\n", call.CallNumber, call.Details)
 			}

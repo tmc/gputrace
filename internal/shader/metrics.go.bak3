@@ -194,15 +194,11 @@ func populateThreadMetrics(t *trace.Trace, metricsMap map[string]*ShaderMetrics)
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "Debug populateThreadMetrics: processing %d command buffers\n", len(commandBuffers))
 	for _, cb := range commandBuffers {
 		dcb, err := command.ParseDetailedCommandBuffer(t, cb.Index)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Debug: ParseDetailedCommandBuffer error: %v\n", err)
 			continue
 		}
-
-		fmt.Fprintf(os.Stderr, "Debug: CB %d has %d encoders\n", cb.Index, len(dcb.Encoders))
 
 		// Get dispatch data for this command buffer
 		data := t.CaptureData
@@ -225,44 +221,21 @@ func populateThreadMetrics(t *trace.Trace, metricsMap map[string]*ShaderMetrics)
 
 		// Match dispatches to encoders (assume 1:1 for now)
 		for i, encoder := range dcb.Encoders {
-			fmt.Fprintf(os.Stderr, "Debug: Encoder %d label=%q\n", i, encoder.Label)
 			if i >= len(dispatches) {
 				break
 			}
 
 			dispatch := dispatches[i]
-
-			// Try to find matching metrics by encoder label
-			// The label might not match exactly (e.g., "SimpleAdd" vs "simple_add")
-			// so we try multiple strategies:
-			// 1. Exact match
-			// 2. Case-insensitive match with normalization
-			var targetMetrics *ShaderMetrics
 			if metrics, exists := metricsMap[encoder.Label]; exists {
-				targetMetrics = metrics
-			} else {
-				// Try to match by normalizing names (remove underscores, lowercase)
-				normalizedLabel := normalizeForMatching(encoder.Label)
-				fmt.Fprintf(os.Stderr, "Debug: normalized encoder label %q -> %q\n", encoder.Label, normalizedLabel)
-				for name, metrics := range metricsMap {
-					normalizedName := normalizeForMatching(name)
-					fmt.Fprintf(os.Stderr, "Debug: checking against metric %q -> %q\n", name, normalizedName)
-					if normalizedName == normalizedLabel {
-						fmt.Fprintf(os.Stderr, "Debug: MATCH!\n")
-						targetMetrics = metrics
-						break
-					}
+				// Take the first dispatch configuration (they're usually the same)
+				if metrics.ThreadgroupsX == 0 {
+					metrics.ThreadgroupsX = dispatch.ThreadsX
+					metrics.ThreadgroupsY = dispatch.ThreadsY
+					metrics.ThreadgroupsZ = dispatch.ThreadsZ
+					metrics.ThreadsPerGroupX = dispatch.ThreadsPerGroupX
+					metrics.ThreadsPerGroupY = dispatch.ThreadsPerGroupY
+					metrics.ThreadsPerGroupZ = dispatch.ThreadsPerGroupZ
 				}
-			}
-
-			if targetMetrics != nil && targetMetrics.ThreadgroupsX == 0 {
-				// Store the dispatch configuration
-				targetMetrics.ThreadgroupsX = dispatch.ThreadsX
-				targetMetrics.ThreadgroupsY = dispatch.ThreadsY
-				targetMetrics.ThreadgroupsZ = dispatch.ThreadsZ
-				targetMetrics.ThreadsPerGroupX = dispatch.ThreadsPerGroupX
-				targetMetrics.ThreadsPerGroupY = dispatch.ThreadsPerGroupY
-				targetMetrics.ThreadsPerGroupZ = dispatch.ThreadsPerGroupZ
 			}
 		}
 	}
@@ -294,9 +267,7 @@ func estimateTimingMetrics(t *trace.Trace, metricsMap map[string]*ShaderMetrics)
 		fmt.Fprintf(os.Stderr, "Debug: CSV loaded successfully with %d encoders\n", len(counterData.Encoders))
 	}
 
-	fmt.Fprintf(os.Stderr, "Debug: Found %d timings and %d metrics\n", len(timingMap), len(metricsMap))
 	for name, metrics := range metricsMap {
-		fmt.Fprintf(os.Stderr, "Debug: Processing metric '%s'\n", name)
 		if timing, exists := timingMap[name]; exists {
 			// Use actual timing if available
 			durationPerInvocation := timing.DurationNs

@@ -1,0 +1,4 @@
+Every 2.0s: bd list --format=dot | dot -Tsvg -o beads.svg; md5sum beads.svg                                                                             m4x.local: 09:03:38
+                                                                                                                                                              in 0.101s (0)
+583a750e2778cb0121d2f95147e52746  beads.svg                                                                                                                                
+                                                                                                                                                                           
