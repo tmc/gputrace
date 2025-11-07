@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -104,7 +105,7 @@ func (t *Trace) ParseAPICallList() (*APICallList, error) {
 	labelMap := parseCSRecordsFromInit(data[:firstCUUU])
 
 	// Parse initialization calls before first CUUU
-	initCalls, nextCallNum, err := parseInitCalls(data[:firstCUUU], callNum)
+	initCalls, _, err := parseInitCalls(data[:firstCUUU], callNum, labelMap)
 	if err != nil {
 		return nil, fmt.Errorf("parse init calls: %w", err)
 	}
@@ -116,8 +117,34 @@ func (t *Trace) ParseAPICallList() (*APICallList, error) {
 		}
 	}
 
+	// Sort init calls to match Xcode ordering: buffers → functions → pipeline states
+	sort.SliceStable(initCalls, func(i, j int) bool {
+		order := map[string]int{
+			"newBuffer":        1,
+			"newFunction":      2,
+			"newPipelineState": 3,
+			"newHeap":          4,
+			"newResidencySet":  5,
+			"newSharedEvent":   6,
+		}
+		typeI := order[initCalls[i].Type]
+		typeJ := order[initCalls[j].Type]
+		if typeI == 0 {
+			typeI = 99 // Unknown types go last
+		}
+		if typeJ == 0 {
+			typeJ = 99
+		}
+		return typeI < typeJ
+	})
+
+	// Renumber calls after sorting
+	for i := range initCalls {
+		initCalls[i].CallNumber = i
+	}
+
 	list.InitCalls = initCalls
-	callNum = nextCallNum
+	callNum = len(initCalls)
 
 	// Parse all command buffers
 	commandBuffers, err := t.ParseCommandBuffers()
@@ -140,7 +167,7 @@ func (t *Trace) ParseAPICallList() (*APICallList, error) {
 		cbLabelMap := parseCSRecordsFromInit(cbData)
 
 		// Parse this command buffer's calls
-		cbCalls, nextCallNum, err := parseCommandBufferCalls(cbData, cb, callNum)
+		cbCalls, nextCallNum, err := parseCommandBufferCalls(cbData, cb, callNum, list.InitCalls)
 		if err != nil {
 			return nil, fmt.Errorf("parse CB %d: %w", i, err)
 		}
@@ -165,7 +192,7 @@ func (t *Trace) ParseAPICallList() (*APICallList, error) {
 }
 
 // parseInitCalls parses initialization calls before the first command buffer.
-func parseInitCalls(data []byte, startCallNum int) ([]InitCall, int, error) {
+func parseInitCalls(data []byte, startCallNum int, labelMap map[uint64]string) ([]InitCall, int, error) {
 	var calls []InitCall
 	callNum := startCallNum
 
@@ -255,7 +282,7 @@ func parseInitCalls(data []byte, startCallNum int) ([]InitCall, int, error) {
 
 		// Read heap address at +0x08 and buffer address at +0x24
 		if absolutePos+0x2c <= len(data) {
-			heapAddr := binary.LittleEndian.Uint64(data[absolutePos+0x08 : absolutePos+0x10])
+			_ = binary.LittleEndian.Uint64(data[absolutePos+0x08 : absolutePos+0x10]) // heapAddr (not used in Xcode format)
 			bufAddr := binary.LittleEndian.Uint64(data[absolutePos+0x24 : absolutePos+0x2c])
 			bufLen := binary.LittleEndian.Uint64(data[absolutePos+0x10 : absolutePos+0x18])
 
@@ -263,18 +290,8 @@ func parseInitCalls(data []byte, startCallNum int) ([]InitCall, int, error) {
 				CallNumber: callNum,
 				Type:       "newBuffer",
 				Address:    bufAddr,
-				Info:       fmt.Sprintf("[0x%x newBufferWithLength:%d options:HazardTrackingModeUntracked]", heapAddr, bufLen),
+				Info:       fmt.Sprintf("[Device newBufferWithLength:%d options:CPUCacheModeDefaultCache]", bufLen),
 				Offset:     int64(absolutePos),
-			})
-
-			// Add BufferHeapOffset call after buffer creation
-			// Read offset from buffer structure
-			calls = append(calls, InitCall{
-				CallNumber: callNum + 1,
-				Type:       "bufferHeapOffset",
-				Address:    bufAddr,
-				Info:       fmt.Sprintf("BufferHeapOffset(0x%x, 0)", bufAddr),
-				Offset:     int64(absolutePos) + 1, // Slight offset to maintain ordering
 			})
 		}
 
@@ -329,14 +346,18 @@ func parseInitCalls(data []byte, startCallNum int) ([]InitCall, int, error) {
 			callNum++
 		} else if strings.Contains(strings.ToLower(name), "_") || (name[0] >= 'a' && name[0] <= 'z') {
 			// Likely a function name (has underscores or starts lowercase)
-			calls = append(calls, InitCall{
-				CallNumber: callNum,
-				Type:       "newFunction",
-				Address:    addr,
-				Info:       fmt.Sprintf("[0x%x newFunctionWithName:\"%s\"]", addr, name),
-				Label:      name,
-			})
-			callNum++
+			// Only create init call if this looks like a library address (top 32 bits >= 0x7)
+			// This filters out the runtime function address (0x101...) and keeps only the CS record address (0x704...)
+			if (addr >> 32) >= 0x7 {
+				calls = append(calls, InitCall{
+					CallNumber: callNum,
+					Type:       "newFunction",
+					Address:    addr,
+					Info:       fmt.Sprintf("[0x%x newFunctionWithName:\"%s\"]", addr, name),
+					Label:      name,
+				})
+				callNum++
+			}
 		}
 		// Encoder/command buffer labels will be handled separately in their respective sections
 	}
@@ -390,20 +411,25 @@ func parseInitCalls(data []byte, startCallNum int) ([]InitCall, int, error) {
 			funcAddr := binary.LittleEndian.Uint64(data[absolutePos+0x0c : absolutePos+0x14])
 
 			if pipelineAddr != 0 {
-				// Try to find function name
+				// Try to find function name from labelMap first, then from existing calls
 				funcName := "function"
-				for _, call := range calls {
-					if call.Type == "newFunction" && call.Address == funcAddr {
-						// Use label if available, otherwise extract from Info
-						if call.Label != "" {
-							funcName = call.Label
-						} else if strings.Contains(call.Info, "=") {
-							parts := strings.Split(call.Info, "=")
-							if len(parts) > 0 {
-								funcName = strings.TrimSpace(parts[0])
+				if label, exists := labelMap[funcAddr]; exists {
+					funcName = label
+				} else {
+					// Fallback: search in already-parsed calls
+					for _, call := range calls {
+						if call.Type == "newFunction" && call.Address == funcAddr {
+							// Use label if available, otherwise extract from Info
+							if call.Label != "" {
+								funcName = call.Label
+							} else if strings.Contains(call.Info, "=") {
+								parts := strings.Split(call.Info, "=")
+								if len(parts) > 0 {
+									funcName = strings.TrimSpace(parts[0])
+								}
 							}
+							break
 						}
-						break
 					}
 				}
 
@@ -449,7 +475,7 @@ func parseInitCalls(data []byte, startCallNum int) ([]InitCall, int, error) {
 }
 
 // parseCommandBufferCalls parses all API calls within a command buffer.
-func parseCommandBufferCalls(data []byte, cb *CommandBuffer, startCallNum int) (*CommandBufferCalls, int, error) {
+func parseCommandBufferCalls(data []byte, cb *CommandBuffer, startCallNum int, initCalls []InitCall) (*CommandBufferCalls, int, error) {
 	cbCalls := &CommandBufferCalls{
 		Index:      cb.Index,
 		Address:    0,
@@ -512,6 +538,16 @@ func parseCommandBufferCalls(data []byte, cb *CommandBuffer, startCallNum int) (
 		return nil, 0, err
 	}
 
+	// Find pipeline state address from init calls
+	// Use the first pipeline state found in init section
+	pipelineAddr := uint64(0)
+	for _, call := range initCalls {
+		if call.Type == "newPipelineState" {
+			pipelineAddr = call.Address
+			break
+		}
+	}
+
 	// Create encoder call
 	if encoderAddr != 0 {
 		cbCalls.Calls = append(cbCalls.Calls, FormattedAPICall{
@@ -524,16 +560,16 @@ func parseCommandBufferCalls(data []byte, cb *CommandBuffer, startCallNum int) (
 		callNum++
 	}
 
-	// Add setComputePipelineState call
-	// The pipeline state address should be passed in from parsing or extracted from trace
-	// For now, we'll need to get it from the init calls
-	cbCalls.Calls = append(cbCalls.Calls, FormattedAPICall{
-		CallNumber: callNum,
-		Indented:   true,
-		Type:       "setPipelineState",
-		Details:    "setComputePipelineState", // Address will be added in formatting
-	})
-	callNum++
+	// Add setComputePipelineState call with address
+	if pipelineAddr != 0 {
+		cbCalls.Calls = append(cbCalls.Calls, FormattedAPICall{
+			CallNumber: callNum,
+			Indented:   true,
+			Type:       "setPipelineState",
+			Details:    fmt.Sprintf("setComputePipelineState:0x%x", pipelineAddr),
+		})
+		callNum++
+	}
 
 	// Parse buffer bindings (CtU<b>ulul records)
 	bufferBindings, err := parseBufferBindings(data)
@@ -559,7 +595,7 @@ func parseCommandBufferCalls(data []byte, cb *CommandBuffer, startCallNum int) (
 			CallNumber: callNum,
 			Indented:   true,
 			Type:       "dispatch",
-			Details: fmt.Sprintf("dispatchThreadgroups:{%d, %d, %d} threadsPerThreadgroup:{%d, %d, %d}",
+			Details: fmt.Sprintf("dispatchThreads:{%d, %d, %d} threadsPerThreadgroup:{%d, %d, %d}",
 				dispatch.ThreadsX, dispatch.ThreadsY, dispatch.ThreadsZ,
 				dispatch.ThreadsPerGroupX, dispatch.ThreadsPerGroupY, dispatch.ThreadsPerGroupZ),
 			Offset: dispatch.Offset,
@@ -654,7 +690,12 @@ func (t *Trace) FormatAPICallList(w io.Writer) error {
 
 	// Format init calls
 	for _, call := range apiList.InitCalls {
-		if call.Type == "bufferHeapOffset" || call.Type == "setLabel" || call.Type == "requestResidency" {
+		// Skip bufferHeapOffset in compact format
+		if call.Type == "bufferHeapOffset" {
+			continue
+		}
+
+		if call.Type == "setLabel" || call.Type == "requestResidency" {
 			// These calls don't have the "address =" prefix
 			fmt.Fprintf(w, "#%d %s\n", call.CallNumber, call.Info)
 		} else {
@@ -676,6 +717,11 @@ func (t *Trace) FormatAPICallList(w io.Writer) error {
 		}
 		fmt.Fprintf(w, "#%d %s = [0x%x commandBuffer]\n", cb.CallNumber, cbPrefix, 0) // TODO: get queue address
 
+		// Add setLabel call if command buffer has a label
+		if cb.Label != "" {
+			fmt.Fprintf(w, "#%d [setLabel:\"%s\"]\n", cb.CallNumber+1, cb.Label)
+		}
+
 		for _, call := range cb.Calls {
 			indent := ""
 			if call.Indented {
@@ -689,6 +735,11 @@ func (t *Trace) FormatAPICallList(w io.Writer) error {
 					callPrefix = call.Label
 				}
 				fmt.Fprintf(w, "%s#%d %s = [%s]\n", indent, call.CallNumber, callPrefix, call.Details)
+
+				// Add setLabel call if encoder has a label
+				if call.Type == "encoder" && call.Label != "" {
+					fmt.Fprintf(w, "%s#%d [setLabel:\"%s\"]\n", indent, call.CallNumber+1, call.Label)
+				}
 			} else {
 				fmt.Fprintf(w, "%s#%d [%s]\n", indent, call.CallNumber, call.Details)
 			}
@@ -902,7 +953,21 @@ func parseCSRecordsFromInit(data []byte) map[uint64]string {
 					}
 				}
 				if validLabel {
-					labels[address] = string(labelBytes)
+					label := string(labelBytes)
+					labels[address] = label
+
+					// Also try to read function address at offset +0x1c (28 bytes from CS marker)
+					// This is the actual function address used in Ctt records
+					// Only add it if it looks like a function name (has underscores or lowercase start)
+					if strings.Contains(strings.ToLower(label), "_") || (len(label) > 0 && label[0] >= 'a' && label[0] <= 'z') {
+						funcAddrOffset := i + 0x1c
+						if funcAddrOffset+8 <= len(data) {
+							funcAddr := binary.LittleEndian.Uint64(data[funcAddrOffset : funcAddrOffset+8])
+							if funcAddr != 0 && funcAddr != address {
+								labels[funcAddr] = label
+							}
+						}
+					}
 				}
 			}
 		}
@@ -1080,7 +1145,7 @@ func (t *Trace) formatCommandBufferWithEncoders(w io.Writer, data []byte, allCBs
 		// Print dispatches for this encoder
 		for dispatchIdx < endDispatchIdx && dispatchIdx < len(dispatches) {
 			dispatch := dispatches[dispatchIdx]
-			fmt.Fprintf(w, "\t#%d [dispatchThreadgroups:{%d, %d, %d} threadsPerThreadgroup:{%d, %d, %d}]\n",
+			fmt.Fprintf(w, "\t#%d [dispatchThreads:{%d, %d, %d} threadsPerThreadgroup:{%d, %d, %d}]\n",
 				callNum,
 				dispatch.ThreadsX, dispatch.ThreadsY, dispatch.ThreadsZ,
 				dispatch.ThreadsPerGroupX, dispatch.ThreadsPerGroupY, dispatch.ThreadsPerGroupZ)
