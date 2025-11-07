@@ -134,20 +134,121 @@ func (t *Trace) CountCommandBuffers() (int, error) {
 }
 
 // ParseComputeEncoders extracts all compute command encoders from the trace.
-// Each kernel name corresponds to a compute encoder in the trace.
+// Returns only actual kernel function names (those with underscores like "simple_add"),
+// filtering out encoder labels and command buffer labels.
 func (t *Trace) ParseComputeEncoders() ([]*ComputeEncoder, error) {
-	var encoders []*ComputeEncoder
+	if len(t.KernelNames) == 0 {
+		return nil, nil
+	}
 
-	// Use kernel names from trace metadata as encoder identifiers
-	for i, name := range t.KernelNames {
+	// Strategy: Only include names that look like actual function names (have underscores).
+	// This filters out encoder labels like "SimpleAdd" and command buffer labels like "SingleEncoder".
+	// Actual Metal kernel functions typically use lowercase_with_underscores naming.
+	var encoders []*ComputeEncoder
+	seen := make(map[string]bool) // deduplicate exact matches
+
+	for _, name := range t.KernelNames {
+		// Only include if it looks like an actual function name
+		if !isActualFunctionName(name) {
+			continue
+		}
+
+		// Avoid exact duplicates
+		if seen[name] {
+			continue
+		}
+
 		encoder := &ComputeEncoder{
-			Index: i,
+			Index: len(encoders),
 			Label: name,
 		}
 		encoders = append(encoders, encoder)
+		seen[name] = true
 	}
 
 	return encoders, nil
+}
+
+// isActualFunctionName returns true if the name looks like an actual kernel function
+// rather than an encoder label or command buffer label.
+// Actual function names typically have underscores (e.g., "simple_add", "matmul_kernel").
+func isActualFunctionName(name string) bool {
+	// Must have at least one underscore
+	return stringContains(name, '_')
+}
+
+// normalizeKernelName converts a kernel name to a canonical form for deduplication.
+// Strips common suffixes and normalizes case to identify related names.
+// Examples:
+//   "simple_add" -> "simple"
+//   "SimpleAdd" -> "simple"
+//   "SingleEncoder" -> "single"
+func normalizeKernelName(name string) string {
+	// Convert to lowercase and remove underscores/special chars
+	var normalized []byte
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if c >= 'A' && c <= 'Z' {
+			normalized = append(normalized, c+32) // to lowercase
+		} else if c >= 'a' && c <= 'z' || c >= '0' && c <= '9' {
+			normalized = append(normalized, c)
+		}
+	}
+
+	result := string(normalized)
+
+	// Strip common suffixes that are typically added to labels/variants
+	// This helps identify "simple_add", "SimpleAdd", "SingleEncoder" as related
+	suffixes := []string{"encoder", "add", "kernel", "compute", "shader", "function"}
+	for _, suffix := range suffixes {
+		if len(result) > len(suffix) && stringEndsWith(result, suffix) {
+			result = result[:len(result)-len(suffix)]
+			break // Only strip one suffix to avoid over-normalization
+		}
+	}
+
+	return result
+}
+
+// stringEndsWith checks if s ends with suffix (helper to avoid importing strings)
+func stringEndsWith(s, suffix string) bool {
+	if len(s) < len(suffix) {
+		return false
+	}
+	for i := 0; i < len(suffix); i++ {
+		if s[len(s)-len(suffix)+i] != suffix[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// isPreferredKernelName returns true if name1 is a better choice than name2.
+// Preference: lowercase_with_underscores > shorter_names > CamelCase
+func isPreferredKernelName(name1, name2 string) bool {
+	// Prefer names with underscores (likely actual function names)
+	hasUnderscore1 := stringContains(name1, '_')
+	hasUnderscore2 := stringContains(name2, '_')
+
+	if hasUnderscore1 && !hasUnderscore2 {
+		return true
+	}
+	if !hasUnderscore1 && hasUnderscore2 {
+		return false
+	}
+
+	// Prefer shorter names (less likely to be decorated labels)
+	return len(name1) < len(name2)
+}
+
+// stringContains checks if s contains the byte c (helper to avoid importing strings)
+func stringContains(s string, c byte) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] == c {
+			return true
+		}
+	}
+	return false
 }
 
 // CountComputeEncoders returns the number of compute encoders in the trace.

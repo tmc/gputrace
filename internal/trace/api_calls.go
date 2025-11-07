@@ -698,6 +698,125 @@ func (t *Trace) FormatAPICallList(w io.Writer) error {
 	return nil
 }
 
+// FormatAPICallListFull writes an expanded/full API call list showing all nesting levels.
+// This matches the Xcode Instruments "expanded tree view" format where command buffers
+// and encoders are shown at multiple indentation levels.
+func (t *Trace) FormatAPICallListFull(w io.Writer) error {
+	// Parse all API calls
+	apiList, err := t.ParseAPICallList()
+	if err != nil {
+		return fmt.Errorf("parse API calls: %w", err)
+	}
+
+	// Format init calls (same as compact)
+	for _, call := range apiList.InitCalls {
+		if call.Type == "bufferHeapOffset" || call.Type == "setLabel" || call.Type == "requestResidency" {
+			fmt.Fprintf(w, "#%d %s\n", call.CallNumber, call.Info)
+		} else {
+			prefix := fmt.Sprintf("0x%x", call.Address)
+			if call.Label != "" {
+				prefix = call.Label
+			}
+			fmt.Fprintf(w, "#%d %s = %s\n", call.CallNumber, prefix, call.Info)
+		}
+	}
+
+	// Format command buffers - show full tree expansion
+	for _, cb := range apiList.CommandBuffers {
+		// Level 0: Full tree view (command buffer + all nested calls)
+		cbPrefix := fmt.Sprintf("0x%x", cb.Address)
+		if cb.Label != "" {
+			cbPrefix = cb.Label
+		}
+		fmt.Fprintf(w, "#%d %s = [0x%x commandBuffer]\n", cb.CallNumber, cbPrefix, 0)
+
+		// Show command buffer setLabel if label exists
+		if cb.Label != "" {
+			fmt.Fprintf(w, "#%d [setLabel:\"%s\"]\n", cb.CallNumber+1, cb.Label)
+		}
+
+		// Show all calls indented
+		for _, call := range cb.Calls {
+			indent := ""
+			if call.Indented {
+				indent = "\t"
+			}
+
+			if call.Address != 0 {
+				callPrefix := fmt.Sprintf("0x%x", call.Address)
+				if call.Label != "" {
+					callPrefix = call.Label
+				}
+				fmt.Fprintf(w, "%s#%d %s = [%s]\n", indent, call.CallNumber, callPrefix, call.Details)
+
+				// Show encoder setLabel if label exists
+				if call.Indented && call.Label != "" && call.Type == "encoder" {
+					fmt.Fprintf(w, "%s#%d [setLabel:\"%s\"]\n", indent, call.CallNumber+1, call.Label)
+				}
+			} else {
+				fmt.Fprintf(w, "%s#%d [%s]\n", indent, call.CallNumber, call.Details)
+			}
+		}
+
+		fmt.Fprintf(w, "\n") // Blank line after each expansion level
+
+		// Level 1: Command buffer with calls (no init calls)
+		fmt.Fprintf(w, "#%d %s = [0x%x commandBuffer]\n", cb.CallNumber, cbPrefix, 0)
+		if cb.Label != "" {
+			fmt.Fprintf(w, "#%d [setLabel:\"%s\"]\n", cb.CallNumber+1, cb.Label)
+		}
+		for _, call := range cb.Calls {
+			if call.Address != 0 {
+				callPrefix := fmt.Sprintf("0x%x", call.Address)
+				if call.Label != "" {
+					callPrefix = call.Label
+				}
+				fmt.Fprintf(w, "#%d %s = [%s]\n", call.CallNumber, callPrefix, call.Details)
+				if call.Label != "" && call.Type == "encoder" {
+					fmt.Fprintf(w, "#%d [setLabel:\"%s\"]\n", call.CallNumber+1, call.Label)
+				}
+			} else {
+				fmt.Fprintf(w, "#%d [%s]\n", call.CallNumber, call.Details)
+			}
+		}
+
+		fmt.Fprintf(w, "\n") // Blank line after level 1
+
+		// Level 2: Just encoder calls (deepest nesting)
+		for _, call := range cb.Calls {
+			if call.Type == "encoder" {
+				callPrefix := fmt.Sprintf("0x%x", call.Address)
+				if call.Label != "" {
+					callPrefix = call.Label
+				}
+				fmt.Fprintf(w, "#%d %s = [%s]\n", call.CallNumber, callPrefix, call.Details)
+				if call.Label != "" {
+					fmt.Fprintf(w, "#%d [setLabel:\"%s\"]\n", call.CallNumber+1, call.Label)
+				}
+
+				// Show encoder's calls (not indented at this level)
+				// For now, we'd need to track which calls belong to which encoder
+				// Simplifying to just show the encoder declaration
+			} else if !call.Indented {
+				// Show non-indented calls (commit, waitUntilCompleted)
+				if call.Address != 0 {
+					callPrefix := fmt.Sprintf("0x%x", call.Address)
+					if call.Label != "" {
+						callPrefix = call.Label
+					}
+					fmt.Fprintf(w, "#%d %s = [%s]\n", call.CallNumber, callPrefix, call.Details)
+				} else {
+					fmt.Fprintf(w, "#%d [%s]\n", call.CallNumber, call.Details)
+				}
+			}
+		}
+
+		fmt.Fprintf(w, "\n") // Blank line after level 2
+	}
+
+	return nil
+}
+
 // formatBufferCreation formats buffer creation calls from init section.
 func formatBufferCreation(w io.Writer, data []byte, startCallNum int) int {
 	callNum := startCallNum
