@@ -24,6 +24,9 @@ type InitCall struct {
 	// Additional info (e.g., function name, buffer length)
 	Info string
 
+	// Label for this object (if available from CS records)
+	Label string
+
 	// Offset in capture file
 	Offset int64
 }
@@ -44,6 +47,9 @@ type FormattedAPICall struct {
 
 	// Details of the call (parameters, etc.)
 	Details string
+
+	// Label for this object (if available from CS records)
+	Label string
 
 	// Offset in capture file
 	Offset int64
@@ -69,6 +75,9 @@ type CommandBufferCalls struct {
 	// CallNumber is the global call index for this CB creation
 	CallNumber int
 
+	// Label for this command buffer (if available from CS records)
+	Label string
+
 	// Calls within this command buffer (encoders, setBuffer, dispatch, etc.)
 	Calls []FormattedAPICall
 }
@@ -91,11 +100,22 @@ func (t *Trace) ParseAPICallList() (*APICallList, error) {
 		return nil, fmt.Errorf("no command buffers found")
 	}
 
+	// Parse labels from CS records in init section
+	labelMap := parseCSRecordsFromInit(data[:firstCUUU])
+
 	// Parse initialization calls before first CUUU
 	initCalls, nextCallNum, err := parseInitCalls(data[:firstCUUU], callNum)
 	if err != nil {
 		return nil, fmt.Errorf("parse init calls: %w", err)
 	}
+
+	// Apply labels to init calls
+	for i := range initCalls {
+		if label, exists := labelMap[initCalls[i].Address]; exists {
+			initCalls[i].Label = label
+		}
+	}
+
 	list.InitCalls = initCalls
 	callNum = nextCallNum
 
@@ -116,10 +136,25 @@ func (t *Trace) ParseAPICallList() (*APICallList, error) {
 
 		cbData := data[cb.Offset:cbEnd]
 
+		// Parse labels from CS records in this command buffer's section
+		cbLabelMap := parseCSRecordsFromInit(cbData)
+
 		// Parse this command buffer's calls
 		cbCalls, nextCallNum, err := parseCommandBufferCalls(cbData, cb, callNum)
 		if err != nil {
 			return nil, fmt.Errorf("parse CB %d: %w", i, err)
+		}
+
+		// Apply command buffer label
+		if label, exists := labelMap[cbCalls.Address]; exists {
+			cbCalls.Label = label
+		}
+
+		// Apply labels to encoder calls within this command buffer
+		for j := range cbCalls.Calls {
+			if label, exists := cbLabelMap[cbCalls.Calls[j].Address]; exists {
+				cbCalls.Calls[j].Label = label
+			}
 		}
 
 		list.CommandBuffers = append(list.CommandBuffers, *cbCalls)
@@ -658,13 +693,23 @@ func (t *Trace) FormatAPICallList(w io.Writer) error {
 			// These calls don't have the "address =" prefix
 			fmt.Fprintf(w, "#%d %s\n", call.CallNumber, call.Info)
 		} else {
-			fmt.Fprintf(w, "#%d 0x%x = %s\n", call.CallNumber, call.Address, call.Info)
+			// Use label if available, otherwise use address
+			prefix := fmt.Sprintf("0x%x", call.Address)
+			if call.Label != "" {
+				prefix = call.Label
+			}
+			fmt.Fprintf(w, "#%d %s = %s\n", call.CallNumber, prefix, call.Info)
 		}
 	}
 
 	// Format command buffer calls
 	for _, cb := range apiList.CommandBuffers {
-		fmt.Fprintf(w, "#%d 0x%x = [0x%x commandBuffer]\n", cb.CallNumber, cb.Address, 0) // TODO: get queue address
+		// Use command buffer label if available
+		cbPrefix := fmt.Sprintf("0x%x", cb.Address)
+		if cb.Label != "" {
+			cbPrefix = cb.Label
+		}
+		fmt.Fprintf(w, "#%d %s = [0x%x commandBuffer]\n", cb.CallNumber, cbPrefix, 0) // TODO: get queue address
 
 		for _, call := range cb.Calls {
 			indent := ""
@@ -673,7 +718,12 @@ func (t *Trace) FormatAPICallList(w io.Writer) error {
 			}
 
 			if call.Address != 0 {
-				fmt.Fprintf(w, "%s#%d 0x%x = [%s]\n", indent, call.CallNumber, call.Address, call.Details)
+				// Use label if available for the call
+				callPrefix := fmt.Sprintf("0x%x", call.Address)
+				if call.Label != "" {
+					callPrefix = call.Label
+				}
+				fmt.Fprintf(w, "%s#%d %s = [%s]\n", indent, call.CallNumber, callPrefix, call.Details)
 			} else {
 				fmt.Fprintf(w, "%s#%d [%s]\n", indent, call.CallNumber, call.Details)
 			}
