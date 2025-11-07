@@ -171,10 +171,26 @@ func (t *Trace) ParseComputeEncoders() ([]*ComputeEncoder, error) {
 
 // isActualFunctionName returns true if the name looks like an actual kernel function
 // rather than an encoder label or command buffer label.
-// Actual function names typically have underscores (e.g., "simple_add", "matmul_kernel").
+// Actual function names typically have underscores (e.g., "simple_add", "matmul_kernel")
+// and start with lowercase letters.
+// Encoder labels like "Encoder_5_complex_math" or "MultipleEncoders_6" are filtered out.
 func isActualFunctionName(name string) bool {
+	if len(name) == 0 {
+		return false
+	}
+
 	// Must have at least one underscore
-	return stringContains(name, '_')
+	if !stringContains(name, '_') {
+		return false
+	}
+
+	// Must start with lowercase letter (filters out "Encoder_X_..." and "MultipleEncoders_X")
+	firstChar := name[0]
+	if firstChar < 'a' || firstChar > 'z' {
+		return false
+	}
+
+	return true
 }
 
 // normalizeKernelName converts a kernel name to a canonical form for deduplication.

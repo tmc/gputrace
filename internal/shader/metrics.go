@@ -238,12 +238,16 @@ func populateThreadMetrics(t *trace.Trace, metricsMap map[string]*ShaderMetrics)
 		// Note: There may be more encoder labels than actual compute dispatches
 		// (e.g., command buffer labels, encoder labels vs actual kernel names)
 		// Try to match each encoder label to the metrics map
+		// Dispatches are assigned sequentially to matching encoders
+		dispatchIndex := 0
 		for _, encoder := range dcb.Encoders {
 			// Try to find matching metrics by encoder label
 			// The label might not match exactly (e.g., "SimpleAdd" vs "simple_add")
+			// or the encoder label might have a prefix (e.g., "Encoder_5_complex_math" vs "complex_math")
 			// so we try multiple strategies:
 			// 1. Exact match
-			// 2. Case-insensitive match with normalization
+			// 2. Normalized match (case-insensitive, no underscores)
+			// 3. Suffix match (encoder label ends with metric name after normalization)
 			var targetMetrics *ShaderMetrics
 			if metrics, exists := metricsMap[encoder.Label]; exists {
 				targetMetrics = metrics
@@ -252,19 +256,24 @@ func populateThreadMetrics(t *trace.Trace, metricsMap map[string]*ShaderMetrics)
 				normalizedLabel := normalizeForMatching(encoder.Label)
 				for name, metrics := range metricsMap {
 					normalizedName := normalizeForMatching(name)
+					// Check exact normalized match
 					if normalizedName == normalizedLabel {
+						targetMetrics = metrics
+						break
+					}
+					// Check if encoder label ends with metric name (handles "Encoder_5_complex_math" -> "complex_math")
+					if len(normalizedLabel) > len(normalizedName) &&
+						normalizedLabel[len(normalizedLabel)-len(normalizedName):] == normalizedName {
 						targetMetrics = metrics
 						break
 					}
 				}
 			}
 
-			// If we found a matching metric and have at least one dispatch, apply the first dispatch
-			// (In single-encoder traces, there's typically only one dispatch anyway)
-			if targetMetrics != nil && len(dispatches) > 0 && targetMetrics.ThreadgroupsX == 0 {
-				// Use the first dispatch for now
-				// TODO: For traces with multiple dispatches per CB, implement proper matching
-				dispatch := dispatches[0]
+			// If we found a matching metric and have a dispatch available, apply it
+			if targetMetrics != nil && dispatchIndex < len(dispatches) && targetMetrics.ThreadgroupsX == 0 {
+				dispatch := dispatches[dispatchIndex]
+				dispatchIndex++ // Move to next dispatch for next matching encoder
 
 				// Store threads per threadgroup
 				targetMetrics.ThreadsPerGroupX = dispatch.ThreadsPerGroupX
