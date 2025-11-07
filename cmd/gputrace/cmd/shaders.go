@@ -9,7 +9,10 @@ import (
 	"github.com/tmc/mlx-go/experiments/gputrace"
 )
 
-var shadersVerbose bool
+var (
+	shadersVerbose  bool
+	shadersEstimate bool
+)
 
 var shadersCmd = &cobra.Command{
 	Use:   "shaders <trace.gputrace>",
@@ -22,15 +25,19 @@ Shows:
   - Type (Compute)
   - Pipeline State address
   - # SIMD Groups (threadgroups dispatched)
-  - # Allocated Registers (estimated)
+  - # Allocated Registers
   - High Register (peak register usage)
   - Spilled Bytes (register spills to memory)
+
+By default, uncomputed fields show "?" instead of estimates.
+Use --estimate to show estimated values for fields that cannot be determined from the trace.
 
 Output matches Xcode Instruments GPU counters format.
 
 Examples:
-  gputrace shaders trace.gputrace
-  gputrace shaders trace.gputrace -v`,
+  gputrace shaders trace.gputrace              # Show ? for uncomputed fields
+  gputrace shaders trace.gputrace --estimate   # Show estimates
+  gputrace shaders trace.gputrace -v           # Verbose output`,
 	Args: cobra.ExactArgs(1),
 	RunE: runShaders,
 }
@@ -39,6 +46,7 @@ func init() {
 	rootCmd.AddCommand(shadersCmd)
 
 	shadersCmd.Flags().BoolVarP(&shadersVerbose, "verbose", "v", false, "Show verbose output")
+	shadersCmd.Flags().BoolVarP(&shadersEstimate, "estimate", "e", false, "Show estimated values for uncomputed fields")
 }
 
 func runShaders(cmd *cobra.Command, args []string) error {
@@ -64,7 +72,7 @@ func runShaders(cmd *cobra.Command, args []string) error {
 
 	// Format as Xcode Instruments style output
 	// Pass trace to enable real register data from performance counters when available
-	gputrace.FormatShadersXcodeStyle(os.Stdout, report, trace)
+	gputrace.FormatShadersXcodeStyle(os.Stdout, report, trace, shadersEstimate)
 
 	return nil
 }

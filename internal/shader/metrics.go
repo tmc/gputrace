@@ -581,7 +581,8 @@ func repeatStr(s string, n int) string {
 // FormatShadersXcodeStyle formats shader metrics in Xcode Instruments style.
 // Matches the format from GPU counters in Xcode's Instruments app.
 // If trace is provided, real register data from performance counters will be used when available.
-func FormatShadersXcodeStyle(w io.Writer, report *ShaderMetricsReport, trace *Trace) error {
+// If showEstimates is false, uncomputed fields will show "?" instead of estimates.
+func FormatShadersXcodeStyle(w io.Writer, report *ShaderMetricsReport, trace *Trace, showEstimates bool) error {
 	// Header matching Xcode format exactly
 	fmt.Fprintf(w, "%-8s%-60s%-12s%-24s%-16s%-24s%-16s%-16s\n",
 		"Cost", "Name", "Type", "Pipeline State",
@@ -600,11 +601,25 @@ func FormatShadersXcodeStyle(w io.Writer, report *ShaderMetricsReport, trace *Tr
 		// Type is always "Compute" for compute shaders
 		shaderType := "Compute"
 
-		// Pipeline state address (use the encoder address)
-		pipelineState := fmt.Sprintf("Compute Pipeline 0x%x", metrics.Address)
+		// Pipeline state address (use the encoder address if available)
+		var pipelineState string
+		if metrics.Address != 0 {
+			pipelineState = fmt.Sprintf("Compute Pipeline 0x%x", metrics.Address)
+		} else if showEstimates {
+			pipelineState = "Compute Pipeline 0x0"
+		} else {
+			pipelineState = "Compute Pipeline ?"
+		}
 
 		// # SIMD Groups = total threadgroups dispatched
-		simdGroups := fmt.Sprintf("%d", metrics.TotalThreadgroups)
+		var simdGroups string
+		if metrics.TotalThreadgroups > 0 {
+			simdGroups = fmt.Sprintf("%d", metrics.TotalThreadgroups)
+		} else if showEstimates {
+			simdGroups = "0"
+		} else {
+			simdGroups = "?"
+		}
 
 		// Try to get real register data from performance counters
 		// TODO: Implement GetRegisterDataForShader method
@@ -614,11 +629,20 @@ func FormatShadersXcodeStyle(w io.Writer, report *ShaderMetricsReport, trace *Tr
 		// 	allocatedRegs, highReg, spilledBytes, hasRealData = trace.GetRegisterDataForShader(metrics.Address)
 		// }
 
-		// For now, always use estimation
-		allocatedRegs := estimateAllocatedRegisters(metrics)
-		allocatedRegsStr := fmt.Sprintf("%d (est)", allocatedRegs)
-		highRegStr := allocatedRegsStr
-		spilledBytesStr := "0 bytes (est)"
+		// Register allocation and spilled bytes
+		var allocatedRegsStr, highRegStr, spilledBytesStr string
+		if showEstimates {
+			// Show estimates
+			allocatedRegs := estimateAllocatedRegisters(metrics)
+			allocatedRegsStr = fmt.Sprintf("%d (est)", allocatedRegs)
+			highRegStr = allocatedRegsStr
+			spilledBytesStr = "0 bytes (est)"
+		} else {
+			// Show ? for uncomputed fields
+			allocatedRegsStr = "?"
+			highRegStr = "?"
+			spilledBytesStr = "?"
+		}
 
 		// Print row matching Xcode format
 		fmt.Fprintf(w, "%-8s%-60s%-12s%-24s%-16s%-24s%-16s%-16s\n",
