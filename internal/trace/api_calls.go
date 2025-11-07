@@ -697,24 +697,28 @@ func (t *Trace) FormatAPICallList(w io.Writer) error {
 		return fmt.Errorf("parse API calls: %w", err)
 	}
 
+	// Renumber calls as we format (some types are filtered out)
+	displayCallNum := 0
+
 	// Format init calls
 	for _, call := range apiList.InitCalls {
-		// Skip bufferHeapOffset in compact format
-		if call.Type == "bufferHeapOffset" {
+		// Skip bufferHeapOffset and newSharedEvent in compact format to match Xcode
+		if call.Type == "bufferHeapOffset" || call.Type == "newSharedEvent" {
 			continue
 		}
 
 		if call.Type == "setLabel" || call.Type == "requestResidency" {
 			// These calls don't have the "address =" prefix
-			fmt.Fprintf(w, "#%d %s\n", call.CallNumber, call.Info)
+			fmt.Fprintf(w, "#%d %s\n", displayCallNum, call.Info)
 		} else {
 			// Use label if available, otherwise use address
 			prefix := fmt.Sprintf("0x%x", call.Address)
 			if call.Label != "" {
 				prefix = call.Label
 			}
-			fmt.Fprintf(w, "#%d %s = %s\n", call.CallNumber, prefix, call.Info)
+			fmt.Fprintf(w, "#%d %s = %s\n", displayCallNum, prefix, call.Info)
 		}
+		displayCallNum++
 	}
 
 	// Format command buffer calls
@@ -724,11 +728,13 @@ func (t *Trace) FormatAPICallList(w io.Writer) error {
 		if cb.Label != "" {
 			cbPrefix = cb.Label
 		}
-		fmt.Fprintf(w, "#%d %s = [0x%x commandBuffer]\n", cb.CallNumber, cbPrefix, cb.QueueAddress)
+		fmt.Fprintf(w, "#%d %s = [0x%x commandBuffer]\n", displayCallNum, cbPrefix, cb.QueueAddress)
+		displayCallNum++
 
 		// Add setLabel call if command buffer has a label
 		if cb.Label != "" {
-			fmt.Fprintf(w, "#%d [setLabel:\"%s\"]\n", cb.CallNumber+1, cb.Label)
+			fmt.Fprintf(w, "#%d [setLabel:\"%s\"]\n", displayCallNum, cb.Label)
+			displayCallNum++
 		}
 
 		for _, call := range cb.Calls {
@@ -743,14 +749,17 @@ func (t *Trace) FormatAPICallList(w io.Writer) error {
 				if call.Label != "" {
 					callPrefix = call.Label
 				}
-				fmt.Fprintf(w, "%s#%d %s = [%s]\n", indent, call.CallNumber, callPrefix, call.Details)
+				fmt.Fprintf(w, "%s#%d %s = [%s]\n", indent, displayCallNum, callPrefix, call.Details)
+				displayCallNum++
 
 				// Add setLabel call if encoder has a label
 				if call.Type == "encoder" && call.Label != "" {
-					fmt.Fprintf(w, "%s#%d [setLabel:\"%s\"]\n", indent, call.CallNumber+1, call.Label)
+					fmt.Fprintf(w, "%s#%d [setLabel:\"%s\"]\n", indent, displayCallNum, call.Label)
+					displayCallNum++
 				}
 			} else {
-				fmt.Fprintf(w, "%s#%d [%s]\n", indent, call.CallNumber, call.Details)
+				fmt.Fprintf(w, "%s#%d [%s]\n", indent, displayCallNum, call.Details)
+				displayCallNum++
 			}
 		}
 	}
@@ -768,17 +777,26 @@ func (t *Trace) FormatAPICallListFull(w io.Writer) error {
 		return fmt.Errorf("parse API calls: %w", err)
 	}
 
+	// Renumber calls as we format (some types are filtered out)
+	displayCallNum := 0
+
 	// Format init calls (same as compact)
 	for _, call := range apiList.InitCalls {
-		if call.Type == "bufferHeapOffset" || call.Type == "setLabel" || call.Type == "requestResidency" {
-			fmt.Fprintf(w, "#%d %s\n", call.CallNumber, call.Info)
+		// Skip certain types to match Xcode output
+		if call.Type == "bufferHeapOffset" || call.Type == "newSharedEvent" {
+			continue
+		}
+
+		if call.Type == "setLabel" || call.Type == "requestResidency" {
+			fmt.Fprintf(w, "#%d %s\n", displayCallNum, call.Info)
 		} else {
 			prefix := fmt.Sprintf("0x%x", call.Address)
 			if call.Label != "" {
 				prefix = call.Label
 			}
-			fmt.Fprintf(w, "#%d %s = %s\n", call.CallNumber, prefix, call.Info)
+			fmt.Fprintf(w, "#%d %s = %s\n", displayCallNum, prefix, call.Info)
 		}
+		displayCallNum++
 	}
 
 	// Format command buffers - show full tree expansion
