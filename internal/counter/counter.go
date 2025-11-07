@@ -611,22 +611,29 @@ func intBitsToFloat32(bits uint32) float32 {
 
 // groupRecordsByEncoder groups records by encoder for aggregation.
 //
-// Strategy:
-// 1. Metadata records (2.3-2.9 KB) identify encoder context
+// Strategy (gputrace-75):
+// 1. Metadata records (2.3-2.9 KB) mark encoder boundaries
 // 2. Following sample records (464 bytes) belong to that encoder
-// 3. Group records until next metadata record is encountered
+// 3. Each metadata record represents a unique encoder in sequence
+// 4. Use sequential index as EncoderID (binary field extraction unreliable)
+//
+// Note: Previous approach extracted EncoderID from offset 0x01b4, but this field
+// is not unique per encoder. Sequential indexing provides correct grouping.
 func groupRecordsByEncoder(records []*CounterRecord) []*EncoderGroup {
 	groups := make([]*EncoderGroup, 0)
 	var currentGroup *EncoderGroup
+	encoderIndex := uint64(0)
 
 	for _, record := range records {
 		if record.IsMetadata {
-			// Start new encoder group
+			// Start new encoder group with sequential ID
 			if currentGroup != nil {
 				groups = append(groups, currentGroup)
 			}
+
+			encoderIndex++
 			currentGroup = &EncoderGroup{
-				EncoderID:      record.EncoderID,
+				EncoderID:      encoderIndex, // Use sequential index instead of extracted value
 				MetadataRecord: record,
 				SampleRecords:  make([]*CounterRecord, 0),
 			}

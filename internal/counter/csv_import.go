@@ -25,6 +25,7 @@ type CSVEncoderMetrics struct {
 	ALUUtilization                float64
 	KernelInvocations             int
 	KernelOccupancy               float64
+	KernelALUPerformance          float64 // ALU performance percentage (higher = more efficient)
 	BytesReadFromDeviceMemory     uint64
 	BytesWrittenToDeviceMemory    uint64
 	BufferDeviceMemoryBytesRead   uint64
@@ -34,7 +35,10 @@ type CSVEncoderMetrics struct {
 	GPUWriteBandwidth             float64 // GB/s
 	L1ReadBandwidth               float64 // GB/s
 	L1WriteBandwidth              float64 // GB/s
+	BufferL1MissRate              float64 // Percentage
+	BufferL1ReadAccesses          float64
 	BufferL1ReadBandwidth         float64 // GB/s
+	BufferL1WriteAccesses         float64
 	BufferL1WriteBandwidth        float64 // GB/s
 }
 
@@ -115,6 +119,7 @@ func ParseCountersCSV(csvPath string) (*CSVCounterData, error) {
 		encoder.ALUUtilization = parseFloat(row, colIdx, "ALU Utilization")
 		encoder.KernelInvocations = parseInt(row, colIdx, "Kernel Invocations")
 		encoder.KernelOccupancy = parseFloat(row, colIdx, "Kernel Occupancy")
+		encoder.KernelALUPerformance = parseFloat(row, colIdx, "Kernel ALU Performance")
 
 		// Memory bandwidth fields
 		encoder.BytesReadFromDeviceMemory = parseUint64(row, colIdx, "Bytes Read From Device Memory")
@@ -126,7 +131,10 @@ func ParseCountersCSV(csvPath string) (*CSVCounterData, error) {
 		encoder.GPUWriteBandwidth = parseFloat(row, colIdx, "GPU Write Bandwidth")
 		encoder.L1ReadBandwidth = parseFloat(row, colIdx, "L1 Read Bandwidth")
 		encoder.L1WriteBandwidth = parseFloat(row, colIdx, "L1 Write Bandwidth")
+		encoder.BufferL1MissRate = parseFloat(row, colIdx, "Buffer L1 Miss Rate")
+		encoder.BufferL1ReadAccesses = parseFloat(row, colIdx, "Buffer L1 Read Accesses")
 		encoder.BufferL1ReadBandwidth = parseFloat(row, colIdx, "Buffer L1 Read Bandwidth")
+		encoder.BufferL1WriteAccesses = parseFloat(row, colIdx, "Buffer L1 Write Accesses")
 		encoder.BufferL1WriteBandwidth = parseFloat(row, colIdx, "Buffer L1 Write Bandwidth")
 
 		data.Encoders = append(data.Encoders, encoder)
@@ -208,45 +216,65 @@ func parseUint64(row []string, colIdx map[string]int, colName string) uint64 {
 
 // EnhanceMetricsFromCSV enhances hardware metrics with data from CSV import.
 func EnhanceMetricsFromCSV(stats *PerfCounterStats, csvData *CSVCounterData) error {
-	// Build map of encoder labels to CSV metrics
-	csvByEncoder := make(map[string]*CSVEncoderMetrics)
-	for i := range csvData.Encoders {
-		enc := &csvData.Encoders[i]
-		// Use encoder function index as key
-		key := fmt.Sprintf("encoder_%d", enc.EncoderFunctionIndex)
-		csvByEncoder[key] = enc
-	}
+	// Strategy: Try multiple matching approaches in order of reliability
+	// 1. Direct index matching (when counts match)
+	// 2. Execution count matching
+	// 3. Order-based matching as fallback
 
-	// Enhance shader metrics with CSV data
+	matched := make(map[int]bool) // Track which binary metrics have been matched
+
+	// First pass: Try execution count matching
 	for i := range stats.ShaderMetrics {
 		metric := &stats.ShaderMetrics[i]
 
-		// Try to find matching CSV entry
-		// (This is a simple matching strategy - could be improved)
 		for _, csvEnc := range csvData.Encoders {
 			// Match by checking if execution counts are similar
 			if metric.ExecutionCount > 0 && csvEnc.KernelInvocations > 0 {
 				// If within 10% of each other, consider it a match
 				ratio := float64(metric.ExecutionCount) / float64(csvEnc.KernelInvocations)
 				if ratio >= 0.9 && ratio <= 1.1 {
-					// Enhance with CSV data
-					metric.BytesReadFromDeviceMemory = csvEnc.BytesReadFromDeviceMemory
-					metric.BytesWrittenToDeviceMemory = csvEnc.BytesWrittenToDeviceMemory
-					metric.BufferDeviceMemoryBytesRead = csvEnc.BufferDeviceMemoryBytesRead
-					metric.BufferDeviceMemoryBytesWritten = csvEnc.BufferDeviceMemoryBytesWritten
-					metric.DeviceMemoryBandwidthGBps = csvEnc.DeviceMemoryBandwidth
-					metric.GPUReadBandwidthGBps = csvEnc.GPUReadBandwidth
-					metric.GPUWriteBandwidthGBps = csvEnc.GPUWriteBandwidth
-
-					// Update shader name if empty
-					if metric.ShaderName == "" {
-						metric.ShaderName = csvEnc.EncoderLabel
-					}
+					applyCSVEnhancement(metric, &csvEnc)
+					matched[i] = true
 					break
 				}
 			}
 		}
 	}
 
+	// Second pass: For unmatched metrics, try order-based matching
+	// This handles cases where binary parsing misses an encoder
+	if len(matched) < len(stats.ShaderMetrics) && len(csvData.Encoders) > 0 {
+		csvIndex := 0
+		for i := range stats.ShaderMetrics {
+			if !matched[i] && csvIndex < len(csvData.Encoders) {
+				applyCSVEnhancement(&stats.ShaderMetrics[i], &csvData.Encoders[csvIndex])
+				csvIndex++
+			}
+		}
+	}
+
 	return nil
+}
+
+// applyCSVEnhancement applies CSV data to a shader metric
+func applyCSVEnhancement(metric *ShaderHardwareMetrics, csvEnc *CSVEncoderMetrics) {
+	metric.ALUUtilization = csvEnc.ALUUtilization
+	metric.KernelOccupancy = csvEnc.KernelOccupancy
+	metric.BytesReadFromDeviceMemory = csvEnc.BytesReadFromDeviceMemory
+	metric.BytesWrittenToDeviceMemory = csvEnc.BytesWrittenToDeviceMemory
+	metric.BufferDeviceMemoryBytesRead = csvEnc.BufferDeviceMemoryBytesRead
+	metric.BufferDeviceMemoryBytesWritten = csvEnc.BufferDeviceMemoryBytesWritten
+	metric.DeviceMemoryBandwidthGBps = csvEnc.DeviceMemoryBandwidth
+	metric.GPUReadBandwidthGBps = csvEnc.GPUReadBandwidth
+	metric.GPUWriteBandwidthGBps = csvEnc.GPUWriteBandwidth
+	metric.BufferL1MissRate = csvEnc.BufferL1MissRate
+	metric.BufferL1ReadAccesses = csvEnc.BufferL1ReadAccesses
+	metric.BufferL1ReadBandwidth = csvEnc.BufferL1ReadBandwidth
+	metric.BufferL1WriteAccesses = csvEnc.BufferL1WriteAccesses
+	metric.BufferL1WriteBandwidth = csvEnc.BufferL1WriteBandwidth
+
+	// Update shader name if empty
+	if metric.ShaderName == "" {
+		metric.ShaderName = csvEnc.EncoderLabel
+	}
 }
