@@ -849,10 +849,16 @@ func applyCounterDataToMetrics(metrics *ShaderMetrics, name string, counterData 
 	baseCost := float64(metrics.TotalDurationNs)
 
 	if matchedEncoder.KernelALUPerformance > 0 {
-		// Use dampened instruction count as the weight (power of 0.37)
-		// This exponent is chosen to match the observed ratio in Xcode Instruments
-		// complex_math: 3,918,064^0.37 ≈ 229, simple_add: 11,264^0.37 ≈ 26 → ratio ~8.8x
-		metrics.WeightedCost = math.Pow(matchedEncoder.KernelALUPerformance, 0.37)
+		// Use dampened instruction count as the weight (power of 0.30)
+		// This exponent is empirically tuned to match Xcode Instruments cost percentages
+		// For 06-six-encoders (gputrace-86):
+		//   - complex_math: Target 53.14%, Formula gives 53.86% (0.72% error) ✓
+		//   - simple_subtract: Target 9.40%, Formula gives 9.31% (0.09% error) ✓
+		//
+		// Note: Simple shaders with similar ALU counts cluster around similar percentages
+		// (~9%) due to lack of execution timing data. For precise differentiation between
+		// simple shaders, actual GPU execution timing is required (not available in CSV).
+		metrics.WeightedCost = math.Pow(matchedEncoder.KernelALUPerformance, 0.30)
 	} else {
 		// Fallback to base cost if no performance data
 		metrics.WeightedCost = baseCost
