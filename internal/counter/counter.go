@@ -191,9 +191,22 @@ func ParsePerfCounters(t *trace.Trace) (*PerfCounterStats, error) {
 		stats.ShaderMetrics = append(stats.ShaderMetrics, *metric)
 	}
 
+	// Try CSV enhancement (gputrace-63): Use Xcode-exported CSV as ground truth
+	// CSV is the most accurate source, so apply it first
+	csvApplied := false
+	if csvData, err := ImportCountersCSV(t); err == nil {
+		if err := EnhanceMetricsFromCSV(stats, csvData); err == nil {
+			csvApplied = true
+			// Successfully enhanced metrics with CSV data
+		}
+	}
+
 	// Apply deterministic metric extraction (gputrace-115)
-	if err := extractDeterministicMetrics(perfDir, stats); err == nil {
-		// Successfully enhanced metrics with deterministic extraction
+	// Only if CSV wasn't applied, as CSV is more reliable
+	if !csvApplied {
+		if err := extractDeterministicMetrics(perfDir, stats); err == nil {
+			// Successfully enhanced metrics with deterministic extraction
+		}
 	}
 
 	// Try to correlate with shader names from trace
@@ -633,11 +646,13 @@ func groupRecordsByEncoder(records []*CounterRecord) []*EncoderGroup {
 
 // aggregateEncoderMetrics aggregates metrics from sample records within an encoder group.
 //
-// Aggregation rules (based on docs/FIELD_OFFSET_ANALYSIS.md):
-// - Kernel Invocations: SUM across all sample records
-// - ALU Utilization: AVERAGE across all sample records
-// - Kernel Occupancy: AVERAGE across all sample records
-// - Memory Bandwidth: SUM bytes, then calculate bandwidth
+// Aggregation rules (gputrace-76):
+// - Deterministic metrics (Kernel Invocations, Registers): Use FIRST/REPRESENTATIVE value (not sum)
+//   These are constant across samples for the same encoder
+// - Timing metrics (ALU Utilization, Occupancy): AVERAGE across samples
+//   These vary with time/load
+// - Counter metrics (Memory Bytes): SUM across samples
+//   These accumulate over time
 func aggregateEncoderMetrics(group *EncoderGroup) *ShaderHardwareMetrics {
 	if len(group.SampleRecords) == 0 {
 		return nil
@@ -647,13 +662,14 @@ func aggregateEncoderMetrics(group *EncoderGroup) *ShaderHardwareMetrics {
 		PipelineState: group.EncoderID, // Use encoder ID as identifier
 	}
 
-	var totalInvocations int
+	var firstInvocations int          // DETERMINISTIC: use first value
+	var invocationsSet bool
 	var totalALUUtil float64
 	var totalOccupancy float64
 	var aluSamples int
 	var occupancySamples int
-	var totalBytesRead uint64
-	var totalBytesWritten uint64
+	var totalBytesRead uint64         // COUNTER: sum
+	var totalBytesWritten uint64      // COUNTER: sum
 
 	for _, record := range group.SampleRecords {
 		if record.ShaderMetric == nil {
@@ -662,27 +678,31 @@ func aggregateEncoderMetrics(group *EncoderGroup) *ShaderHardwareMetrics {
 
 		metrics := record.ShaderMetric
 
-		// Sum: Kernel Invocations
-		totalInvocations += metrics.ExecutionCount
+		// FIRST: Kernel Invocations (deterministic metric)
+		// These are constant for an encoder, so take the first non-zero value
+		if !invocationsSet && metrics.ExecutionCount > 0 {
+			firstInvocations = metrics.ExecutionCount
+			invocationsSet = true
+		}
 
-		// Average: ALU Utilization (if present)
+		// Average: ALU Utilization (timing metric - varies across samples)
 		if metrics.ALUUtilization > 0 {
 			totalALUUtil += metrics.ALUUtilization
 			aluSamples++
 		}
 
-		// Average: Kernel Occupancy (if present)
+		// Average: Kernel Occupancy (timing metric - varies across samples)
 		if metrics.KernelOccupancy > 0 {
 			totalOccupancy += metrics.KernelOccupancy
 			occupancySamples++
 		}
 
-		// Sum: Memory bandwidth (bytes)
+		// Sum: Memory bandwidth (counter metric - accumulates)
 		totalBytesRead += metrics.BytesReadFromDeviceMemory
 		totalBytesWritten += metrics.BytesWrittenToDeviceMemory
 	}
 
-	aggregated.ExecutionCount = totalInvocations
+	aggregated.ExecutionCount = firstInvocations
 
 	if aluSamples > 0 {
 		aggregated.ALUUtilization = totalALUUtil / float64(aluSamples)
