@@ -105,18 +105,21 @@ func (t *Trace) ParseAPICallList() (*APICallList, error) {
 	}
 
 	// Parse labels from CS records in init section
-	labelMap := parseCSRecordsFromInit(data[:firstCUUU])
+	csRecords, labelMap := parseCSRecordsFromInit(data[:firstCUUU])
 
 	// Parse initialization calls before first CUUU
-	initCalls, _, err := parseInitCalls(data[:firstCUUU], callNum, labelMap)
+	initCalls, _, err := parseInitCalls(data[:firstCUUU], callNum, csRecords, labelMap)
 	if err != nil {
 		return nil, fmt.Errorf("parse init calls: %w", err)
 	}
 
-	// Apply labels to init calls
+	// Apply labels to init calls that don't already have labels
+	// (Function calls from CS records already have correct labels set)
 	for i := range initCalls {
-		if label, exists := labelMap[initCalls[i].Address]; exists {
-			initCalls[i].Label = label
+		if initCalls[i].Label == "" {
+			if label, exists := labelMap[initCalls[i].Address]; exists {
+				initCalls[i].Label = label
+			}
 		}
 	}
 
@@ -167,7 +170,7 @@ func (t *Trace) ParseAPICallList() (*APICallList, error) {
 		cbData := data[cb.Offset:cbEnd]
 
 		// Parse labels from CS records in this command buffer's section
-		cbLabelMap := parseCSRecordsFromInit(cbData)
+		_, cbLabelMap := parseCSRecordsFromInit(cbData)
 
 		// Parse this command buffer's calls
 		cbCalls, nextCallNum, err := parseCommandBufferCalls(cbData, cb, callNum, list.InitCalls)
@@ -198,7 +201,7 @@ func (t *Trace) ParseAPICallList() (*APICallList, error) {
 }
 
 // parseInitCalls parses initialization calls before the first command buffer.
-func parseInitCalls(data []byte, startCallNum int, labelMap map[uint64]string) ([]InitCall, int, error) {
+func parseInitCalls(data []byte, startCallNum int, csRecords []FunctionRecord, labelMap map[uint64]string) ([]InitCall, int, error) {
 	var calls []InitCall
 	callNum := startCallNum
 
@@ -327,13 +330,13 @@ func parseInitCalls(data []byte, startCallNum int, labelMap map[uint64]string) (
 		offset += pos + 4
 	}
 
-	// Parse CS records using parseCSRecordsFromInit to get all named objects
-	csRecords := parseCSRecordsFromInit(data)
-
-	// Create InitCalls for functions from CS records
-	// We need to determine which CS records are functions vs encoders/queues
+	// Create InitCalls for functions from CS records list
+	// We iterate over the list (not map) to preserve all entries including duplicates
 	// Functions typically have lowercase_with_underscores naming
-	for addr, name := range csRecords {
+	for _, record := range csRecords {
+		name := record.Label
+		addr := record.CSAddress
+
 		if name == "" {
 			continue
 		}
@@ -341,7 +344,6 @@ func parseInitCalls(data []byte, startCallNum int, labelMap map[uint64]string) (
 		// Check if this is a command queue label (e.g., "Stream 0")
 		if strings.Contains(name, "Stream") || strings.Contains(name, "Queue") {
 			// This is a command queue - add newCommandQueue call
-			// Note: setLabel calls would be separate API calls in the trace
 			calls = append(calls, InitCall{
 				CallNumber: callNum,
 				Type:       "newCommandQueue",
@@ -937,8 +939,18 @@ func formatBufferCreation(w io.Writer, data []byte, startCallNum int) int {
 	return callNum
 }
 
+// FunctionRecord represents a parsed CS record with function label information.
+type FunctionRecord struct {
+	CSAddress   uint64 // The CS record address
+	FuncAddress uint64 // The runtime function address (if found)
+	Label       string // The label/name
+}
+
 // parseCSRecordsFromInit parses CS records from init section to get encoder labels.
-func parseCSRecordsFromInit(data []byte) map[uint64]string {
+// Returns both a list of records (for creating multiple entries with same address)
+// and a map for quick lookup by address.
+func parseCSRecordsFromInit(data []byte) ([]FunctionRecord, map[uint64]string) {
+	var records []FunctionRecord
 	labels := make(map[uint64]string)
 
 	// CS record structure:
@@ -983,24 +995,45 @@ func parseCSRecordsFromInit(data []byte) map[uint64]string {
 					label := string(labelBytes)
 					labels[address] = label
 
-					// Also try to read function address at offset +0x1c (28 bytes from CS marker)
-					// This is the actual function address used in Ctt records
+					// Create a function record entry
+					record := FunctionRecord{
+						CSAddress: address,
+						Label:     label,
+					}
+
+					// Also try to read function address after the type marker
+					// Pattern: label + null + padding + "t\x00\x00\x00" + function_address (8 bytes)
 					// Only add it if it looks like a function name (has underscores or lowercase start)
 					if strings.Contains(strings.ToLower(label), "_") || (len(label) > 0 && label[0] >= 'a' && label[0] <= 'z') {
-						funcAddrOffset := i + 0x1c
-						if funcAddrOffset+8 <= len(data) {
-							funcAddr := binary.LittleEndian.Uint64(data[funcAddrOffset : funcAddrOffset+8])
-							if funcAddr != 0 && funcAddr != address {
-								labels[funcAddr] = label
+						// Search for "t\x00\x00\x00" type marker after label
+						typeMarker := []byte{'t', 0, 0, 0}
+						searchStart := labelEnd + 1
+						searchEnd := i + 0x30 // Search within reasonable range
+						if searchEnd > len(data) {
+							searchEnd = len(data)
+						}
+
+						typeMarkerPos := bytes.Index(data[searchStart:searchEnd], typeMarker)
+						if typeMarkerPos != -1 {
+							// Function address is 4 bytes after type marker
+							funcAddrOffset := searchStart + typeMarkerPos + 4
+							if funcAddrOffset+8 <= len(data) {
+								funcAddr := binary.LittleEndian.Uint64(data[funcAddrOffset : funcAddrOffset+8])
+								if funcAddr != 0 && funcAddr != address {
+									record.FuncAddress = funcAddr
+									labels[funcAddr] = label
+								}
 							}
 						}
 					}
+
+					records = append(records, record)
 				}
 			}
 		}
 	}
 
-	return labels
+	return records, labels
 }
 
 // formatCommandBufferWithEncoders formats a command buffer with all encoders properly separated.

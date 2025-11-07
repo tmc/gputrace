@@ -69,7 +69,7 @@ func TestParseInitCalls_ResidencySet(t *testing.T) {
 	copy(data[offset:], []byte("CUt\x00"))
 	binary.LittleEndian.PutUint64(data[offset+4:], 0x0afd018000) // residency set address
 
-	calls, _, err := parseInitCalls(data, 0, make(map[uint64]string))
+	calls, _, err := parseInitCalls(data, 0, nil, make(map[uint64]string))
 	if err != nil {
 		t.Fatalf("parseInitCalls failed: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestParseInitCalls_Heap(t *testing.T) {
 	binary.LittleEndian.PutUint32(data[offset+0x20:], 0x74) // size marker
 	binary.LittleEndian.PutUint64(data[offset+0x24:], 0x106da56b0) // heap address
 
-	calls, _, err := parseInitCalls(data, 0, make(map[uint64]string))
+	calls, _, err := parseInitCalls(data, 0, nil, make(map[uint64]string))
 	if err != nil {
 		t.Fatalf("parseInitCalls failed: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestParseInitCalls_BufferFromHeap(t *testing.T) {
 	binary.LittleEndian.PutUint64(data[offset+0x10:], 16) // buffer length
 	binary.LittleEndian.PutUint64(data[offset+0x24:], 0x106da6190) // buffer address
 
-	calls, _, err := parseInitCalls(data, 0, make(map[uint64]string))
+	calls, _, err := parseInitCalls(data, 0, nil, make(map[uint64]string))
 	if err != nil {
 		t.Fatalf("parseInitCalls failed: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestParseInitCalls_SharedEvent(t *testing.T) {
 	// Event address at +0x0c
 	binary.LittleEndian.PutUint64(data[offset+0x0c:], 0xafcc88800)
 
-	calls, _, err := parseInitCalls(data, 0, make(map[uint64]string))
+	calls, _, err := parseInitCalls(data, 0, nil, make(map[uint64]string))
 	if err != nil {
 		t.Fatalf("parseInitCalls failed: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestParseInitCalls_CommandQueue(t *testing.T) {
 	binary.LittleEndian.PutUint64(data[offset+4:], 0x106da64d0) // queue address
 	copy(data[offset+0x0C:], []byte("Stream 0\x00")) // label
 
-	calls, _, err := parseInitCalls(data, 0, make(map[uint64]string))
+	calls, _, err := parseInitCalls(data, 0, nil, make(map[uint64]string))
 	if err != nil {
 		t.Fatalf("parseInitCalls failed: %v", err)
 	}
@@ -270,7 +270,7 @@ func TestParseInitCalls_Function(t *testing.T) {
 	binary.LittleEndian.PutUint64(data[offset+4:], 0xafcc88580) // function address
 	copy(data[offset+0x08:], []byte("vv_Addfloat32\x00"))        // function name
 
-	calls, _, err := parseInitCalls(data, 0, make(map[uint64]string))
+	calls, _, err := parseInitCalls(data, 0, nil, make(map[uint64]string))
 	if err != nil {
 		t.Fatalf("parseInitCalls failed: %v", err)
 	}
@@ -319,7 +319,7 @@ func TestParseInitCalls_PipelineState(t *testing.T) {
 	binary.LittleEndian.PutUint64(data[offset+0x0C:], 0xafcc88580) // function address
 	binary.LittleEndian.PutUint64(data[offset+0x20:], 0x106d82550) // pipeline state address
 
-	calls, _, err := parseInitCalls(data, 0, make(map[uint64]string))
+	calls, _, err := parseInitCalls(data, 0, nil, make(map[uint64]string))
 	if err != nil {
 		t.Fatalf("parseInitCalls failed: %v", err)
 	}
@@ -404,7 +404,7 @@ func TestParseInitCalls_Ordering(t *testing.T) {
 	binary.LittleEndian.PutUint64(data[offset+0x10:], 16)
 	binary.LittleEndian.PutUint64(data[offset+0x24:], 0x106da6190)
 
-	calls, _, err := parseInitCalls(data, 0, make(map[uint64]string))
+	calls, _, err := parseInitCalls(data, 0, nil, make(map[uint64]string))
 	if err != nil {
 		t.Fatalf("parseInitCalls failed: %v", err)
 	}
