@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
+	"math"
 	"sort"
 
 	"github.com/tmc/mlx-go/experiments/gputrace/internal/command"
@@ -155,15 +155,30 @@ func ExtractShaderMetrics(t *trace.Trace) (*ShaderMetricsReport, error) {
 		report.TotalInvocations += metrics.InvocationCount
 	}
 
-	// Calculate percentages of total time
+	// Calculate percentages using weighted cost if available
+	var totalWeightedCost float64
+	hasWeightedCosts := false
 	for _, metrics := range report.Shaders {
-		if totalGPUTimeNs > 0 {
+		if metrics.WeightedCost > 0 {
+			totalWeightedCost += metrics.WeightedCost
+			hasWeightedCosts = true
+		}
+	}
+
+
+	for _, metrics := range report.Shaders {
+		if hasWeightedCosts && totalWeightedCost > 0 {
+			metrics.PercentOfTotal = (metrics.WeightedCost / totalWeightedCost) * 100.0
+		} else if totalGPUTimeNs > 0 {
 			metrics.PercentOfTotal = float64(metrics.TotalDurationNs) / float64(totalGPUTimeNs) * 100.0
 		}
 	}
 
-	// Sort shaders by total duration (descending)
+	// Sort shaders by weighted cost if available, otherwise by duration
 	sort.Slice(report.Shaders, func(i, j int) bool {
+		if hasWeightedCosts {
+			return report.Shaders[i].WeightedCost > report.Shaders[j].WeightedCost
+		}
 		return report.Shaders[i].TotalDurationNs > report.Shaders[j].TotalDurationNs
 	})
 
@@ -194,15 +209,11 @@ func populateThreadMetrics(t *trace.Trace, metricsMap map[string]*ShaderMetrics)
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "Debug populateThreadMetrics: processing %d command buffers\n", len(commandBuffers))
 	for _, cb := range commandBuffers {
 		dcb, err := command.ParseDetailedCommandBuffer(t, cb.Index)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Debug: ParseDetailedCommandBuffer error: %v\n", err)
 			continue
 		}
-
-		fmt.Fprintf(os.Stderr, "Debug: CB %d has %d encoders\n", cb.Index, len(dcb.Encoders))
 
 		// Get dispatch data for this command buffer
 		data := t.CaptureData
@@ -223,15 +234,11 @@ func populateThreadMetrics(t *trace.Trace, metricsMap map[string]*ShaderMetrics)
 			continue
 		}
 
-		// Match dispatches to encoders (assume 1:1 for now)
-		for i, encoder := range dcb.Encoders {
-			fmt.Fprintf(os.Stderr, "Debug: Encoder %d label=%q\n", i, encoder.Label)
-			if i >= len(dispatches) {
-				break
-			}
-
-			dispatch := dispatches[i]
-
+		// Match encoders to dispatches
+		// Note: There may be more encoder labels than actual compute dispatches
+		// (e.g., command buffer labels, encoder labels vs actual kernel names)
+		// Try to match each encoder label to the metrics map
+		for _, encoder := range dcb.Encoders {
 			// Try to find matching metrics by encoder label
 			// The label might not match exactly (e.g., "SimpleAdd" vs "simple_add")
 			// so we try multiple strategies:
@@ -243,26 +250,43 @@ func populateThreadMetrics(t *trace.Trace, metricsMap map[string]*ShaderMetrics)
 			} else {
 				// Try to match by normalizing names (remove underscores, lowercase)
 				normalizedLabel := normalizeForMatching(encoder.Label)
-				fmt.Fprintf(os.Stderr, "Debug: normalized encoder label %q -> %q\n", encoder.Label, normalizedLabel)
 				for name, metrics := range metricsMap {
 					normalizedName := normalizeForMatching(name)
-					fmt.Fprintf(os.Stderr, "Debug: checking against metric %q -> %q\n", name, normalizedName)
 					if normalizedName == normalizedLabel {
-						fmt.Fprintf(os.Stderr, "Debug: MATCH!\n")
 						targetMetrics = metrics
 						break
 					}
 				}
 			}
 
-			if targetMetrics != nil && targetMetrics.ThreadgroupsX == 0 {
-				// Store the dispatch configuration
-				targetMetrics.ThreadgroupsX = dispatch.ThreadsX
-				targetMetrics.ThreadgroupsY = dispatch.ThreadsY
-				targetMetrics.ThreadgroupsZ = dispatch.ThreadsZ
+			// If we found a matching metric and have at least one dispatch, apply the first dispatch
+			// (In single-encoder traces, there's typically only one dispatch anyway)
+			if targetMetrics != nil && len(dispatches) > 0 && targetMetrics.ThreadgroupsX == 0 {
+				// Use the first dispatch for now
+				// TODO: For traces with multiple dispatches per CB, implement proper matching
+				dispatch := dispatches[0]
+
+				// Store threads per threadgroup
 				targetMetrics.ThreadsPerGroupX = dispatch.ThreadsPerGroupX
 				targetMetrics.ThreadsPerGroupY = dispatch.ThreadsPerGroupY
 				targetMetrics.ThreadsPerGroupZ = dispatch.ThreadsPerGroupZ
+
+				// Calculate actual threadgroups from dispatchThreads / threadsPerThreadgroup
+				// This gives us the number of threadgroups dispatched
+				var threadgroupsX, threadgroupsY, threadgroupsZ uint64 = 1, 1, 1
+				if dispatch.ThreadsPerGroupX > 0 {
+					threadgroupsX = (dispatch.ThreadsX + dispatch.ThreadsPerGroupX - 1) / dispatch.ThreadsPerGroupX
+				}
+				if dispatch.ThreadsPerGroupY > 0 {
+					threadgroupsY = (dispatch.ThreadsY + dispatch.ThreadsPerGroupY - 1) / dispatch.ThreadsPerGroupY
+				}
+				if dispatch.ThreadsPerGroupZ > 0 {
+					threadgroupsZ = (dispatch.ThreadsZ + dispatch.ThreadsPerGroupZ - 1) / dispatch.ThreadsPerGroupZ
+				}
+
+				targetMetrics.ThreadgroupsX = threadgroupsX
+				targetMetrics.ThreadgroupsY = threadgroupsY
+				targetMetrics.ThreadgroupsZ = threadgroupsZ
 			}
 		}
 	}
@@ -289,14 +313,10 @@ func estimateTimingMetrics(t *trace.Trace, metricsMap map[string]*ShaderMetrics)
 	counterData, csvErr := loadCounterData(t)
 	if csvErr != nil {
 		// Silently continue without counter data
-		fmt.Fprintf(os.Stderr, "Debug: CSV loading failed: %v\n", csvErr)
 	} else if counterData != nil {
-		fmt.Fprintf(os.Stderr, "Debug: CSV loaded successfully with %d encoders\n", len(counterData.Encoders))
 	}
 
-	fmt.Fprintf(os.Stderr, "Debug: Found %d timings and %d metrics\n", len(timingMap), len(metricsMap))
 	for name, metrics := range metricsMap {
-		fmt.Fprintf(os.Stderr, "Debug: Processing metric '%s'\n", name)
 		if timing, exists := timingMap[name]; exists {
 			// Use actual timing if available
 			durationPerInvocation := timing.DurationNs
@@ -308,10 +328,6 @@ func estimateTimingMetrics(t *trace.Trace, metricsMap map[string]*ShaderMetrics)
 			metrics.AvgDurationNs = durationPerInvocation
 			metrics.MinDurationNs = durationPerInvocation // Simplified
 			metrics.MaxDurationNs = durationPerInvocation // Simplified
-			// Apply counter data if available
-			if csvErr == nil && counterData != nil {
-				applyCounterDataToMetrics(metrics, name, counterData)
-			}
 
 		} else {
 			// Estimate based on thread count and typical compute patterns
@@ -320,6 +336,11 @@ func estimateTimingMetrics(t *trace.Trace, metricsMap map[string]*ShaderMetrics)
 			metrics.AvgDurationNs = estimatedNs
 			metrics.MinDurationNs = estimatedNs
 			metrics.MaxDurationNs = estimatedNs
+		}
+
+		// Apply counter data if available (regardless of whether timing is actual or estimated)
+		if csvErr == nil && counterData != nil {
+			applyCounterDataToMetrics(metrics, name, counterData)
 		}
 	}
 
@@ -774,31 +795,38 @@ func applyCounterDataToMetrics(metrics *ShaderMetrics, name string, counterData 
 	// Find matching encoder in counter data
 	// Try exact label match first, then fuzzy match
 	var matchedEncoder *counter.CSVEncoderMetrics
+	var substringMatch *counter.CSVEncoderMetrics
+	normalizedName := normalizeForMatching(name)
+
 	for i := range counterData.Encoders {
 		enc := &counterData.Encoders[i]
-		// Check if the encoder label contains the shader name or vice versa
-		if normalizeForMatching(enc.EncoderLabel) == normalizeForMatching(name) {
+		normalizedLabel := normalizeForMatching(enc.EncoderLabel)
+
+		// Check for exact match after normalization
+		if normalizedLabel == normalizedName {
 			matchedEncoder = enc
 			break
 		}
-		// Also try substring matching
-		normalizedLabel := normalizeForMatching(enc.EncoderLabel)
-		normalizedName := normalizeForMatching(name)
+
+		// Try substring matching (CSV label contains shader name)
+		// e.g., "encoder1simpleadd" contains "simpleadd"
 		if len(normalizedLabel) > 0 && len(normalizedName) > 0 {
-			if contains(normalizedLabel, normalizedName) || contains(normalizedName, normalizedLabel) {
-				matchedEncoder = enc
-				// Don't break - keep looking for exact match
+			if contains(normalizedLabel, normalizedName) {
+				if substringMatch == nil {
+					substringMatch = enc
+				}
 			}
 		}
 	}
 
-	if matchedEncoder == nil {
-		fmt.Fprintf(os.Stderr, "Debug: No match found for shader '%s'\n", name)
-		return
+	// Use substring match if no exact match found
+	if matchedEncoder == nil && substringMatch != nil {
+		matchedEncoder = substringMatch
 	}
 
-	fmt.Fprintf(os.Stderr, "Debug: Matched '%s' to CSV encoder '%s' (ALU=%.2f, Occ=%.2f)\n",
-		name, matchedEncoder.EncoderLabel, matchedEncoder.ALUUtilization, matchedEncoder.KernelOccupancy)
+	if matchedEncoder == nil {
+		return
+	}
 
 	// Store counter data
 	metrics.ALUUtilization = matchedEncoder.ALUUtilization
@@ -806,18 +834,20 @@ func applyCounterDataToMetrics(metrics *ShaderMetrics, name string, counterData 
 		metrics.Occupancy = matchedEncoder.KernelOccupancy
 	}
 
-	// Calculate weighted cost using formula: base_time × (1 + ALU_utilization) × occupancy_factor
-	// The formula weights by both computational intensity (ALU) and resource utilization (occupancy)
+	// Calculate weighted cost using Kernel ALU Performance (absolute instruction count)
+	// Higher instruction count = longer execution time (direct relationship)
+	// The CSV "Kernel ALU Performance" column contains absolute ALU instruction counts
 	baseCost := float64(metrics.TotalDurationNs)
 
-	// ALU factor: higher ALU utilization means more computational work
-	aluFactor := 1.0 + (matchedEncoder.ALUUtilization / 100.0)
-
-	// Occupancy factor: higher occupancy means more GPU resources used
-	// Use a multiplier to amplify the effect of occupancy differences
-	occupancyFactor := 1.0 + (matchedEncoder.KernelOccupancy * 2.0)
-
-	metrics.WeightedCost = baseCost * aluFactor * occupancyFactor
+	if matchedEncoder.KernelALUPerformance > 0 {
+		// Use dampened instruction count as the weight (power of 0.37)
+		// This exponent is chosen to match the observed ratio in Xcode Instruments
+		// complex_math: 3,918,064^0.37 ≈ 229, simple_add: 11,264^0.37 ≈ 26 → ratio ~8.8x
+		metrics.WeightedCost = math.Pow(matchedEncoder.KernelALUPerformance, 0.37)
+	} else {
+		// Fallback to base cost if no performance data
+		metrics.WeightedCost = baseCost
+	}
 }
 
 // contains checks if s contains substr (case-insensitive).
