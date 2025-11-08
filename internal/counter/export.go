@@ -86,23 +86,27 @@ func (e *CountersCSVExporter) ExportCountersCSV(w io.Writer) error {
 	return nil
 }
 
-// generateCounterRowSimple creates a single CSV row with all 246 columns.
+// generateCounterRowSimple creates a single CSV row with all 247 columns.
 func (e *CountersCSVExporter) generateCounterRowSimple(index, functionIndex int, cbLabel, encoderLabel string, encoder *ComputeEncoder) []string {
-	row := make([]string, 246)
+	row := make([]string, 247)
 
-	// Columns 1-5: Metadata
+	// Get debug group for this encoder based on its label (sequence-based mapping)
+	debugGroup := e.trace.GetDebugGroupForLabel(encoderLabel)
+
+	// Columns 1-6: Metadata
 	row[0] = fmt.Sprintf("%d", index)         // Index
 	row[1] = fmt.Sprintf("%d", functionIndex) // Encoder FunctionIndex
 	row[2] = cbLabel                          // CommandBuffer Label
-	row[3] = encoderLabel                     // Encoder Label
-	row[4] = ""                               // Empty column
+	row[3] = debugGroup                       // Debug Group (hierarchical label)
+	row[4] = encoderLabel                     // Encoder Label
+	row[5] = ""                               // Empty column
 
 	// Generate synthetic counter values (matching timeline's approach)
 	values := e.generateSyntheticCountersSimple()
 
-	// Columns 6-246: Performance metrics (241 metrics)
+	// Columns 7-247: Performance metrics (241 metrics)
 	// Map synthetic values to appropriate columns
-	for i := 5; i < 246; i++ {
+	for i := 6; i < 247; i++ {
 		metricName := getMetricNameForColumn(i)
 		if val, exists := values[metricName]; exists {
 			row[i] = fmt.Sprintf("%.2f", val)
@@ -115,17 +119,21 @@ func (e *CountersCSVExporter) generateCounterRowSimple(index, functionIndex int,
 }
 
 // generateCounterRowFromBinaryData creates a CSV row using REAL binary-parsed counter data.
-// Maps EncoderCounterMetrics fields to the 246-column Xcode Counters.csv format.
+// Maps EncoderCounterMetrics fields to the 247-column Xcode Counters.csv format.
 // Uses data from PopulateEncoderMetricsFromBinaryParsing (validated 100% accurate on kernel invocations).
 func (e *CountersCSVExporter) generateCounterRowFromBinaryData(index, functionIndex int, cbLabel, encoderLabel string, metrics *EncoderCounterMetrics) []string {
-	row := make([]string, 246)
+	row := make([]string, 247)
 
-	// Columns 1-5: Metadata
+	// Get debug group for this encoder based on its label
+	debugGroup := e.trace.GetDebugGroupForLabel(encoderLabel)
+
+	// Columns 1-6: Metadata
 	row[0] = fmt.Sprintf("%d", index)         // Index
 	row[1] = fmt.Sprintf("%d", functionIndex) // Encoder FunctionIndex
 	row[2] = cbLabel                          // CommandBuffer Label
-	row[3] = encoderLabel                     // Encoder Label
-	row[4] = ""                               // Empty column
+	row[3] = debugGroup                       // Debug Group
+	row[4] = encoderLabel                     // Encoder Label
+	row[5] = ""                               // Empty column
 
 	// Build map of counter values from binary parsing
 	// Only use fields available in EncoderCounterMetrics (counter_sampling.go:143-167)
@@ -133,7 +141,8 @@ func (e *CountersCSVExporter) generateCounterRowFromBinaryData(index, functionIn
 
 	// Core metrics from binary parsing (validated 100% accurate)
 	values["Kernel Invocations"] = float64(metrics.DispatchCount) // 100% accurate from gputrace-44
-	values["ALU Utilization"] = metrics.ALUUtilization            // From binary parsing
+	values["ALU Utilization"] = metrics.ALUUtilization            // From CSV enhancement (gputrace-63)
+	values["Kernel Occupancy"] = metrics.KernelOccupancy          // From CSV enhancement (gputrace-63)
 
 	// Utilization metrics
 	values["Compute Shader Utilization"] = metrics.ComputeUtilization
@@ -232,7 +241,7 @@ func (e *CountersCSVExporter) generateCounterRowFromBinaryData(index, functionIn
 	}
 
 	// Map values to CSV columns (6-246)
-	for i := 5; i < 246; i++ {
+	for i := 6; i < 247; i++ {
 		metricName := getMetricNameForColumn(i)
 		if val, exists := values[metricName]; exists {
 			// Format based on metric type
@@ -309,156 +318,25 @@ func (e *CountersCSVExporter) generateSyntheticCountersSimple() map[string]float
 	return values
 }
 
-// getCountersCSVHeader returns the header row for Counters.csv (246 columns).
+// getCountersCSVHeader returns the header row for Counters.csv (247 columns).
+// Uses the complete 241-metric list from file_mapping.go (gputrace-114).
 func getCountersCSVHeader() []string {
-	header := make([]string, 246)
+	header := make([]string, 247)
 
-	// Columns 1-5: Metadata
+	// Columns 1-6: Metadata
 	header[0] = "Index"
 	header[1] = "Encoder FunctionIndex"
 	header[2] = "CommandBuffer Label"
-	header[3] = "Encoder Label"
-	header[4] = ""
+	header[3] = "Debug Group"
+	header[4] = "Encoder Label"
+	header[5] = ""
 
-	// Columns 6-246: Performance metrics (241 metrics)
-	// Based on Xcode Instruments Counters.csv format
-	metrics := []string{
-		"1D Texture Array Sampler Calls",
-		"1D Texture Sampler Calls",
-		"2D MSAA Texture Sampler Calls",
-		"2D Texture Array Sampler Calls",
-		"2D Texture Sampler Calls",
-		"2X MSAA Resolved Pixels Stored",
-		"3D Texture Sampler Calls",
-		"4X MSAA Resolved Pixels Stored",
-		"ALU Utilization",
-		"Anisotropic Sampler Calls",
-		"Attachment Pixels Stored",
-		"Average Anisotropic Level",
-		"Average Pixel Overdraw",
-		"Average Samples Per Pixel",
-		"Average Sparse Texture Tile Size",
-		"Buffer Device Memory Bytes Read",
-		"Buffer Device Memory Bytes Written",
-		"Buffer L1 Miss Rate",
-		"Buffer Read Bytes",
-		"Buffer Write Bytes",
-		"Bytes Read From Device Memory",
-		"Bytes Written To Device Memory",
-		"Clamp Sampler Calls",
-		"Compute Shader Launch Limiter",
-		"Compute Shader Utilization",
-		"Cube Texture Array Sampler Calls",
-		"Cube Texture Sampler Calls",
-		"Depth Attachment Pixels Stored",
-		"Depth Texture Device Memory Bytes Read",
-		"Device Atomic Bytes Read",
-		"Device Atomic Bytes Written",
-		"Fragment Primitives",
-		"Fragment Shader Launch Limiter",
-		"Fragment Shader Utilization",
-		"FS ALU Float Instructions",
-		"FS ALU Half Instructions",
-		"FS ALU Instructions",
-		"FS ALU Integer and Complex Instructions",
-		"FS ALU Integer and Conditional Instructions",
-		"FS ALU Performance",
-		"FS Buffer Device Memory Bytes Read",
-		"FS Buffer Device Memory Bytes Written",
-		"FS Buffer Read Bytes",
-		"FS Buffer Write Bytes",
-		"FS Bytes Read From Device Memory",
-		"FS Bytes Written To Device Memory",
-		"FS Device Atomic Bytes Read",
-		"FS Device Atomic Bytes Written",
-		"FS Invocations",
-		"FS L1 Read Bandwidth",
-		"FS L1 Write Bandwidth",
-		"FS Last Level Cache Bytes Read",
-		"FS Last Level Cache Bytes Written",
-		"FS Occupancy",
-		"FS Texture Cache Miss Rate",
-		"FS Texture Device Memory Bytes Read",
-		"FS Texture Read Bytes",
-		"GPU Time",
-		"Kernel ALU Float Instructions",
-		"Kernel ALU Half Instructions",
-		"Kernel ALU Instructions",
-		"Kernel ALU Integer and Complex Instructions",
-		"Kernel ALU Integer and Conditional Instructions",
-		"Kernel ALU Performance",
-		"Kernel Invocations",
-		"Kernel Occupancy",
-		"Kernel Texture Cache Miss Rate",
-		"L1 Cache Limiter",
-		"L1 Read Bandwidth",
-		"L1 Write Bandwidth",
-		"Last Level Cache Bytes Read",
-		"Last Level Cache Bytes Written",
-		"Last Level Cache Limiter",
-		"Nearest Sampler Calls",
-		"Overdraw",
-		"Pixels",
-		"Primitives",
-		"Render Passes",
-		"Repeat Sampler Calls",
-		"Samples",
-		"Sparse Texture Access Calls",
-		"Sparse Texture Commit Calls",
-		"Sparse Texture Resident Bytes",
-		"Stencil Attachment Pixels Stored",
-		"Texture Cache Miss Rate",
-		"Texture Device Memory Bytes Read",
-		"Texture Device Memory Bytes Written",
-		"Texture Filtering Limiter",
-		"Texture Filtering Utilization",
-		"Texture Read Bytes",
-		"Texture Write Bytes",
-		"Threadgroups",
-		"Threads",
-		"Tile Shader Launch Limiter",
-		"Tile Shader Utilization",
-		"Vertex Primitives",
-		"Vertex Shader Launch Limiter",
-		"Vertex Shader Utilization",
-		"Vertices",
-		"VS ALU Float Instructions",
-		"VS ALU Half Instructions",
-		"VS ALU Instructions",
-		"VS ALU Integer and Complex Instructions",
-		"VS ALU Integer and Conditional Instructions",
-		"VS ALU Performance",
-		"VS Buffer Device Memory Bytes Read",
-		"VS Buffer Device Memory Bytes Written",
-		"VS Buffer Read Bytes",
-		"VS Buffer Write Bytes",
-		"VS Bytes Read From Device Memory",
-		"VS Bytes Written To Device Memory",
-		"VS Device Atomic Bytes Read",
-		"VS Device Atomic Bytes Written",
-		"VS Invocations",
-		"VS L1 Read Bandwidth",
-		"VS L1 Write Bandwidth",
-		"VS Last Level Cache Bytes Read",
-		"VS Last Level Cache Bytes Written",
-		"VS Occupancy",
-		"VS Texture Cache Miss Rate",
-		"VS Texture Device Memory Bytes Read",
-		"VS Texture Read Bytes",
-	}
-
-	// Fill in the metric names (columns 5-246)
-	// Note: This is a partial list - Xcode has 241 metrics total
-	// Remaining columns will be filled with empty strings by default
-	for i, metricName := range metrics {
-		if i+5 < 246 {
-			header[i+5] = metricName
+	// Columns 7-247: Performance metrics (241 metrics)
+	// Use the complete list from file_mapping.go (verified against Xcode Instruments)
+	for i, metricName := range AllCounterNames {
+		if i+6 < 247 {
+			header[i+6] = metricName
 		}
-	}
-
-	// Fill remaining columns with placeholder names
-	for i := 5 + len(metrics); i < 246; i++ {
-		header[i] = fmt.Sprintf("Reserved Metric %d", i-4)
 	}
 
 	return header
@@ -466,7 +344,7 @@ func getCountersCSVHeader() []string {
 
 // getMetricNameForColumn returns the metric name for a given column index.
 func getMetricNameForColumn(colIndex int) string {
-	if colIndex < 5 {
+	if colIndex < 6 {
 		return ""
 	}
 

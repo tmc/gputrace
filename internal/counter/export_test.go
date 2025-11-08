@@ -45,8 +45,8 @@ func TestExportWithBinaryData(t *testing.T) {
 	// Check header
 	header := rows[0]
 	t.Logf("Generated %d columns", len(header))
-	if len(header) != 246 {
-		t.Errorf("Expected 246 columns, got %d", len(header))
+	if len(header) != 247 {
+		t.Errorf("Expected 247 columns (6 metadata + 241 metrics), got %d", len(header))
 	}
 
 	// Check first data row
@@ -122,15 +122,18 @@ func TestExportSixEncoders(t *testing.T) {
 		colIdx[col] = i
 	}
 
-	// Verify key columns from gputrace-68
-	if header[13] != "ALU Utilization" {
-		t.Errorf("Column 13 should be 'ALU Utilization', got '%s'", header[13])
+	// Verify key columns (adjusted for 6 metadata columns: Index, FunctionIndex, CB Label, Debug Group, Encoder Label, empty)
+	// ALU Utilization is 9th metric (index 8) → column 6+8=14
+	// Kernel Invocations is metric index 102 → column 6+102=108
+	// Kernel Occupancy is metric index 103 → column 6+103=109
+	if header[14] != "ALU Utilization" {
+		t.Errorf("Column 14 should be 'ALU Utilization', got '%s'", header[14])
 	}
-	if header[107] != "Kernel Invocations" {
-		t.Errorf("Column 107 should be 'Kernel Invocations', got '%s'", header[107])
+	if header[108] != "Kernel Invocations" {
+		t.Errorf("Column 108 should be 'Kernel Invocations', got '%s'", header[108])
 	}
-	if header[108] != "Kernel Occupancy" {
-		t.Errorf("Column 108 should be 'Kernel Occupancy', got '%s'", header[108])
+	if header[109] != "Kernel Occupancy" {
+		t.Errorf("Column 109 should be 'Kernel Occupancy', got '%s'", header[109])
 	}
 
 	// Check each encoder row
@@ -139,10 +142,14 @@ func TestExportSixEncoders(t *testing.T) {
 		encoderLabel := row[colIdx["Encoder Label"]]
 		t.Logf("\nEncoder %d: %s", i-1, encoderLabel)
 
-		// gputrace-81: Check key validated metrics
-		t.Logf("  ALU Utilization (col 13): %s", row[13])
-		t.Logf("  Kernel Invocations (col 107): %s", row[107])
-		t.Logf("  Kernel Occupancy (col 108): %s", row[108])
+		// gputrace-81: Check key validated metrics (using colIdx for correct columns)
+		aluIdx := colIdx["ALU Utilization"]
+		invIdx := colIdx["Kernel Invocations"]
+		occIdx := colIdx["Kernel Occupancy"]
+
+		t.Logf("  ALU Utilization (col %d): %s", aluIdx, row[aluIdx])
+		t.Logf("  Kernel Invocations (col %d): %s", invIdx, row[invIdx])
+		t.Logf("  Kernel Occupancy (col %d): %s", occIdx, row[occIdx])
 
 		if idx, ok := colIdx["Bytes Read From Device Memory"]; ok && idx < len(row) {
 			t.Logf("  Bytes Read: %s", row[idx])
