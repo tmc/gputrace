@@ -10,10 +10,10 @@ import (
 // Metal Replay Engine types and functions
 
 type (
-	MetalReplayEngine      = replay.MetalReplayEngine
-	MetalReplayResult      = replay.MetalReplayResult
-	MetalValidationResult  = replay.MetalValidationResult
-	ReplayPlan             = replay.ReplayPlan
+	MetalReplayEngine     = replay.MetalReplayEngine
+	MetalReplayResult     = replay.MetalReplayResult
+	MetalValidationResult = replay.MetalValidationResult
+	ReplayPlan            = replay.ReplayPlan
 )
 
 // NewMetalReplayEngine creates a new Metal replay engine for the given trace.

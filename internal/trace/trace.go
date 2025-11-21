@@ -27,17 +27,17 @@ type DebugGroupLabel struct {
 
 // Trace represents a parsed .gputrace bundle.
 type Trace struct {
-	Path              string
-	Metadata          *Metadata
-	CaptureData       []byte
-	DeviceResources   map[string][]byte // key is device address (e.g., "0x862ccc000")
-	KernelNames       []string
-	EncoderLabels     []string
-	BufferLabels      []string
-	DebugGroupLabels  []string            // Hierarchical debug group labels (e.g., "training_iteration:forward_pass:linear_layer")
-	DebugGroupOffsets []DebugGroupLabel   // Debug groups with their offsets for encoder association
-	EncoderDebugGroups map[string]string   // Maps encoder label to its debug group (sequence-based)
-	CommandQueueLabel string
+	Path               string
+	Metadata           *Metadata
+	CaptureData        []byte
+	DeviceResources    map[string][]byte // key is device address (e.g., "0x862ccc000")
+	KernelNames        []string
+	EncoderLabels      []string
+	BufferLabels       []string
+	DebugGroupLabels   []string          // Hierarchical debug group labels (e.g., "training_iteration:forward_pass:linear_layer")
+	DebugGroupOffsets  []DebugGroupLabel // Debug groups with their offsets for encoder association
+	EncoderDebugGroups map[string]string // Maps encoder label to its debug group (sequence-based)
+	CommandQueueLabel  string
 }
 
 // Metadata contains information from the metadata plist file.

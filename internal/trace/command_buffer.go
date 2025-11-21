@@ -196,9 +196,10 @@ func isActualFunctionName(name string) bool {
 // normalizeKernelName converts a kernel name to a canonical form for deduplication.
 // Strips common suffixes and normalizes case to identify related names.
 // Examples:
-//   "simple_add" -> "simple"
-//   "SimpleAdd" -> "simple"
-//   "SingleEncoder" -> "single"
+//
+//	"simple_add" -> "simple"
+//	"SimpleAdd" -> "simple"
+//	"SingleEncoder" -> "single"
 func normalizeKernelName(name string) string {
 	// Convert to lowercase and remove underscores/special chars
 	var normalized []byte

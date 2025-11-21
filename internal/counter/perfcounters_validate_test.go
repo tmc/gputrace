@@ -418,12 +418,22 @@ func TestValidateBothMetrics(t *testing.T) {
 
 		t.Logf("  CSV ALU: %.2f%%, Binary: %.2f%% (diff: %.2f%%)",
 			csvEnc.ALUUtilization,
-			func() float64 { if aluMatch != nil { return aluMatch.ALUUtilization }; return 0 }(),
+			func() float64 {
+				if aluMatch != nil {
+					return aluMatch.ALUUtilization
+				}
+				return 0
+			}(),
 			aluDiff)
 
 		t.Logf("  CSV Occ: %.2f%%, Binary: %.2f%% (diff: %.2f%%)",
 			csvEnc.KernelOccupancy,
-			func() float64 { if occMatch != nil { return occMatch.KernelOccupancy }; return 0 }(),
+			func() float64 {
+				if occMatch != nil {
+					return occMatch.KernelOccupancy
+				}
+				return 0
+			}(),
 			occDiff)
 	}
 
@@ -606,6 +616,7 @@ func TestValidateMemoryBandwidth(t *testing.T) {
 		})
 	}
 }
+
 // TestDiagnoseProfilingExtraction checks if Profiling file parsing is working.
 func TestDiagnoseProfilingExtraction(t *testing.T) {
 	tracePath := filepath.Join("..", "..", "testdata", "traces", "06-six-encoders", "06-six-encoders-run1-perf.gputrace")

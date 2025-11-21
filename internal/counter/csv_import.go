@@ -18,28 +18,28 @@ type CSVCounterData struct {
 
 // CSVEncoderMetrics represents metrics for a single encoder from CSV.
 type CSVEncoderMetrics struct {
-	Index                         int
-	EncoderFunctionIndex          int
-	CommandBufferLabel            string
-	EncoderLabel                  string
-	ALUUtilization                float64
-	KernelInvocations             int
-	KernelOccupancy               float64
-	KernelALUPerformance          float64 // ALU performance percentage (higher = more efficient)
-	BytesReadFromDeviceMemory     uint64
-	BytesWrittenToDeviceMemory    uint64
-	BufferDeviceMemoryBytesRead   uint64
+	Index                          int
+	EncoderFunctionIndex           int
+	CommandBufferLabel             string
+	EncoderLabel                   string
+	ALUUtilization                 float64
+	KernelInvocations              int
+	KernelOccupancy                float64
+	KernelALUPerformance           float64 // ALU performance percentage (higher = more efficient)
+	BytesReadFromDeviceMemory      uint64
+	BytesWrittenToDeviceMemory     uint64
+	BufferDeviceMemoryBytesRead    uint64
 	BufferDeviceMemoryBytesWritten uint64
-	DeviceMemoryBandwidth         float64 // GB/s
-	GPUReadBandwidth              float64 // GB/s
-	GPUWriteBandwidth             float64 // GB/s
-	L1ReadBandwidth               float64 // GB/s
-	L1WriteBandwidth              float64 // GB/s
-	BufferL1MissRate              float64 // Percentage
-	BufferL1ReadAccesses          float64
-	BufferL1ReadBandwidth         float64 // GB/s
-	BufferL1WriteAccesses         float64
-	BufferL1WriteBandwidth        float64 // GB/s
+	DeviceMemoryBandwidth          float64 // GB/s
+	GPUReadBandwidth               float64 // GB/s
+	GPUWriteBandwidth              float64 // GB/s
+	L1ReadBandwidth                float64 // GB/s
+	L1WriteBandwidth               float64 // GB/s
+	BufferL1MissRate               float64 // Percentage
+	BufferL1ReadAccesses           float64
+	BufferL1ReadBandwidth          float64 // GB/s
+	BufferL1WriteAccesses          float64
+	BufferL1WriteBandwidth         float64 // GB/s
 }
 
 // ImportCountersCSV imports performance counters from an Xcode Counters.csv file.

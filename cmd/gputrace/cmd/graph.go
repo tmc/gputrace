@@ -78,9 +78,9 @@ func runGraph(cmd *cobra.Command, args []string) error {
 
 	// Configure generator
 	config := &graph.Config{
-		Type:        graphType,
-		ShowTiming:  graphShowTiming,
-		ShowMemory:  graphShowMemory,
+		Type:       graphType,
+		ShowTiming: graphShowTiming,
+		ShowMemory: graphShowMemory,
 	}
 
 	// Generate graph

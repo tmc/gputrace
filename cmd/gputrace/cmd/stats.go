@@ -133,9 +133,9 @@ func runStats(cmd *cobra.Command, args []string) error {
 
 // StatsJSONOutput represents the JSON output structure for stats command.
 type StatsJSONOutput struct {
-	Statistics  *StatsJSON   `json:"statistics"`
-	Metadata    *MetadataJSON `json:"metadata,omitempty"`
-	Verbose     *VerboseJSON  `json:"verbose,omitempty"`
+	Statistics *StatsJSON    `json:"statistics"`
+	Metadata   *MetadataJSON `json:"metadata,omitempty"`
+	Verbose    *VerboseJSON  `json:"verbose,omitempty"`
 }
 
 // StatsJSON represents statistics in JSON format.
@@ -165,11 +165,11 @@ type MetadataJSON struct {
 
 // VerboseJSON represents verbose output in JSON format.
 type VerboseJSON struct {
-	EncoderLabels     []string      `json:"encoder_labels,omitempty"`
-	KernelNames       []string      `json:"kernel_names,omitempty"`
-	BufferLabels      []string      `json:"buffer_labels,omitempty"`
-	CommandQueueLabel string        `json:"command_queue_label,omitempty"`
-	TimingData        []TimingJSON  `json:"timing_data,omitempty"`
+	EncoderLabels     []string     `json:"encoder_labels,omitempty"`
+	KernelNames       []string     `json:"kernel_names,omitempty"`
+	BufferLabels      []string     `json:"buffer_labels,omitempty"`
+	CommandQueueLabel string       `json:"command_queue_label,omitempty"`
+	TimingData        []TimingJSON `json:"timing_data,omitempty"`
 }
 
 // TimingJSON represents timing data in JSON format.

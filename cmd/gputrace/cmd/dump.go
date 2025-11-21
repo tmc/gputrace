@@ -10,14 +10,14 @@ import (
 )
 
 var (
-	dumpFilter       string
-	dumpNoIndent     bool
-	dumpNoNumbers    bool
-	dumpBuffersOnly  bool
-	dumpDispatchOnly bool
-	dumpEncodersOnly bool
-	dumpJSON         bool
-	dumpFull         bool
+	dumpFilter             string
+	dumpNoIndent           bool
+	dumpNoNumbers          bool
+	dumpBuffersOnly        bool
+	dumpDispatchOnly       bool
+	dumpEncodersOnly       bool
+	dumpJSON               bool
+	dumpFull               bool
 	dumpCommandBufferIndex int
 )
 

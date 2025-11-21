@@ -233,4 +233,3 @@ func TestExamineRecordStructure(t *testing.T) {
 		}
 	}
 }
-

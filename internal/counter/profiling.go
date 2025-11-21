@@ -145,10 +145,10 @@ func parseProfilingFile(path string, encoderIndex int) (*ProfilingMetrics, error
 // Returns only rare candidate values (likely actual occupancy).
 func extractOccupancyCandidates(data []byte) []float64 {
 	const (
-		minOccupancy      = 0.0001 // 0.01% minimum (CSV shows values like 0.08%)
-		maxOccupancy      = 1.0    // 100% maximum (but typically < 1%)
-		noiseThreshold    = 20     // Values appearing >20 times are likely noise
-		minOccurrences    = 1      // Must appear at least once (obviously)
+		minOccupancy   = 0.0001 // 0.01% minimum (CSV shows values like 0.08%)
+		maxOccupancy   = 1.0    // 100% maximum (but typically < 1%)
+		noiseThreshold = 20     // Values appearing >20 times are likely noise
+		minOccurrences = 1      // Must appear at least once (obviously)
 	)
 
 	// First pass: Count frequency of each value

@@ -165,7 +165,6 @@ func ExtractShaderMetrics(t *trace.Trace) (*ShaderMetricsReport, error) {
 		}
 	}
 
-
 	for _, metrics := range report.Shaders {
 		if hasWeightedCosts && totalWeightedCost > 0 {
 			metrics.PercentOfTotal = (metrics.WeightedCost / totalWeightedCost) * 100.0

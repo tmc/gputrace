@@ -109,14 +109,14 @@ func TestScanMetadataRecords(t *testing.T) {
 	defer tr.Close()
 
 	expectedLimiters := map[string]float32{
-		"Compute Shader Launch": 0.04,
-		"Control Flow":          0.01,
+		"Compute Shader Launch":  0.04,
+		"Control Flow":           0.01,
 		"Instruction Throughput": 0.06,
-		"Integer Conditional":   0.02,
-		"L1 Cache":              0.01,
-		"Last Level Cache":      0.04,
-		"MMU":                   0.02,
-		"Texture Write":         0.04,
+		"Integer Conditional":    0.02,
+		"L1 Cache":               0.01,
+		"Last Level Cache":       0.04,
+		"MMU":                    0.02,
+		"Texture Write":          0.04,
 	}
 
 	// Find .gpuprofiler_raw directory

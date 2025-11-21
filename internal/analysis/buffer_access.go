@@ -26,12 +26,12 @@ type BufferAccessAnalysis struct {
 
 // BufferAccessInfo tracks access patterns for a single buffer.
 type BufferAccessInfo struct {
-	Address       uint64
-	AccessCount   int
-	EncoderIDs    []int // Which encoders accessed this buffer
-	FirstAccess   int   // Record index of first access
-	LastAccess    int   // Record index of last access
-	IsShared      bool  // Accessed by multiple encoders
+	Address     uint64
+	AccessCount int
+	EncoderIDs  []int // Which encoders accessed this buffer
+	FirstAccess int   // Record index of first access
+	LastAccess  int   // Record index of last access
+	IsShared    bool  // Accessed by multiple encoders
 }
 
 // EncoderAccessInfo tracks buffer access for a single encoder.
@@ -44,9 +44,9 @@ type EncoderAccessInfo struct {
 
 // BufferAlias represents potential memory aliasing.
 type BufferAlias struct {
-	Address   uint64
-	Encoders  []int
-	Indices   []int
+	Address  uint64
+	Encoders []int
+	Indices  []int
 }
 
 // AnalyzeBufferAccess analyzes buffer access patterns from Ct and Cul records.
@@ -198,16 +198,16 @@ func FormatBufferAccessReport(analysis *BufferAccessAnalysis, verbose bool) stri
 
 		// Sort buffers by number of accessing encoders
 		type bufferShare struct {
-			addr      uint64
-			info      *BufferAccessInfo
+			addr       uint64
+			info       *BufferAccessInfo
 			shareCount int
 		}
 		var sharedBuffers []bufferShare
 		for addr, info := range analysis.BufferAccesses {
 			if info.IsShared {
 				sharedBuffers = append(sharedBuffers, bufferShare{
-					addr:      addr,
-					info:      info,
+					addr:       addr,
+					info:       info,
 					shareCount: len(info.EncoderIDs),
 				})
 			}

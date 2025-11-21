@@ -208,15 +208,15 @@ type EncoderCounterMetrics struct {
 	BufferL1WriteBandwidth float64 // Buffer L1 write bandwidth (GB/s)
 
 	// Shader Utilization Metrics (gputrace-67)
-	ComputeShaderUtilization       float64 // Compute shader utilization percentage (0-100)
-	FragmentShaderUtilization      float64 // Fragment shader utilization percentage (0-100)
-	VertexShaderUtilization        float64 // Vertex shader utilization percentage (0-100)
-	ControlFlowUtilization         float64 // Control flow utilization percentage (0-100)
-	InstructionThroughputUtil      float64 // Instruction throughput utilization percentage (0-100)
-	IntegerAndComplexUtil          float64 // Integer and complex instruction utilization percentage (0-100)
-	IntegerAndConditionalUtil      float64 // Integer and conditional instruction utilization percentage (0-100)
-	F16Utilization                 float64 // FP16 instruction utilization percentage (0-100)
-	F32Utilization                 float64 // FP32 instruction utilization percentage (0-100)
+	ComputeShaderUtilization  float64 // Compute shader utilization percentage (0-100)
+	FragmentShaderUtilization float64 // Fragment shader utilization percentage (0-100)
+	VertexShaderUtilization   float64 // Vertex shader utilization percentage (0-100)
+	ControlFlowUtilization    float64 // Control flow utilization percentage (0-100)
+	InstructionThroughputUtil float64 // Instruction throughput utilization percentage (0-100)
+	IntegerAndComplexUtil     float64 // Integer and complex instruction utilization percentage (0-100)
+	IntegerAndConditionalUtil float64 // Integer and conditional instruction utilization percentage (0-100)
+	F16Utilization            float64 // FP16 instruction utilization percentage (0-100)
+	F32Utilization            float64 // FP32 instruction utilization percentage (0-100)
 }
 
 // DispatchCounterMetrics contains counter metrics for a single compute dispatch.
@@ -634,15 +634,15 @@ func PopulateEncoderMetricsFromBinaryParsing(t *trace.Trace) ([]EncoderCounterMe
 			BufferL1WriteBandwidth: shaderMetric.BufferL1WriteBandwidth,
 
 			// Shader Utilization Metrics from gputrace-67
-			ComputeShaderUtilization:       shaderMetric.ComputeShaderUtilization,
-			FragmentShaderUtilization:      shaderMetric.FragmentShaderUtilization,
-			VertexShaderUtilization:        shaderMetric.VertexShaderUtilization,
-			ControlFlowUtilization:         shaderMetric.ControlFlowUtilization,
-			InstructionThroughputUtil:      shaderMetric.InstructionThroughputUtil,
-			IntegerAndComplexUtil:          shaderMetric.IntegerAndComplexUtil,
-			IntegerAndConditionalUtil:      shaderMetric.IntegerAndConditionalUtil,
-			F16Utilization:                 shaderMetric.F16Utilization,
-			F32Utilization:                 shaderMetric.F32Utilization,
+			ComputeShaderUtilization:  shaderMetric.ComputeShaderUtilization,
+			FragmentShaderUtilization: shaderMetric.FragmentShaderUtilization,
+			VertexShaderUtilization:   shaderMetric.VertexShaderUtilization,
+			ControlFlowUtilization:    shaderMetric.ControlFlowUtilization,
+			InstructionThroughputUtil: shaderMetric.InstructionThroughputUtil,
+			IntegerAndComplexUtil:     shaderMetric.IntegerAndComplexUtil,
+			IntegerAndConditionalUtil: shaderMetric.IntegerAndConditionalUtil,
+			F16Utilization:            shaderMetric.F16Utilization,
+			F32Utilization:            shaderMetric.F32Utilization,
 
 			// Execution counts (validated with 100% accuracy on Encoder 5)
 			DispatchCount: shaderMetric.ExecutionCount, // This is kernel invocations

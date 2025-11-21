@@ -23,24 +23,24 @@ type PerfCounterStats struct {
 
 // ShaderHardwareMetrics represents hardware performance metrics for a shader.
 type ShaderHardwareMetrics struct {
-	ShaderName                    string  // Shader/kernel function name
-	PipelineState                 uint64  // Pipeline state object address
-	SIMDGroups                    int     // Number of SIMD groups executed
-	AllocatedRegs                 int     // Number of allocated registers
-	HighRegister                  int     // Highest register used
-	SpilledBytes                  int     // Bytes spilled to memory
-	ALUUtilization                float64 // ALU utilization percentage (0-100)
-	KernelOccupancy               float64 // Kernel occupancy percentage (0-100)
-	MemoryBandwidth               uint64  // Memory bandwidth used (bytes)
-	ExecutionCount                int     // Number of times this shader executed
-	TotalCycles                   uint64  // Total GPU cycles spent
-	BytesReadFromDeviceMemory     uint64  // Total bytes read from device memory
-	BytesWrittenToDeviceMemory    uint64  // Total bytes written to device memory
-	BufferDeviceMemoryBytesRead   uint64  // Buffer bytes read from device memory
-	BufferDeviceMemoryBytesWritten uint64 // Buffer bytes written to device memory
-	DeviceMemoryBandwidthGBps     float64 // Device memory bandwidth in GB/s
-	GPUReadBandwidthGBps          float64 // GPU read bandwidth in GB/s
-	GPUWriteBandwidthGBps         float64 // GPU write bandwidth in GB/s
+	ShaderName                     string  // Shader/kernel function name
+	PipelineState                  uint64  // Pipeline state object address
+	SIMDGroups                     int     // Number of SIMD groups executed
+	AllocatedRegs                  int     // Number of allocated registers
+	HighRegister                   int     // Highest register used
+	SpilledBytes                   int     // Bytes spilled to memory
+	ALUUtilization                 float64 // ALU utilization percentage (0-100)
+	KernelOccupancy                float64 // Kernel occupancy percentage (0-100)
+	MemoryBandwidth                uint64  // Memory bandwidth used (bytes)
+	ExecutionCount                 int     // Number of times this shader executed
+	TotalCycles                    uint64  // Total GPU cycles spent
+	BytesReadFromDeviceMemory      uint64  // Total bytes read from device memory
+	BytesWrittenToDeviceMemory     uint64  // Total bytes written to device memory
+	BufferDeviceMemoryBytesRead    uint64  // Buffer bytes read from device memory
+	BufferDeviceMemoryBytesWritten uint64  // Buffer bytes written to device memory
+	DeviceMemoryBandwidthGBps      float64 // Device memory bandwidth in GB/s
+	GPUReadBandwidthGBps           float64 // GPU read bandwidth in GB/s
+	GPUWriteBandwidthGBps          float64 // GPU write bandwidth in GB/s
 
 	// Shader Launch Limiters (0-100% range, typically 0.03-0.08)
 	ComputeShaderLaunchLimiter  float64 // Compute shader launch limiter percentage
@@ -48,12 +48,12 @@ type ShaderHardwareMetrics struct {
 	VertexShaderLaunchLimiter   float64 // Vertex shader launch limiter percentage
 
 	// Pipeline Limiters (0-100% range, typically 0.01-3.74 for complex shaders)
-	ControlFlowLimiter              float64 // Control flow limiter percentage
-	InstructionThroughputLimiter    float64 // Instruction throughput limiter percentage
-	IntegerAndComplexLimiter        float64 // Integer and complex instruction limiter percentage
-	IntegerAndConditionalLimiter    float64 // Integer and conditional instruction limiter percentage
-	F16Limiter                      float64 // FP16 instruction limiter percentage
-	F32Limiter                      float64 // FP32 instruction limiter percentage
+	ControlFlowLimiter           float64 // Control flow limiter percentage
+	InstructionThroughputLimiter float64 // Instruction throughput limiter percentage
+	IntegerAndComplexLimiter     float64 // Integer and complex instruction limiter percentage
+	IntegerAndConditionalLimiter float64 // Integer and conditional instruction limiter percentage
+	F16Limiter                   float64 // FP16 instruction limiter percentage
+	F32Limiter                   float64 // FP32 instruction limiter percentage
 
 	// Memory Limiters (0-100% range, typically 0.01-0.15)
 	L1CacheLimiter        float64 // L1 cache limiter percentage
@@ -73,15 +73,15 @@ type ShaderHardwareMetrics struct {
 	BufferL1WriteBandwidth float64 // Buffer L1 write bandwidth (GB/s)
 
 	// Shader Utilization Metrics (gputrace-67)
-	ComputeShaderUtilization       float64 // Compute shader utilization percentage (0-100)
-	FragmentShaderUtilization      float64 // Fragment shader utilization percentage (0-100)
-	VertexShaderUtilization        float64 // Vertex shader utilization percentage (0-100)
-	ControlFlowUtilization         float64 // Control flow utilization percentage (0-100)
-	InstructionThroughputUtil      float64 // Instruction throughput utilization percentage (0-100)
-	IntegerAndComplexUtil          float64 // Integer and complex instruction utilization percentage (0-100)
-	IntegerAndConditionalUtil      float64 // Integer and conditional instruction utilization percentage (0-100)
-	F16Utilization                 float64 // FP16 instruction utilization percentage (0-100)
-	F32Utilization                 float64 // FP32 instruction utilization percentage (0-100)
+	ComputeShaderUtilization  float64 // Compute shader utilization percentage (0-100)
+	FragmentShaderUtilization float64 // Fragment shader utilization percentage (0-100)
+	VertexShaderUtilization   float64 // Vertex shader utilization percentage (0-100)
+	ControlFlowUtilization    float64 // Control flow utilization percentage (0-100)
+	InstructionThroughputUtil float64 // Instruction throughput utilization percentage (0-100)
+	IntegerAndComplexUtil     float64 // Integer and complex instruction utilization percentage (0-100)
+	IntegerAndConditionalUtil float64 // Integer and conditional instruction utilization percentage (0-100)
+	F16Utilization            float64 // FP16 instruction utilization percentage (0-100)
+	F32Utilization            float64 // FP32 instruction utilization percentage (0-100)
 }
 
 // CounterRecord represents a single parsed record from a counter file.
@@ -654,12 +654,12 @@ func groupRecordsByEncoder(records []*CounterRecord) []*EncoderGroup {
 // aggregateEncoderMetrics aggregates metrics from sample records within an encoder group.
 //
 // Aggregation rules (gputrace-76):
-// - Deterministic metrics (Kernel Invocations, Registers): Use FIRST/REPRESENTATIVE value (not sum)
-//   These are constant across samples for the same encoder
-// - Timing metrics (ALU Utilization, Occupancy): AVERAGE across samples
-//   These vary with time/load
-// - Counter metrics (Memory Bytes): SUM across samples
-//   These accumulate over time
+//   - Deterministic metrics (Kernel Invocations, Registers): Use FIRST/REPRESENTATIVE value (not sum)
+//     These are constant across samples for the same encoder
+//   - Timing metrics (ALU Utilization, Occupancy): AVERAGE across samples
+//     These vary with time/load
+//   - Counter metrics (Memory Bytes): SUM across samples
+//     These accumulate over time
 func aggregateEncoderMetrics(group *EncoderGroup) *ShaderHardwareMetrics {
 	if len(group.SampleRecords) == 0 {
 		return nil
@@ -669,14 +669,14 @@ func aggregateEncoderMetrics(group *EncoderGroup) *ShaderHardwareMetrics {
 		PipelineState: group.EncoderID, // Use encoder ID as identifier
 	}
 
-	var firstInvocations int          // DETERMINISTIC: use first value
+	var firstInvocations int // DETERMINISTIC: use first value
 	var invocationsSet bool
 	var totalALUUtil float64
 	var totalOccupancy float64
 	var aluSamples int
 	var occupancySamples int
-	var totalBytesRead uint64         // COUNTER: sum
-	var totalBytesWritten uint64      // COUNTER: sum
+	var totalBytesRead uint64    // COUNTER: sum
+	var totalBytesWritten uint64 // COUNTER: sum
 
 	for _, record := range group.SampleRecords {
 		if record.ShaderMetric == nil {

@@ -30,21 +30,21 @@ import (
 
 // Re-export main types from internal packages
 type (
-	Trace                   = trace.Trace
-	Metadata                = trace.Metadata
-	RecordType              = trace.RecordType
-	EncoderTiming           = trace.EncoderTiming
-	Store0TimingData        = timing.Store0TimingData
-	Store0Encoder           = timing.Store0Encoder
-	ShaderSourceMapper      = shader.ShaderSourceMapper
-	ShaderMetrics           = shader.ShaderMetrics
-	ShaderMetricsReport     = shader.ShaderMetricsReport
-	PerfCounterStats        = counter.PerfCounterStats
-	ShaderHardwareMetrics   = counter.ShaderHardwareMetrics
-	XcodeCounterData        = counter.XcodeCounterData
-	XcodeEncoderCounters    = counter.XcodeEncoderCounters
-	TraceStatistics         = analysis.TraceStatistics
-	TimingMetricsExtractor  = timing.TimingMetricsExtractor
+	Trace                  = trace.Trace
+	Metadata               = trace.Metadata
+	RecordType             = trace.RecordType
+	EncoderTiming          = trace.EncoderTiming
+	Store0TimingData       = timing.Store0TimingData
+	Store0Encoder          = timing.Store0Encoder
+	ShaderSourceMapper     = shader.ShaderSourceMapper
+	ShaderMetrics          = shader.ShaderMetrics
+	ShaderMetricsReport    = shader.ShaderMetricsReport
+	PerfCounterStats       = counter.PerfCounterStats
+	ShaderHardwareMetrics  = counter.ShaderHardwareMetrics
+	XcodeCounterData       = counter.XcodeCounterData
+	XcodeEncoderCounters   = counter.XcodeEncoderCounters
+	TraceStatistics        = analysis.TraceStatistics
+	TimingMetricsExtractor = timing.TimingMetricsExtractor
 
 	// Buffer access analysis types (gputrace-93)
 	BufferAccessAnalysis = analysis.BufferAccessAnalysis
@@ -84,18 +84,18 @@ type (
 	SourceLineAttribution   = shader.SourceLineAttribution
 
 	// Timing metrics types (gputrace-106)
-	TimingMetrics        = timing.TimingMetrics
-	KernelTiming         = timing.KernelTiming
-	CommandBufferTiming  = timing.CommandBufferTiming
-	TimingComparison     = timing.TimingComparison
+	TimingMetrics       = timing.TimingMetrics
+	KernelTiming        = timing.KernelTiming
+	CommandBufferTiming = timing.CommandBufferTiming
+	TimingComparison    = timing.TimingComparison
 
 	// Timing profiler types (gputrace-107)
 	TimingExtractorProfilerRaw = timing.TimingExtractorProfilerRaw
 	ProfilerRawTiming          = timing.ProfilerRawTiming
 
 	// Correlation types (gputrace-96)
-	CorrelatedShaderMetrics  = shader.CorrelatedShaderMetrics
-	ShaderCorrelationReport  = shader.ShaderCorrelationReport
+	CorrelatedShaderMetrics = shader.CorrelatedShaderMetrics
+	ShaderCorrelationReport = shader.ShaderCorrelationReport
 
 	// Insights types (gputrace-97)
 	PerformanceInsight = analysis.PerformanceInsight
@@ -146,20 +146,20 @@ const (
 
 // Re-export functions
 var (
-	ExtractTimingData              = timing.ExtractTimingData
-	ExtractStore0Timing            = timing.ExtractStore0Timing
-	ConvertStore0ToEncoderTimings  = timing.ConvertStore0ToEncoderTimings
-	GenerateSyntheticTiming        = timing.GenerateSyntheticTiming
-	ExtractShaderMetrics           = shader.ExtractShaderMetrics
-	NewShaderSourceMapper          = shader.NewShaderSourceMapper
-	FormatShadersXcodeStyle        = shader.FormatShadersXcodeStyle
-	ParseDetailedCommandBuffer     = command.ParseDetailedCommandBuffer
-	DumpCommandBuffer              = command.DumpCommandBuffer
-	ToPprof                        = export.ToPprof
-	ParseXcodeCountersCSV          = counter.ParseXcodeCountersCSV
-	ExtractStatistics              = analysis.ExtractStatistics
-	NewTimingMetricsExtractor      = timing.NewTimingMetricsExtractor
-	ParsePerfCounters              = counter.ParsePerfCounters
+	ExtractTimingData             = timing.ExtractTimingData
+	ExtractStore0Timing           = timing.ExtractStore0Timing
+	ConvertStore0ToEncoderTimings = timing.ConvertStore0ToEncoderTimings
+	GenerateSyntheticTiming       = timing.GenerateSyntheticTiming
+	ExtractShaderMetrics          = shader.ExtractShaderMetrics
+	NewShaderSourceMapper         = shader.NewShaderSourceMapper
+	FormatShadersXcodeStyle       = shader.FormatShadersXcodeStyle
+	ParseDetailedCommandBuffer    = command.ParseDetailedCommandBuffer
+	DumpCommandBuffer             = command.DumpCommandBuffer
+	ToPprof                       = export.ToPprof
+	ParseXcodeCountersCSV         = counter.ParseXcodeCountersCSV
+	ExtractStatistics             = analysis.ExtractStatistics
+	NewTimingMetricsExtractor     = timing.NewTimingMetricsExtractor
+	ParsePerfCounters             = counter.ParsePerfCounters
 
 	// Buffer access analysis functions (gputrace-93)
 	AnalyzeBufferAccess      = analysis.AnalyzeBufferAccess
@@ -183,22 +183,22 @@ var (
 	FormatCounterSamplingResult     = counter.FormatCounterSamplingResult
 
 	// Replay engine functions (gputrace-103, gputrace-104)
-	NewReplayEngine            = replay.NewReplayEngine
-	FormatReplayPlan           = replay.FormatReplayPlan
-	FormatReplayValidation     = replay.FormatReplayValidation
-	FormatReplayAnalysis       = replay.FormatReplayAnalysis
+	NewReplayEngine        = replay.NewReplayEngine
+	FormatReplayPlan       = replay.FormatReplayPlan
+	FormatReplayValidation = replay.FormatReplayValidation
+	FormatReplayAnalysis   = replay.FormatReplayAnalysis
 
 	// Shader source attribution functions (gputrace-105)
-	ExtractShaderSourceAttribution     = shader.ExtractShaderSourceAttribution
-	FormatShaderSourceAttribution      = shader.FormatShaderSourceAttribution
-	FormatShaderSourceAttributionHTML  = shader.FormatShaderSourceAttributionHTML
+	ExtractShaderSourceAttribution    = shader.ExtractShaderSourceAttribution
+	FormatShaderSourceAttribution     = shader.FormatShaderSourceAttribution
+	FormatShaderSourceAttributionHTML = shader.FormatShaderSourceAttributionHTML
 
 	// Timing metrics functions (gputrace-106)
-	FormatTimingMetrics      = timing.FormatTimingMetrics
-	ExportTimingMetricsJSON  = timing.ExportTimingMetricsJSON
-	ExportTimingMetricsCSV   = timing.ExportTimingMetricsCSV
-	CompareTraces            = timing.CompareTraces
-	FormatTimingComparison   = timing.FormatTimingComparison
+	FormatTimingMetrics     = timing.FormatTimingMetrics
+	ExportTimingMetricsJSON = timing.ExportTimingMetricsJSON
+	ExportTimingMetricsCSV  = timing.ExportTimingMetricsCSV
+	CompareTraces           = timing.CompareTraces
+	FormatTimingComparison  = timing.FormatTimingComparison
 
 	// Timing profiler functions (gputrace-107)
 	NewTimingExtractorProfilerRaw = timing.NewTimingExtractorProfilerRaw
@@ -209,12 +209,12 @@ var (
 	ExportShaderMetricsJSON   = shader.ExportShaderMetricsJSON
 
 	// Correlation functions (gputrace-96)
-	CorrelateShaderMetrics   = shader.CorrelateShaderMetrics
-	FormatCorrelationReport  = shader.FormatCorrelationReport
+	CorrelateShaderMetrics  = shader.CorrelateShaderMetrics
+	FormatCorrelationReport = shader.FormatCorrelationReport
 
 	// Insights functions (gputrace-97)
-	GenerateInsights      = analysis.GenerateInsights
-	FormatInsightsReport  = analysis.FormatInsightsReport
+	GenerateInsights     = analysis.GenerateInsights
+	FormatInsightsReport = analysis.FormatInsightsReport
 )
 
 // Open opens and parses a .gputrace bundle.

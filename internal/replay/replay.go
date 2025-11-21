@@ -19,14 +19,14 @@ type (
 
 // Re-export common record type constants from mtsp.go
 const (
-	RecordTypeCt     = "Ct"
-	RecordTypeCi     = "Ci"
-	RecordTypeCS     = "CS"
-	RecordTypeCulul  = "Culul"
-	RecordTypeCU     = "CU"
-	RecordTypeCul    = "Cul"
-	RecordTypeCut    = "Cut"
-	RecordTypeCuw    = "Cuw"
+	RecordTypeCt    = "Ct"
+	RecordTypeCi    = "Ci"
+	RecordTypeCS    = "CS"
+	RecordTypeCulul = "Culul"
+	RecordTypeCU    = "CU"
+	RecordTypeCul   = "Cul"
+	RecordTypeCut   = "Cut"
+	RecordTypeCuw   = "Cuw"
 )
 
 // Function aliases from counter package

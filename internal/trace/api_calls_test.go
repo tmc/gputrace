@@ -103,9 +103,9 @@ func TestParseInitCalls_Heap(t *testing.T) {
 	offset := 0x18C
 	binary.LittleEndian.PutUint32(data[offset-4:], 0x09) // size
 	copy(data[offset:], []byte("CU\x00\x00"))
-	binary.LittleEndian.PutUint64(data[offset+4:], 0x0afd058000) // device address
-	copy(data[offset+0x0C:], []byte("88B6ED551A91183D")) // UUID
-	binary.LittleEndian.PutUint32(data[offset+0x20:], 0x74) // size marker
+	binary.LittleEndian.PutUint64(data[offset+4:], 0x0afd058000)   // device address
+	copy(data[offset+0x0C:], []byte("88B6ED551A91183D"))           // UUID
+	binary.LittleEndian.PutUint32(data[offset+0x20:], 0x74)        // size marker
 	binary.LittleEndian.PutUint64(data[offset+0x24:], 0x106da56b0) // heap address
 
 	calls, _, err := parseInitCalls(data, 0, nil, make(map[uint64]string))
@@ -143,7 +143,7 @@ func TestParseInitCalls_BufferFromHeap(t *testing.T) {
 	binary.LittleEndian.PutUint32(data[offset-4:], 0x09) // size
 	copy(data[offset:], []byte("Culul\x00\x00\x00"))
 	binary.LittleEndian.PutUint64(data[offset+0x08:], 0x106da56b0) // heap address
-	binary.LittleEndian.PutUint64(data[offset+0x10:], 16) // buffer length
+	binary.LittleEndian.PutUint64(data[offset+0x10:], 16)          // buffer length
 	binary.LittleEndian.PutUint64(data[offset+0x24:], 0x106da6190) // buffer address
 
 	calls, _, err := parseInitCalls(data, 0, nil, make(map[uint64]string))
@@ -222,7 +222,7 @@ func TestParseInitCalls_CommandQueue(t *testing.T) {
 	offset := 0x830
 	copy(data[offset:], []byte("CS\x00\x00"))
 	binary.LittleEndian.PutUint64(data[offset+4:], 0x106da64d0) // queue address
-	copy(data[offset+0x0C:], []byte("Stream 0\x00")) // label
+	copy(data[offset+0x0C:], []byte("Stream 0\x00"))            // label
 
 	calls, _, err := parseInitCalls(data, 0, nil, make(map[uint64]string))
 	if err != nil {
@@ -268,7 +268,7 @@ func TestParseInitCalls_Function(t *testing.T) {
 	offset := 0x500
 	copy(data[offset:], []byte("CS\x00\x00"))
 	binary.LittleEndian.PutUint64(data[offset+4:], 0xafcc88580) // function address
-	copy(data[offset+0x08:], []byte("vv_Addfloat32\x00"))        // function name
+	copy(data[offset+0x08:], []byte("vv_Addfloat32\x00"))       // function name
 
 	calls, _, err := parseInitCalls(data, 0, nil, make(map[uint64]string))
 	if err != nil {
@@ -491,12 +491,12 @@ func TestParseBufferBindings(t *testing.T) {
 	offset := 0x100
 	copy(data[offset:], []byte("Ctulul\x00\x00"))
 	binary.LittleEndian.PutUint64(data[offset+0x10:], 0x106da6190) // buffer address
-	binary.LittleEndian.PutUint32(data[offset+0x20:], 0) // index 0
+	binary.LittleEndian.PutUint32(data[offset+0x20:], 0)           // index 0
 
 	offset = 0x200
 	copy(data[offset:], []byte("Ctulul\x00\x00"))
 	binary.LittleEndian.PutUint64(data[offset+0x10:], 0xafcdd0000) // buffer address
-	binary.LittleEndian.PutUint32(data[offset+0x20:], 1) // index 1
+	binary.LittleEndian.PutUint32(data[offset+0x20:], 1)           // index 1
 
 	bindings, err := parseBufferBindings(data)
 	if err != nil {

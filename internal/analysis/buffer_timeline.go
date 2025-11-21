@@ -28,13 +28,13 @@ type BufferTimelineAnalysis struct {
 // BufferLifecycle tracks the lifecycle of a single buffer.
 type BufferLifecycle struct {
 	Address       uint64
-	FirstSeen     int      // Record index of first access
-	LastSeen      int      // Record index of last access
-	AccessCount   int      // Number of times accessed
-	EncoderIDs    []int    // Which encoders accessed this buffer
-	AccessIndices []int    // Record indices where buffer was accessed
-	IsActive      bool     // Currently active in timeline
-	Size          uint64   // Buffer size if available
+	FirstSeen     int    // Record index of first access
+	LastSeen      int    // Record index of last access
+	AccessCount   int    // Number of times accessed
+	EncoderIDs    []int  // Which encoders accessed this buffer
+	AccessIndices []int  // Record indices where buffer was accessed
+	IsActive      bool   // Currently active in timeline
+	Size          uint64 // Buffer size if available
 }
 
 // BufferTimelineEvent represents a point in time event for a buffer.

@@ -38,14 +38,14 @@ type BufferDiff struct {
 	ChangedBuffers map[uint64]*BufferChange   // Buffers with different sizes/usage
 
 	// Summary statistics
-	TotalAdded         int
-	TotalRemoved       int
-	TotalChanged       int
-	TotalCommon        int
-	MemoryDeltaBytes   int64   // Positive = more memory in trace2
-	MemoryDeltaMB      float64
-	Trace1MemoryBytes  uint64
-	Trace2MemoryBytes  uint64
+	TotalAdded        int
+	TotalRemoved      int
+	TotalChanged      int
+	TotalCommon       int
+	MemoryDeltaBytes  int64 // Positive = more memory in trace2
+	MemoryDeltaMB     float64
+	Trace1MemoryBytes uint64
+	Trace2MemoryBytes uint64
 }
 
 // BufferChange represents a change in buffer metadata between traces.
