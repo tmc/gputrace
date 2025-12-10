@@ -29,6 +29,7 @@ Output formats:
   - chrome: Chrome tracing format (chrome://tracing)
   - html: Interactive standalone HTML timeline viewer
   - json: Raw timeline data in JSON format
+  - text: Hierarchical text output to stdout
 
 Examples:
   # Generate interactive HTML timeline viewer
@@ -52,7 +53,7 @@ func init() {
 	rootCmd.AddCommand(timelineCmd)
 
 	timelineCmd.Flags().StringVarP(&timelineOutput, "output", "o", "timeline.json", "Output file path")
-	timelineCmd.Flags().StringVar(&timelineFormat, "format", "chrome", "Output format: chrome, json")
+	timelineCmd.Flags().StringVar(&timelineFormat, "format", "chrome", "Output format: chrome, html, json, text")
 }
 
 func runTimeline(cmd *cobra.Command, args []string) error {
@@ -89,8 +90,13 @@ func runTimeline(cmd *cobra.Command, args []string) error {
 		if err := exportTimelineJSON(timeline, timelineOutput); err != nil {
 			return fmt.Errorf("failed to export JSON: %w", err)
 		}
+	case "text":
+		if err := exportTextTimeline(timeline); err != nil {
+			return fmt.Errorf("failed to export text: %w", err)
+		}
+		return nil
 	default:
-		return fmt.Errorf("unknown format: %s (supported: chrome, html, json)", timelineFormat)
+		return fmt.Errorf("unknown format: %s (supported: chrome, html, json, text)", timelineFormat)
 	}
 
 	fmt.Printf("✓ Timeline written to: %s\n", timelineOutput)
@@ -105,6 +111,113 @@ func runTimeline(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// exportTextTimeline prints the timeline to stdout in a hierarchical format.
+func exportTextTimeline(timeline *Timeline) error {
+	if len(timeline.Encoders) == 0 && len(timeline.Events) == 0 {
+		fmt.Println("No timeline data available.")
+		return nil
+	}
+
+	// Find command buffer events
+	var cbs []TimelineEvent
+	for _, event := range timeline.Events {
+		if event.Category == "command_buffer" {
+			cbs = append(cbs, event)
+		}
+	}
+
+	// If no CB events, create a dummy one
+	if len(cbs) == 0 {
+		cbs = append(cbs, TimelineEvent{
+			Name:      "CB#0",
+			Timestamp: timeline.StartTime,
+			Duration:  timeline.Duration,
+		})
+	}
+
+	firstTimestamp := timeline.StartTime
+	if len(cbs) > 0 && cbs[0].Timestamp < firstTimestamp {
+		firstTimestamp = cbs[0].Timestamp
+	}
+
+	for _, cb := range cbs {
+		var cbStart float64
+		if cb.Timestamp >= firstTimestamp {
+			cbStart = float64(cb.Timestamp-firstTimestamp) / 1000000.0
+		} else {
+			cbStart = 0.0
+		}
+		fmt.Printf("%s [%.1fms]\n", cb.Name, cbStart)
+
+		cbIndex, ok := cb.Args["index"].(int)
+		if !ok {
+			continue
+		}
+
+		var cbEncoders []EncoderInfo
+		for _, encoder := range timeline.Encoders {
+			belongsToCB := false
+			for _, k := range timeline.Kernels {
+				if k.Encoder == encoder.Index {
+					if kArgCB, ok := getKernelCBIndex(timeline, k); ok && kArgCB == cbIndex {
+						belongsToCB = true
+						break
+					}
+				}
+			}
+			if belongsToCB {
+				cbEncoders = append(cbEncoders, encoder)
+			}
+		}
+
+		for i, encoder := range cbEncoders {
+			startMs := float64(encoder.StartTime-firstTimestamp) / 1e6
+			durationMs := float64(encoder.Duration) / 1e6
+
+			label := encoder.Label
+			if label == "" {
+				label = "Unknown Encoder"
+			}
+
+			var encoderKernels []KernelInfo
+			for _, k := range timeline.Kernels {
+				if k.Encoder == encoder.Index {
+					encoderKernels = append(encoderKernels, k)
+				}
+			}
+
+			prefix := "├─"
+			if i == len(cbEncoders)-1 {
+				prefix = "└─"
+			}
+
+			if len(encoderKernels) > 0 {
+				for _, k := range encoderKernels {
+					kStartMs := float64(k.StartTime-firstTimestamp) / 1e6
+					kDurationMs := float64(k.Duration) / 1e6
+					fmt.Printf("  %s %.2fms: %s (%.2fms) - %s\n",
+						prefix, kStartMs, k.Name, kDurationMs, label)
+				}
+			} else {
+				fmt.Printf("  %s %.2fms: %s (%.2fms) - %s\n", prefix, startMs, label, durationMs, "Encoder")
+			}
+		}
+	}
+
+	return nil
+}
+
+func getKernelCBIndex(timeline *Timeline, k KernelInfo) (int, bool) {
+	for _, e := range timeline.Events {
+		if e.Category == "kernel" && e.Name == k.Name && e.Timestamp == k.StartTime/1000 {
+			if cbIdx, ok := e.Args["cb_index"].(int); ok {
+				return cbIdx, true
+			}
+		}
+	}
+	return -1, false
 }
 
 // Timeline represents the complete timeline data.
