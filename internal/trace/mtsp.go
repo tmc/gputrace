@@ -174,7 +174,9 @@ func detectRecordType(data []byte) string {
 
 	// Check for known markers
 	// Markers typically appear around offset 32 based on hex analysis
-	for i := 8; i < min(len(data), 64); i++ {
+	// Extended scan range to 128 to catch CS records with larger padding
+	// Started scan at 4 to catch CS records that appear immediately after size
+	for i := 4; i < min(len(data), 128); i++ {
 		if i+5 <= len(data) && bytes.Equal(data[i:i+5], []byte("Culul")) {
 			return RecordTypeCulul
 		}
@@ -225,6 +227,14 @@ func (r *MTSPRecord) parseCSRecord() {
 	for i := 0; i < len(r.Data)-4; i++ {
 		if i+2 < len(r.Data) && r.Data[i] == 'C' && r.Data[i+1] == 'S' && r.Data[i+2] == 0 {
 			// Found CS marker, look for string after address
+
+			// Extract address (8 bytes after CS marker + 2 bytes padding/zero)
+			// CS marker is 2 bytes + 2 zero bytes = 4 bytes total
+			addressStart := i + 4
+			if addressStart+8 <= len(r.Data) {
+				r.Address = binary.LittleEndian.Uint64(r.Data[addressStart : addressStart+8])
+			}
+
 			stringStart := i + 12 // Skip CS marker + padding + address
 			if stringStart < len(r.Data) {
 				if end := bytes.IndexByte(r.Data[stringStart:], 0); end != -1 {

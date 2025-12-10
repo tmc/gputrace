@@ -134,36 +134,50 @@ func (t *Trace) CountCommandBuffers() (int, error) {
 }
 
 // ParseComputeEncoders extracts all compute command encoders from the trace.
-// Returns only actual kernel function names (those with underscores like "simple_add"),
-// filtering out encoder labels and command buffer labels.
+// Scans the capture file for CS (Command Submission) records which define encoders.
 func (t *Trace) ParseComputeEncoders() ([]*ComputeEncoder, error) {
-	if len(t.KernelNames) == 0 {
-		return nil, nil
+	data := t.CaptureData
+	if len(data) == 0 {
+		return nil, fmt.Errorf("capture data not loaded")
 	}
 
-	// Strategy: Only include names that look like actual function names (have underscores).
-	// This filters out encoder labels like "SimpleAdd" and command buffer labels like "SingleEncoder".
-	// Actual Metal kernel functions typically use lowercase_with_underscores naming.
 	var encoders []*ComputeEncoder
-	seen := make(map[string]bool) // deduplicate exact matches
+	csMarker := []byte("CS\x00\x00")
+	offset := 0
 
-	for _, name := range t.KernelNames {
-		// Only include if it looks like an actual function name
-		if !isActualFunctionName(name) {
-			continue
+	// Scan for CS records
+	for {
+		pos := bytes.Index(data[offset:], csMarker)
+		if pos == -1 {
+			break
 		}
+		absolutePos := offset + pos
 
-		// Avoid exact duplicates
-		if seen[name] {
-			continue
-		}
+		if absolutePos+12 <= len(data) {
+			// Read CS address (encoder address)
+			addr := binary.LittleEndian.Uint64(data[absolutePos+4 : absolutePos+12])
 
-		encoder := &ComputeEncoder{
-			Index: len(encoders),
-			Label: name,
+			// Read label
+			labelStart := absolutePos + 12
+			labelEnd := labelStart
+			for labelEnd < len(data) && data[labelEnd] != 0 {
+				labelEnd++
+			}
+			label := string(data[labelStart:labelEnd])
+
+			// Accept all CS records as potential encoders
+			// This includes "Multiply" type labels which act as both encoder and kernel name proxy
+			if len(label) > 0 {
+				encoder := &ComputeEncoder{
+					Index:   len(encoders),
+					Address: addr,
+					Label:   label,
+					Offset:  int64(absolutePos),
+				}
+				encoders = append(encoders, encoder)
+			}
 		}
-		encoders = append(encoders, encoder)
-		seen[name] = true
+		offset = absolutePos + 4
 	}
 
 	return encoders, nil

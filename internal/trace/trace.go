@@ -38,6 +38,7 @@ type Trace struct {
 	DebugGroupOffsets  []DebugGroupLabel // Debug groups with their offsets for encoder association
 	EncoderDebugGroups map[string]string // Maps encoder label to its debug group (sequence-based)
 	CommandQueueLabel  string
+	DeviceLabels       map[uint64]string // Maps device resource address to label (e.g. "fences")
 }
 
 // Metadata contains information from the metadata plist file.
@@ -99,6 +100,7 @@ func Open(path string) (*Trace, error) {
 		DebugGroupLabels:   make([]string, 0),
 		DebugGroupOffsets:  make([]DebugGroupLabel, 0),
 		EncoderDebugGroups: make(map[string]string),
+		DeviceLabels:       make(map[uint64]string),
 	}
 
 	// Parse metadata
@@ -263,6 +265,7 @@ func (t *Trace) extractLabels() error {
 	for _, data := range t.DeviceResources {
 		t.extractKernelNamesFromMTSP(data, &t.KernelNames)
 		t.extractCommandQueueLabel(data, &t.CommandQueueLabel)
+		t.extractDeviceLabels(data)
 	}
 
 	return nil
@@ -331,6 +334,54 @@ func (t *Trace) extractKernelNamesFromMTSP(data []byte, kernelNames *[]string) {
 					if !contains(*kernelNames, name) {
 						*kernelNames = append(*kernelNames, name)
 					}
+				}
+			}
+		}
+	}
+}
+
+// extractDeviceLabels scans for any CS records in device resources and stores them.
+func (t *Trace) extractDeviceLabels(data []byte) {
+	// Simple CS parser for device resources
+	// CS markers in device resources seem to be "CS" followed by "uw" (based on analysis)
+	// But our improved detectRecordType logic handles "CS" generically.
+	// We'll scan for standard CS markers "CS\x00\x00" first as used in dumps.
+	// But `dump_dev_cs.go` failed with `CS\x00\x00`.
+	// The dump `find_fence_addr.go` showed `CS` at 0xca870 followed by `uw`.
+	// So we need to scan for "CS" and accept non-null padding?
+
+	// Implementation: Scan for "CS" and extract address + label
+	// Address at +4, Label at +12
+
+	for i := 0; i < len(data)-20; i++ {
+		if data[i] == 'C' && data[i+1] == 'S' {
+			// Found 'CS'.
+
+			// Determine offset to address based on padding/subtype
+			// In device-resources, we see "CSuwuw..." where address is at +8
+			// In capture, we see "CS\0\0" where address is at +4
+			addrOffset := 4
+			if data[i+2] != 0 {
+				addrOffset = 8
+			}
+
+			// Address
+			addr := binary.LittleEndian.Uint64(data[i+addrOffset : i+addrOffset+8])
+
+			// Label starts after address
+			// For +4 addr: address ends at +12. Label at +12.
+			// For +8 addr: address ends at +16. Label at +16.
+			labelStart := i + addrOffset + 8
+
+			labelEnd := labelStart
+			for labelEnd < len(data) && data[labelEnd] != 0 && labelEnd-labelStart < 128 {
+				labelEnd++
+			}
+
+			if labelEnd > labelStart {
+				label := string(data[labelStart:labelEnd])
+				if isPrintable(label) && len(label) > 2 {
+					t.DeviceLabels[addr] = label
 				}
 			}
 		}
@@ -702,16 +753,24 @@ func (t *Trace) BuildPipelineFunctionMap() PipelineFunctionMap {
 	labelMap := make(map[uint64]string)
 
 	// Parse CS records from capture data
-	_, captureLabels := parseCSRecordsFromInit(t.CaptureData)
-	for addr, label := range captureLabels {
-		labelMap[addr] = label
+	// Using ParseMTSPRecords to get all records, including CS with valid addresses
+	records, _ := t.ParseMTSPRecords()
+	for _, rec := range records {
+		if rec.Type == RecordTypeCS && rec.Label != "" && rec.Address != 0 {
+			labelMap[rec.Address] = rec.Label
+		}
 	}
 
-	// Parse CS records from all device-resources files
+	// Also parse CS records from device resources
 	for _, data := range t.DeviceResources {
-		_, deviceLabels := parseCSRecordsFromInit(data)
-		for addr, label := range deviceLabels {
-			labelMap[addr] = label
+		// Create a temporary trace with just this data to use ParseMTSPRecords
+		tempTrace := &Trace{CaptureData: data}
+		if resRecords, err := tempTrace.ParseMTSPRecords(); err == nil {
+			for _, rec := range resRecords {
+				if rec.Type == RecordTypeCS && rec.Label != "" && rec.Address != 0 {
+					labelMap[rec.Address] = rec.Label
+				}
+			}
 		}
 	}
 

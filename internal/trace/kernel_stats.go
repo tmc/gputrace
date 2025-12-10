@@ -101,11 +101,10 @@ func (t *Trace) AnalyzeKernels() (map[string]*KernelStat, error) {
 			offset += pos + 4
 		}
 
-		// The first CS record is the command buffer label, subsequent ones are encoders
-		var actualEncoders []EncoderSection
-		if len(encoders) > 1 {
-			actualEncoders = encoders[1:]
-		}
+		// Treat all CS records as potential encoders.
+		// Previously we skipped the first one assuming it was the Command Buffer label,
+		// but this breaks single-encoder command buffers.
+		actualEncoders := encoders
 
 		// Sort encoders by offset
 		sort.Slice(actualEncoders, func(i, j int) bool {
@@ -229,16 +228,13 @@ func (t *Trace) AnalyzeKernels() (map[string]*KernelStat, error) {
 					// For ICB, we trust the encoder label if it looks plausible
 					if kernelName == "unknown" && currentEncoder.Label != "" {
 						// Relaxed check: Accept if it has underscores OR if it matches known MLX patterns
+						// Also accept Capitalized names (like "Multiply") if pipeline is missing,
+						// assuming the debug group label represents the operation.
 						if isActualFunctionName(currentEncoder.Label) {
 							kernelName = currentEncoder.Label
-						} else {
-							// Try simpler check for ICB support
-							// Many MLX kernels are just function names like "rms_norm_looped"
-							// which might fail strict checks if they don't look "function-y" enough?
-							// Actually isActualFunctionName requires underscores and lowercase start.
-							// "rms_norm_looped" passes.
-							// But maybe some don't?
-							// Let's just trust the label if we have nothing else.
+						} else if len(currentEncoder.Label) > 0 {
+							// For missing pipelines, we accept any label as better than "unknown"
+							// This catches cases like "Multiply" where no Ct record exists.
 							kernelName = currentEncoder.Label
 						}
 					}
