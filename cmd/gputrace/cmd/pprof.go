@@ -18,8 +18,8 @@ var (
 	showStats  bool
 )
 
-var gputrace2pprofCmd = &cobra.Command{
-	Use:   "gputrace2pprof <trace.gputrace>",
+var pprofCmd = &cobra.Command{
+	Use:   "pprof <trace.gputrace>",
 	Short: "Convert .gputrace files to pprof format",
 	Long: `Convert .gputrace files to pprof format with shader-level timing breakdowns.
 
@@ -35,7 +35,7 @@ Example workflow:
   MTL_CAPTURE_ENABLED=1 go test -bench=BenchmarkForwardPass$ -benchtime=1x
 
   # 2. Convert to pprof
-  gputrace gputrace2pprof /tmp/forward_pass_*.gputrace -all -prefix gpu_analysis
+  gputrace pprof /tmp/forward_pass_*.gputrace -all -prefix gpu_analysis
 
   # 3. Analyze with pprof
   go tool pprof -top gpu_analysis.gpu.pprof
@@ -50,21 +50,21 @@ The pprof profile shows GPU time organized hierarchically:
 
 This makes it easy to identify which shaders are consuming the most GPU time.`,
 	Args: cobra.ExactArgs(1),
-	RunE: runGPUTrace2PPRof,
+	RunE: runPprof,
 }
 
 func init() {
-	rootCmd.AddCommand(gputrace2pprofCmd)
+	rootCmd.AddCommand(pprofCmd)
 
-	gputrace2pprofCmd.Flags().StringVarP(&output, "output", "o", "", "Output pprof file path (default: trace_name.pprof)")
-	gputrace2pprofCmd.Flags().StringVar(&prefix, "prefix", "", "Output prefix for -all mode (default: trace name)")
-	gputrace2pprofCmd.Flags().BoolVar(&all, "all", false, "Generate all profile formats (gpu, combined, text)")
-	gputrace2pprofCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Verbose output")
-	gputrace2pprofCmd.Flags().BoolVar(&textReport, "text", false, "Generate text report only")
-	gputrace2pprofCmd.Flags().BoolVar(&showStats, "stats", false, "Show trace statistics only")
+	pprofCmd.Flags().StringVarP(&output, "output", "o", "", "Output pprof file path (default: trace_name.pprof)")
+	pprofCmd.Flags().StringVar(&prefix, "prefix", "", "Output prefix for -all mode (default: trace name)")
+	pprofCmd.Flags().BoolVar(&all, "all", false, "Generate all profile formats (gpu, combined, text)")
+	pprofCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Verbose output")
+	pprofCmd.Flags().BoolVar(&textReport, "text", false, "Generate text report only")
+	pprofCmd.Flags().BoolVar(&showStats, "stats", false, "Show trace statistics only")
 }
 
-func runGPUTrace2PPRof(cmd *cobra.Command, args []string) error {
+func runPprof(cmd *cobra.Command, args []string) error {
 	tracePath := args[0]
 
 	// Verify trace file exists

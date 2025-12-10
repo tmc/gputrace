@@ -92,7 +92,7 @@ Alternatively, use one of the other timing extraction methods:
 
 	if timingProfilerVerbose {
 		// Show additional details
-		fmt.Println("\n=== Detailed Information ===\n")
+		fmt.Println("\n=== Detailed Information ===")
 		fmt.Printf("Data Source: %s.gpuprofiler_raw\n", tracePath)
 		fmt.Printf("Encoders with timing: %d\n", len(timings))
 

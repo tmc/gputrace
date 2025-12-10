@@ -88,7 +88,7 @@ func runCorrelate(cmd *cobra.Command, args []string) error {
 
 	// Print verbose details if requested
 	if correlateVerbose && len(report.Shaders) > 0 {
-		fmt.Println("\n=== Detailed Shader Metrics ===\n")
+		fmt.Println("\n=== Detailed Shader Metrics ===")
 		for i, shader := range report.Shaders {
 			if i >= 10 {
 				fmt.Printf("... and %d more shaders (use --json for full data)\n", len(report.Shaders)-10)

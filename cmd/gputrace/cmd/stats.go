@@ -70,7 +70,7 @@ func runStats(cmd *cobra.Command, args []string) error {
 
 	// If verbose, show additional analysis
 	if statsVerbose {
-		fmt.Println("\n=== Detailed Analysis ===\n")
+		fmt.Println("\n=== Detailed Analysis ===")
 
 		// Show metadata details
 		if trace.Metadata != nil {
