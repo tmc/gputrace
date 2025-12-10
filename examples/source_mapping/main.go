@@ -47,10 +47,10 @@ func main() {
 
 	// Extract timing
 	fmt.Println("Extracting timing data...")
-	timings, err := trace.ExtractTimingData()
+	timings, err := gputrace.ExtractTimingData(trace)
 	if err != nil || len(timings) == 0 {
 		// Try synthetic timing
-		timings = trace.GenerateSyntheticTiming()
+		timings = gputrace.GenerateSyntheticTiming(trace)
 		if len(timings) == 0 {
 			log.Fatal("No timing data available")
 		}
@@ -98,7 +98,7 @@ func main() {
 
 	// Generate pprof with source mapping
 	fmt.Println("Generating pprof with source mapping...")
-	prof, err := trace.ToPprofWithSource(timings, mapper)
+	prof, err := gputrace.ToPprofWithSource(trace, timings, mapper)
 	if err != nil {
 		log.Fatalf("Failed to generate pprof: %v", err)
 	}
