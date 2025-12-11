@@ -134,50 +134,61 @@ func (t *Trace) CountCommandBuffers() (int, error) {
 }
 
 // ParseComputeEncoders extracts all compute command encoders from the trace.
-// Scans the capture file for CS (Command Submission) records which define encoders.
+// Scans the capture file and device-resources for CS (Command Submission) records.
 func (t *Trace) ParseComputeEncoders() ([]*ComputeEncoder, error) {
-	data := t.CaptureData
-	if len(data) == 0 {
-		return nil, fmt.Errorf("capture data not loaded")
+	var encoders []*ComputeEncoder
+
+	// Helper to scan a data slice for CS records
+	scanCS := func(data []byte) {
+		csMarker := []byte("CS\x00\x00")
+		offset := 0
+
+		for {
+			pos := bytes.Index(data[offset:], csMarker)
+			if pos == -1 {
+				break
+			}
+			absolutePos := offset + pos
+
+			if absolutePos+12 <= len(data) {
+				// Read CS address (encoder address)
+				addr := binary.LittleEndian.Uint64(data[absolutePos+4 : absolutePos+12])
+
+				// Read label
+				labelStart := absolutePos + 12
+				labelEnd := labelStart
+				for labelEnd < len(data) && data[labelEnd] != 0 {
+					labelEnd++
+				}
+				label := string(data[labelStart:labelEnd])
+
+				// Accept all CS records as potential encoders
+				// This includes "Multiply" type labels which act as both encoder and kernel name proxy
+				if len(label) > 0 {
+					encoder := &ComputeEncoder{
+						Index:   len(encoders),
+						Address: addr,
+						Label:   label,
+						Offset:  int64(absolutePos),
+					}
+					encoders = append(encoders, encoder)
+				}
+			}
+			offset = absolutePos + 4
+		}
 	}
 
-	var encoders []*ComputeEncoder
-	csMarker := []byte("CS\x00\x00")
-	offset := 0
+	// Scan capture data
+	if len(t.CaptureData) > 0 {
+		scanCS(t.CaptureData)
+	}
 
-	// Scan for CS records
-	for {
-		pos := bytes.Index(data[offset:], csMarker)
-		if pos == -1 {
-			break
+	// If no encoders found in capture, also scan device-resources
+	// Some trace formats store CS records only in device-resources
+	if len(encoders) == 0 {
+		for _, data := range t.DeviceResources {
+			scanCS(data)
 		}
-		absolutePos := offset + pos
-
-		if absolutePos+12 <= len(data) {
-			// Read CS address (encoder address)
-			addr := binary.LittleEndian.Uint64(data[absolutePos+4 : absolutePos+12])
-
-			// Read label
-			labelStart := absolutePos + 12
-			labelEnd := labelStart
-			for labelEnd < len(data) && data[labelEnd] != 0 {
-				labelEnd++
-			}
-			label := string(data[labelStart:labelEnd])
-
-			// Accept all CS records as potential encoders
-			// This includes "Multiply" type labels which act as both encoder and kernel name proxy
-			if len(label) > 0 {
-				encoder := &ComputeEncoder{
-					Index:   len(encoders),
-					Address: addr,
-					Label:   label,
-					Offset:  int64(absolutePos),
-				}
-				encoders = append(encoders, encoder)
-			}
-		}
-		offset = absolutePos + 4
 	}
 
 	return encoders, nil

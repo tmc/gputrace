@@ -26,10 +26,10 @@ var timelineCmd = &cobra.Command{
   - GPU execution timeline
 
 Output formats:
+  - text: Hierarchical text output to stdout
   - chrome: Chrome tracing format (chrome://tracing)
   - html: Interactive standalone HTML timeline viewer
   - json: Raw timeline data in JSON format
-  - text: Hierarchical text output to stdout
 
 Examples:
   # Generate interactive HTML timeline viewer
@@ -53,7 +53,7 @@ func init() {
 	rootCmd.AddCommand(timelineCmd)
 
 	timelineCmd.Flags().StringVarP(&timelineOutput, "output", "o", "timeline.json", "Output file path")
-	timelineCmd.Flags().StringVar(&timelineFormat, "format", "chrome", "Output format: chrome, html, json, text")
+	timelineCmd.Flags().StringVar(&timelineFormat, "format", "text", "Output format: chrome, html, json, text")
 }
 
 func runTimeline(cmd *cobra.Command, args []string) error {
