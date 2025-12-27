@@ -28,7 +28,7 @@ func main() {
 
 	// Generate enhanced pprof
 	fmt.Println("Generating enhanced pprof profile...")
-	prof, err := gputrace.ToPprofWithMetrics(trace)
+	prof, err := gputrace.ToPprofWithMetrics(trace, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error generating pprof: %v\n", err)
 		os.Exit(1)

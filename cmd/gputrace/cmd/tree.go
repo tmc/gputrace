@@ -4,9 +4,10 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/tmc/gputrace/internal/shader"
+	"github.com/tmc/gputrace/internal/timing"
 	"github.com/tmc/gputrace/internal/trace"
 )
 
@@ -51,16 +52,18 @@ func init() {
 type DebugGroupNode struct {
 	Name            string
 	TimePercent     float64
+	TotalDuration   time.Duration
 	TotalDispatches int
 	Encoders        []*EncoderNode
 }
 
 // EncoderNode represents an encoder with its kernel
 type EncoderNode struct {
-	Label         string  // Debug group label OR kernel function name
-	KernelName    string  // Actual kernel function name
+	Label         string // Debug group label OR kernel function name
+	KernelName    string // Actual kernel function name
 	Address       uint64
 	TimePercent   float64
+	Duration      time.Duration
 	DispatchCount int
 }
 
@@ -72,12 +75,20 @@ func runTree(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to open trace: %w", err)
 	}
 
-	// Get shader metrics for timing percentages
-	shaderMetrics, _ := shader.ExtractShaderMetrics(t)
-	kernelTiming := make(map[string]float64)
-	if shaderMetrics != nil {
-		for _, shader := range shaderMetrics.Shaders {
-			kernelTiming[shader.Name] = shader.PercentOfTotal
+	// Extract comprehensive timing metrics
+	extractor := timing.NewTimingMetricsExtractor(t)
+	metrics, err := extractor.Extract()
+	if err != nil {
+		fmt.Printf("Warning: failed to extract timing metrics: %v\n", err)
+	}
+
+	// Map Label -> Duration (Approximate mapping for now as unique IDs are tricky)
+	labelDurations := make(map[string]time.Duration)
+	var totalTraceDuration time.Duration
+	if metrics != nil {
+		totalTraceDuration = metrics.TotalDuration
+		for _, et := range metrics.EncoderTimings {
+			labelDurations[et.Label] += time.Duration(et.DurationNs)
 		}
 	}
 
@@ -115,7 +126,19 @@ func runTree(cmd *cobra.Command, args []string) error {
 		}
 
 		// Get timing for this kernel
-		timePct := kernelTiming[kernelName]
+		var duration time.Duration
+		var timePct float64
+
+		// Try to lookup duration by label (either encoder label or kernel name)
+		if d, ok := labelDurations[enc.Label]; ok {
+			duration = d
+		} else if d, ok := labelDurations[kernelName]; ok {
+			duration = d
+		}
+
+		if totalTraceDuration > 0 {
+			timePct = float64(duration) / float64(totalTraceDuration) * 100.0
+		}
 
 		// Get dispatch count
 		dispatchCount := 1
@@ -173,12 +196,14 @@ func runTree(cmd *cobra.Command, args []string) error {
 				KernelName:    kernelName,
 				Address:       enc.Address,
 				TimePercent:   timePct,
+				Duration:      duration,
 				DispatchCount: dispatchCount,
 			})
 		}
 
 		debugGroups[groupName].TotalDispatches += dispatchCount
 		debugGroups[groupName].TimePercent += timePct
+		debugGroups[groupName].TotalDuration += duration
 	}
 
 	// Filter and convert to sorted slice
@@ -208,6 +233,7 @@ func runTree(cmd *cobra.Command, args []string) error {
 				for _, enc := range dg.Encoders {
 					dg.TotalDispatches += enc.DispatchCount
 					dg.TimePercent += enc.TimePercent
+					dg.TotalDuration += enc.Duration
 				}
 			}
 		}
@@ -250,7 +276,7 @@ func runTree(cmd *cobra.Command, args []string) error {
 
 		fmt.Printf("%s %s", connector, dg.Name)
 		if dg.TimePercent > 0 {
-			fmt.Printf(" (%.1f%%)", dg.TimePercent)
+			fmt.Printf(" (%.1f%%, %v)", dg.TimePercent, dg.TotalDuration)
 		}
 		fmt.Printf(" [%d kernels, %d dispatches]\n", len(dg.Encoders), dg.TotalDispatches)
 
@@ -276,7 +302,7 @@ func runTree(cmd *cobra.Command, args []string) error {
 
 			fmt.Printf("%s%s %s", childPrefix, encConnector, enc.KernelName)
 			if enc.TimePercent > 0 {
-				fmt.Printf(" (%.1f%%)", enc.TimePercent)
+				fmt.Printf(" (%.1f%%, %v)", enc.TimePercent, enc.Duration)
 			}
 			if enc.DispatchCount > 1 {
 				fmt.Printf(" [%d dispatches]", enc.DispatchCount)
@@ -289,6 +315,9 @@ func runTree(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Total: %d groups, %d unique kernels, %d dispatches", len(dgList), totalEncoders, totalDispatches)
 	if totalTime > 0 {
 		fmt.Printf(" (%.1f%% GPU time)", totalTime)
+	}
+	if metrics != nil {
+		fmt.Printf("\nTotal GPU Duration: %v", metrics.TotalDuration)
 	}
 	fmt.Println()
 

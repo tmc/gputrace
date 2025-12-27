@@ -12,9 +12,10 @@ import (
 
 // GPUTraceProfiler provides comprehensive profiling from .gputrace files.
 type GPUTraceProfiler struct {
-	trace    *gputrace.Trace
-	timings  []*gputrace.EncoderTiming
-	basename string
+	trace        *gputrace.Trace
+	timings      []*gputrace.EncoderTiming
+	basename     string
+	sourceMapper *gputrace.ShaderSourceMapper
 }
 
 // FromGPUTrace creates a comprehensive profiler from a .gputrace file.
@@ -64,6 +65,13 @@ func FromGPUTrace(tracePath string, shaderSearchPaths ...string) (*GPUTraceProfi
 		}
 	}
 
+	// Initialize source mapper
+	mapper := gputrace.NewShaderSourceMapper(shaderSearchPaths...)
+	if err := mapper.IndexShaderSources(); err != nil {
+		// Log error but continue - source mapping is optional
+		fmt.Printf("Warning: failed to index shader sources: %v\n", err)
+	}
+
 	// Get basename for output files
 	basename := filepath.Base(tracePath)
 	if ext := filepath.Ext(basename); ext != "" {
@@ -71,9 +79,10 @@ func FromGPUTrace(tracePath string, shaderSearchPaths ...string) (*GPUTraceProfi
 	}
 
 	return &GPUTraceProfiler{
-		trace:    trace,
-		timings:  timings,
-		basename: basename,
+		trace:        trace,
+		timings:      timings,
+		basename:     basename,
+		sourceMapper: mapper,
 	}, nil
 }
 
@@ -81,7 +90,7 @@ func FromGPUTrace(tracePath string, shaderSearchPaths ...string) (*GPUTraceProfi
 // This shows GPU kernel execution time organized hierarchically:
 // GPU Trace > Command Queue > Encoder > Kernel
 func (p *GPUTraceProfiler) WriteGPUProfile(path string) error {
-	prof, err := gputrace.ToPprof(p.trace, p.timings)
+	prof, err := gputrace.ToPprofWithMetrics(p.trace, p.sourceMapper)
 	if err != nil {
 		return fmt.Errorf("generate pprof: %w", err)
 	}

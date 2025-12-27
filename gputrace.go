@@ -162,9 +162,9 @@ var (
 	FormatShadersXcodeStyle       = shader.FormatShadersXcodeStyle
 	ParseDetailedCommandBuffer    = command.ParseDetailedCommandBuffer
 	DumpCommandBuffer             = command.DumpCommandBuffer
-	ToPprof           = export.ToPprof
-	ToPprofWithSource  = export.ToPprofWithSource
-	ToPprofWithMetrics = export.ToPprofWithMetrics
+	ToPprof                       = export.ToPprof
+	ToPprofWithSource             = export.ToPprofWithSource
+	ToPprofWithMetrics            = export.ToPprofWithMetrics
 	ParseXcodeCountersCSV         = counter.ParseXcodeCountersCSV
 	ExtractStatistics             = analysis.ExtractStatistics
 	NewTimingMetricsExtractor     = timing.NewTimingMetricsExtractor

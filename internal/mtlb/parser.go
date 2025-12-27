@@ -5,19 +5,18 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 )
 
 // MTLBHeader represents the header of an MTLB file.
 type MTLBHeader struct {
-	Magic           [4]byte // "MTLB"
-	Version         uint32
-	Flags           uint32
-	Reserved        uint32
-	TotalSize       uint64
-	FunctionTable   uint64 // Offset to function table
-	StringTable     uint64 // Offset to string table
-	BytecodeOffset  uint64 // Offset to bytecode
+	Magic          [4]byte // "MTLB"
+	Version        uint32
+	Flags          uint32
+	Reserved       uint32
+	TotalSize      uint64
+	FunctionTable  uint64 // Offset to function table
+	StringTable    uint64 // Offset to string table
+	BytecodeOffset uint64 // Offset to bytecode
 }
 
 // MTLBFile represents a parsed Metal Library Binary file.
@@ -63,64 +62,47 @@ func ParseMTLB(data []byte) (*MTLBFile, error) {
 // ListFunctions returns a list of function names found in the MTLB file.
 // This is a best-effort implementation based on the user's description
 // that function names appear as null-terminated strings.
+// ListFunctions returns a list of function names found in the MTLB file.
+// It scans the file for "NAMED" tags which precede function names.
 func (m *MTLBFile) ListFunctions() ([]string, error) {
-	// If string table offset is valid, try to read from there
-	// Otherwise scan for strings?
-
-	// The user mentioned:
-	// Function table offset
-	// String table offset
-
-	// Let's look at the string table offset
-	if m.Header.StringTable >= uint64(len(m.Data)) {
-		return nil, fmt.Errorf("string table offset %d out of bounds (size %d)", m.Header.StringTable, len(m.Data))
-	}
-
-	// We'll treat the string table as a sequence of null-terminated strings
-	// until we hit the end of file or something that doesn't look like a string?
-	// Or maybe the Function Table points to strings in the String Table.
-
-	// For MVP, let's just scan for strings starting from the String Table offset
-	// until the Bytecode offset or EOF.
-
-	start := m.Header.StringTable
-	end := uint64(len(m.Data))
-	if m.Header.BytecodeOffset > start && m.Header.BytecodeOffset < end {
-		end = m.Header.BytecodeOffset
-	}
-
-	if start >= end {
-		return nil, nil // No string table or invalid range
-	}
-
 	var functions []string
-	buf := bytes.NewBuffer(m.Data[start:end])
 
-	// This is a naive implementation. The string table might have a structure.
-	// But let's try reading null-terminated strings.
+	// Start scanning from FunctionTable offset
+	start := m.Header.FunctionTable
+	if start >= uint64(len(m.Data)) {
+		return nil, nil
+	}
 
-	for {
-		s, err := buf.ReadString(0)
-		if err != nil {
-			if err == io.EOF {
-				if len(s) > 0 {
-					// Last string without null terminator? Unlikely but possible.
-					cleanS := cleanString(s)
-					if len(cleanS) > 0 {
-						functions = append(functions, cleanS)
-					}
-				}
-				break
-			}
-			return functions, err
+	data := m.Data[start:]
+
+	// Identify "NAMED" tags (0x4E 41 4D 45 44 00)
+	namedTag := []byte("NAMED\x00")
+
+	idx := 0
+	for idx < len(data) {
+		// Search for tag
+		pos := bytes.Index(data[idx:], namedTag)
+		if pos == -1 {
+			break
 		}
 
-		// Remove the null terminator
-		s = s[:len(s)-1]
-		cleanS := cleanString(s)
-		if len(cleanS) > 0 {
-			functions = append(functions, cleanS)
+		// Move to start of name
+		nameStart := idx + pos + len(namedTag)
+
+		// Find end of name (null terminator)
+		nameEnd := bytes.IndexByte(data[nameStart:], 0)
+		if nameEnd == -1 {
+			break
 		}
+
+		// Extract name
+		name := string(data[nameStart : nameStart+nameEnd])
+		if len(name) > 0 {
+			functions = append(functions, name)
+		}
+
+		// Advance index
+		idx = nameStart + nameEnd + 1
 	}
 
 	return functions, nil

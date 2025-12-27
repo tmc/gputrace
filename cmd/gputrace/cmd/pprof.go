@@ -10,12 +10,13 @@ import (
 )
 
 var (
-	output     string
-	prefix     string
-	all        bool
-	verbose    bool
-	textReport bool
-	showStats  bool
+	output      string
+	prefix      string
+	all         bool
+	verbose     bool
+	textReport  bool
+	showStats   bool
+	searchPaths []string
 )
 
 var pprofCmd = &cobra.Command{
@@ -62,6 +63,7 @@ func init() {
 	pprofCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Verbose output")
 	pprofCmd.Flags().BoolVar(&textReport, "text", false, "Generate text report only")
 	pprofCmd.Flags().BoolVar(&showStats, "stats", false, "Show trace statistics only")
+	pprofCmd.Flags().StringSliceVar(&searchPaths, "search-path", nil, "Search paths for shader source files")
 }
 
 func runPprof(cmd *cobra.Command, args []string) error {
@@ -94,7 +96,7 @@ func runPprof(cmd *cobra.Command, args []string) error {
 	}
 
 	// Create profiler
-	prof, err := mlxprof.FromGPUTrace(tracePath)
+	prof, err := mlxprof.FromGPUTrace(tracePath, searchPaths...)
 	if err != nil {
 		return fmt.Errorf("failed to load trace: %w\n\nPlease ensure this is a valid .gputrace directory bundle", err)
 	}
