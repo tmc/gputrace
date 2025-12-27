@@ -15,3 +15,6 @@ cmd/gputrace/gputrace$
 *.swp
 *.swo
 *~
+
+# Large trace files
+testdata/traces/*.tar.gz
