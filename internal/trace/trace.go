@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/tmc/gputrace/internal/mtlb"
 	"howett.net/plist"
 )
 
@@ -39,6 +40,7 @@ type Trace struct {
 	EncoderDebugGroups map[string]string // Maps encoder label to its debug group (sequence-based)
 	CommandQueueLabel  string
 	DeviceLabels       map[uint64]string // Maps device resource address to label (e.g. "fences")
+	MTLBLibraries      []*mtlb.MTLBFile  // Parsed Metal libraries found in the bundle
 }
 
 // Metadata contains information from the metadata plist file.
@@ -78,6 +80,7 @@ const (
 	MagicMTSP   = "MTSP"
 	MagicXDIC   = "xdic"
 	MagicBPList = "bplist00"
+	MagicMTLB   = "MTLB"
 )
 
 // Open opens and parses a .gputrace bundle.
@@ -101,6 +104,7 @@ func Open(path string) (*Trace, error) {
 		DebugGroupOffsets:  make([]DebugGroupLabel, 0),
 		EncoderDebugGroups: make(map[string]string),
 		DeviceLabels:       make(map[uint64]string),
+		MTLBLibraries:      make([]*mtlb.MTLBFile, 0),
 	}
 
 	// Parse metadata
@@ -116,6 +120,13 @@ func Open(path string) (*Trace, error) {
 	// Load device resources
 	if err := trace.loadDeviceResources(); err != nil {
 		return nil, fmt.Errorf("load device resources: %w", err)
+	}
+
+	// Scan for sidecar files (like MTLB)
+	if err := trace.scanSidecarFiles(); err != nil {
+		// Log error but verify trace continues? For now, hard fail or soft?
+		// Prefer soft fail for sidecars.
+		fmt.Fprintf(os.Stderr, "scan sidecars: %v\n", err)
 	}
 
 	// Extract labels and names
@@ -253,7 +264,58 @@ func (t *Trace) loadDeviceResources() error {
 	return nil
 }
 
-// extractLabels extracts kernel names, encoder labels, and buffer labels from MTSP data.
+// scanSidecarFiles scans for other interesting files in the bundle (e.g. MTLB libraries).
+func (t *Trace) scanSidecarFiles() error {
+	entries, err := os.ReadDir(t.Path)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		name := entry.Name()
+
+		// Skip known standard files
+		if name == "capture" || name == "unsorted-capture" || name == "metadata" || name == "index" ||
+			strings.HasPrefix(name, "device-resources-") || strings.HasPrefix(name, "startup-") ||
+			strings.HasPrefix(name, "store") || strings.HasPrefix(name, "MTLBuffer-") ||
+			strings.HasPrefix(name, "MTLHeap-") {
+			continue
+		}
+
+		// Check unknown files for magic bytes
+		filePath := filepath.Join(t.Path, name)
+		f, err := os.Open(filePath)
+		if err != nil {
+			continue // Skip unreadable
+		}
+
+		magic := make([]byte, 4)
+		if _, err := f.Read(magic); err != nil {
+			f.Close()
+			continue
+		}
+		f.Close()
+
+		if string(magic) == MagicMTLB {
+			// Found an MTLB file!
+			data, err := os.ReadFile(filePath)
+			if err != nil {
+				continue
+			}
+
+			if mtlbFile, err := mtlb.ParseMTLB(data); err == nil {
+				t.MTLBLibraries = append(t.MTLBLibraries, mtlbFile)
+			}
+		}
+	}
+	return nil
+}
+
+// extractLabels extracts kernel names, encoder labels, and buffer labels from MTSP and MTLB data.
 func (t *Trace) extractLabels() error {
 	// Extract from capture data - includes both labels AND kernel names
 	t.extractStringsFromMTSP(t.CaptureData, &t.EncoderLabels, &t.BufferLabels)
@@ -266,6 +328,17 @@ func (t *Trace) extractLabels() error {
 		t.extractKernelNamesFromMTSP(data, &t.KernelNames)
 		t.extractCommandQueueLabel(data, &t.CommandQueueLabel)
 		t.extractDeviceLabels(data)
+	}
+
+	// Extract from MTLB libraries
+	for _, lib := range t.MTLBLibraries {
+		if funcs, err := lib.ListFunctions(); err == nil {
+			for _, f := range funcs {
+				if !contains(t.KernelNames, f) {
+					t.KernelNames = append(t.KernelNames, f)
+				}
+			}
+		}
 	}
 
 	return nil
@@ -296,8 +369,9 @@ func (t *Trace) extractStringsFromMTSP(data []byte, encoderLabels, bufferLabels 
 				label := string(data[start:end])
 				// Filter out empty strings and non-ASCII junk
 				if len(label) > 0 && isPrintable(label) {
-					// Heuristic: labels with "Stage" or ending in specific patterns
-					if strings.Contains(label, "Stage") || strings.Contains(label, "Label") {
+					// Heuristic: any reasonable length alphanumeric string could be a label
+					// We filter out common noisy strings if needed
+					if looksLikeGeneralLabel(label) {
 						*encoderLabels = append(*encoderLabels, label)
 					} else if strings.Contains(label, "Buffer") || strings.Contains(label, "Output") || strings.Contains(label, "Input") {
 						*bufferLabels = append(*bufferLabels, label)
@@ -306,6 +380,29 @@ func (t *Trace) extractStringsFromMTSP(data []byte, encoderLabels, bufferLabels 
 			}
 		}
 	}
+}
+
+// looksLikeGeneralLabel checks if a string looks like a potential encoder/kernel label.
+func looksLikeGeneralLabel(s string) bool {
+	if len(s) < 3 || len(s) > 128 {
+		return false
+	}
+	// Avoid common non-label strings
+	ignored := []string{"MTSP", "CS", "MTL", "device-resources", "capture", "metadata"}
+	for _, ignore := range ignored {
+		if s == ignore {
+			return false
+		}
+	}
+	// Verify it has some letters
+	hasLetter := false
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+			hasLetter = true
+			break
+		}
+	}
+	return hasLetter
 }
 
 // extractKernelNamesFromMTSP extracts kernel function names from device resources.
@@ -471,7 +568,7 @@ func (t *Trace) extractDebugGroupLabels(data []byte, debugLabels *[]string) {
 					// Case 2: Regular encoder/buffer label - associate with current debug group
 					// Only process if we're inside a debug group and haven't seen this label
 					if !seenEncoderLabels[fullLabel] {
-						// Check if it's an encoder label (has underscores, lowercase start)
+						// Check if it's an encoder label
 						if isActualEncoderLabel(fullLabel) {
 							t.EncoderDebugGroups[fullLabel] = currentDebugGroup
 							seenEncoderLabels[fullLabel] = true
@@ -484,14 +581,9 @@ func (t *Trace) extractDebugGroupLabels(data []byte, debugLabels *[]string) {
 }
 
 // isActualEncoderLabel checks if a label is likely an encoder/kernel label.
-// Encoder labels have underscores and start with lowercase (e.g., "steel_gemm_splitk", "input_tensor_A")
+// Now relaxed to accept PascalCase (e.g., "Transpose") and standard identifiers.
 func isActualEncoderLabel(label string) bool {
 	if len(label) == 0 {
-		return false
-	}
-
-	// Must have underscores (encoder/kernel naming convention)
-	if !strings.Contains(label, "_") {
 		return false
 	}
 
@@ -500,11 +592,22 @@ func isActualEncoderLabel(label string) bool {
 		return false
 	}
 
-	// Should start with lowercase or be a buffer name
-	firstChar := label[0]
-	isLowercase := firstChar >= 'a' && firstChar <= 'z'
+	// Basic identifier check (Alphanumeric + underscore)
+	for _, r := range label {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-') {
+			return false
+		}
+	}
 
-	return isLowercase
+	// Heuristic: Must have at least one letter
+	hasLetter := false
+	for _, r := range label {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+			hasLetter = true
+			break
+		}
+	}
+	return hasLetter
 }
 
 // GetDebugGroupForLabel returns the debug group for a given encoder label.

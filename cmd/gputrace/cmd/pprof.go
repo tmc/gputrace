@@ -30,12 +30,15 @@ The resulting pprof files can be analyzed with standard Go profiling tools:
   go tool pprof output.pprof
   go tool pprof -http=:8080 output.pprof
 
+This tool automatically recovers kernel names from Metal Library (MTLB) sidecar files
+if explicit debug labels are missing from the command stream (common in MLX traces).
+
 Example workflow:
 
   # 1. Capture GPU trace from benchmark
   MTL_CAPTURE_ENABLED=1 go test -bench=BenchmarkForwardPass$ -benchtime=1x
 
-  # 2. Convert to pprof
+  # 2. Convert to pprof (automatically handles anonymous traces)
   gputrace pprof /tmp/forward_pass_*.gputrace -all -prefix gpu_analysis
 
   # 3. Analyze with pprof

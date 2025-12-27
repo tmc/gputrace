@@ -293,13 +293,42 @@ func stringContains(s string, c byte) bool {
 	return false
 }
 
-// CountComputeEncoders returns the number of compute encoders in the trace.
+// CountComputeEncoders returns the number of unique compute encoders (Cuw) in the trace.
 func (t *Trace) CountComputeEncoders() (int, error) {
-	encoders, err := t.ParseComputeEncoders()
+	records, err := t.ParseMTSPRecords()
 	if err != nil {
 		return 0, err
 	}
-	return len(encoders), nil
+
+	uniqueEncoders := make(map[uint64]struct{})
+	cuwRecordCount := 0
+
+	for _, rec := range records {
+		if rec.Type == RecordTypeCuw {
+			cuwRecordCount++
+			cuw, err := rec.ParseCuwRecord()
+			if err == nil {
+				uniqueEncoders[cuw.BufferAddr] = struct{}{}
+			}
+		}
+	}
+
+	// Fallback logic
+	if len(uniqueEncoders) <= 1 {
+		// If we only have 0 or 1 unique address (likely 0), check if we have many records.
+		// If so, fall back to parsing CS records which was the old behavior
+		if cuwRecordCount == 0 {
+			encoders, err := t.ParseComputeEncoders()
+			if err != nil {
+				return 0, err
+			}
+			return len(encoders), nil
+		}
+		// If we have Cuw records but only 1 address, return 1 (or 0)
+		return len(uniqueEncoders), nil
+	}
+
+	return len(uniqueEncoders), nil
 }
 
 // ParseDispatchCalls extracts all compute kernel dispatch calls from the trace.

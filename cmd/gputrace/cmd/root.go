@@ -13,6 +13,12 @@ var rootCmd = &cobra.Command{
 	Short: "Tools for analyzing and converting GPU trace files",
 	Long: `gputrace provides tools for analyzing and converting GPU trace files (.gputrace bundles).
 
+Key Features:
+- Parse and analyze Metal GPU capture data
+- Recovery of kernel names from Metal Library (MTLB) sidecar files
+- Generate pprof profiles for deep performance analysis
+- Inspect raw trace records and shader performance metrics
+
 Command Groups:
 
 Basic Information:

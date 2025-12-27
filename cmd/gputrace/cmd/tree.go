@@ -2,439 +2,242 @@ package cmd
 
 import (
 	"fmt"
-	"sort"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/tmc/gputrace/internal/timing"
 	"github.com/tmc/gputrace/internal/trace"
 )
 
 var treeCmd = &cobra.Command{
-	Use:   "tree <trace.gputrace>",
-	Short: "Show hierarchical view of debug groups, encoders, and kernels",
-	Long: `Display the trace in a hierarchical tree format similar to Xcode's GPU profiler:
-
-  DebugGroup (% time)
-  └─ Compute Encoder 0xa... kernel_function (% time)
-     └─ N dispatches
-
-Two view modes are available:
-  - Default: Groups by MLX operation (Squeeze, QuantizedMatmul, etc.) from encoder labels
-  - --by-kernel: Groups by actual kernel function names (copy, qmv, etc.)
-
-Examples:
-  gputrace tree trace.gputrace                    # Group by MLX operation
-  gputrace tree trace.gputrace --by-kernel        # Group by kernel function
-  gputrace tree trace.gputrace -f Squeeze         # Filter by debug group
-  gputrace tree trace.gputrace -k copy            # Filter by kernel function`,
-	Args: cobra.ExactArgs(1),
-	RunE: runTree,
+	Use:   "tree [trace-path]",
+	Short: "Display execution tree grouped by pipeline state",
+	Long:  `Display a hierarchical view of GPU execution, grouped by Compute Pipeline State, then by Kernel.`,
+	Args:  cobra.ExactArgs(1),
+	RunE:  runTree,
 }
-
-var (
-	treeShowDispatches bool
-	treeFilter         string
-	treeKernelFilter   string
-	treeByKernel       bool
-)
 
 func init() {
 	rootCmd.AddCommand(treeCmd)
-	treeCmd.Flags().BoolVar(&treeShowDispatches, "show-dispatches", false, "Show individual dispatch calls")
-	treeCmd.Flags().StringVarP(&treeFilter, "filter", "f", "", "Filter by debug group or encoder label")
-	treeCmd.Flags().StringVarP(&treeKernelFilter, "kernel", "k", "", "Filter by kernel function name")
-	treeCmd.Flags().BoolVar(&treeByKernel, "by-kernel", false, "Group by kernel function instead of MLX operation")
-}
-
-// DebugGroupNode represents a debug group (MLX operation)
-type DebugGroupNode struct {
-	Name            string
-	TimePercent     float64
-	TotalDuration   time.Duration
-	TotalDispatches int
-	Encoders        []*EncoderNode
-}
-
-// EncoderNode represents an encoder with its kernel
-type EncoderNode struct {
-	Label         string // Debug group label OR kernel function name
-	KernelName    string // Actual kernel function name
-	Address       uint64
-	TimePercent   float64
-	Duration      time.Duration
-	DispatchCount int
 }
 
 func runTree(cmd *cobra.Command, args []string) error {
 	tracePath := args[0]
-
 	t, err := trace.Open(tracePath)
 	if err != nil {
-		return fmt.Errorf("failed to open trace: %w", err)
+		return fmt.Errorf("open trace: %w", err)
 	}
+	defer t.Close()
 
-	// Extract comprehensive timing metrics
-	extractor := timing.NewTimingMetricsExtractor(t)
-	metrics, err := extractor.Extract()
+	// 1. Parse all MTSP records to rebuild linear execution history
+	rawRecords, err := t.ParseMTSPRecords()
 	if err != nil {
-		fmt.Printf("Warning: failed to extract timing metrics: %v\n", err)
+		return fmt.Errorf("parse records: %w", err)
 	}
 
-	// Map Label -> Duration (Approximate mapping for now as unique IDs are tricky)
-	labelDurations := make(map[string]time.Duration)
-	var totalTraceDuration time.Duration
-	if metrics != nil {
-		totalTraceDuration = metrics.TotalDuration
-		for _, et := range metrics.EncoderTimings {
-			labelDurations[et.Label] += time.Duration(et.DurationNs)
+	// Flatten nested records
+	var records []trace.MTSPRecord
+	var flatten func([]trace.MTSPRecord) error
+	flatten = func(recs []trace.MTSPRecord) error {
+		for _, rec := range recs {
+			if rec.Type == trace.RecordTypeUnknown && len(rec.Data) > 64 {
+				// Special check: If record contains dispatch marker, do NOT flatten it,
+				// to avoid splitting the marker across nested record boundaries.
+				if bytesContains(rec.Data, []byte("ul@3")) {
+					records = append(records, rec)
+					continue
+				}
+
+				// Try parsing as container (skip 16 bytes header)
+				if len(rec.Data) > 16 {
+					nested, err := t.ParseMTSPFromData(rec.Data[16:])
+					if err == nil && len(nested) > 0 {
+						// Heuristic: If we found multiple records, assume valid container
+						if len(nested) > 0 {
+							if err := flatten(nested); err != nil {
+								return err
+							}
+							continue
+						}
+					}
+				}
+			}
+			records = append(records, rec)
+		}
+		return nil
+	}
+	if err := flatten(rawRecords); err != nil {
+		return fmt.Errorf("flatten records: %w", err)
+	}
+
+	// 2. Build symbol table (FunctionAddr -> Name)
+	// Scan device resources for CS records which define function names
+	addrToName := make(map[uint64]string)
+
+	for _, data := range t.DeviceResources {
+		resRecords, err := t.ParseMTSPFromData(data)
+		if err != nil {
+			continue
+		}
+		for _, rec := range resRecords {
+			if (rec.Type == trace.RecordTypeCS || rec.Type == trace.RecordTypeCSuwuw) && rec.Label != "" && rec.Address != 0 {
+				addrToName[rec.Address] = rec.Label
+			}
+		}
+	}
+	// Also scan main records for CS records (just in case definitions are inline)
+	for _, rec := range records {
+		if (rec.Type == trace.RecordTypeCS || rec.Type == trace.RecordTypeCSuwuw) && rec.Label != "" && rec.Address != 0 {
+			addrToName[rec.Address] = rec.Label
 		}
 	}
 
-	// Get kernel stats for dispatch counts
-	kernelStats, _ := t.AnalyzeKernels()
-
-	// Get compute encoders - these have the actual kernel function names
-	computeEncoders, err := t.ParseComputeEncoders()
-	if err != nil {
-		return fmt.Errorf("parse compute encoders: %w", err)
+	// 3. Reconstruct Execution Tree
+	type Dispatch struct {
+		ID     int
+		Offset int
 	}
 
-	// Parse API calls to get debug group labels
-	apiCallList, _ := t.ParseAPICallList()
+	type KernelNode struct {
+		FunctionAddr uint64
+		// Name resolved later
+		CommandFlags   uint32
+		BufferBindings []uint64 // Unique buffer addresses used
+		Dispatches     []Dispatch
+	}
 
-	// Build encoder address to debug group label mapping
-	addrToDebugLabel := make(map[uint64]string)
-	if apiCallList != nil {
-		for _, cb := range apiCallList.CommandBuffers {
-			for _, call := range cb.Calls {
-				if call.Type == "encoder" && call.Details == "computeCommandEncoder" && call.Label != "" {
-					addrToDebugLabel[call.Address] = call.Label
+	type PipelineNode struct {
+		Address uint64
+		Kernels []*KernelNode // Ordered list of kernel invocations
+	}
+
+	pipelineMap := make(map[uint64]*PipelineNode)
+	var rootPipelines []*PipelineNode // For deterministic ordering (e.g. by first use)
+
+	var currentPipeline *PipelineNode
+	var currentKernel *KernelNode // "Active" kernel node under current pipeline
+
+	// Scan records
+	// fmt.Printf("DEBUG: Scanning %d records\n", len(records))
+	for _, rec := range records {
+		if rec.Type == trace.RecordTypeCt {
+			// ctCount++
+			ct, err := rec.ParseCtRecord()
+			if err != nil {
+				// fmt.Printf("DEBUG: Failed to parse Ct: %v\n", err)
+				continue
+			}
+
+			// Pipeline Change?
+			pNode, exists := pipelineMap[ct.PipelineAddr]
+			if !exists {
+				pNode = &PipelineNode{
+					Address: ct.PipelineAddr,
+					Kernels: []*KernelNode{},
 				}
+				pipelineMap[ct.PipelineAddr] = pNode
+				rootPipelines = append(rootPipelines, pNode)
+			}
+			currentPipeline = pNode
+
+			// Function (Kernel) Change?
+			// Check if we can reuse the current kernel node
+			if len(currentPipeline.Kernels) > 0 {
+				last := currentPipeline.Kernels[len(currentPipeline.Kernels)-1]
+				if last.FunctionAddr == ct.FunctionAddr {
+					currentKernel = last
+					// Add new bindings if any
+					for _, b := range ct.BufferBindings {
+						found := false
+						for _, existing := range currentKernel.BufferBindings {
+							if existing == b {
+								found = true
+								break
+							}
+						}
+						if !found {
+							currentKernel.BufferBindings = append(currentKernel.BufferBindings, b)
+						}
+					}
+					continue
+				}
+			}
+
+			kNode := &KernelNode{
+				FunctionAddr:   ct.FunctionAddr,
+				CommandFlags:   ct.CommandFlags,
+				BufferBindings: ct.BufferBindings, // Copy initial bindings
+				Dispatches:     []Dispatch{},
+			}
+			currentPipeline.Kernels = append(currentPipeline.Kernels, kNode)
+			currentKernel = kNode
+		}
+
+		// Check for Dispatch (ul@3 marker)
+		if bytesContains(rec.Data, []byte("ul@3")) {
+			// Found a dispatch!
+			if currentKernel != nil {
+				currentKernel.Dispatches = append(currentKernel.Dispatches, Dispatch{
+					ID:     len(currentKernel.Dispatches), // Local ID
+					Offset: rec.Offset,
+				})
+			} else {
+				fmt.Printf("WARNING: Found ul@3 at offset %d but currentKernel is nil!\n", rec.Offset)
 			}
 		}
 	}
 
-	// Build the tree based on mode
-	debugGroups := make(map[string]*DebugGroupNode)
-
-	for _, enc := range computeEncoders {
-		kernelName := enc.Label
-		if kernelName == "" {
-			kernelName = "unknown"
+	// 4. Resolve Names using MTLB Heuristic if needed
+	// Collect unique function addresses in order of appearance
+	uniqueFuncs := make([]uint64, 0)
+	seenFuncs := make(map[uint64]bool)
+	for _, p := range rootPipelines {
+		for _, k := range p.Kernels {
+			if !seenFuncs[k.FunctionAddr] {
+				seenFuncs[k.FunctionAddr] = true
+				uniqueFuncs = append(uniqueFuncs, k.FunctionAddr)
+			}
 		}
+	}
 
-		// Get timing for this kernel
-		var duration time.Duration
-		var timePct float64
-
-		// Try to lookup duration by label (either encoder label or kernel name)
-		if d, ok := labelDurations[enc.Label]; ok {
-			duration = d
-		} else if d, ok := labelDurations[kernelName]; ok {
-			duration = d
-		}
-
-		if totalTraceDuration > 0 {
-			timePct = float64(duration) / float64(totalTraceDuration) * 100.0
-		}
-
-		// Get dispatch count
-		dispatchCount := 1
-		if stat, ok := kernelStats[kernelName]; ok && stat.DispatchCount > 0 {
-			dispatchCount = stat.DispatchCount
-		}
-
-		// Get debug group label from API calls
-		debugLabel := addrToDebugLabel[enc.Address]
-		if debugLabel == "" {
-			debugLabel = kernelName
-		}
-
-		// Determine grouping
-		var groupName string
-		if treeByKernel {
-			// Group by kernel function type
-			groupName = inferDebugGroup(kernelName)
+	// Use addrToName first, then fallback to KernelNames (MTLB)
+	finalNames := make(map[uint64]string)
+	mtlbIndex := 0
+	for _, addr := range uniqueFuncs {
+		if name, ok := addrToName[addr]; ok {
+			finalNames[addr] = name
 		} else {
-			// Group by first MLX operation from debug label
-			groupName = extractFirstOperation(debugLabel)
-			if groupName == "" {
-				groupName = inferDebugGroup(kernelName)
+			// Fallback to MTLB list if available
+			if mtlbIndex < len(t.KernelNames) {
+				finalNames[addr] = t.KernelNames[mtlbIndex] // Heuristic: One-to-one mapping
+				mtlbIndex++
+			} else {
+				finalNames[addr] = fmt.Sprintf("Unknown_0x%x", addr)
 			}
 		}
-
-		// Apply kernel filter
-		if treeKernelFilter != "" {
-			if !strings.Contains(strings.ToLower(kernelName), strings.ToLower(treeKernelFilter)) {
-				continue
-			}
-		}
-
-		// Create or update debug group
-		if _, exists := debugGroups[groupName]; !exists {
-			debugGroups[groupName] = &DebugGroupNode{
-				Name:     groupName,
-				Encoders: make([]*EncoderNode, 0),
-			}
-		}
-
-		// Check if we already have this kernel in this group (aggregate by kernel name)
-		found := false
-		for _, e := range debugGroups[groupName].Encoders {
-			if e.KernelName == kernelName {
-				e.DispatchCount += dispatchCount
-				found = true
-				break
-			}
-		}
-
-		if !found {
-			debugGroups[groupName].Encoders = append(debugGroups[groupName].Encoders, &EncoderNode{
-				Label:         debugLabel,
-				KernelName:    kernelName,
-				Address:       enc.Address,
-				TimePercent:   timePct,
-				Duration:      duration,
-				DispatchCount: dispatchCount,
-			})
-		}
-
-		debugGroups[groupName].TotalDispatches += dispatchCount
-		debugGroups[groupName].TimePercent += timePct
-		debugGroups[groupName].TotalDuration += duration
 	}
 
-	// Filter and convert to sorted slice
-	var dgList []*DebugGroupNode
-	for _, dg := range debugGroups {
-		if treeFilter != "" {
-			filterLower := strings.ToLower(treeFilter)
-			dgMatches := strings.Contains(strings.ToLower(dg.Name), filterLower)
-
-			var matchingEncoders []*EncoderNode
-			for _, enc := range dg.Encoders {
-				if strings.Contains(strings.ToLower(enc.Label), filterLower) ||
-					strings.Contains(strings.ToLower(enc.KernelName), filterLower) {
-					matchingEncoders = append(matchingEncoders, enc)
+	// 5. Print Tree
+	fmt.Println("GpuTrace Execution Tree")
+	for _, p := range rootPipelines {
+		fmt.Printf("▼ Compute Pipeline 0x%x\n", p.Address)
+		for _, k := range p.Kernels {
+			name := finalNames[k.FunctionAddr]
+			fmt.Printf("  ▼ %s (Flags: 0x%x)\n", name, k.CommandFlags)
+			for i, b := range k.BufferBindings {
+				bName := addrToName[b]
+				if bName != "" {
+					fmt.Printf("    - Buffer %d: %s (0x%x)\n", i, bName, b)
+				} else {
+					fmt.Printf("    - Buffer %d: 0x%x\n", i, b)
 				}
 			}
-
-			if !dgMatches && len(matchingEncoders) == 0 {
-				continue
-			}
-
-			if len(matchingEncoders) > 0 && !dgMatches {
-				dg.Encoders = matchingEncoders
-				// Recalculate totals
-				dg.TotalDispatches = 0
-				dg.TimePercent = 0
-				for _, enc := range dg.Encoders {
-					dg.TotalDispatches += enc.DispatchCount
-					dg.TimePercent += enc.TimePercent
-					dg.TotalDuration += enc.Duration
-				}
-			}
-		}
-
-		dgList = append(dgList, dg)
-	}
-
-	// Sort by time percentage descending, then by dispatch count
-	sort.Slice(dgList, func(i, j int) bool {
-		if dgList[i].TimePercent != dgList[j].TimePercent {
-			return dgList[i].TimePercent > dgList[j].TimePercent
-		}
-		return dgList[i].TotalDispatches > dgList[j].TotalDispatches
-	})
-
-	// Print the tree
-	fmt.Println("=== GPU Trace Hierarchy ===")
-	if treeByKernel {
-		fmt.Println("(grouped by kernel function)")
-	} else {
-		fmt.Println("(grouped by MLX operation)")
-	}
-	fmt.Println()
-
-	totalDispatches := 0
-	totalEncoders := 0
-	var totalTime float64
-	for _, dg := range dgList {
-		totalDispatches += dg.TotalDispatches
-		totalEncoders += len(dg.Encoders)
-		totalTime += dg.TimePercent
-	}
-
-	for i, dg := range dgList {
-		isLast := i == len(dgList)-1
-		connector := "├─"
-		if isLast {
-			connector = "└─"
-		}
-
-		fmt.Printf("%s %s", connector, dg.Name)
-		if dg.TimePercent > 0 {
-			fmt.Printf(" (%.1f%%, %v)", dg.TimePercent, dg.TotalDuration)
-		}
-		fmt.Printf(" [%d kernels, %d dispatches]\n", len(dg.Encoders), dg.TotalDispatches)
-
-		// Sort encoders by time percentage, then dispatch count
-		sort.Slice(dg.Encoders, func(a, b int) bool {
-			if dg.Encoders[a].TimePercent != dg.Encoders[b].TimePercent {
-				return dg.Encoders[a].TimePercent > dg.Encoders[b].TimePercent
-			}
-			return dg.Encoders[a].DispatchCount > dg.Encoders[b].DispatchCount
-		})
-
-		childPrefix := "   "
-		if !isLast {
-			childPrefix = "│  "
-		}
-
-		for j, enc := range dg.Encoders {
-			encIsLast := j == len(dg.Encoders)-1
-			encConnector := "├─"
-			if encIsLast {
-				encConnector = "└─"
-			}
-
-			fmt.Printf("%s%s %s", childPrefix, encConnector, enc.KernelName)
-			if enc.TimePercent > 0 {
-				fmt.Printf(" (%.1f%%, %v)", enc.TimePercent, enc.Duration)
-			}
-			if enc.DispatchCount > 1 {
-				fmt.Printf(" [%d dispatches]", enc.DispatchCount)
-			}
-			fmt.Println()
+			fmt.Printf("    ▶ DispatchThreadgroups (%d calls)\n", len(k.Dispatches))
 		}
 	}
-
-	fmt.Println()
-	fmt.Printf("Total: %d groups, %d unique kernels, %d dispatches", len(dgList), totalEncoders, totalDispatches)
-	if totalTime > 0 {
-		fmt.Printf(" (%.1f%% GPU time)", totalTime)
-	}
-	if metrics != nil {
-		fmt.Printf("\nTotal GPU Duration: %v", metrics.TotalDuration)
-	}
-	fmt.Println()
 
 	return nil
 }
 
-// extractFirstOperation extracts the first operation from a cumulative path
-// e.g., "SqueezeRMSNormQuantizedMatmul" -> "Squeeze"
-// This matches Xcode's behavior where the first operation is the top-level debug group
-func extractFirstOperation(path string) string {
-	if path == "" {
-		return ""
-	}
-
-	// Known MLX operation names to look for
-	ops := []string{
-		"Argmax", "Softmax", "LogSoftmax",
-		"QuantizedMatmul", "Matmul", "GEMM",
-		"RMSNorm", "LayerNorm", "BatchNorm",
-		"RoPE", "Attention", "SDPA", "ScaledDotProductAttention",
-		"SliceUpdate", "Slice", "Concat", "Split",
-		"Reshape", "Transpose", "Squeeze", "ExpandDims",
-		"Add", "Subtract", "Multiply", "Divide",
-		"Sigmoid", "Tanh", "ReLU", "GELU", "SiLU",
-		"Broadcast", "Arange", "Full", "Zeros", "Ones",
-		"Copy", "Negative", "Abs", "Synchronize",
-		"RandomBits", "AsType",
-	}
-
-	// Find the first occurrence of any operation
-	firstOp := ""
-	firstPos := len(path)
-
-	for _, op := range ops {
-		pos := strings.Index(path, op)
-		if pos >= 0 && pos < firstPos {
-			firstPos = pos
-			firstOp = op
-		}
-	}
-
-	if firstOp != "" {
-		return firstOp
-	}
-
-	// Fallback: return the path as-is if short, or truncate
-	if len(path) > 30 {
-		return path[:30]
-	}
-	return path
-}
-
-// inferDebugGroup infers the debug group (MLX operation) from a kernel name
-func inferDebugGroup(kernelName string) string {
-	lower := strings.ToLower(kernelName)
-
-	// Quantized operations
-	if strings.Contains(lower, "qmv") || strings.Contains(lower, "quantized") || strings.Contains(lower, "affine_") || strings.Contains(lower, "dequantize") {
-		return "QuantizedMatmul"
-	}
-
-	// Copy/dtype conversions
-	if strings.Contains(lower, "copy") {
-		return "Copy"
-	}
-
-	// Attention
-	if strings.Contains(lower, "sdpa") || strings.Contains(lower, "attention") {
-		return "Attention"
-	}
-
-	// Normalization
-	if strings.Contains(lower, "rms") || strings.Contains(lower, "norm") {
-		return "RMSNorm"
-	}
-
-	// RoPE
-	if strings.Contains(lower, "rope") {
-		return "RoPE"
-	}
-
-	// Sampling
-	if strings.Contains(lower, "argmax") || strings.Contains(lower, "softmax") {
-		return "Argmax"
-	}
-
-	// GEMM
-	if strings.Contains(lower, "gemm") || strings.Contains(lower, "gemv") || strings.Contains(lower, "matmul") {
-		return "Matmul"
-	}
-
-	// Elementwise
-	if strings.Contains(lower, "add") || strings.Contains(lower, "multiply") ||
-		strings.Contains(lower, "subtract") || strings.Contains(lower, "divide") ||
-		strings.Contains(lower, "sigmoid") || strings.Contains(lower, "log") ||
-		strings.Contains(lower, "negative") || strings.Contains(lower, "select") ||
-		strings.Contains(lower, "minimum") || strings.Contains(lower, "maximum") {
-		return "Elementwise"
-	}
-
-	// Comparison
-	if strings.Contains(lower, "equal") || strings.Contains(lower, "greater") ||
-		strings.Contains(lower, "less") {
-		return "Comparison"
-	}
-
-	// Index operations
-	if strings.Contains(lower, "arange") || strings.Contains(lower, "gather") ||
-		strings.Contains(lower, "scatter") {
-		return "Indexing"
-	}
-
-	// Random
-	if strings.Contains(lower, "rbit") || strings.Contains(lower, "random") {
-		return "Random"
-	}
-
-	// Other
-	return "Other"
+func bytesContains(s, substr []byte) bool {
+	return strings.Contains(string(s), string(substr))
 }

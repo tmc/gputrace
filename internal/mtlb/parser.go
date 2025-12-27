@@ -75,19 +75,35 @@ func (m *MTLBFile) ListFunctions() ([]string, error) {
 
 	data := m.Data[start:]
 
-	// Identify "NAMED" tags (0x4E 41 4D 45 44 00)
-	namedTag := []byte("NAMED\x00")
+	// Identify "NAMED" tags (0x4E 41 4D 45 44 00) or "NAME;" (0x4E 41 4D 45 3B 00)
+	tags := [][]byte{
+		[]byte("NAMED\x00"),
+		[]byte("NAME;\x00"),
+	}
 
 	idx := 0
 	for idx < len(data) {
-		// Search for tag
-		pos := bytes.Index(data[idx:], namedTag)
-		if pos == -1 {
+		// Search for any tag
+		bestPos := -1
+		tagLen := 0
+
+		for _, tag := range tags {
+			pos := bytes.Index(data[idx:], tag)
+			if pos != -1 {
+				if bestPos == -1 || pos < bestPos {
+					bestPos = pos
+					tagLen = len(tag)
+				}
+			}
+		}
+
+		if bestPos == -1 {
 			break
 		}
 
-		// Move to start of name
-		nameStart := idx + pos + len(namedTag)
+		pos := bestPos
+		// Move to start of name (after tag)
+		nameStart := idx + pos + tagLen
 
 		// Find end of name (null terminator)
 		nameEnd := bytes.IndexByte(data[nameStart:], 0)

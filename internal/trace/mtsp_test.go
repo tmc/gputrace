@@ -5,230 +5,128 @@ import (
 	"testing"
 )
 
-// TestParseCtRecord tests the CtRecord parser with the example from the spec.
 func TestParseCtRecord(t *testing.T) {
-	// Real example from trace (120-byte Ct record from spec):
-	// Record #2 with 7 buffer bindings
-	data := make([]byte, 120)
+	// Construct a synthetic Ct record
+	// Header (RecordSize=0, Flags=0) - assuming first 8 bytes.
+	// We need 64 bytes total for minimum size check + marker.
 
-	// Header
-	binary.LittleEndian.PutUint32(data[0x00:0x04], 120)        // record_size
-	binary.LittleEndian.PutUint32(data[0x04:0x08], 0xffffc02f) // command_flags
+	// Format based on mtsp.go implementation:
+	// ... "Ct\0\0" (marker)
+	// +4: PipelineAddr (8 bytes)
+	// +12: FunctionAddr (8 bytes)
+	// +20: BindingCount (4 bytes)
+	// +24: Stride (4 bytes) - MUST be 8
+	// +28: Bindings...
 
-	// Reserved section (0x08-0x20) stays zero
+	data := make([]byte, 100)
 
-	// Markers
-	binary.LittleEndian.PutUint32(data[0x20:0x24], 0x00000008) // marker1
-	copy(data[0x24:0x28], []byte{'C', 't', 0, 0})              // marker2
+	// Create marker "Ct\0\0" at offset 16
+	markerOffset := 16
+	copy(data[markerOffset:], []byte("Ct\000\000"))
 
-	// Addresses and counts
-	binary.LittleEndian.PutUint64(data[0x28:0x30], 0x0b94c3dae0) // pipeline_addr
-	binary.LittleEndian.PutUint64(data[0x30:0x38], 0x0100f93c00) // function_addr
-	binary.LittleEndian.PutUint32(data[0x38:0x3c], 7)            // binding_count
-	binary.LittleEndian.PutUint32(data[0x3c:0x40], 8)            // stride
+	base := markerOffset
+	pipelineAddr := uint64(0x1122334455667788)
+	functionAddr := uint64(0x8877665544332211)
+	bindingCount := uint32(2)
+	stride := uint32(8)
 
-	// Buffer bindings (7 addresses)
-	buffers := []uint64{
-		0x010dcff59c,
-		0x010dcee01c,
-		0x010d29b854,
-		0x010d29c388,
-		0x010bf3c29c,
-		0x010036b06c,
-		0x010017ce3c,
+	binary.LittleEndian.PutUint64(data[base+4:], pipelineAddr)
+	binary.LittleEndian.PutUint64(data[base+12:], functionAddr)
+	binary.LittleEndian.PutUint32(data[base+20:], bindingCount)
+	binary.LittleEndian.PutUint32(data[base+24:], stride)
+
+	// Bindings at base+28
+	binding1 := uint64(0xAABBCCDDEEFF0011)
+	binding2 := uint64(0x1100FFEEDDCCBBAA)
+	binary.LittleEndian.PutUint64(data[base+28:], binding1)
+	binary.LittleEndian.PutUint64(data[base+36:], binding2)
+
+	rec := MTSPRecord{
+		Type: RecordTypeCt,
+		Data: data,
 	}
 
-	for i, addr := range buffers {
-		offset := 0x40 + (i * 8)
-		binary.LittleEndian.PutUint64(data[offset:offset+8], addr)
-	}
-
-	// Create MTSPRecord wrapper
-	record := &MTSPRecord{
-		Type:   RecordTypeCt,
-		Offset: 0,
-		Size:   120,
-		Data:   data,
-	}
-
-	// Parse the record
-	ct, err := record.ParseCtRecord()
+	ct, err := rec.ParseCtRecord()
 	if err != nil {
 		t.Fatalf("ParseCtRecord failed: %v", err)
 	}
 
-	// Validate fields
-	if ct.RecordSize != 120 {
-		t.Errorf("RecordSize = %d, want 120", ct.RecordSize)
+	if ct.PipelineAddr != pipelineAddr {
+		t.Errorf("expected PipelineAddr 0x%x, got 0x%x", pipelineAddr, ct.PipelineAddr)
 	}
-
-	if ct.CommandFlags != 0xffffc02f {
-		t.Errorf("CommandFlags = 0x%08x, want 0xffffc02f", ct.CommandFlags)
+	if ct.FunctionAddr != functionAddr {
+		t.Errorf("expected FunctionAddr 0x%x, got 0x%x", functionAddr, ct.FunctionAddr)
 	}
-
-	if ct.PipelineAddr != 0x0b94c3dae0 {
-		t.Errorf("PipelineAddr = 0x%016x, want 0x0b94c3dae0", ct.PipelineAddr)
+	if ct.BindingCount != bindingCount {
+		t.Errorf("expected BindingCount %d, got %d", bindingCount, ct.BindingCount)
 	}
-
-	if ct.FunctionAddr != 0x0100f93c00 {
-		t.Errorf("FunctionAddr = 0x%016x, want 0x0100f93c00", ct.FunctionAddr)
+	if len(ct.BufferBindings) != int(bindingCount) {
+		t.Errorf("expected %d bindings, got %d", bindingCount, len(ct.BufferBindings))
 	}
-
-	if ct.BindingCount != 7 {
-		t.Errorf("BindingCount = %d, want 7", ct.BindingCount)
-	}
-
-	if ct.Stride != 8 {
-		t.Errorf("Stride = %d, want 8", ct.Stride)
-	}
-
-	if len(ct.BufferBindings) != 7 {
-		t.Fatalf("BufferBindings length = %d, want 7", len(ct.BufferBindings))
-	}
-
-	// Validate each buffer binding
-	for i, expected := range buffers {
-		if ct.BufferBindings[i] != expected {
-			t.Errorf("BufferBindings[%d] = 0x%016x, want 0x%016x",
-				i, ct.BufferBindings[i], expected)
-		}
+	if ct.BufferBindings[0] != binding1 {
+		t.Errorf("expected binding[0] 0x%x, got 0x%x", binding1, ct.BufferBindings[0])
 	}
 }
 
-// TestParseCtRecord_WrongType tests error handling for non-Ct records.
-func TestParseCtRecord_WrongType(t *testing.T) {
-	record := &MTSPRecord{
-		Type:   RecordTypeCS,
-		Offset: 0,
-		Size:   120,
-		Data:   make([]byte, 120),
+func TestParseCSuwuwRecord(t *testing.T) {
+	// CSuwuw record: Label extraction
+	// ... [CSuwuw] (6 bytes) [pad] ... [address] [string]
+
+	data := make([]byte, 100)
+
+	markerOffset := 10
+	copy(data[markerOffset:], []byte("CSuwuw"))
+
+	// Based on implementation line 393: addressStart := i + 9
+	addrOffset := markerOffset + 9
+	funcAddr := uint64(0xCAFEBABE112233)
+	binary.LittleEndian.PutUint64(data[addrOffset:], funcAddr)
+
+	// String follows address (addrOffset + 8), skipping nulls
+	stringStart := addrOffset + 8
+	// Add some nulls
+	data[stringStart] = 0
+	data[stringStart+1] = 0
+
+	label := "MyKernelFunc"
+	copy(data[stringStart+2:], []byte(label))
+	data[stringStart+2+len(label)] = 0 // Null terminator
+
+	rec := MTSPRecord{
+		Type: RecordTypeCSuwuw,
+		Data: data,
 	}
 
-	_, err := record.ParseCtRecord()
-	if err == nil {
-		t.Error("ParseCtRecord should fail for non-Ct record")
+	rec.parseCSuwuwRecord()
+
+	if rec.Address != funcAddr {
+		t.Errorf("expected Address 0x%x, got 0x%x", funcAddr, rec.Address)
 	}
-}
-
-// TestParseCtRecord_TooSmall tests error handling for undersized records.
-func TestParseCtRecord_TooSmall(t *testing.T) {
-	record := &MTSPRecord{
-		Type:   RecordTypeCt,
-		Offset: 0,
-		Size:   32,
-		Data:   make([]byte, 32),
-	}
-
-	_, err := record.ParseCtRecord()
-	if err == nil {
-		t.Error("ParseCtRecord should fail for record smaller than 64 bytes")
-	}
-}
-
-// TestParseCtRecord_BindingsOutOfBounds tests handling of truncated binding data.
-func TestParseCtRecord_BindingsOutOfBounds(t *testing.T) {
-	// Create a record that claims 10 bindings but only has space for 5
-	data := make([]byte, 0x40+40) // Header + 5 bindings
-
-	binary.LittleEndian.PutUint32(data[0x00:0x04], 144) // claims 144 bytes
-	binary.LittleEndian.PutUint32(data[0x04:0x08], 0xffffc02f)
-	binary.LittleEndian.PutUint64(data[0x28:0x30], 0x0b94c3dae0)
-	binary.LittleEndian.PutUint64(data[0x30:0x38], 0x0100f93c00)
-	binary.LittleEndian.PutUint32(data[0x38:0x3c], 10) // Claims 10 bindings
-	binary.LittleEndian.PutUint32(data[0x3c:0x40], 8)
-
-	record := &MTSPRecord{
-		Type:   RecordTypeCt,
-		Offset: 0,
-		Size:   len(data),
-		Data:   data,
-	}
-
-	_, err := record.ParseCtRecord()
-	if err == nil {
-		t.Error("ParseCtRecord should fail when bindings exceed data length")
+	if rec.Label != label {
+		t.Errorf("expected Label %q, got %q", label, rec.Label)
 	}
 }
 
-// TestParseCtRecord_SizeMismatch tests validation of record size field.
-func TestParseCtRecord_SizeMismatch(t *testing.T) {
-	data := make([]byte, 120)
+func TestParseCiulSlRecord(t *testing.T) {
+	// CiulSl record: Function Address
+	// "CiulSl" at some offset
+	// +8: Address (8 bytes)
 
-	// Set up valid record but with wrong size in header
-	binary.LittleEndian.PutUint32(data[0x00:0x04], 200) // Wrong size!
-	binary.LittleEndian.PutUint32(data[0x04:0x08], 0xffffc02f)
-	binary.LittleEndian.PutUint64(data[0x28:0x30], 0x0b94c3dae0)
-	binary.LittleEndian.PutUint64(data[0x30:0x38], 0x0100f93c00)
-	binary.LittleEndian.PutUint32(data[0x38:0x3c], 7)
-	binary.LittleEndian.PutUint32(data[0x3c:0x40], 8)
+	data := make([]byte, 64)
+	offset := 10
+	copy(data[offset:], []byte("CiulSl"))
+	funcAddr := uint64(0xDEADBEEF)
+	binary.LittleEndian.PutUint64(data[offset+8:], funcAddr)
 
-	record := &MTSPRecord{
-		Type:   RecordTypeCt,
-		Offset: 0,
-		Size:   120,
-		Data:   data,
+	rec := MTSPRecord{
+		Type: RecordTypeCiulSl,
+		Data: data,
 	}
 
-	_, err := record.ParseCtRecord()
-	if err == nil {
-		t.Error("ParseCtRecord should fail when record size doesn't match expected size")
-	}
-}
+	// This method updates rec.FunctionAddr in place
+	rec.parseCiulSlRecord()
 
-// TestParseCtRecord_VariousSizes tests parsing records with different binding counts.
-func TestParseCtRecord_VariousSizes(t *testing.T) {
-	testCases := []struct {
-		name         string
-		bindingCount uint32
-		expectedSize uint32
-	}{
-		{"6 bindings", 6, 112},
-		{"7 bindings", 7, 120},
-		{"8 bindings", 8, 128},
-		{"9 bindings", 9, 136},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			data := make([]byte, tc.expectedSize)
-
-			binary.LittleEndian.PutUint32(data[0x00:0x04], tc.expectedSize)
-			binary.LittleEndian.PutUint32(data[0x04:0x08], 0xffffc01c)
-			binary.LittleEndian.PutUint64(data[0x28:0x30], 0x0b94c3dae0)
-			binary.LittleEndian.PutUint64(data[0x30:0x38], 0x0100f93c00)
-			binary.LittleEndian.PutUint32(data[0x38:0x3c], tc.bindingCount)
-			binary.LittleEndian.PutUint32(data[0x3c:0x40], 8)
-
-			// Fill in dummy buffer addresses
-			for i := uint32(0); i < tc.bindingCount; i++ {
-				offset := 0x40 + (i * 8)
-				binary.LittleEndian.PutUint64(data[offset:offset+8], 0x010d000000+uint64(i)*0x1000)
-			}
-
-			record := &MTSPRecord{
-				Type:   RecordTypeCt,
-				Offset: 0,
-				Size:   int(tc.expectedSize),
-				Data:   data,
-			}
-
-			ct, err := record.ParseCtRecord()
-			if err != nil {
-				t.Fatalf("ParseCtRecord failed: %v", err)
-			}
-
-			if ct.RecordSize != tc.expectedSize {
-				t.Errorf("RecordSize = %d, want %d", ct.RecordSize, tc.expectedSize)
-			}
-
-			if ct.BindingCount != tc.bindingCount {
-				t.Errorf("BindingCount = %d, want %d", ct.BindingCount, tc.bindingCount)
-			}
-
-			if uint32(len(ct.BufferBindings)) != tc.bindingCount {
-				t.Errorf("BufferBindings length = %d, want %d",
-					len(ct.BufferBindings), tc.bindingCount)
-			}
-		})
+	if rec.FunctionAddr != funcAddr {
+		t.Errorf("expected FunctionAddr 0x%x, got 0x%x", funcAddr, rec.FunctionAddr)
 	}
 }

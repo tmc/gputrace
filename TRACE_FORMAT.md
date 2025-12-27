@@ -33,27 +33,54 @@ Magic: "MTSP" (Metal Trace Stream Protocol)
 
 ### Record Types
 
-The capture file contains various record types identified by 4-byte magic numbers:
+### Record Types
 
-1. **CUUU** - Command buffer records (70 in test trace)
-   - +0x00: "CUUU" magic (4 bytes)
-   - +0x04: padding (4 bytes)
-   - +0x08: timestamp (8 bytes, little-endian)
-   - +0x10: UUID string (null-terminated hex)
+The capture file contains various record types identified by 4-byte magic numbers or strings.
+Parsing logic now supports recursive discovery of nested records.
 
-   Each CUUU marker represents one committed Metal command buffer.
+1. **CS** - Command Submission? (Container)
+   - Often acts as a textual label container but ALSO contains nested records.
+   - In `device-resources`, CS records map text strings (keys) to Addresses (values).
+     - Example: "affine_qmv_..." -> 0x9bb8c81c0 (Function Address).
+     - Example: "compute-pipeline-state" -> 0x9bb8cab600 (Pipeline Address).
+     - Example: "library" -> 0x9bb8c81c0.
 
-2. **Culul** - Encoder/label markers (6 in test trace)
-   - These appear to mark encoder boundaries or labeled scopes
-   - NOT the same as command buffers!
+2. **Cuw** - Command Update/Write? (Container)
+   - Identified as a container for kernels and commands.
+   - Heavily nested structure.
 
-3. **Cul** - Unknown label records (1140 in test trace)
+3. **Ci** - Compute Info? (Container)
+   - Size 256 bytes (common).
+   - Contains:
+     - `ICB` Address (Indirect Command Buffer?)
+     - `Count` (Dispatch count or Threadgroups?)
+   - Often nests `Cul` and `Cuw` records.
 
-4. **Ct** - Unknown trace records (4624 in test trace)
+4. **Ctt** - Command details (Size 116 / 76)
+   - Links Function objects to Pipeline States.
+   - In `device-resources` (Size 76):
+     - +0x04: Device Address
+     - +0x0C: Function Address
+     - +0x20: Pipeline State Address
+   - In `capture` (Size 116):
+     - Contains similar linking plus execution params.
 
-5. **Cuw** - Unknown records (13 in test trace)
+5. **Ciulul** / **CiSulul** - Container (Variable size)
+   - Appears in `device-resources`.
+   - Contains arguments ("in", "out") and source file mappings.
 
-6. **Ci** - Unknown info records (6 in test trace)
+6. **Cul** - Unknown label records (Size 56/68)
+
+7. **Other Unknowns**
+   - Numerous small records (22, 24, 25 bytes) nested in `Ct`/`Ci`.
+   - Likely contain kernel arguments, grid sizes, or dispatch flags.
+
+### Device Resources
+The `device-resources` file is an MTSP stream that acts as a symbol table/linker.
+- Maps Function Addresses to Names (`CS` record).
+- Maps Pipeline Addresses to "compute-pipeline-state" label (`CS` record).
+- Maps Function Addresses to Source Files (`CiSulul` record).
+
 
 ## Index File Format (xdic)
 

@@ -144,6 +144,9 @@ type StatsJSON struct {
 	BufferUsageGB    float64        `json:"buffer_usage_gb"`
 	BufferSizeSum    uint64         `json:"buffer_size_sum"`
 	UniqueBuffers    int            `json:"unique_buffers"`
+	HeapUsageBytes   uint64         `json:"heap_usage_bytes"`
+	HeapUsageMB      float64        `json:"heap_usage_mb"`
+	UniqueHeaps      int            `json:"unique_heaps"`
 	UnusedBuffers    int            `json:"unused_buffers,omitempty"`
 	UnusedTextures   int            `json:"unused_textures,omitempty"`
 	UnusedFunctions  int            `json:"unused_functions,omitempty"`
@@ -153,6 +156,7 @@ type StatsJSON struct {
 	DispatchCalls    int            `json:"dispatch_calls"`
 	TotalRecords     int            `json:"total_records"`
 	RecordTypes      map[string]int `json:"record_types"`
+	MTLBLibraries    int            `json:"mtlb_libraries"`
 }
 
 // MetadataJSON represents trace metadata in JSON format.
@@ -187,6 +191,9 @@ func outputStatsJSON(stats *gputrace.TraceStatistics, trace *gputrace.Trace, ver
 		BufferUsageGB:    stats.BufferUsageGB,
 		BufferSizeSum:    stats.BufferSizeSum,
 		UniqueBuffers:    stats.UniqueBuffers,
+		HeapUsageBytes:   stats.HeapUsageBytes,
+		HeapUsageMB:      stats.HeapUsageMB,
+		UniqueHeaps:      stats.UniqueHeaps,
 		UnusedBuffers:    stats.UnusedBuffers,
 		UnusedTextures:   stats.UnusedTextures,
 		UnusedFunctions:  stats.UnusedFunctions,
@@ -196,6 +203,7 @@ func outputStatsJSON(stats *gputrace.TraceStatistics, trace *gputrace.Trace, ver
 		DispatchCalls:    stats.DispatchCalls,
 		TotalRecords:     stats.TotalRecords,
 		RecordTypes:      stats.RecordTypes,
+		MTLBLibraries:    stats.MTLBLibraries,
 	}
 
 	output := &StatsJSONOutput{
