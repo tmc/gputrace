@@ -8,20 +8,23 @@ import (
 
 // MTSP Record Types observed in capture files
 const (
-	RecordTypeCS      = "CS"      // Command submission with kernel name
-	RecordTypeCt      = "Ct"      // Command type/transition?
-	RecordTypeCtt     = "Ctt"     // Command type extended?
-	RecordTypeCU      = "CU"      // Command unknown?
-	RecordTypeCulul   = "Culul"   // Command buffer marker
-	RecordTypeCiulul  = "Ciulul"  // Compute Indirect ulul?
-	RecordTypeCtulul  = "Ctulul"  // Command type ulul?
-	RecordTypeCuw     = "Cuw"     // Command write?
-	RecordTypeCi      = "Ci"      // Command info?
-	RecordTypeCul     = "Cul"     // Command?
-	RecordTypeCut     = "Cut"     // Command type extended?
-	RecordTypeCSuwuw  = "CSuwuw"  // Command Submission uwuw?
-	RecordTypeCiulSl  = "CiulSl"  // Command info ul Sl?
-	RecordTypeUnknown = "Unknown" // Fallback for valid-looking records
+	RecordTypeCS      = "CS"        // Command submission with kernel name
+	RecordTypeCt      = "Ct"        // Command type/transition?
+	RecordTypeCtt     = "Ctt"       // Command type extended?
+	RecordTypeCU      = "CU"        // Command unknown?
+	RecordTypeCulul   = "Culul"     // Command buffer marker
+	RecordTypeCiulul  = "Ciulul"    // Compute Indirect ulul?
+	RecordTypeCtulul  = "Ctulul"    // Command type ulul?
+	RecordTypeC       = "C"         // Generic Command (Pop, EndEncoding, etc.)
+	RecordTypeC_3ul   = "C@3ul@3ul" // Dispatch threads
+	RecordTypeCuw     = "Cuw"       // Command write?
+	RecordTypeCi      = "Ci"        // Command info?
+	RecordTypeCul     = "Cul"       // Command?
+	RecordTypeCut     = "Cut"       // Command type extended?
+	RecordTypeCSuwuw  = "CSuwuw"    // Command Submission uwuw?
+	RecordTypeCiulSl  = "CiulSl"    // Command info ul Sl?
+	RecordTypeCtU     = "CtU"       // Buffer definition (CtU<b>ulul)
+	RecordTypeUnknown = "Unknown"   // Fallback for valid-looking records
 )
 
 // MTSPRecord represents a parsed MTSP record from the capture file.
@@ -32,11 +35,13 @@ type MTSPRecord struct {
 	Data   []byte // Raw record data
 
 	// Parsed fields (type-specific)
-	Label        string   // For CS records: kernel/stream name
-	Address      uint64   // Memory address
-	FunctionAddr uint64   // Metal function address (for CiulSl)
-	Pointers     []uint64 // Referenced pointers
-	Values       []uint32 // Embedded values
+	Label         string   // For CS records: kernel/stream name
+	Address       uint64   // Memory address
+	FunctionAddr  uint64   // Metal function address (for CiulSl)
+	Pointers      []uint64 // Referenced pointers
+	Values        []uint32 // Embedded values
+	Name          string   // Buffer name (for CtU)
+	SecondaryAddr uint64   // Function address (for CS Library records)
 }
 
 // CtRecord represents a parsed Ct (Command) record containing
@@ -103,10 +108,14 @@ type CulRecord struct {
 // +0x0C: function addr
 // +0x20: pipeline addr
 type CttRecord struct {
-	RecordSize   uint32
-	DeviceAddr   uint64
-	FunctionAddr uint64
-	PipelineAddr uint64
+	RecordSize     uint32
+	CommandFlags   uint32 // Command flags
+	DeviceAddr     uint64
+	FunctionAddr   uint64
+	PipelineAddr   uint64
+	BindingCount   uint32   // Number of resource bindings
+	Stride         uint32   // Binding array stride (always 8)
+	BufferBindings []uint64 // Array of buffer addresses
 }
 
 // ParseCttRecord parses a Ctt (Command Type Transfer?) record.
@@ -141,6 +150,24 @@ func (r *MTSPRecord) ParseCttRecord() (*CttRecord, error) {
 		DeviceAddr:   binary.LittleEndian.Uint64(r.Data[base+4 : base+12]),
 		FunctionAddr: binary.LittleEndian.Uint64(r.Data[base+12 : base+20]),
 		PipelineAddr: binary.LittleEndian.Uint64(r.Data[base+0x20 : base+0x28]),
+	}
+
+	// Parse bindings if present (similar to Ct records)
+	// Base + 0x28 corresponds to offset 0x4C relative to start (if base=0x24)
+	if base+0x30 <= len(r.Data) {
+		ctt.BindingCount = binary.LittleEndian.Uint32(r.Data[base+0x28 : base+0x2c])
+		ctt.Stride = binary.LittleEndian.Uint32(r.Data[base+0x2c : base+0x30])
+
+		if ctt.BindingCount > 0 {
+			bindingsOffset := base + 0x30
+			size := int(ctt.BindingCount) * 8
+			if bindingsOffset+size <= len(r.Data) {
+				ctt.BufferBindings = make([]uint64, ctt.BindingCount)
+				for i := 0; i < int(ctt.BindingCount); i++ {
+					ctt.BufferBindings[i] = binary.LittleEndian.Uint64(r.Data[bindingsOffset+i*8 : bindingsOffset+(i+1)*8])
+				}
+			}
+		}
 	}
 
 	return ctt, nil
@@ -279,8 +306,19 @@ func detectRecordType(data []byte) string {
 		if i+6 <= len(data) && bytes.Equal(data[i:i+6], []byte("Ciulul")) {
 			return RecordTypeCiulul
 		}
+		// Check for CtU (Buffer Definition)
+		if i+10 <= len(data) && bytes.Equal(data[i:i+10], []byte("CtU<b>ulul")) {
+			return RecordTypeCtU
+		}
 		if i+6 <= len(data) && bytes.Equal(data[i:i+6], []byte("Ctulul")) {
 			return RecordTypeCtulul
+		}
+		if i+10 <= len(data) && bytes.Equal(data[i:i+10], []byte("C@3ul@3ul\x00")) {
+			return RecordTypeC_3ul
+		}
+		// Check for C (Generic) - Check simpler marker first
+		if i+4 <= len(data) && bytes.Equal(data[i:i+4], []byte("C\x00\x00\x00")) {
+			return RecordTypeC
 		}
 		// Check CS before Ct/Cul to avoid false matches
 		if i+6 <= len(data) && bytes.Equal(data[i:i+6], []byte("CSuwuw")) {
@@ -330,112 +368,80 @@ func detectRecordType(data []byte) string {
 // parseCSuwuwRecord parses a CSuwuw record.
 // Seem to be similar to CS records but with "CSuwuw" marker.
 func (r *MTSPRecord) parseCSuwuwRecord() {
-	// Format seems to be:
-	// ... [CSuwuw] [padding] [address] [string]
+	// Format: ... [CSuwuw] [padding] [address] [string]
+	// Marker is 6 bytes: "CSuwuw" (43 53 75 77 75 77)
 
-	for i := 0; i < len(r.Data)-14; i++ {
-		if i+6 <= len(r.Data) && bytes.Equal(r.Data[i:i+6], []byte("CSuwuw")) {
-			// Found marker
-			// Address starts at i + 6 + 2 (padding?) or just after?
-			// Dump showed: 43 53 75 77 75 77 00 00 00 c0 57 2c 0a
-			// "CSuwuw" is 6 bytes.
-			// Then 00 00 00 (3 bytes? align to 8?)
-			// Let's assume address starts at i+8 or i+12?
-			// In dump: offset 0x88 is "F... CSuwuw..."
-			// CSuwuw at 0x8C.
-			// Address at 0x98? (12 bytes after start of marker, similar to CS)
+	// Scan for marker
+	marker := []byte("CSuwuw")
+	idx := bytes.Index(r.Data, marker)
+	if idx != -1 {
+		// Based on analysis, address seems to effectively follow the marker,
+		// possibly with alignment padding.
+		// In examined traces, address starts 9 bytes after marker start?
+		// 0x84: CSuwuw... 0x8D: Address. Difference is 9 bytes.
+		// Address is 8 bytes.
+		// String starts after address.
 
-			// Let's skip marker (6) + padding (unknown)
-			// Scan for non-zero bytes?
-			// Or just assume +12 bytes from start of marker matching CS?
-			// CS was: +4 (marker) + 8 (padding/whatever) -> +12?
-			// CS parser used `i+12` for string start, `i+4` for address start.
-			// CS marker is 4 bytes (CS\0\0).
-			// CSuwuw is 6 bytes.
-			// Address likely 8-byte aligned.
+		addrStart := idx + 9
+		if addrStart+8 <= len(r.Data) {
+			r.Address = binary.LittleEndian.Uint64(r.Data[addrStart : addrStart+8])
 
-			// Dump again:
-			// 43 53 75 77 75 77 (CSuwuw)
-			// 00 00 00 (3 nulls)
-			// c0 57 2c 0a ... (Address)
-			// 6 + 3 = 9 bytes? Alignment usually 4 or 8.
-			// If marker starts at 0x8C. 0x8C + 9 = 0x95. Not aligned.
-			// 0x98 is aligned.
-
-			// Let's try to find address 8 bytes after marker start?
-			// Marker at 0. Address at 8? (skip 2 bytes padding)
-			// 6 + 2 = 8.
-			// Dump: 00 00 00. 3 bytes padding.
-			// Wait, previous byte before marker was 00?
-			// Let's look at dump again.
-			// 00000080  46 00 00 00 43 53 75 77  75 77 00 00 00 c0 57 2c
-			// Offset 0x84 is C (43).
-			// 0x84: CSuwuw (6 bytes) -> ends 0x8A.
-			// 0x8A: 00 00 00 (3 bytes) -> ends 0x8D.
-			// 0x8D: c0 57 2c (Address?)
-			// This is unaligned.
-
-			// Maybe address is at offset 0x90?
-			// 0x90 is 0a ...
-			// c0 57 2c 0a 00 00 00 00 is 0x0000000a2c57c0 (valid address)
-			// So address starts at 0x8D.
-			// Offset 0x8D relative to 0x84 is +9.
-			// Only 9 bytes?
-
-			// Let's search for string null terminator?
-			// String "root" is at 0x99 (72 6f 6f 74).
-
-			// Address 8D to 95 (8 bytes).
-			// 0x95 is 00. 0x96 is 00. 0x97 is 00. 0x98 is 00.
-			// 0x99 is 'r'.
-			// So string starts after address.
-
-			addressStart := i + 9
-			if addressStart+8 <= len(r.Data) {
-				r.Address = binary.LittleEndian.Uint64(r.Data[addressStart : addressStart+8])
-			}
-
-			// String usually follows.
-			stringStart := addressStart + 8
+			// String likely follows address, maybe with padding/nulls
+			strStart := addrStart + 8
 			// Skip nulls
-			for stringStart < len(r.Data) && r.Data[stringStart] == 0 {
-				stringStart++
+			for strStart < len(r.Data) && r.Data[strStart] == 0 {
+				strStart++
 			}
-			if stringStart < len(r.Data) {
-				if end := bytes.IndexByte(r.Data[stringStart:], 0); end != -1 {
-					r.Label = string(r.Data[stringStart : stringStart+end])
+
+			if strStart < len(r.Data) {
+				if end := bytes.IndexByte(r.Data[strStart:], 0); end != -1 {
+					r.Label = string(r.Data[strStart : strStart+end])
 				}
 			}
-			break
 		}
 	}
 }
 
-// parseCSRecord parses a CS (Command Submission?) record.
-// These often contain kernel/stream names.
+// parseCSRecord parses a CS (Command Submission) record.
+// These contain kernel/stream names or UUIDs.
 func (r *MTSPRecord) parseCSRecord() {
-	// CS records typically have format:
-	// [size] [padding] [CS marker] [address] [string...]
+	// CS marker is "CS\x00\x00" (4 bytes)
+	// Structure: [CS Marker] [Address (8 bytes)] [String] [Flags?] [SecondaryAddr]
+	// Note: The marker might not be at offset 0 of Data due to unknown header fields.
 
-	// Look for null-terminated string after CS marker
-	for i := 0; i < len(r.Data)-4; i++ {
-		if i+2 < len(r.Data) && r.Data[i] == 'C' && r.Data[i+1] == 'S' && r.Data[i+2] == 0 {
-			// Found CS marker, look for string after address
+	marker := []byte{0x43, 0x53, 0x00, 0x00}
+	idx := bytes.Index(r.Data, marker)
+	if idx != -1 {
+		// Address is immediately after the 4-byte marker
+		addrStart := idx + 4
+		if addrStart+8 <= len(r.Data) {
+			r.Address = binary.LittleEndian.Uint64(r.Data[addrStart : addrStart+8])
 
-			// Extract address (8 bytes after CS marker + 2 bytes padding/zero)
-			// CS marker is 2 bytes + 2 zero bytes = 4 bytes total
-			addressStart := i + 4
-			if addressStart+8 <= len(r.Data) {
-				r.Address = binary.LittleEndian.Uint64(r.Data[addressStart : addressStart+8])
-			}
+			// String starts immediately after address
+			strStart := addrStart + 8
+			if strStart < len(r.Data) {
+				// Find null terminator
+				if end := bytes.IndexByte(r.Data[strStart:], 0); end != -1 {
+					r.Label = string(r.Data[strStart : strStart+end])
 
-			stringStart := i + 12 // Skip CS marker + padding + address
-			if stringStart < len(r.Data) {
-				if end := bytes.IndexByte(r.Data[stringStart:], 0); end != -1 {
-					r.Label = string(r.Data[stringStart : stringStart+end])
+					// Heuristic: Check for Secondary Address after string
+					// Check at aligned offsets after string end?
+					// Dump analysis: StrEnd -> Padding -> 4 bytes -> Address
+					// StrEnd is strStart + end + 1 (null)
+					afterStr := strStart + end + 1
+					// Align to 4 bytes?
+					rem := afterStr % 4
+					if rem != 0 {
+						afterStr += (4 - rem)
+					}
+
+					// Skip 8 bytes (Flags/Count/Magic?)
+					nextAddrStart := afterStr + 8
+					if nextAddrStart+8 <= len(r.Data) {
+						r.SecondaryAddr = binary.LittleEndian.Uint64(r.Data[nextAddrStart : nextAddrStart+8])
+					}
 				}
 			}
-			break
 		}
 	}
 }
@@ -733,10 +739,6 @@ func (r *MTSPRecord) ParseCululRecord() (*CululRecord, error) {
 }
 
 // ParseCulRecord parses a Cul (Command / Resource Binding) record.
-//
-// Cul Record Structure (variable size):
-//
-//	Similar to Culul but with variable payload structure
 func (r *MTSPRecord) ParseCulRecord() (*CulRecord, error) {
 	if r.Type != RecordTypeCul {
 		return nil, fmt.Errorf("not a Cul record (type=%s)", r.Type)
@@ -750,54 +752,22 @@ func (r *MTSPRecord) ParseCulRecord() (*CulRecord, error) {
 		RecordSize:   binary.LittleEndian.Uint32(r.Data[0x00:0x04]),
 		CommandFlags: binary.LittleEndian.Uint32(r.Data[0x04:0x08]),
 		MarkerCount:  binary.LittleEndian.Uint32(r.Data[0x20:0x24]),
-		BufferAddr:   binary.LittleEndian.Uint64(r.Data[0x28:0x30]),
-		Field1:       binary.LittleEndian.Uint32(r.Data[0x30:0x34]),
-		Field2:       binary.LittleEndian.Uint32(r.Data[0x34:0x38]),
 	}
 
-	// For larger records, try to parse payload and array
-	if len(r.Data) >= 0x48 {
-		cul.PayloadSize = binary.LittleEndian.Uint32(r.Data[0x40:0x44])
-		if len(r.Data) >= 0x50 {
-			cul.PayloadAddr = binary.LittleEndian.Uint64(r.Data[0x48:0x50])
-		}
+	// Cul marker at 0x24 (4 bytes)
+	// Address at 0x28
+	if len(r.Data) >= 0x30 {
+		cul.BufferAddr = binary.LittleEndian.Uint64(r.Data[0x28:0x30])
 	}
-
-	// Try to find array section
-	if len(r.Data) >= 0x58 {
-		cul.ArrayCount = binary.LittleEndian.Uint32(r.Data[0x50:0x54])
-		cul.ArrayStride = binary.LittleEndian.Uint32(r.Data[0x54:0x58])
-
-		// Extract array addresses if present
-		if cul.ArrayCount > 0 && cul.ArrayCount < 1024 {
-			cul.ArrayAddresses = make([]uint64, 0, cul.ArrayCount)
-			for i := uint32(0); i < cul.ArrayCount; i++ {
-				offset := 0x58 + (i * 8)
-				if int(offset)+8 <= len(r.Data) {
-					addr := binary.LittleEndian.Uint64(r.Data[offset : offset+8])
-					cul.ArrayAddresses = append(cul.ArrayAddresses, addr)
-				}
-			}
-		}
+	// Value/Size at 0x30
+	if len(r.Data) >= 0x34 {
+		cul.Field1 = binary.LittleEndian.Uint32(r.Data[0x30:0x34])
 	}
 
 	return cul, nil
 }
 
 // ParseCuwRecord parses a Cuw (Command Update/Write) record.
-//
-// Cuw Record Structure (56, 68, or 124 bytes):
-//
-//	Offset | Size | Type    | Field Name
-//	-------|------|---------|------------------
-//	0x00   | 4    | uint32  | record_size
-//	0x04   | 4    | uint32  | command_flags
-//	0x08   | 24   | bytes   | reserved
-//	0x20   | 4    | uint32  | marker_count
-//	0x24   | ?    | char[]  | marker ("Cuw" or "Cuwuw")
-//	0x28   | 8    | uint64  | buffer_addr
-//	0x30   | 8    | uint64  | field1 (size 68+)
-//	0x38   | 4    | uint32  | field2 (size 68+)
 func (r *MTSPRecord) ParseCuwRecord() (*CuwRecord, error) {
 	if r.Type != RecordTypeCuw {
 		return nil, fmt.Errorf("not a Cuw record (type=%s)", r.Type)
@@ -811,21 +781,229 @@ func (r *MTSPRecord) ParseCuwRecord() (*CuwRecord, error) {
 		RecordSize:   binary.LittleEndian.Uint32(r.Data[0x00:0x04]),
 		CommandFlags: binary.LittleEndian.Uint32(r.Data[0x04:0x08]),
 		MarkerCount:  binary.LittleEndian.Uint32(r.Data[0x20:0x24]),
-		BufferAddr:   binary.LittleEndian.Uint64(r.Data[0x28:0x30]),
 	}
 
-	// For size 68+ records, extract additional fields
-	if len(r.Data) >= 0x38 {
-		cuw.Field1 = binary.LittleEndian.Uint64(r.Data[0x30:0x38])
-	}
-	if len(r.Data) >= 0x3c {
-		cuw.Field2 = binary.LittleEndian.Uint32(r.Data[0x38:0x3c])
+	// Check for "Cuwuw" (8 bytes marker?) or "Cuw" (4 bytes)
+	// Markers at 0x24
+	if len(r.Data) >= 0x2C && bytes.HasPrefix(r.Data[0x24:], []byte("Cuwuw")) {
+		// Cuwuw variant
+		// Marker: 0x24 (8 bytes approx? Cuwuw\0\0\0)
+		// Address starts at 0x2C (0x24 + 8)
+		if len(r.Data) >= 0x34 {
+			cuw.BufferAddr = binary.LittleEndian.Uint64(r.Data[0x2c:0x34])
+		}
+		// Extract extra fields if needed
+		if len(r.Data) >= 0x38 {
+			val := binary.LittleEndian.Uint32(r.Data[0x34:0x38])
+			cuw.Field2 = val
+		}
+	} else {
+		// Standard Cuw variant
+		// Marker: 0x24 "Cuw\0"
+		// Address starts at 0x28
+		cuw.BufferAddr = binary.LittleEndian.Uint64(r.Data[0x28:0x30])
+		// Value at 0x30
+		if len(r.Data) >= 0x38 {
+			cuw.Field1 = binary.LittleEndian.Uint64(r.Data[0x30:0x38])
+		}
 	}
 
 	return cuw, nil
 }
 
-// parseCiulSlRecord parses a CiulSl record.
+// ParseCuwRecord parses a Cuw (Command Update/Write) record.
+// ... (existing code) ...
+
+// CtURecord represents a parsed CtU (Buffer Definition) record.
+type CtURecord struct {
+	RecordSize uint32
+	Address    uint64
+	Name       string
+}
+
+// ParseCtURecord parses a CtU record (CtU<b>ulul).
+// Format: Marker at ~0x24/0x2C, followed by Address, then Name.
+func (r *MTSPRecord) ParseCtURecord() (*CtURecord, error) {
+	if r.Type != RecordTypeCtU {
+		return nil, fmt.Errorf("not a CtU record (type=%s)", r.Type)
+	}
+
+	// Find marker "CtU<b>ulul"
+	marker := []byte("CtU<b>ulul")
+	idx := bytes.Index(r.Data, marker)
+	if idx == -1 {
+		return nil, fmt.Errorf("CtU marker not found")
+	}
+
+	// Address usually follows marker + padding?
+	// In dependencies.go logic: base = idx, Address at base+8?
+	// Let's look at dependencies.go:
+	// base := absolutePos + 12 (where absolutePos was start of marker?)
+	// No, dependencies.go finds marker, then says "Label starts at +12" for CS.
+	// For Bind (CtU): ctBindMarker := "CtU<b>ulul\x00\x00" (12 bytes)
+	// bindPos := bytes.Index(..., marker)
+	// base := bindPos + 12
+	// bufferAddr := data[base+8 : base+16] -> This implies Address is at Marker + 12 + 8 = Marker + 20?
+	// string starts at base+16 -> Marker + 12 + 16 = Marker + 28?
+
+	// Let's implement based on dependencies.go offsets relative to Marker start.
+	// Marker len is 10 bytes "CtU<b>ulul". dependencies.go uses 12 bytes with nulls.
+
+	addrOffset := idx + 20
+	if addrOffset+8 > len(r.Data) {
+		return nil, fmt.Errorf("CtU record too small for address")
+	}
+	addr := binary.LittleEndian.Uint64(r.Data[addrOffset : addrOffset+8])
+
+	nameOffset := idx + 28
+	if nameOffset >= len(r.Data) {
+		return nil, fmt.Errorf("CtU record too small for name")
+	}
+
+	// Extract null-terminated string
+	nameData := r.Data[nameOffset:]
+	end := bytes.IndexByte(nameData, 0)
+	var name string
+	if end != -1 {
+		name = string(nameData[:end])
+	} else {
+		name = string(nameData)
+	}
+
+	return &CtURecord{
+		RecordSize: uint32(r.Size),
+		Address:    addr,
+		Name:       name,
+	}, nil
+}
+
+// ParseCtululRecord parses a Ctulul record.
+// Structure appears to be similar to Ctt/Ct (Binding info).
+// Marker "Ctulul\0\0" at ~0x24.
+func (r *MTSPRecord) ParseCtululRecord() (*CttRecord, error) {
+	if r.Type != RecordTypeCtulul {
+		return nil, fmt.Errorf("not a Ctulul record (type=%s)", r.Type)
+	}
+
+	// Find marker
+	marker := []byte("Ctulul\x00")
+	idx := bytes.Index(r.Data, marker[:6]) // Just match prefix
+	if idx == -1 {
+		return nil, fmt.Errorf("Ctulul marker not found")
+	}
+
+	// Based on analysis:
+	// Marker at idx.
+	// Pipeline Addr at idx + 8?
+	// Count at idx + 44?
+	// Buffer Array at idx + 52?
+
+	base := idx
+	if base+52 > len(r.Data) {
+		return nil, fmt.Errorf("Ctulul record too small header")
+	}
+
+	count := binary.LittleEndian.Uint32(r.Data[base+44 : base+48])
+	// stride := binary.LittleEndian.Uint32(r.Data[base+48 : base+52]) // Usually 8
+
+	ctt := &CttRecord{
+		RecordSize:   uint32(r.Size),
+		CommandFlags: binary.LittleEndian.Uint32(r.Data[0x04:0x08]), // Assuming flags at 0x04
+		PipelineAddr: binary.LittleEndian.Uint64(r.Data[base+8 : base+16]),
+		BindingCount: count,
+		// Function Addr? Maybe at base+16?
+	}
+
+	// Extract buffers
+	bufferStart := base + 52
+	if bufferStart+int(count)*8 <= len(r.Data) {
+		ctt.BufferBindings = make([]uint64, count)
+		for i := 0; i < int(count); i++ {
+			offset := bufferStart + i*8
+			ctt.BufferBindings[i] = binary.LittleEndian.Uint64(r.Data[offset : offset+8])
+		}
+	}
+
+	return ctt, nil
+}
+
+// CRecord represents a generic command record (e.g. PopDebugGroup).
+type CRecord struct {
+	RecordSize   uint32
+	CommandFlags uint32
+	EncoderAddr  uint64
+}
+
+func (r *MTSPRecord) ParseCRecord() (*CRecord, error) {
+	if r.Type != RecordTypeC {
+		return nil, fmt.Errorf("not a C record (type=%s)", r.Type)
+	}
+
+	// Marker "C\0\0\0" at ~0x24
+	marker := []byte("C\x00\x00\x00")
+	idx := bytes.Index(r.Data, marker)
+	if idx == -1 {
+		return nil, fmt.Errorf("C marker not found")
+	}
+
+	// Encoder Addr usually at marker + 8
+	addrStart := idx + 8
+	if addrStart+8 > len(r.Data) {
+		return nil, fmt.Errorf("C record too small for address")
+	}
+
+	return &CRecord{
+		RecordSize:   uint32(r.Size),
+		CommandFlags: binary.LittleEndian.Uint32(r.Data[0x04:0x08]),
+		EncoderAddr:  binary.LittleEndian.Uint64(r.Data[addrStart : addrStart+8]),
+	}, nil
+}
+
+// CDispatchRecord represents a compute dispatch record (C@3ul@3ul).
+type CDispatchRecord struct {
+	RecordSize   uint32
+	CommandFlags uint32
+	EncoderID    uint64 // Address at 0x30
+	GridSize     [3]uint32
+	GroupSize    [3]uint32
+}
+
+func (r *MTSPRecord) ParseDispatchRecord() (*CDispatchRecord, error) {
+	if r.Type != RecordTypeC_3ul {
+		return nil, fmt.Errorf("not a dispatch record (type=%s)", r.Type)
+	}
+
+	// Marker "C@3ul@3ul" at ~0x24.
+	// 0x30: Encoder Addr (8 bytes)
+	// 0x38: Grid X
+	// 0x3C: Grid Y
+	// 0x40: Grid Z
+	// ... (0x44, 0x48, 0x4C reserved/unknown?)
+	// 0x50: Group X
+	// 0x54: Group Y
+	// 0x58: Group Z
+
+	if len(r.Data) < 0x60 {
+		return nil, fmt.Errorf("dispatch record too small")
+	}
+
+	return &CDispatchRecord{
+		RecordSize:   uint32(r.Size),
+		CommandFlags: binary.LittleEndian.Uint32(r.Data[0x04:0x08]),
+		EncoderID:    binary.LittleEndian.Uint64(r.Data[0x30:0x38]),
+		GridSize: [3]uint32{
+			uint32(binary.LittleEndian.Uint64(r.Data[0x38:0x40])),
+			uint32(binary.LittleEndian.Uint64(r.Data[0x40:0x48])),
+			uint32(binary.LittleEndian.Uint64(r.Data[0x48:0x50])),
+		},
+		GroupSize: [3]uint32{
+			uint32(binary.LittleEndian.Uint64(r.Data[0x50:0x58])),
+			uint32(binary.LittleEndian.Uint64(r.Data[0x58:0x60])),
+			uint32(binary.LittleEndian.Uint64(r.Data[0x60:0x68])),
+		},
+	}, nil
+}
+
 // Maps Function Address (at base+8) to previous CS record.
 func (r *MTSPRecord) parseCiulSlRecord() {
 	for i := 0; i < len(r.Data)-16; i++ {
