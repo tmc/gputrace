@@ -1,27 +1,46 @@
--- Debug script to dump menu bar items (no Accessibility needed)
+-- Dump Xcode window UI elements to find buttons
 tell application "System Events"
 	tell process "Xcode"
-		set output to "=== Xcode Menu Bar Items ===" & return
+		set LF to ASCII character 10
+		set output to "=== Xcode Window UI Elements ===" & LF & LF
 
-		-- Dump all menus and their items
 		try
-			repeat with m in every menu of menu bar 1
-				set menuName to name of m
-				set output to output & return & "Menu: " & menuName & return
-				try
-					repeat with mi in every menu item of m
-						set miName to name of mi
-						-- Show all items that might be relevant
-						if miName is not missing value and miName is not "" then
-							set output to output & "  - " & miName & return
+			tell window 1
+				-- Get window info
+				set output to output & "Window title: " & (name as string) & LF & LF
+
+				-- Count total elements
+				set allElements to entire contents
+				set output to output & "Total UI elements: " & (count of allElements) & LF & LF
+
+				-- Find all buttons
+				set output to output & "--- All Buttons Found ---" & LF
+				set buttonCount to 0
+				repeat with elem in allElements
+					try
+						if class of elem is button then
+							set buttonCount to buttonCount + 1
+							set btnName to "unnamed"
+							try
+								set btnName to name of elem
+							end try
+							set btnDesc to ""
+							try
+								set btnDesc to description of elem
+							end try
+							set output to output & "  Button " & buttonCount & ": '" & btnName & "'"
+							if btnDesc is not "" then
+								set output to output & " (" & btnDesc & ")"
+							end if
+							set output to output & LF
 						end if
-					end repeat
-				on error errMsg
-					set output to output & "  [Error reading items: " & errMsg & "]" & return
-				end try
-			end repeat
+					end try
+				end repeat
+
+				set output to output & LF & "Total buttons: " & buttonCount & LF
+			end tell
 		on error errMsg
-			set output to output & "Error accessing menus: " & errMsg & return
+			set output to output & "Error: " & errMsg & LF
 		end try
 
 		return output
