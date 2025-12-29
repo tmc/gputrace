@@ -66,15 +66,22 @@ func runStats(cmd *cobra.Command, args []string) error {
 		return outputStatsJSON(statistics, trace, statsVerbose)
 	}
 
-	fmt.Print(statistics.FormatStatistics())
+	// Manually format statistics to apply color
+	fmt.Println(Colorize("Trace Statistics:", ColorBold))
+	fmt.Printf("  Total Records: %d\n", statistics.TotalRecords)
+
+	fmt.Println(Colorize("\nRecord Types:", ColorBold))
+	for k, v := range statistics.RecordTypes {
+		fmt.Printf("  %-15s: %d\n", k, v)
+	}
 
 	// If verbose, show additional analysis
 	if statsVerbose {
-		fmt.Println("\n=== Detailed Analysis ===")
+		fmt.Println(Colorize("\n=== Detailed Analysis ===", ColorBold))
 
 		// Show metadata details
 		if trace.Metadata != nil {
-			fmt.Println("Metadata Details:")
+			fmt.Println(Colorize("Metadata Details:", ColorGreen))
 			fmt.Printf("  UUID: %s\n", trace.Metadata.UUID)
 			fmt.Printf("  Capture Version: %d\n", trace.Metadata.CaptureVersion)
 			fmt.Printf("  Graphics API: %d\n", trace.Metadata.GraphicsAPI)
@@ -84,7 +91,7 @@ func runStats(cmd *cobra.Command, args []string) error {
 
 		// Show all encoder labels
 		if len(trace.EncoderLabels) > 0 {
-			fmt.Printf("All Encoder Labels (%d):\n", len(trace.EncoderLabels))
+			fmt.Printf("%s (%d):\n", Colorize("All Encoder Labels", ColorGreen), len(trace.EncoderLabels))
 			for i, label := range trace.EncoderLabels {
 				fmt.Printf("  [%d] %s\n", i, label)
 			}
@@ -93,7 +100,7 @@ func runStats(cmd *cobra.Command, args []string) error {
 
 		// Show all kernel names
 		if len(trace.KernelNames) > 0 {
-			fmt.Printf("All Kernel Names (%d):\n", len(trace.KernelNames))
+			fmt.Printf("%s (%d):\n", Colorize("All Kernel Names", ColorGreen), len(trace.KernelNames))
 			for i, name := range trace.KernelNames {
 				fmt.Printf("  [%d] %s\n", i, name)
 			}
@@ -102,7 +109,7 @@ func runStats(cmd *cobra.Command, args []string) error {
 
 		// Show buffer labels
 		if len(trace.BufferLabels) > 0 {
-			fmt.Printf("All Buffer Labels (%d):\n", len(trace.BufferLabels))
+			fmt.Printf("%s (%d):\n", Colorize("All Buffer Labels", ColorGreen), len(trace.BufferLabels))
 			for i, label := range trace.BufferLabels {
 				fmt.Printf("  [%d] %s\n", i, label)
 			}
@@ -111,15 +118,15 @@ func runStats(cmd *cobra.Command, args []string) error {
 
 		// Show command queue label
 		if trace.CommandQueueLabel != "" {
-			fmt.Printf("Command Queue Label: %s\n\n", trace.CommandQueueLabel)
+			fmt.Printf("%s: %s\n\n", Colorize("Command Queue Label", ColorGreen), trace.CommandQueueLabel)
 		}
 
 		// Try to extract timing data
 		timings, err := gputrace.ExtractTimingData(trace)
 		if err == nil && len(timings) > 0 {
-			fmt.Printf("Timing Data (%d samples):\n", len(timings))
+			fmt.Printf("%s (%d samples):\n", Colorize("Timing Data", ColorGreen), len(timings))
 			for _, timing := range timings {
-				fmt.Printf("  %s:\n", timing.Label)
+				fmt.Printf("  %s:\n", Colorize(timing.Label, ColorYellow))
 				fmt.Printf("    Start: %d (0x%x)\n", timing.StartTimestamp, timing.StartTimestamp)
 				fmt.Printf("    End:   %d (0x%x)\n", timing.EndTimestamp, timing.EndTimestamp)
 				fmt.Printf("    Duration: %.2f ms\n", timing.DurationMs)
