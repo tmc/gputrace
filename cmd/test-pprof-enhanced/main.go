@@ -26,9 +26,18 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Parse performance counters
+	var stats *gputrace.PerfCounterStats
+	if s, err := gputrace.ParsePerfCounters(trace); err == nil {
+		stats = s
+		fmt.Printf("Loaded performance counters with confidence %.2f\n", stats.ConfidenceLevel)
+	} else {
+		fmt.Printf("Warning: Failed to parse performance counters: %v\n", err)
+	}
+
 	// Generate enhanced pprof
 	fmt.Println("Generating enhanced pprof profile...")
-	prof, err := gputrace.ToPprofWithMetrics(trace, nil)
+	prof, err := gputrace.ToPprofWithMetrics(trace, nil, stats)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error generating pprof: %v\n", err)
 		os.Exit(1)
