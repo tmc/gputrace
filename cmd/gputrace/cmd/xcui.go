@@ -323,6 +323,79 @@ func moveCursor(x, y float64) {
 	}
 }
 
+// clickElement simulates a single click on an AX element using CGEvent.
+// It saves and restores the cursor position.
+// This is useful as a fallback when AXPress fails with error -25205.
+func clickElement(el uintptr) error {
+	ensureXCUI()
+	if cgEventCreateMouseEvent == nil {
+		return fmt.Errorf("CGEvent not available")
+	}
+
+	// Save cursor position
+	origX, origY := getCursorPosition()
+
+	x, y := axPosition(el)
+	w, h := axSize(el)
+
+	verboseLog("clickElement: position=(%d,%d) size=(%d,%d)", x, y, w, h)
+
+	if w == 0 && h == 0 {
+		// Try to get bounds via AXFrame attribute
+		var frameVal uintptr
+		frameKey := mkString("AXFrame")
+		defer cfRelease(frameKey)
+		if axCopyAttributeValue(el, frameKey, &frameVal) == kAXErrorSuccess {
+			defer cfRelease(frameVal)
+			// AXFrame is a CGRect struct
+			var frame [4]float64
+			if axValueGetValue(frameVal, 3, unsafe.Pointer(&frame[0])) { // 3 = kAXValueTypeCGRect
+				x, y = int(frame[0]), int(frame[1])
+				w, h = int(frame[2]), int(frame[3])
+				verboseLog("clickElement: got frame from AXFrame: pos=(%d,%d) size=(%d,%d)", x, y, w, h)
+			}
+		}
+	}
+
+	if w == 0 && h == 0 {
+		return fmt.Errorf("could not get element bounds (position=%d,%d size=%d,%d)", x, y, w, h)
+	}
+
+	// Click at center of element
+	cx := float64(x + w/2)
+	cy := float64(y + h/2)
+
+	// Move cursor to the element first (required for some UI elements)
+	moveCursor(cx, cy)
+	time.Sleep(50 * time.Millisecond)
+
+	// Create mouse events
+	down := cgEventCreateMouseEvent(0, kCGEventLeftMouseDown, cx, cy, 0)
+	if down == 0 {
+		return fmt.Errorf("failed to create mouse down event")
+	}
+	defer cfRelease(down)
+
+	up := cgEventCreateMouseEvent(0, kCGEventLeftMouseUp, cx, cy, 0)
+	if up == 0 {
+		return fmt.Errorf("failed to create mouse up event")
+	}
+	defer cfRelease(up)
+
+	// Post events
+	cgEventPost(kCGHIDEventTap, down)
+	time.Sleep(50 * time.Millisecond)
+	cgEventPost(kCGHIDEventTap, up)
+
+	// Restore cursor position
+	if origX != 0 || origY != 0 {
+		time.Sleep(50 * time.Millisecond)
+		moveCursor(origX, origY)
+	}
+
+	return nil
+}
+
 // doubleClickElement simulates a double-click on an AX element using CGEvent.
 // It saves and restores the cursor position.
 func doubleClickElement(el uintptr) error {
@@ -453,6 +526,30 @@ func axAction(ax uintptr, action string) error {
 		return fmt.Errorf("AX error %d", err)
 	}
 	return nil
+}
+
+// axPressWithFallback tries AXPress first, and falls back to CGEvent click if AXPress fails.
+// This handles the common -25205 (action not supported) error on some Xcode UI elements.
+func axPressWithFallback(el uintptr) error {
+	key := mkString("AXPress")
+	defer cfRelease(key)
+	err := axPerformAction(el, key)
+	if err == kAXErrorSuccess {
+		return nil
+	}
+
+	// AXPress failed - check if it's an action-not-supported error (-25205)
+	// or API disabled (-25211)
+	if err == -25205 || err == -25204 {
+		verboseLog("axPressWithFallback: AXPress failed (error %d), trying CGEvent click", err)
+		// Fall back to CGEvent click
+		if clickErr := clickElement(el); clickErr != nil {
+			return fmt.Errorf("AX error %d, CGEvent fallback: %w", err, clickErr)
+		}
+		return nil
+	}
+
+	return fmt.Errorf("AX error %d", err)
 }
 
 // axActionNames returns the list of actions supported by an element.

@@ -68,7 +68,7 @@ func runEnsureChecked(cmd *cobra.Command, args []string) error {
 	}
 
 	// Click to check it
-	if err := axAction(checkbox, "AXPress"); err != nil {
+	if err := axPressWithFallback(checkbox); err != nil {
 		return fmt.Errorf("failed to click checkbox: %w", err)
 	}
 
@@ -109,7 +109,7 @@ func runToggleCheckbox(cmd *cobra.Command, args []string) error {
 	wasBefore := IsCheckboxChecked(checkbox)
 	fmt.Printf("Checkbox %q was: %v\n", title, wasBefore)
 
-	if err := axAction(checkbox, "AXPress"); err != nil {
+	if err := axPressWithFallback(checkbox); err != nil {
 		return fmt.Errorf("failed to click checkbox: %w", err)
 	}
 

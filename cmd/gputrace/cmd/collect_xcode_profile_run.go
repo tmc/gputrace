@@ -274,7 +274,7 @@ func clickReplayButton(windowAX uintptr) error {
 	replayBtn := findButtonBFS(windowAX, "Replay", 500)
 	verboseLog("clickReplayButton: Replay button (target window)=%d enabled=%v", replayBtn, replayBtn != 0 && IsElementEnabled(replayBtn))
 	if replayBtn != 0 && IsElementEnabled(replayBtn) {
-		if err := axAction(replayBtn, "AXPress"); err != nil {
+		if err := axPressWithFallback(replayBtn); err != nil {
 			return fmt.Errorf("failed to click Replay button: %w", err)
 		}
 		fmt.Println("    Clicked Replay button successfully")
@@ -285,7 +285,7 @@ func clickReplayButton(windowAX uintptr) error {
 	profileBtn := findButtonBFS(windowAX, "Profile", 500)
 	verboseLog("clickReplayButton: Profile button=%d enabled=%v", profileBtn, profileBtn != 0 && IsElementEnabled(profileBtn))
 	if profileBtn != 0 && IsElementEnabled(profileBtn) {
-		if err := axAction(profileBtn, "AXPress"); err != nil {
+		if err := axPressWithFallback(profileBtn); err != nil {
 			return fmt.Errorf("failed to click Profile button: %w", err)
 		}
 		fmt.Println("    Clicked Profile button successfully")
@@ -296,7 +296,7 @@ func clickReplayButton(windowAX uintptr) error {
 	captureBtn := findButtonInAllWindows("Capture GPU workload")
 	verboseLog("clickReplayButton: Capture GPU workload button=%d enabled=%v", captureBtn, captureBtn != 0 && IsElementEnabled(captureBtn))
 	if captureBtn != 0 && IsElementEnabled(captureBtn) {
-		if err := axAction(captureBtn, "AXPress"); err != nil {
+		if err := axPressWithFallback(captureBtn); err != nil {
 			return fmt.Errorf("failed to click Capture GPU workload button: %w", err)
 		}
 		fmt.Println("    Clicked Capture GPU workload button successfully")
@@ -308,7 +308,7 @@ func clickReplayButton(windowAX uintptr) error {
 		time.Sleep(1 * time.Second)
 		replayBtn = findButtonBFS(windowAX, "Replay", 500)
 		if replayBtn != 0 && IsElementEnabled(replayBtn) {
-			if err := axAction(replayBtn, "AXPress"); err != nil {
+			if err := axPressWithFallback(replayBtn); err != nil {
 				return fmt.Errorf("failed to click Replay button: %w", err)
 			}
 			fmt.Println("    Clicked Replay button successfully")
@@ -316,7 +316,7 @@ func clickReplayButton(windowAX uintptr) error {
 		}
 		captureBtn = findButtonInAllWindows("Capture GPU workload")
 		if captureBtn != 0 && IsElementEnabled(captureBtn) {
-			if err := axAction(captureBtn, "AXPress"); err != nil {
+			if err := axPressWithFallback(captureBtn); err != nil {
 				return fmt.Errorf("failed to click Capture GPU workload button: %w", err)
 			}
 			fmt.Println("    Clicked Capture GPU workload button successfully")
@@ -460,7 +460,7 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 	exportBtn := FindExportButton(windowAX)
 	if exportBtn != 0 {
 		fmt.Println("    Found Export button in Summary panel")
-		if err := axAction(exportBtn, "AXPress"); err != nil {
+		if err := axPressWithFallback(exportBtn); err != nil {
 			fmt.Printf("    Warning: Failed to click Export button: %v\n", err)
 		}
 	} else {
@@ -534,7 +534,7 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 		if IsElementEnabled(embedCheckbox) {
 			if !IsCheckboxChecked(embedCheckbox) {
 				fmt.Println("    Enabling 'Embed performance data'")
-				axAction(embedCheckbox, "AXPress")
+				axPressWithFallback(embedCheckbox)
 				time.Sleep(300 * time.Millisecond)
 			} else {
 				fmt.Println("    'Embed performance data' already enabled")
@@ -606,7 +606,7 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 
 	// Click Save button
 	fmt.Println("    Saving...")
-	if err := axAction(saveBtn, "AXPress"); err != nil {
+	if err := axPressWithFallback(saveBtn); err != nil {
 		return fmt.Errorf("failed to click Save: %w", err)
 	}
 

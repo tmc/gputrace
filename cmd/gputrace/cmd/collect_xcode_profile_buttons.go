@@ -145,7 +145,7 @@ func runClickButton(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("Clicking button: %s\n", buttonName)
-	if err := axAction(btn, "AXPress"); err != nil {
+	if err := axPressWithFallback(btn); err != nil {
 		return fmt.Errorf("failed to click: %w", err)
 	}
 	fmt.Println("Done")
