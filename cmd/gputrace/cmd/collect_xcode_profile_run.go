@@ -136,25 +136,15 @@ func clickReplayButton(windowAX uintptr) error {
 		return nil
 	}
 
-	// Fall back to Replay button
-	replayBtn := FindReplayButton(windowAX)
-	if replayBtn == 0 {
-		// Check for Stop button (replay already in progress)
-		if FindStopButton(windowAX) != 0 {
-			fmt.Println("    (Stop button found, replay already in progress?)")
-			return nil
-		}
-		// Retry a few times
-		for i := 0; i < 5; i++ {
-			time.Sleep(1 * time.Second)
-			replayBtn = FindReplayButton(windowAX)
-			if replayBtn != 0 {
-				break
-			}
-		}
+	// Check for Stop button (replay already in progress)
+	if FindStopButton(windowAX) != 0 {
+		fmt.Println("    (Stop button found, replay already in progress?)")
+		return nil
 	}
 
-	if replayBtn != 0 {
+	// Try Replay button
+	replayBtn := FindReplayButton(windowAX)
+	if replayBtn != 0 && IsElementEnabled(replayBtn) {
 		if err := axAction(replayBtn, "AXPress"); err != nil {
 			return fmt.Errorf("failed to click Replay button: %w", err)
 		}
@@ -162,7 +152,39 @@ func clickReplayButton(windowAX uintptr) error {
 		return nil
 	}
 
-	return fmt.Errorf("Replay button not found in AX tree")
+	// Try "Run" button as fallback (newer Xcode versions may use this name)
+	// Look for Run button near GPU trace controls
+	runBtn := FindRunButton(windowAX)
+	if runBtn != 0 && IsElementEnabled(runBtn) {
+		if err := axAction(runBtn, "AXPress"); err != nil {
+			return fmt.Errorf("failed to click Run button: %w", err)
+		}
+		fmt.Println("    Clicked Run button successfully")
+		return nil
+	}
+
+	// Retry a few times
+	for i := 0; i < 5; i++ {
+		time.Sleep(1 * time.Second)
+		replayBtn = FindReplayButton(windowAX)
+		if replayBtn != 0 && IsElementEnabled(replayBtn) {
+			if err := axAction(replayBtn, "AXPress"); err != nil {
+				return fmt.Errorf("failed to click Replay button: %w", err)
+			}
+			fmt.Println("    Clicked Replay button successfully")
+			return nil
+		}
+		runBtn = FindRunButton(windowAX)
+		if runBtn != 0 && IsElementEnabled(runBtn) {
+			if err := axAction(runBtn, "AXPress"); err != nil {
+				return fmt.Errorf("failed to click Run button: %w", err)
+			}
+			fmt.Println("    Clicked Run button successfully")
+			return nil
+		}
+	}
+
+	return fmt.Errorf("Replay/Run button not found in AX tree")
 }
 
 func waitForReplayComplete(windowAX uintptr, timeout time.Duration) error {
