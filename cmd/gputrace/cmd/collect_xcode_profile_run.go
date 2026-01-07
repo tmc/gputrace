@@ -162,16 +162,33 @@ func clickReplayButton(windowAX uintptr) error {
 	windowTitle := axString(windowAX, "AXTitle")
 	verboseLog("clickReplayButton: window=%d title=%q", windowAX, windowTitle)
 
+	// Activate Xcode and raise the target window before clicking
+	if err := ActivateXcode(); err != nil {
+		verboseLog("clickReplayButton: ActivateXcode failed: %v", err)
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	// Raise the specific trace window
+	if err := axAction(windowAX, "AXRaise"); err != nil {
+		verboseLog("clickReplayButton: AXRaise failed: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+
 	// Get app reference to search all windows (Run button may be in toolbar, not document window)
 	appAX, _ := FindXcodeApp()
 	if appAX != 0 {
 		defer cfRelease(appAX)
 	}
 
-	// Helper to search all windows for a button
+	// Helper to search windows for a button - prioritize the target window
 	findButtonInAllWindows := func(name string) uintptr {
+		// First check the target window
+		if btn := findButtonBFS(windowAX, name, 500); btn != 0 {
+			return btn
+		}
+		// Fall back to other windows
 		if appAX == 0 {
-			return findButtonBFS(windowAX, name, 500)
+			return 0
 		}
 		windows := GetAllWindows(appAX)
 		for _, w := range windows {
@@ -182,7 +199,18 @@ func clickReplayButton(windowAX uintptr) error {
 		return 0
 	}
 
-	// First, try to find a "Profile" button (preferred - starts profiling directly)
+	// Try "Capture GPU workload" button (GPU trace specific - starts profiling)
+	captureBtn := findButtonInAllWindows("Capture GPU workload")
+	verboseLog("clickReplayButton: Capture GPU workload button=%d enabled=%v", captureBtn, captureBtn != 0 && IsElementEnabled(captureBtn))
+	if captureBtn != 0 && IsElementEnabled(captureBtn) {
+		if err := axAction(captureBtn, "AXPress"); err != nil {
+			return fmt.Errorf("failed to click Capture GPU workload button: %w", err)
+		}
+		fmt.Println("    Clicked Capture GPU workload button successfully")
+		return nil
+	}
+
+	// Try "Profile" button (alternate name)
 	profileBtn := findButtonInAllWindows("Profile")
 	verboseLog("clickReplayButton: Profile button=%d enabled=%v", profileBtn, profileBtn != 0 && IsElementEnabled(profileBtn))
 	if profileBtn != 0 && IsElementEnabled(profileBtn) {
@@ -204,20 +232,17 @@ func clickReplayButton(windowAX uintptr) error {
 		return nil
 	}
 
-	// Try "Run" button as fallback (newer Xcode versions may use this name)
-	runBtn := findButtonInAllWindows("Run")
-	verboseLog("clickReplayButton: Run button=%d enabled=%v", runBtn, runBtn != 0 && IsElementEnabled(runBtn))
-	if runBtn != 0 && IsElementEnabled(runBtn) {
-		if err := axAction(runBtn, "AXPress"); err != nil {
-			return fmt.Errorf("failed to click Run button: %w", err)
-		}
-		fmt.Println("    Clicked Run button successfully")
-		return nil
-	}
-
 	// Retry a few times
 	for i := 0; i < 5; i++ {
 		time.Sleep(1 * time.Second)
+		captureBtn = findButtonInAllWindows("Capture GPU workload")
+		if captureBtn != 0 && IsElementEnabled(captureBtn) {
+			if err := axAction(captureBtn, "AXPress"); err != nil {
+				return fmt.Errorf("failed to click Capture GPU workload button: %w", err)
+			}
+			fmt.Println("    Clicked Capture GPU workload button successfully")
+			return nil
+		}
 		replayBtn = findButtonInAllWindows("Replay")
 		if replayBtn != 0 && IsElementEnabled(replayBtn) {
 			if err := axAction(replayBtn, "AXPress"); err != nil {
@@ -226,52 +251,39 @@ func clickReplayButton(windowAX uintptr) error {
 			fmt.Println("    Clicked Replay button successfully")
 			return nil
 		}
-		runBtn = findButtonInAllWindows("Run")
-		if runBtn != 0 && IsElementEnabled(runBtn) {
-			if err := axAction(runBtn, "AXPress"); err != nil {
-				return fmt.Errorf("failed to click Run button: %w", err)
-			}
-			fmt.Println("    Clicked Run button successfully")
-			return nil
-		}
 	}
 
-	return fmt.Errorf("Replay/Run button not found in AX tree")
+	return fmt.Errorf("Capture GPU workload/Replay button not found in AX tree")
 }
 
 func waitForReplayComplete(windowAX uintptr, timeout time.Duration) error {
 	start := time.Now()
+	windowTitle := axString(windowAX, "AXTitle")
+	verboseLog("waitForReplayComplete: waiting for profiling in window %q", windowTitle)
 
-	// Get app reference to search all windows (buttons may be in different windows)
-	appAX, _ := FindXcodeApp()
-	if appAX != 0 {
-		defer cfRelease(appAX)
+	// Helper to find a button in the TARGET window only (not all windows)
+	// This prevents false positives from other Xcode windows
+	findButton := func(name string) uintptr {
+		return findButtonBFS(windowAX, name, 500)
 	}
 
-	// Helper to find a button across all windows
-	findButtonInAllWindows := func(name string) uintptr {
-		if appAX == 0 {
-			return findButtonBFS(windowAX, name, 500)
-		}
-		windows := GetAllWindows(appAX)
-		for _, w := range windows {
-			if btn := findButtonBFS(w, name, 500); btn != 0 {
-				return btn
-			}
-		}
-		return 0
-	}
-
-	// First, wait for profiling to actually start (Run button disabled OR Stop button enabled)
+	// First, wait for profiling to actually start
+	// "Capture GPU workload" disabled OR "Stop GPU workload" enabled = profiling running
 	profilingStarted := false
 	for time.Since(start) < 30*time.Second {
-		runBtn := findButtonInAllWindows("Run")
-		stopBtn := findButtonInAllWindows("Stop GPU workload")
+		captureBtn := findButton("Capture GPU workload")
+		stopBtn := findButton("Stop GPU workload")
 
-		// Profiling started if: Run is disabled OR Stop GPU workload is enabled
-		if (runBtn != 0 && !IsElementEnabled(runBtn)) || (stopBtn != 0 && IsElementEnabled(stopBtn)) {
+		captureEnabled := captureBtn != 0 && IsElementEnabled(captureBtn)
+		stopEnabled := stopBtn != 0 && IsElementEnabled(stopBtn)
+
+		verboseLog("waitForReplayComplete: checking start state - Capture=%v(enabled=%v) Stop=%v(enabled=%v)",
+			captureBtn != 0, captureEnabled, stopBtn != 0, stopEnabled)
+
+		// Profiling started if: Capture is disabled OR Stop GPU workload is enabled
+		if (captureBtn != 0 && !captureEnabled) || stopEnabled {
 			profilingStarted = true
-			verboseLog("waitForReplayComplete: profiling started (Run disabled or Stop enabled)")
+			verboseLog("waitForReplayComplete: profiling started")
 			break
 		}
 		time.Sleep(500 * time.Millisecond)
@@ -282,48 +294,69 @@ func waitForReplayComplete(windowAX uintptr, timeout time.Duration) error {
 		// Continue anyway, maybe the state changed too quickly
 	}
 
-	// Now wait for profiling to complete
-	for time.Since(start) < timeout {
-		// Check for completion indicators:
-		// 1. Replay/Run button is enabled (can replay again)
-		rBtn := findButtonInAllWindows("Replay")
-		if rBtn != 0 && IsElementEnabled(rBtn) {
-			verboseLog("waitForReplayComplete: Replay button enabled - complete")
-			return nil
-		}
-		runBtn := findButtonInAllWindows("Run")
-		if runBtn != 0 && IsElementEnabled(runBtn) {
-			verboseLog("waitForReplayComplete: Run button enabled - complete")
-			return nil
-		}
+	// Add minimum wait to ensure profiling has time to run
+	// (prevents detecting completion before profiling actually happens)
+	minWait := 5 * time.Second
+	elapsed := time.Since(start)
+	if elapsed < minWait {
+		sleepTime := minWait - elapsed
+		verboseLog("waitForReplayComplete: minimum wait %.1fs", sleepTime.Seconds())
+		time.Sleep(sleepTime)
+	}
 
-		// 2. Show Performance button appears (profiling complete, ready to view)
-		showPerfBtn := findButtonInAllWindows("Show Performance")
+	// Now wait for profiling to complete
+	lastStatus := ""
+	for time.Since(start) < timeout {
+		// Check for completion indicators (only in target window):
+
+		// 1. Show Performance button appears (most reliable - profiling complete, ready to view)
+		showPerfBtn := findButton("Show Performance")
 		if showPerfBtn != 0 && IsElementEnabled(showPerfBtn) {
 			verboseLog("waitForReplayComplete: Show Performance button found - complete")
 			return nil
 		}
 
-		// 3. Stop GPU workload button is disabled or absent means replay finished
-		stopBtn := findButtonInAllWindows("Stop GPU workload")
-		if stopBtn == 0 || !IsElementEnabled(stopBtn) {
-			// Double-check by looking for Export button
-			exportBtn := findButtonInAllWindows("Export")
-			if exportBtn != 0 {
-				verboseLog("waitForReplayComplete: Stop button disabled/absent, Export available - complete")
+		// 2. Export button appears (indicates performance data is ready)
+		exportBtn := findButton("Export")
+		if exportBtn != 0 && IsElementEnabled(exportBtn) {
+			verboseLog("waitForReplayComplete: Export button found - complete")
+			return nil
+		}
+
+		// 3. Stop GPU workload button is disabled/absent AND Capture is enabled
+		captureBtn := findButton("Capture GPU workload")
+		stopBtn := findButton("Stop GPU workload")
+		captureEnabled := captureBtn != 0 && IsElementEnabled(captureBtn)
+		stopEnabled := stopBtn != 0 && IsElementEnabled(stopBtn)
+
+		if !stopEnabled && captureEnabled {
+			// Additional check: wait for Export or Show Performance to appear
+			// before declaring complete (prevents early false positive)
+			time.Sleep(2 * time.Second)
+			exportBtn = findButton("Export")
+			showPerfBtn = findButton("Show Performance")
+			if exportBtn != 0 || showPerfBtn != 0 {
+				verboseLog("waitForReplayComplete: Stop disabled, Capture enabled, Export/ShowPerf available - complete")
 				return nil
 			}
+			// If still no Export button, continue waiting
+			verboseLog("waitForReplayComplete: Stop disabled, Capture enabled but no Export yet")
 		}
 
 		elapsed := time.Since(start).Seconds()
 		status := "running"
 		if stopBtn == 0 {
 			status = "no stop button"
-		} else if !IsElementEnabled(stopBtn) {
-			status = "stop button disabled"
+		} else if !stopEnabled {
+			status = "stop disabled"
+		}
+
+		// Only print if status changed
+		if status != lastStatus {
+			fmt.Printf("    Profiling... (%.0fs, status: %s)\n", elapsed, status)
+			lastStatus = status
 		}
 		time.Sleep(2 * time.Second)
-		fmt.Printf("    Still waiting... (%.0fs, status: %s)\n", elapsed, status)
 	}
 	return fmt.Errorf("timed out waiting for replay completion")
 }

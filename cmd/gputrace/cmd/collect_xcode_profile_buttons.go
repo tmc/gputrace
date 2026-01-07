@@ -134,12 +134,48 @@ func runClickButton(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("button %q not found in any Xcode window", buttonName)
 	}
 
+	// Find which window contains this button and raise it
+	for _, w := range windows {
+		if containsElement(w, btn, 500) {
+			verboseLog("Raising window containing button %q", buttonName)
+			axAction(w, "AXRaise")
+			time.Sleep(200 * time.Millisecond)
+			break
+		}
+	}
+
 	fmt.Printf("Clicking button: %s\n", buttonName)
 	if err := axAction(btn, "AXPress"); err != nil {
 		return fmt.Errorf("failed to click: %w", err)
 	}
 	fmt.Println("Done")
 	return nil
+}
+
+// containsElement checks if a window/element contains a specific element via BFS.
+func containsElement(root, target uintptr, maxVisit int) bool {
+	queue := []uintptr{root}
+	visited := 0
+	seen := make(map[uintptr]bool)
+
+	for len(queue) > 0 && visited < maxVisit {
+		el := queue[0]
+		queue = queue[1:]
+
+		if seen[el] {
+			continue
+		}
+		seen[el] = true
+		visited++
+
+		if el == target {
+			return true
+		}
+
+		children := axChildren(el)
+		queue = append(queue, children...)
+	}
+	return false
 }
 
 func runListButtons(cmd *cobra.Command, args []string) error {
