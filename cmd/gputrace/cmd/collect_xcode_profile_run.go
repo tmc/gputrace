@@ -104,12 +104,36 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("export failed: %w", err)
 	}
 
+	// Check if file was saved - try multiple locations
 	if _, err := os.Stat(outputPath); err == nil {
 		fmt.Printf(Colorize("\nDone! Output saved to: %s\n", ColorGreen), outputPath)
-	} else {
-		fmt.Print(Colorize("\nNote: Output file not found at expected location.\n", ColorYellow))
-		fmt.Printf("Check Xcode for the exported file.\n")
+		return nil
 	}
+
+	// Try the input file's directory (common Xcode default)
+	outputName := filepath.Base(outputPath)
+	inputDir := filepath.Dir(inputPath)
+	altPath := filepath.Join(inputDir, outputName)
+	if altPath != outputPath {
+		if _, err := os.Stat(altPath); err == nil {
+			fmt.Printf(Colorize("\nDone! Output saved to: %s\n", ColorGreen), altPath)
+			return nil
+		}
+	}
+
+	// Try user's Downloads folder
+	if home, err := os.UserHomeDir(); err == nil {
+		downloadsPath := filepath.Join(home, "Downloads", outputName)
+		if _, err := os.Stat(downloadsPath); err == nil {
+			fmt.Printf(Colorize("\nDone! Output saved to: %s\n", ColorGreen), downloadsPath)
+			return nil
+		}
+	}
+
+	fmt.Print(Colorize("\nNote: Output file not found at expected location.\n", ColorYellow))
+	fmt.Printf("  Expected: %s\n", outputPath)
+	fmt.Printf("  Also checked: %s\n", inputDir)
+	fmt.Printf("Check Xcode's save dialog for the actual location.\n")
 	return nil
 }
 
@@ -353,18 +377,49 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 		}
 	}
 
-	// Set the filename using AX APIs
-	// Note: This saves to whatever directory the save dialog is currently showing
-	// For full path control, the user should specify the output path and we'll set just the basename
+	outputDir := filepath.Dir(outputPath)
 	outputName := filepath.Base(outputPath)
 
 	if collectProfileDebug {
 		DebugTextFields(windowAX)
 	}
 
-	// Find the "Save As" text field by identifier (saveAsNameTextField)
-	// Note: We only set the basename - macOS save dialogs don't accept full paths in the filename field
-	saveNameField := FindSaveAsTextField(windowAX)
+	// Get app reference to search all windows
+	freshApp, _ := FindXcodeApp()
+	if freshApp != 0 {
+		defer cfRelease(freshApp)
+	}
+
+	// Helper to find element across all windows
+	findInAllWindows := func(finder func(uintptr) uintptr) uintptr {
+		if freshApp == 0 {
+			return finder(windowAX)
+		}
+		windows := GetAllWindows(freshApp)
+		for _, w := range windows {
+			if el := finder(w); el != 0 {
+				return el
+			}
+		}
+		return 0
+	}
+
+	// Try to navigate to the output directory using Cmd+Shift+G
+	navigatedToDir := false
+	if outputDir != "" && outputDir != "." {
+		fmt.Printf("    Navigating to directory: %s\n", outputDir)
+		if err := NavigateToFolderInSaveDialog(windowAX, outputDir); err != nil {
+			verboseLog("exportTrace: directory navigation failed: %v", err)
+			// Navigation failed - this is common with Xcode dialogs
+			// Continue with just setting the filename
+		} else {
+			navigatedToDir = true
+			verboseLog("exportTrace: navigated to directory successfully")
+		}
+	}
+
+	// Find the "Save As" text field across all windows and set the filename
+	saveNameField := findInAllWindows(FindSaveAsTextField)
 	fmt.Printf("    Setting filename: %s\n", outputName)
 	if saveNameField != 0 {
 		if err := axSetValue(saveNameField, outputName); err != nil {
@@ -377,33 +432,34 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 	}
 	time.Sleep(300 * time.Millisecond)
 
-	// Click Save button - get completely fresh app and window references
+	// Click Save button - search all windows
 	fmt.Println("    Saving...")
-	freshApp, err := FindXcodeApp()
-	if err != nil {
-		if collectProfileDebug {
-			fmt.Printf("    [DEBUG] Could not get fresh app: %v\n", err)
-		}
-	} else {
-		defer cfRelease(freshApp)
-		freshWindow := GetFirstWindow(freshApp)
-		if freshWindow != 0 {
-			saveBtn := findButtonBFS(freshWindow, "Save", 1000)
-			if saveBtn != 0 {
-				if err := axAction(saveBtn, "AXPress"); err != nil {
-					if collectProfileDebug {
-						fmt.Printf("    [DEBUG] Save click failed: %v\n", err)
-					}
-				}
-			} else if collectProfileDebug {
-				fmt.Println("    [DEBUG] Save button not found")
+	saveBtn := findInAllWindows(func(w uintptr) uintptr {
+		return findButtonBFS(w, "Save", 1000)
+	})
+	if saveBtn != 0 {
+		if err := axAction(saveBtn, "AXPress"); err != nil {
+			if collectProfileDebug {
+				fmt.Printf("    [DEBUG] Save click failed: %v\n", err)
 			}
-		} else if collectProfileDebug {
-			fmt.Println("    [DEBUG] Could not get fresh window")
 		}
+	} else if collectProfileDebug {
+		fmt.Println("    [DEBUG] Save button not found")
 	}
 
+	// Wait for save to complete
 	time.Sleep(2 * time.Second)
+
+	// Check if file was saved to expected location
+	if _, err := os.Stat(outputPath); err == nil {
+		return nil // File found at expected path
+	}
+
+	// If we didn't navigate, suggest where the file might be
+	if !navigatedToDir {
+		verboseLog("exportTrace: file not at %s, may be in Xcode's default export location", outputPath)
+	}
+
 	return nil
 }
 
