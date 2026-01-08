@@ -3,10 +3,14 @@ package cmd
 import (
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
+	"github.com/tmc/gputrace"
+	"github.com/tmc/gputrace/internal/export"
 	"github.com/tmc/gputrace/internal/mlxprof"
+	"github.com/tmc/gputrace/internal/timing"
 )
 
 var (
@@ -17,6 +21,7 @@ var (
 	textReport  bool
 	showStats   bool
 	searchPaths []string
+	sourceLines bool
 )
 
 var pprofCmd = &cobra.Command{
@@ -67,6 +72,7 @@ func init() {
 	pprofCmd.Flags().BoolVar(&textReport, "text", false, "Generate text report only")
 	pprofCmd.Flags().BoolVar(&showStats, "stats", false, "Show trace statistics only")
 	pprofCmd.Flags().StringSliceVar(&searchPaths, "search-path", nil, "Search paths for shader source files")
+	pprofCmd.Flags().BoolVar(&sourceLines, "source-lines", false, "Generate pprof with per-source-line samples (enables go tool pprof -list)")
 }
 
 func runPprof(cmd *cobra.Command, args []string) error {
@@ -96,6 +102,11 @@ func runPprof(cmd *cobra.Command, args []string) error {
 
 		prof.PrintSummary()
 		return nil
+	}
+
+	// If source-lines mode, generate per-line pprof
+	if sourceLines {
+		return generateSourceLinesPprof(tracePath, searchPaths)
 	}
 
 	// Create profiler
@@ -190,6 +201,98 @@ func runPprof(cmd *cobra.Command, args []string) error {
 		fmt.Printf("\nView with: go tool pprof -top %s\n", outputPath)
 		fmt.Printf("Or:        go tool pprof -http=:8080 %s\n", outputPath)
 	}
+
+	return nil
+}
+
+// generateSourceLinesPprof generates a pprof profile with per-source-line samples.
+// This enables 'go tool pprof -list kernel_name' to show line-by-line costs.
+func generateSourceLinesPprof(tracePath string, searchPaths []string) error {
+	// Open trace
+	trace, err := gputrace.Open(tracePath)
+	if err != nil {
+		return fmt.Errorf("failed to open trace: %w", err)
+	}
+
+	// Create shader source mapper
+	mapper := gputrace.NewShaderSourceMapper(searchPaths...)
+	if err := mapper.IndexShaderSources(); err != nil {
+		log.Printf("Warning: failed to index shader sources: %v", err)
+	}
+
+	// Get timing data - try multiple sources in order of preference
+	var timings []*export.EncoderTiming
+
+	// 1. Try real profiler timing from .gpuprofiler_raw (most accurate)
+	profilerTimings, _, profilerErr := gputrace.ExtractEncoderTimingsFromProfiler(trace)
+	if profilerErr == nil && len(profilerTimings) > 0 {
+		if verbose {
+			fmt.Printf("Using real profiler timing data (%d encoders)\n", len(profilerTimings))
+		}
+		var currentTimeNs uint64
+		for _, pt := range profilerTimings {
+			durationNs := uint64(pt.DurationMicros) * 1000 // Convert µs to ns
+			label := pt.Label
+			if label == "" {
+				label = fmt.Sprintf("encoder_%d", pt.Index)
+			}
+			timings = append(timings, &export.EncoderTiming{
+				Label:          label,
+				DurationNs:     durationNs,
+				StartTimestamp: currentTimeNs,
+			})
+			currentTimeNs += durationNs
+		}
+	} else {
+		// 2. Try timing.ExtractTimingData (from encoder labels)
+		extracted, err := timing.ExtractTimingData(trace)
+		if err == nil && len(extracted) > 0 {
+			if verbose {
+				fmt.Printf("Using encoder label timing data (%d encoders)\n", len(extracted))
+			}
+			timings = extracted
+		} else {
+			// 3. Fall back to synthetic timing
+			if verbose {
+				fmt.Printf("Using synthetic timing data (no real profiler data available)\n")
+			}
+			timings = timing.GenerateSyntheticTiming(trace)
+		}
+	}
+
+	// Generate pprof with source lines
+	prof, err := export.ToPprofWithSourceLines(trace, timings, mapper)
+	if err != nil {
+		return fmt.Errorf("failed to generate source-lines pprof: %w", err)
+	}
+
+	// Determine output path
+	baseName := filepath.Base(tracePath)
+	if ext := filepath.Ext(baseName); ext != "" {
+		baseName = baseName[:len(baseName)-len(ext)]
+	}
+	outputPath := output
+	if outputPath == "" {
+		outputPath = baseName + ".source.pprof"
+	}
+
+	// Write profile
+	f, err := os.Create(outputPath)
+	if err != nil {
+		return fmt.Errorf("failed to create output file: %w", err)
+	}
+	defer f.Close()
+
+	if err := prof.Write(f); err != nil {
+		return fmt.Errorf("failed to write pprof: %w", err)
+	}
+
+	fmt.Printf("✅ Source-lines pprof written to: %s\n", outputPath)
+	fmt.Printf("\nView per-line costs with:\n")
+	fmt.Printf("  go tool pprof -list <kernel_name> %s\n", outputPath)
+	fmt.Printf("\nOr interactive mode:\n")
+	fmt.Printf("  go tool pprof %s\n", outputPath)
+	fmt.Printf("  (pprof) list <kernel_name>\n")
 
 	return nil
 }
