@@ -175,6 +175,7 @@ var (
 	DumpCommandBuffer             = command.DumpCommandBuffer
 	ToPprof                       = export.ToPprof
 	ToPprofWithSource             = export.ToPprofWithSource
+	ToPprofWithSourceLines        = export.ToPprofWithSourceLines
 	ToPprofWithMetrics            = export.ToPprofWithMetrics
 	ParseXcodeCountersCSV         = counter.ParseXcodeCountersCSV
 	ExtractStatistics             = analysis.ExtractStatistics
