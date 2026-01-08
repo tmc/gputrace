@@ -8,6 +8,8 @@ import (
 	"github.com/tmc/gputrace/internal/trace"
 )
 
+var dependenciesVerbose bool
+
 var dependenciesCmd = &cobra.Command{
 	Use:   "dependencies <trace_path>",
 	Short: "Generate a dependency graph of operations",
@@ -23,9 +25,37 @@ Example:
 			return err
 		}
 
+		if dependenciesVerbose {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Capture data size: %d bytes\n", len(t.CaptureData))
+
+			events, err := t.ParseDependencyEvents()
+			if err != nil {
+				return fmt.Errorf("parse events: %w", err)
+			}
+
+			csCnt, bindCnt, useCnt := 0, 0, 0
+			for _, ev := range events {
+				switch ev.Type {
+				case trace.EventCS:
+					csCnt++
+				case trace.EventBind:
+					bindCnt++
+				case trace.EventUse:
+					useCnt++
+				}
+			}
+			fmt.Fprintf(cmd.ErrOrStderr(), "Events: %d total (CS=%d, Bind=%d, Use=%d)\n",
+				len(events), csCnt, bindCnt, useCnt)
+		}
+
 		graph, err := t.BuildDependencyGraph()
 		if err != nil {
 			return err
+		}
+
+		if dependenciesVerbose {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Graph: %d nodes, %d edges\n",
+				len(graph.Nodes), len(graph.Edges))
 		}
 
 		fmt.Println("digraph G {")
@@ -44,7 +74,8 @@ Example:
 		}
 
 		for _, edge := range graph.Edges {
-			fmt.Printf("  n%d -> n%d [label=\"%s\"];\n", edge.From, edge.To, edge.Buffer)
+			// Include hazard type in edge label for clarity
+			fmt.Printf("  n%d -> n%d [label=\"%s (%s)\"];\n", edge.From, edge.To, edge.Buffer, edge.Hazard)
 		}
 
 		fmt.Println("}")
@@ -54,4 +85,5 @@ Example:
 
 func init() {
 	rootCmd.AddCommand(dependenciesCmd)
+	dependenciesCmd.Flags().BoolVarP(&dependenciesVerbose, "verbose", "v", false, "Show detailed parsing information")
 }

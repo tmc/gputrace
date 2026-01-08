@@ -17,20 +17,46 @@ type DependencyNode struct {
 	Label string
 }
 
+// HazardType represents the type of memory hazard causing a dependency.
+type HazardType int
+
+const (
+	// HazardRAW is Read After Write - reader depends on writer completing.
+	HazardRAW HazardType = iota
+	// HazardWAW is Write After Write - second write must wait for first write.
+	HazardWAW
+	// HazardWAR is Write After Read - write must wait for read to complete.
+	HazardWAR
+)
+
+func (h HazardType) String() string {
+	switch h {
+	case HazardRAW:
+		return "RAW"
+	case HazardWAW:
+		return "WAW"
+	case HazardWAR:
+		return "WAR"
+	default:
+		return "Unknown"
+	}
+}
+
 type DependencyEdge struct {
 	From   int
 	To     int
-	Buffer string // Name of the buffer causing dependency
+	Buffer string     // Name of the buffer causing dependency
+	Hazard HazardType // Type of memory hazard
 }
 
 // DependencyEvent represents a trace event relevant to dependencies.
 type DependencyEvent struct {
-	Offset    int64
-	Type      EventType
-	Label     string // For CS
-	Address   uint64 // For Bind/Use
-	Name      string // For Bind
-	IsWrite   bool   // For Bind (heuristic)
+	Offset  int64
+	Type    EventType
+	Label   string           // For CS
+	Address uint64           // For Bind/Use
+	Name    string           // For Bind
+	Usage   MTLResourceUsage // Resource usage flags (Read, Write, Sample)
 }
 
 type EventType int
@@ -42,6 +68,10 @@ const (
 )
 
 // BuildDependencyGraph analyzes the trace to construct a dependency graph.
+// Detects three types of memory hazards:
+//   - RAW (Read After Write): reader depends on writer completing
+//   - WAW (Write After Write): second write must wait for first write
+//   - WAR (Write After Read): write must wait for read to complete
 func (t *Trace) BuildDependencyGraph() (*DependencyGraph, error) {
 	events, err := t.ParseDependencyEvents()
 	if err != nil {
@@ -50,15 +80,12 @@ func (t *Trace) BuildDependencyGraph() (*DependencyGraph, error) {
 
 	graph := &DependencyGraph{}
 
-	// Track buffer state: Address -> Last Writer Node ID
-	lastWriter := make(map[uint64]int)
-	// Track buffer names: Address -> Name
-	bufferNames := make(map[uint64]string)
+	// Track buffer state
+	lastWriter := make(map[uint64]int)            // Address -> Last Writer Node ID
+	lastReaders := make(map[uint64]map[int]bool)  // Address -> Set of Reader Node IDs since last write
+	bufferNames := make(map[uint64]string)        // Address -> Name
 
 	currentNodeID := -1
-
-	// Create "Root" node for initial inputs?
-	// For now, implicit.
 
 	for _, ev := range events {
 		switch ev.Type {
@@ -72,44 +99,81 @@ func (t *Trace) BuildDependencyGraph() (*DependencyGraph, error) {
 
 		case EventBind:
 			bufferNames[ev.Address] = ev.Name
-			if currentNodeID != -1 {
-				if ev.IsWrite {
-					// Current node writes to this buffer
-					lastWriter[ev.Address] = currentNodeID
-				} else {
-					// Current node reads from this buffer
-					if writerID, ok := lastWriter[ev.Address]; ok && writerID != currentNodeID {
-						// Add edge
-						graph.Edges = append(graph.Edges, DependencyEdge{
-							From:   writerID,
-							To:     currentNodeID,
-							Buffer: ev.Name,
-						})
-					}
-				}
+			if currentNodeID == -1 {
+				continue
 			}
 
-		case EventUse:
-			if currentNodeID != -1 {
-				// Usage implies dependency on the last writer
-				// We treat 'Use' as a Read for now, unless we can determine otherwise.
-				// If the current node *is* the last writer (e.g. it bound it as write),
-				// then this is just using its own output (no self-dependency needed).
-
+			// Handle Read access
+			if ev.Usage.IsRead() {
+				// RAW hazard: current node reads buffer that was previously written
 				if writerID, ok := lastWriter[ev.Address]; ok && writerID != currentNodeID {
-					// Avoid duplicate edges?
-					// For now, record all, dedupe later if needed.
-					name := bufferNames[ev.Address]
-					if name == "" {
-						name = fmt.Sprintf("0x%x", ev.Address)
-					}
 					graph.Edges = append(graph.Edges, DependencyEdge{
 						From:   writerID,
 						To:     currentNodeID,
-						Buffer: name,
+						Buffer: ev.Name,
+						Hazard: HazardRAW,
 					})
 				}
+				// Track this node as a reader
+				if lastReaders[ev.Address] == nil {
+					lastReaders[ev.Address] = make(map[int]bool)
+				}
+				lastReaders[ev.Address][currentNodeID] = true
 			}
+
+			// Handle Write access
+			if ev.Usage.IsWrite() {
+				// WAW hazard: current node writes to buffer that was previously written
+				if writerID, ok := lastWriter[ev.Address]; ok && writerID != currentNodeID {
+					graph.Edges = append(graph.Edges, DependencyEdge{
+						From:   writerID,
+						To:     currentNodeID,
+						Buffer: ev.Name,
+						Hazard: HazardWAW,
+					})
+				}
+
+				// WAR hazard: current node writes to buffer that has pending readers
+				if readers, ok := lastReaders[ev.Address]; ok {
+					for readerID := range readers {
+						if readerID != currentNodeID {
+							graph.Edges = append(graph.Edges, DependencyEdge{
+								From:   readerID,
+								To:     currentNodeID,
+								Buffer: ev.Name,
+								Hazard: HazardWAR,
+							})
+						}
+					}
+				}
+
+				// Update writer and clear readers (new write invalidates old reads)
+				lastWriter[ev.Address] = currentNodeID
+				delete(lastReaders, ev.Address)
+			}
+
+		case EventUse:
+			if currentNodeID == -1 {
+				continue
+			}
+			// Treat Use as a Read - RAW hazard only
+			if writerID, ok := lastWriter[ev.Address]; ok && writerID != currentNodeID {
+				name := bufferNames[ev.Address]
+				if name == "" {
+					name = fmt.Sprintf("0x%x", ev.Address)
+				}
+				graph.Edges = append(graph.Edges, DependencyEdge{
+					From:   writerID,
+					To:     currentNodeID,
+					Buffer: name,
+					Hazard: HazardRAW,
+				})
+			}
+			// Track as reader
+			if lastReaders[ev.Address] == nil {
+				lastReaders[ev.Address] = make(map[int]bool)
+			}
+			lastReaders[ev.Address][currentNodeID] = true
 		}
 	}
 
@@ -136,138 +200,191 @@ func deduplicateEdges(edges []DependencyEdge) []DependencyEdge {
 }
 
 // ParseDependencyEvents extracts relevant events from the capture file.
+// It parses Ct records (compute dispatches with function addresses and buffer bindings)
+// and resolves kernel names from DeviceLabels.
 func (t *Trace) ParseDependencyEvents() ([]DependencyEvent, error) {
+	var events []DependencyEvent
+
 	data := t.CaptureData
 	if len(data) == 0 {
 		return nil, fmt.Errorf("no capture data")
 	}
 
-	var events []DependencyEvent
+	// Markers for different record types
+	ctMarker := []byte("Ct\x00\x00")        // Compute dispatch with function addr + buffer bindings
+	ctBindMarker := []byte("CtU<b>ulul")    // Buffer definition with name
+	ctUseMarker := []byte("Ctulul\x00")     // Buffer usage in dispatch
 
-	// Markers
-	csMarker := []byte("CS\x00\x00")
-	ctBindMarker := []byte("CtU<b>ulul\x00\x00")
-	ctUseMarker := []byte("Ctulul\x00\x00")
-
+	// First pass: build buffer name map from CtU<b>ulul records
+	bufferNames := make(map[uint64]string)
 	offset := 0
-	for offset < len(data) {
-		// Find next markers
-		// This is inefficient (O(N*3)), can be optimized if needed.
-		csPos := bytes.Index(data[offset:], csMarker)
-		bindPos := bytes.Index(data[offset:], ctBindMarker)
-		usePos := bytes.Index(data[offset:], ctUseMarker)
-
-		// Find the earliest marker
-		nextPos := -1
-		markerType := 0 // 1=CS, 2=Bind, 3=Use
-
-		if csPos != -1 {
-			nextPos = csPos
-			markerType = 1
-		}
-		if bindPos != -1 {
-			if nextPos == -1 || bindPos < nextPos {
-				nextPos = bindPos
-				markerType = 2
-			}
-		}
-		if usePos != -1 {
-			if nextPos == -1 || usePos < nextPos {
-				nextPos = usePos
-				markerType = 3
-			}
-		}
-
-		if nextPos == -1 {
+	for offset < len(data)-40 {
+		pos := bytes.Index(data[offset:], ctBindMarker)
+		if pos == -1 {
 			break
 		}
+		absolutePos := offset + pos
+		base := absolutePos + 12 // After "CtU<b>ulul\x00\x00"
 
-		absolutePos := offset + nextPos
+		if base+16 <= len(data) {
+			bufferAddr := binary.LittleEndian.Uint64(data[base+8 : base+16])
+			strStart := base + 16
+			strEnd := strStart
+			for strEnd < len(data) && data[strEnd] != 0 && strEnd-strStart < 64 {
+				strEnd++
+			}
+			if strEnd > strStart {
+				bufferNames[bufferAddr] = string(data[strStart:strEnd])
+			}
+		}
+		offset = absolutePos + len(ctBindMarker)
+	}
 
-		switch markerType {
-		case 1: // CS
-			if absolutePos+12 <= len(data) {
-				// Label starts at +12
-				labelStart := absolutePos + 12
-				labelEnd := labelStart
-				for labelEnd < len(data) && data[labelEnd] != 0 {
-					labelEnd++
-				}
-				label := string(data[labelStart:labelEnd])
+	// Second pass: parse Ct records (compute dispatches) to get kernel names and bindings
+	// Ct records contain: function address (resolves to kernel name) + buffer binding array
+	offset = 0
+	for offset < len(data)-64 {
+		pos := bytes.Index(data[offset:], ctMarker)
+		if pos == -1 {
+			break
+		}
+		absolutePos := offset + pos
 
-				events = append(events, DependencyEvent{
-					Offset: int64(absolutePos),
-					Type:   EventCS,
-					Label:  label,
-				})
-				offset = labelEnd
-			} else {
+		// Skip if this is part of Ctt, Ctulul, or CtU<b>ulul
+		if absolutePos > 0 && data[absolutePos-1] == 'C' {
+			offset = absolutePos + 4
+			continue
+		}
+		// Check next byte isn't 't' (Ctt) or 'u' (Ctulul) or 'U' (CtU)
+		if absolutePos+3 < len(data) {
+			next := data[absolutePos+2]
+			if next == 't' || next == 'u' || next == 'U' {
 				offset = absolutePos + 4
-			}
-
-		case 2: // Bind
-			base := absolutePos + 12
-			if base+16 <= len(data) {
-				// EncoderAddr := binary.LittleEndian.Uint64(data[base : base+8])
-				bufferAddr := binary.LittleEndian.Uint64(data[base+8 : base+16])
-
-				strStart := base + 16
-				strEnd := strStart
-				for strEnd < len(data) && data[strEnd] != 0 {
-					strEnd++
-				}
-				if strEnd < len(data) {
-					name := string(data[strStart:strEnd])
-
-					// Parse Flags (heuristic)
-					// Check bytes after string. Look for 0x01 or 0x80.
-					isWrite := false
-					checkStart := strEnd + 1
-					checkEnd := checkStart + 32
-					if checkEnd > len(data) { checkEnd = len(data) }
-
-					// In Squeeze example: ... 80 01 ...
-					// 0x01 usually means Write access in Metal (MTLResourceUsageWrite)
-					for k := checkStart; k < checkEnd; k++ {
-						if data[k] == 0x01 { // Found a write flag
-							isWrite = true
-							break
-						}
-					}
-
-					events = append(events, DependencyEvent{
-						Offset:  int64(absolutePos),
-						Type:    EventBind,
-						Address: bufferAddr,
-						Name:    name,
-						IsWrite: isWrite,
-					})
-					offset = strEnd
-				} else {
-					offset += 12
-				}
-			} else {
-				offset += 12
-			}
-
-		case 3: // Use
-			base := absolutePos + 8 // Marker is 8 bytes
-			if base+16 <= len(data) {
-				// val1 := binary.LittleEndian.Uint64(data[base : base+8])
-				val2 := binary.LittleEndian.Uint64(data[base+8 : base+16])
-
-				events = append(events, DependencyEvent{
-					Offset:  int64(absolutePos),
-					Type:    EventUse,
-					Address: val2,
-				})
-				offset = base + 16
-			} else {
-				offset += 8
+				continue
 			}
 		}
 
-		offset++
+		// Parse Ct record structure:
+		// +0: "Ct\0\0" (4 bytes)
+		// +4: pipeline_addr (8 bytes)
+		// +12: function_addr (8 bytes)
+		// +20: binding_count (4 bytes)
+		// +24: stride (4 bytes)
+		// +28: buffer_bindings (8 bytes each)
+		base := absolutePos
+		if base+28 > len(data) {
+			offset = absolutePos + 4
+			continue
+		}
+
+		funcAddr := binary.LittleEndian.Uint64(data[base+12 : base+20])
+		bindingCount := binary.LittleEndian.Uint32(data[base+20 : base+24])
+		stride := binary.LittleEndian.Uint32(data[base+24 : base+28])
+
+		// Validate
+		if stride != 8 || bindingCount > 100 {
+			offset = absolutePos + 4
+			continue
+		}
+
+		// Resolve kernel name from function address
+		kernelName := t.DeviceLabels[funcAddr]
+		if kernelName == "" {
+			// Try to find in KernelNames by pattern matching (fallback)
+			kernelName = fmt.Sprintf("kernel_0x%x", funcAddr)
+		}
+
+		// Emit CS event (kernel dispatch)
+		events = append(events, DependencyEvent{
+			Offset: int64(absolutePos),
+			Type:   EventCS,
+			Label:  kernelName,
+		})
+
+		// Parse buffer bindings and emit Bind events
+		bindingsStart := base + 28
+		for i := 0; i < int(bindingCount); i++ {
+			bindOffset := bindingsStart + i*8
+			if bindOffset+8 > len(data) {
+				break
+			}
+			bufferAddr := binary.LittleEndian.Uint64(data[bindOffset : bindOffset+8])
+			if bufferAddr == 0 {
+				continue
+			}
+
+			name := bufferNames[bufferAddr]
+			if name == "" {
+				name = fmt.Sprintf("buf_0x%x", bufferAddr)
+			}
+
+			// Default to ReadWrite since explicit usage flags aren't in MTSP
+			events = append(events, DependencyEvent{
+				Offset:  int64(bindOffset),
+				Type:    EventBind,
+				Address: bufferAddr,
+				Name:    name,
+				Usage:   MTLResourceUsageRead | MTLResourceUsageWrite,
+			})
+		}
+
+		offset = absolutePos + 28 + int(bindingCount)*8
+	}
+
+	// Third pass: parse Ctulul records for additional buffer usage
+	offset = 0
+	for offset < len(data)-32 {
+		pos := bytes.Index(data[offset:], ctUseMarker)
+		if pos == -1 {
+			break
+		}
+		absolutePos := offset + pos
+
+		// Skip if this is CtU<b>ulul
+		if absolutePos >= 4 && bytes.Equal(data[absolutePos-4:absolutePos], []byte("<b>u")) {
+			offset = absolutePos + len(ctUseMarker)
+			continue
+		}
+
+		// Parse Ctulul structure:
+		// +8: pipeline_addr (8 bytes)
+		// +32: binding_count (4 bytes)
+		// +36: stride (4 bytes)
+		// +40: buffer_bindings
+		base := absolutePos
+		if base+40 > len(data) {
+			offset = absolutePos + len(ctUseMarker)
+			continue
+		}
+
+		bindingCount := binary.LittleEndian.Uint32(data[base+32 : base+36])
+		stride := binary.LittleEndian.Uint32(data[base+36 : base+40])
+
+		if stride != 8 || bindingCount > 100 {
+			offset = absolutePos + len(ctUseMarker)
+			continue
+		}
+
+		// Emit Use events for each binding
+		bindingsStart := base + 40
+		for i := 0; i < int(bindingCount); i++ {
+			bindOffset := bindingsStart + i*8
+			if bindOffset+8 > len(data) {
+				break
+			}
+			bufferAddr := binary.LittleEndian.Uint64(data[bindOffset : bindOffset+8])
+			if bufferAddr == 0 {
+				continue
+			}
+
+			events = append(events, DependencyEvent{
+				Offset:  int64(bindOffset),
+				Type:    EventUse,
+				Address: bufferAddr,
+			})
+		}
+
+		offset = absolutePos + 40 + int(bindingCount)*8
 	}
 
 	return events, nil
