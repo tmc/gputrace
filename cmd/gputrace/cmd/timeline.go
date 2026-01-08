@@ -28,6 +28,7 @@ var timelineCmd = &cobra.Command{
 Output formats:
   - text: Hierarchical text output to stdout
   - chrome: Chrome tracing format (chrome://tracing)
+  - perfetto: Perfetto format (ui.perfetto.dev) - same as chrome
   - html: Interactive standalone HTML timeline viewer
   - json: Raw timeline data in JSON format
 
@@ -78,9 +79,9 @@ func runTimeline(cmd *cobra.Command, args []string) error {
 
 	// Export based on format
 	switch timelineFormat {
-	case "chrome":
+	case "chrome", "perfetto":
 		if err := exportChromeTracing(timeline, timelineOutput); err != nil {
-			return fmt.Errorf("failed to export Chrome tracing: %w", err)
+			return fmt.Errorf("failed to export Chrome/Perfetto tracing: %w", err)
 		}
 	case "html":
 		if err := exportHTML(timeline, timelineOutput); err != nil {
@@ -96,7 +97,7 @@ func runTimeline(cmd *cobra.Command, args []string) error {
 		}
 		return nil
 	default:
-		return fmt.Errorf("unknown format: %s (supported: chrome, html, json, text)", timelineFormat)
+		return fmt.Errorf("unknown format: %s (supported: chrome, perfetto, html, json, text)", timelineFormat)
 	}
 
 	fmt.Printf("✓ Timeline written to: %s\n", timelineOutput)
@@ -104,6 +105,11 @@ func runTimeline(cmd *cobra.Command, args []string) error {
 		fmt.Println("\nView in Chrome:")
 		fmt.Println("  1. Open chrome://tracing")
 		fmt.Println("  2. Click 'Load' and select", timelineOutput)
+		fmt.Println("  3. Use WASD to navigate, mouse wheel to zoom")
+	} else if timelineFormat == "perfetto" {
+		fmt.Println("\nView in Perfetto:")
+		fmt.Println("  1. Open https://ui.perfetto.dev")
+		fmt.Println("  2. Drag and drop", timelineOutput, "onto the page")
 		fmt.Println("  3. Use WASD to navigate, mouse wheel to zoom")
 	} else if timelineFormat == "html" {
 		fmt.Println("\nView timeline:")
@@ -295,90 +301,216 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 		APICallseq: make([]APICall, 0),
 	}
 
-	// Extract timing metrics
+	// Try to get real timing from profiler data first (streamData plist)
+	profilerTimings, totalTimeUs, profilerErr := gputrace.ExtractEncoderTimingsFromProfiler(trace)
+	useProfilerTiming := profilerErr == nil && len(profilerTimings) > 0
+
+	// Get real encoder labels from ParseComputeEncoders (primary source for labels)
+	computeEncoders, _ := trace.ParseComputeEncoders()
+
+	// Extract timing metrics (fallback)
 	extractor := gputrace.NewTimingMetricsExtractor(trace)
 	metrics, err := extractor.Extract()
 	if err != nil {
 		return nil, fmt.Errorf("extract timing: %w", err)
 	}
 
-	// Calculate timeline bounds
-	if len(metrics.EncoderTimings) > 0 {
-		timeline.StartTime = metrics.EncoderTimings[0].StartTimestamp
-		timeline.EndTime = metrics.EncoderTimings[0].EndTimestamp
+	// If we have real profiler timing, use it
+	if useProfilerTiming {
+		// Use real timing from profiler data
+		timeline.Duration = uint64(totalTimeUs) * 1000 // Convert µs to ns
+		timeline.StartTime = 0
+		timeline.EndTime = timeline.Duration
 
-		for _, encoder := range metrics.EncoderTimings {
-			if encoder.StartTimestamp < timeline.StartTime {
-				timeline.StartTime = encoder.StartTimestamp
+		// Build timeline from profiler timing
+		var currentTimeNs uint64 = 0
+		for i, pt := range profilerTimings {
+			durationNs := uint64(pt.DurationMicros) * 1000 // Convert µs to ns
+			startTimeNs := currentTimeNs
+			endTimeNs := startTimeNs + durationNs
+
+			label := pt.Label
+			if label == "" && i < len(computeEncoders) {
+				label = computeEncoders[i].Label
 			}
-			if encoder.EndTimestamp > timeline.EndTime {
-				timeline.EndTime = encoder.EndTimestamp
+			if label == "" {
+				label = fmt.Sprintf("Encoder_%d", i)
 			}
+
+			encoderInfo := EncoderInfo{
+				Index:     i,
+				Label:     label,
+				Type:      "compute",
+				StartTime: startTimeNs,
+				EndTime:   endTimeNs,
+				Duration:  durationNs,
+			}
+			timeline.Encoders = append(timeline.Encoders, encoderInfo)
+
+			// Create timeline event for encoder
+			event := TimelineEvent{
+				Name:      label,
+				Category:  "encoder",
+				Phase:     "X",
+				Timestamp: startTimeNs / 1000, // Convert to µs for Chrome format
+				Duration:  durationNs / 1000,
+				ProcessID: 1,
+				ThreadID:  1,
+				Args: map[string]interface{}{
+					"index":       i,
+					"duration_ms": float64(durationNs) / 1e6,
+					"duration_us": float64(durationNs) / 1e3,
+					"real_timing": true,
+				},
+			}
+			timeline.Events = append(timeline.Events, event)
+
+			currentTimeNs = endTimeNs
+		}
+	} else {
+		// Fall back to synthetic/heuristic timing
+		// Build a map of timing by label for lookup
+		timingByLabel := make(map[string]*gputrace.EncoderTiming)
+		for _, et := range metrics.EncoderTimings {
+			timingByLabel[et.Label] = et
+		}
+
+		// Calculate timeline bounds from timing metrics
+		if len(metrics.EncoderTimings) > 0 {
+			timeline.StartTime = metrics.EncoderTimings[0].StartTimestamp
+			timeline.EndTime = metrics.EncoderTimings[0].EndTimestamp
+
+			for _, encoder := range metrics.EncoderTimings {
+				if encoder.StartTimestamp < timeline.StartTime {
+					timeline.StartTime = encoder.StartTimestamp
+				}
+				if encoder.EndTimestamp > timeline.EndTime {
+					timeline.EndTime = encoder.EndTimestamp
+				}
+			}
+		}
+
+		timeline.Duration = timeline.EndTime - timeline.StartTime
+
+		// Use compute encoders as primary source for encoder info (better labels)
+		if len(computeEncoders) > 0 {
+			avgDuration := timeline.Duration / uint64(len(computeEncoders))
+			if avgDuration == 0 {
+				avgDuration = 1000000 // 1ms default
+			}
+
+			currentTime := timeline.StartTime
+			for i, enc := range computeEncoders {
+				var startTime, endTime, duration uint64
+				if timing, ok := timingByLabel[enc.Label]; ok {
+					startTime = timing.StartTimestamp
+					endTime = timing.EndTimestamp
+					duration = timing.DurationNs
+				} else {
+					startTime = currentTime
+					duration = avgDuration
+					endTime = startTime + duration
+					currentTime = endTime + 10000
+				}
+
+				encoderInfo := EncoderInfo{
+					Index:     i,
+					Label:     enc.Label,
+					Type:      "compute",
+					StartTime: startTime,
+					EndTime:   endTime,
+					Duration:  duration,
+				}
+				timeline.Encoders = append(timeline.Encoders, encoderInfo)
+
+				// Create timeline event for encoder
+				event := TimelineEvent{
+					Name:      enc.Label,
+					Category:  "encoder",
+					Phase:     "X",
+					Timestamp: startTime / 1000, // Convert to microseconds
+					Duration:  duration / 1000,
+					ProcessID: 1,
+					ThreadID:  1,
+					Args: map[string]interface{}{
+						"index":       i,
+						"address":     fmt.Sprintf("0x%x", enc.Address),
+						"duration_ms": float64(duration) / 1e6,
+						"duration_us": float64(duration) / 1e3,
+					},
+				}
+				timeline.Events = append(timeline.Events, event)
+			}
+		} else {
+		// Fall back to timing metrics if no compute encoders found
+		for i, encoder := range metrics.EncoderTimings {
+			encoderInfo := EncoderInfo{
+				Index:     i,
+				Label:     encoder.Label,
+				Type:      "compute",
+				StartTime: encoder.StartTimestamp,
+				EndTime:   encoder.EndTimestamp,
+				Duration:  encoder.DurationNs,
+			}
+			timeline.Encoders = append(timeline.Encoders, encoderInfo)
+
+			event := TimelineEvent{
+				Name:      encoder.Label,
+				Category:  "encoder",
+				Phase:     "X",
+				Timestamp: encoder.StartTimestamp / 1000,
+				Duration:  encoder.DurationNs / 1000,
+				ProcessID: 1,
+				ThreadID:  1,
+				Args: map[string]interface{}{
+					"index":       i,
+					"duration_ms": float64(encoder.DurationNs) / 1e6,
+					"duration_us": float64(encoder.DurationNs) / 1e3,
+				},
+			}
+			timeline.Events = append(timeline.Events, event)
+		}
 		}
 	}
 
-	timeline.Duration = timeline.EndTime - timeline.StartTime
-
-	// Add encoder events
-	for i, encoder := range metrics.EncoderTimings {
-		encoderInfo := EncoderInfo{
-			Index:     i,
-			Label:     encoder.Label,
-			Type:      "compute", // Default type
-			StartTime: encoder.StartTimestamp,
-			EndTime:   encoder.EndTimestamp,
-			Duration:  encoder.DurationNs,
-		}
-		timeline.Encoders = append(timeline.Encoders, encoderInfo)
-
-		// Create timeline event for encoder
-		event := TimelineEvent{
-			Name:      encoder.Label,
-			Category:  "encoder",
-			Phase:     "X",                           // Complete event
-			Timestamp: encoder.StartTimestamp / 1000, // Convert to microseconds
-			Duration:  encoder.DurationNs / 1000,     // Convert to microseconds
-			ProcessID: 1,
-			ThreadID:  1,
-			Args: map[string]interface{}{
-				"index":       i,
-				"duration_ms": float64(encoder.DurationNs) / 1e6,
-				"duration_us": float64(encoder.DurationNs) / 1e3,
-			},
-		}
-		timeline.Events = append(timeline.Events, event)
-	}
-
-	// Add kernel events (if we have kernel-level timing)
+	// Add kernel events - associate with encoders by name matching
 	if len(metrics.KernelTimings) > 0 {
-		// Distribute kernels across encoder timeline
-		// This is approximate since we don't have exact per-invocation timing
-		for i, kernel := range metrics.KernelTimings {
-			encoderIdx := i % len(timeline.Encoders)
-			if len(timeline.Encoders) == 0 {
-				break
+		for _, kernel := range metrics.KernelTimings {
+			// Find the best matching encoder for this kernel
+			encoderIdx := findBestEncoderMatch(kernel.Name, timeline.Encoders)
+			if encoderIdx < 0 && len(timeline.Encoders) > 0 {
+				encoderIdx = 0 // Default to first encoder if no match
 			}
 
-			encoder := timeline.Encoders[encoderIdx]
-			// Create kernel event within encoder timeframe
+			var startTime uint64
+			var encoderDuration uint64 = 1000000 // 1ms default
+			if encoderIdx >= 0 && encoderIdx < len(timeline.Encoders) {
+				startTime = timeline.Encoders[encoderIdx].StartTime
+				encoderDuration = timeline.Encoders[encoderIdx].Duration
+			}
+
+			kernelDuration := uint64(kernel.AvgDuration.Nanoseconds())
+			if kernelDuration == 0 {
+				kernelDuration = encoderDuration / uint64(kernel.InvocationCount+1)
+			}
+
 			kernelInfo := KernelInfo{
 				Name:      kernel.Name,
 				Encoder:   encoderIdx,
-				StartTime: encoder.StartTime,
-				EndTime:   encoder.EndTime,
-				Duration:  uint64(kernel.AvgDuration.Nanoseconds()),
+				StartTime: startTime,
+				EndTime:   startTime + kernelDuration,
+				Duration:  kernelDuration,
 			}
 			timeline.Kernels = append(timeline.Kernels, kernelInfo)
 
-			// Create timeline event for kernel
 			event := TimelineEvent{
 				Name:      kernel.Name,
 				Category:  "kernel",
 				Phase:     "X",
-				Timestamp: encoder.StartTime / 1000, // Convert to microseconds
-				Duration:  uint64(kernel.AvgDuration.Microseconds()),
+				Timestamp: startTime / 1000,
+				Duration:  kernelDuration / 1000,
 				ProcessID: 1,
-				ThreadID:  2, // Use different thread for kernels
+				ThreadID:  2,
 				Args: map[string]interface{}{
 					"invocations": kernel.InvocationCount,
 					"avg_ns":      kernel.AvgDuration.Nanoseconds(),
@@ -398,10 +530,10 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 			event := TimelineEvent{
 				Name:      fmt.Sprintf("CommandBuffer %d", i),
 				Category:  "command_buffer",
-				Phase:     "i", // Instant event
+				Phase:     "i",
 				Timestamp: uint64(cb.Offset),
 				ProcessID: 1,
-				ThreadID:  0, // Use thread 0 for command buffers
+				ThreadID:  0,
 				Args: map[string]interface{}{
 					"offset": cb.Offset,
 					"index":  i,
@@ -417,7 +549,56 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 	return timeline, nil
 }
 
+// findBestEncoderMatch finds the encoder index that best matches a kernel name.
+// Returns -1 if no reasonable match is found.
+func findBestEncoderMatch(kernelName string, encoders []EncoderInfo) int {
+	// First, try exact match
+	for i, enc := range encoders {
+		if enc.Label == kernelName {
+			return i
+		}
+	}
+
+	// Try partial match - kernel name contained in encoder label or vice versa
+	kernelLower := toLowerASCII(kernelName)
+	for i, enc := range encoders {
+		encLower := toLowerASCII(enc.Label)
+		if containsSubstr(kernelLower, encLower) || containsSubstr(encLower, kernelLower) {
+			return i
+		}
+	}
+
+	return -1
+}
+
+// toLowerASCII converts a string to lowercase (ASCII only).
+func toLowerASCII(s string) string {
+	b := make([]byte, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		b[i] = c
+	}
+	return string(b)
+}
+
+// containsSubstr checks if s contains substr.
+func containsSubstr(s, substr string) bool {
+	if len(substr) > len(s) {
+		return false
+	}
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
 // generateCounterTracks creates performance counter tracks for the timeline.
+// Only returns real data from .gpuprofiler_raw files - no synthetic data.
 func generateCounterTracks(trace *gputrace.Trace, timeline *Timeline) []CounterTrack {
 	tracks := make([]CounterTrack, 0)
 
@@ -426,14 +607,14 @@ func generateCounterTracks(trace *gputrace.Trace, timeline *Timeline) []CounterT
 		return tracks
 	}
 
-	// Try to use real performance counter data first
+	// Only use real performance counter data - no synthetic fallback
 	perfStats, err := gputrace.ParsePerfCounters(trace)
 	if err == nil && len(perfStats.ShaderMetrics) > 0 {
 		return generateCounterTracksFromPerfData(perfStats, timeline)
 	}
 
-	// Fallback to synthetic counter tracks based on encoder activity
-	return generateSyntheticCounterTracks(timeline)
+	// No synthetic data - return empty if no real perf data available
+	return tracks
 }
 
 // generateCounterTracksFromPerfData creates counter tracks from real performance counter data.
@@ -559,14 +740,8 @@ func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, tim
 				shaderLaunchLimiter = (1.0 - occupancy/100.0) * 100.0
 			}
 		} else {
-			// Use synthetic estimates as fallback
-			activeCores = estimateActiveCores(encoder)
-			occupancy = estimateOccupancy(encoder)
-			aluUtil = estimateALUUtilization(encoder)
-			bandwidth = estimateBandwidth(encoder)
-			throughput = estimateThroughput(encoder)
-			occupancyManager = estimateOccupancyManager(encoder)
-			shaderLaunchLimiter = estimateShaderLaunchLimiter(encoder)
+			// No real data for this encoder - skip it (no synthetic data)
+			continue
 		}
 
 		// Add samples at start and end of encoder execution
@@ -641,30 +816,24 @@ func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, tim
 		Samples: make([]CounterSample, 0),
 	}
 
-	// Generate samples for new tracks
+	// Generate samples for new tracks - only for encoders with real data
 	for _, encoder := range timeline.Encoders {
-		var l1Miss, memRead, memWrite, compLimit, memLimit float64
-
-		var metrics *gputrace.ShaderHardwareMetrics
-		if m, exists := shaderMetricsMap[encoder.Label]; exists {
-			metrics = m
-			l1Miss = metrics.BufferL1MissRate
-			// Convert bytes to GB/s
-			durationSec := float64(encoder.Duration) / 1e9
-			if durationSec > 0 {
-				memRead = float64(metrics.BytesReadFromDeviceMemory) / 1e9 / durationSec
-				memWrite = float64(metrics.BytesWrittenToDeviceMemory) / 1e9 / durationSec
-			}
-			compLimit = metrics.ComputeShaderLaunchLimiter + metrics.ALUUtilization                        // Proxy
-			memLimit = metrics.L1CacheLimiter + metrics.LastLevelCacheLimiter + metrics.TextureReadLimiter // Proxy
-		} else {
-			// Synthetic estimates
-			l1Miss = 25.0
-			memRead = 50.0
-			memWrite = 50.0
-			compLimit = 10.0
-			memLimit = 5.0
+		metrics, exists := shaderMetricsMap[encoder.Label]
+		if !exists {
+			// No real data for this encoder - skip it (no synthetic data)
+			continue
 		}
+
+		l1Miss := metrics.BufferL1MissRate
+		// Convert bytes to GB/s
+		var memRead, memWrite float64
+		durationSec := float64(encoder.Duration) / 1e9
+		if durationSec > 0 {
+			memRead = float64(metrics.BytesReadFromDeviceMemory) / 1e9 / durationSec
+			memWrite = float64(metrics.BytesWrittenToDeviceMemory) / 1e9 / durationSec
+		}
+		compLimit := metrics.ComputeShaderLaunchLimiter + metrics.ALUUtilization                        // Proxy
+		memLimit := metrics.L1CacheLimiter + metrics.LastLevelCacheLimiter + metrics.TextureReadLimiter // Proxy
 
 		l1MissTrack.Samples = append(l1MissTrack.Samples,
 			CounterSample{Timestamp: encoder.StartTime, Value: l1Miss},
@@ -696,165 +865,6 @@ func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, tim
 	tracks = append(tracks, l1MissTrack, memReadTrack, memWriteTrack, computeLimiterTrack, memoryLimiterTrack)
 
 	return tracks
-}
-
-// generateSyntheticCounterTracks creates synthetic counter tracks when real performance data is unavailable.
-func generateSyntheticCounterTracks(timeline *Timeline) []CounterTrack {
-	tracks := make([]CounterTrack, 0)
-
-	// Track 1: Active Cores (0-8 for M-series GPUs)
-	activeCoresTrack := CounterTrack{
-		Name:    "Active Cores",
-		Unit:    "count",
-		Samples: make([]CounterSample, 0),
-	}
-
-	// Track 2: Occupancy (0-100%)
-	occupancyTrack := CounterTrack{
-		Name:    "Occupancy",
-		Unit:    "%",
-		Samples: make([]CounterSample, 0),
-	}
-
-	// Track 3: ALU Utilization (0-100%)
-	aluTrack := CounterTrack{
-		Name:    "ALU Utilization",
-		Unit:    "%",
-		Samples: make([]CounterSample, 0),
-	}
-
-	// Track 4: Memory Bandwidth (GB/s)
-	bandwidthTrack := CounterTrack{
-		Name:    "Bandwidth",
-		Unit:    "GB/s",
-		Samples: make([]CounterSample, 0),
-	}
-
-	// Track 5: Instruction Throughput
-	throughputTrack := CounterTrack{
-		Name:    "Instruction Throughput",
-		Unit:    "%",
-		Samples: make([]CounterSample, 0),
-	}
-
-	// Track 6: Occupancy Manager
-	occupancyManagerTrack := CounterTrack{
-		Name:    "Occupancy Manager",
-		Unit:    "%",
-		Samples: make([]CounterSample, 0),
-	}
-
-	// Track 7: Shader Launch Limiter
-	shaderLaunchLimiterTrack := CounterTrack{
-		Name:    "Shader Launch Limiter",
-		Unit:    "%",
-		Samples: make([]CounterSample, 0),
-	}
-
-	// Generate samples for each encoder period
-	for _, encoder := range timeline.Encoders {
-		// Use synthetic estimates
-		activeCores := estimateActiveCores(encoder)
-		occupancy := estimateOccupancy(encoder)
-		aluUtil := estimateALUUtilization(encoder)
-		bandwidth := estimateBandwidth(encoder)
-		throughput := estimateThroughput(encoder)
-		occupancyManager := estimateOccupancyManager(encoder)
-		shaderLaunchLimiter := estimateShaderLaunchLimiter(encoder)
-
-		// Add samples at start and end of encoder execution
-		activeCoresTrack.Samples = append(activeCoresTrack.Samples,
-			CounterSample{Timestamp: encoder.StartTime, Value: activeCores},
-			CounterSample{Timestamp: encoder.EndTime, Value: activeCores})
-
-		occupancyTrack.Samples = append(occupancyTrack.Samples,
-			CounterSample{Timestamp: encoder.StartTime, Value: occupancy},
-			CounterSample{Timestamp: encoder.EndTime, Value: occupancy})
-
-		aluTrack.Samples = append(aluTrack.Samples,
-			CounterSample{Timestamp: encoder.StartTime, Value: aluUtil},
-			CounterSample{Timestamp: encoder.EndTime, Value: aluUtil})
-
-		bandwidthTrack.Samples = append(bandwidthTrack.Samples,
-			CounterSample{Timestamp: encoder.StartTime, Value: bandwidth},
-			CounterSample{Timestamp: encoder.EndTime, Value: bandwidth})
-
-		throughputTrack.Samples = append(throughputTrack.Samples,
-			CounterSample{Timestamp: encoder.StartTime, Value: throughput},
-			CounterSample{Timestamp: encoder.EndTime, Value: throughput})
-
-		occupancyManagerTrack.Samples = append(occupancyManagerTrack.Samples,
-			CounterSample{Timestamp: encoder.StartTime, Value: occupancyManager},
-			CounterSample{Timestamp: encoder.EndTime, Value: occupancyManager})
-
-		shaderLaunchLimiterTrack.Samples = append(shaderLaunchLimiterTrack.Samples,
-			CounterSample{Timestamp: encoder.StartTime, Value: shaderLaunchLimiter},
-			CounterSample{Timestamp: encoder.EndTime, Value: shaderLaunchLimiter})
-	}
-
-	// Calculate statistics for each track
-	calculateTrackStats(&activeCoresTrack)
-	calculateTrackStats(&occupancyTrack)
-	calculateTrackStats(&aluTrack)
-	calculateTrackStats(&bandwidthTrack)
-	calculateTrackStats(&throughputTrack)
-	calculateTrackStats(&occupancyManagerTrack)
-	calculateTrackStats(&shaderLaunchLimiterTrack)
-
-	tracks = append(tracks, activeCoresTrack, occupancyTrack, aluTrack, bandwidthTrack, throughputTrack, occupancyManagerTrack, shaderLaunchLimiterTrack)
-
-	return tracks
-}
-
-// estimateActiveCores estimates the number of active GPU cores for an encoder.
-func estimateActiveCores(encoder EncoderInfo) float64 {
-	// Synthetic estimation: assume 4-8 cores active during execution
-	// In reality, this would come from performance counters
-	return 6.0
-}
-
-// estimateOccupancy estimates GPU occupancy percentage.
-func estimateOccupancy(encoder EncoderInfo) float64 {
-	// Synthetic estimation: 60-90% occupancy
-	// In reality, this would come from performance counters
-	return 75.0
-}
-
-// estimateALUUtilization estimates ALU utilization percentage.
-func estimateALUUtilization(encoder EncoderInfo) float64 {
-	// Synthetic estimation: 40-80% ALU utilization
-	// In reality, this would come from performance counters
-	return 65.0
-}
-
-// estimateBandwidth estimates memory bandwidth in GB/s.
-func estimateBandwidth(encoder EncoderInfo) float64 {
-	// Synthetic estimation: 50-150 GB/s for M-series GPUs
-	// In reality, this would come from performance counters
-	return 100.0
-}
-
-// estimateThroughput estimates instruction throughput percentage.
-func estimateThroughput(encoder EncoderInfo) float64 {
-	// Synthetic estimation: 50-90% throughput
-	// In reality, this would come from performance counters
-	return 70.0
-}
-
-// estimateOccupancyManager estimates occupancy manager efficiency percentage.
-func estimateOccupancyManager(encoder EncoderInfo) float64 {
-	// Synthetic estimation: typically slightly lower than raw occupancy
-	// Represents how well the GPU scheduler manages threadgroup dispatch
-	// In reality, this would come from performance counters
-	return 71.0
-}
-
-// estimateShaderLaunchLimiter estimates shader launch limiter percentage.
-func estimateShaderLaunchLimiter(encoder EncoderInfo) float64 {
-	// Synthetic estimation: percentage of time shader launches are resource-limited
-	// High values indicate register pressure, threadgroup memory limits, etc.
-	// In reality, this would come from performance counters
-	return 25.0
 }
 
 // calculateTrackStats calculates min, max, and average values for a counter track.

@@ -34,6 +34,8 @@ type (
 	Metadata               = trace.Metadata
 	RecordType             = trace.RecordType
 	EncoderTiming          = trace.EncoderTiming
+	ComputeEncoder         = trace.ComputeEncoder
+	CommandBuffer          = trace.CommandBuffer
 	Store0TimingData       = timing.Store0TimingData
 	Store0Encoder          = timing.Store0Encoder
 	ShaderSourceMapper     = shader.ShaderSourceMapper
@@ -65,6 +67,9 @@ type (
 
 	// Counter export types (gputrace-101)
 	CountersCSVExporter = counter.CountersCSVExporter
+
+	// Encoder timing from profiler data (streamData plist)
+	EncoderTimingInfo = counter.EncoderTimingInfo
 
 	// Counter sampling types (gputrace-104)
 	CounterSamplingConfig     = counter.CounterSamplingConfig
@@ -235,4 +240,10 @@ var (
 // Open opens and parses a .gputrace bundle.
 func Open(path string) (*Trace, error) {
 	return trace.Open(path)
+}
+
+// ExtractEncoderTimingsFromProfiler extracts real timing data from .gpuprofiler_raw streamData.
+// Returns per-encoder timing info, total time in microseconds, and any error.
+func ExtractEncoderTimingsFromProfiler(t *Trace) ([]EncoderTimingInfo, int, error) {
+	return counter.ExtractEncoderTimingsFromProfiler(t)
 }
