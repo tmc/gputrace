@@ -59,6 +59,18 @@ type ShaderMetrics struct {
 	// Counter Data (from GPU performance counters)
 	ALUUtilization float64 `json:"alu_utilization"` // ALU utilization percentage (0.0-100.0)
 	WeightedCost   float64 `json:"weighted_cost"`   // Weighted cost for percentage calculation
+
+	// Instruction Counts (from PipelineStats/streamData - real data, not heuristics)
+	InstructionCount       int `json:"instruction_count"`        // Total instruction count
+	ALUInstructionCount    int `json:"alu_instruction_count"`    // ALU instruction count
+	FP32InstructionCount   int `json:"fp32_instruction_count"`   // FP32 instruction count
+	FP16InstructionCount   int `json:"fp16_instruction_count"`   // FP16 instruction count
+	INT32InstructionCount  int `json:"int32_instruction_count"`  // INT32 instruction count
+	INT16InstructionCount  int `json:"int16_instruction_count"`  // INT16 instruction count
+	BranchInstructionCount int `json:"branch_instruction_count"` // Branch instruction count
+	ThreadgroupMemory      int `json:"threadgroup_memory"`       // Threadgroup memory usage
+	AllocatedRegisters     int `json:"allocated_registers"`      // Allocated register count
+	SpilledBytes           int `json:"spilled_bytes"`            // Bytes spilled to memory
 }
 
 // ShaderMetricsReport aggregates metrics for all shaders in a trace.
@@ -126,6 +138,13 @@ func ExtractShaderMetrics(t *trace.Trace) (*ShaderMetricsReport, error) {
 	// Estimate timing information
 	if err := estimateTimingMetrics(t, metricsMap); err != nil {
 		return nil, fmt.Errorf("estimate timing metrics: %w", err)
+	}
+
+	// Populate instruction counts from PipelineStats (streamData - real data)
+	if err := populateInstructionCounts(t, metricsMap); err != nil {
+		// Non-fatal: instruction counts may not be available for all traces
+		// Continue without them
+		_ = err
 	}
 
 	// Calculate derived metrics and classifications
@@ -379,6 +398,84 @@ func estimateShaderDuration(metrics *ShaderMetrics) uint64 {
 	}
 
 	return estimatedNs
+}
+
+// populateInstructionCounts populates instruction counts from PipelineStats (streamData).
+// This uses real compiler data instead of heuristics.
+func populateInstructionCounts(t *trace.Trace, metricsMap map[string]*ShaderMetrics) error {
+	// Try to get PipelineStats from streamData via counter package
+	stats, err := counter.ParsePerfCounters(t)
+	if err != nil {
+		return err
+	}
+
+	if stats == nil || len(stats.ShaderMetrics) == 0 {
+		return nil
+	}
+
+	// Build lookup map from shader name to hardware metrics
+	hwMetricsMap := make(map[string]*counter.ShaderHardwareMetrics)
+	for i := range stats.ShaderMetrics {
+		m := &stats.ShaderMetrics[i]
+		hwMetricsMap[m.ShaderName] = m
+	}
+
+	// Populate instruction counts for each shader
+	for name, metrics := range metricsMap {
+		// Try exact match
+		if hw, ok := hwMetricsMap[name]; ok {
+			applyHardwareMetrics(metrics, hw)
+			continue
+		}
+
+		// Try fuzzy matching (kernel names may have type suffixes)
+		for hwName, hw := range hwMetricsMap {
+			if fuzzyMatch(name, hwName) {
+				applyHardwareMetrics(metrics, hw)
+				break
+			}
+		}
+	}
+
+	return nil
+}
+
+// applyHardwareMetrics applies hardware metrics (including instruction counts) to shader metrics.
+func applyHardwareMetrics(metrics *ShaderMetrics, hw *counter.ShaderHardwareMetrics) {
+	// Instruction counts from PipelineStats (real data from streamData)
+	metrics.InstructionCount = hw.InstructionCount
+	metrics.ALUInstructionCount = hw.ALUInstructionCount
+	metrics.FP32InstructionCount = hw.FP32InstructionCount
+	metrics.FP16InstructionCount = hw.FP16InstructionCount
+	metrics.INT32InstructionCount = hw.INT32InstructionCount
+	metrics.INT16InstructionCount = hw.INT16InstructionCount
+	metrics.BranchInstructionCount = hw.BranchInstructionCount
+	metrics.ThreadgroupMemory = hw.ThreadgroupMemory
+	metrics.AllocatedRegisters = hw.AllocatedRegs
+	metrics.SpilledBytes = hw.SpilledBytes
+
+	// Also update ALU utilization if available
+	if hw.ALUUtilization > 0 {
+		metrics.ALUUtilization = hw.ALUUtilization
+	}
+}
+
+// fuzzyMatch checks if two shader names are similar (handles type suffixes).
+func fuzzyMatch(name1, name2 string) bool {
+	// One contains the other
+	if len(name1) > 3 && len(name2) > 3 {
+		if len(name1) < len(name2) {
+			return containsIgnoreCase(name2, name1)
+		}
+		return containsIgnoreCase(name1, name2)
+	}
+	return false
+}
+
+// containsIgnoreCase checks if s1 contains s2 (case-insensitive).
+func containsIgnoreCase(s1, s2 string) bool {
+	return len(s1) >= len(s2) && (s1 == s2 ||
+		(len(s1) > len(s2) && (s1[:len(s2)] == s2 || s1[len(s1)-len(s2):] == s2)))
 }
 
 // calculateOccupancy estimates GPU occupancy based on thread configuration.
@@ -659,10 +756,11 @@ func repeatStr(s string, n int) string {
 // If trace is provided, real register data from performance counters will be used when available.
 // If showEstimates is false, uncomputed fields will show "?" instead of estimates.
 func FormatShadersXcodeStyle(w io.Writer, report *ShaderMetricsReport, trace *Trace, showEstimates bool) error {
-	// Header matching Xcode format exactly
-	fmt.Fprintf(w, "%-8s%-60s%-12s%-24s%-16s%-24s%-16s%-16s\n",
+	// Header matching Xcode format with wider columns
+	fmt.Fprintf(w, "%-8s %-50s %-10s %-20s %15s %10s %10s %12s\n",
 		"Cost", "Name", "Type", "Pipeline State",
-		"# SIMD Groups", "# Allocated Registers", "High Register", "Spilled Bytes")
+		"# SIMD Groups", "Registers", "High Reg", "Spilled")
+	fmt.Fprintf(w, "%s\n", repeatStr("-", 145))
 
 	// Sort shaders by percentage (descending) like Xcode does
 	// Already sorted by TotalDurationNs in ExtractShaderMetrics
@@ -671,8 +769,11 @@ func FormatShadersXcodeStyle(w io.Writer, report *ShaderMetricsReport, trace *Tr
 		// Format cost percentage
 		cost := fmt.Sprintf("%.2f%%", metrics.PercentOfTotal)
 
-		// Shader name
+		// Truncate long shader names
 		name := metrics.Name
+		if len(name) > 50 {
+			name = name[:47] + "..."
+		}
 
 		// Type is always "Compute" for compute shaders
 		shaderType := "Compute"
@@ -680,39 +781,36 @@ func FormatShadersXcodeStyle(w io.Writer, report *ShaderMetricsReport, trace *Tr
 		// Pipeline state address (use the encoder address if available)
 		var pipelineState string
 		if metrics.Address != 0 {
-			pipelineState = fmt.Sprintf("Compute Pipeline 0x%x", metrics.Address)
+			pipelineState = fmt.Sprintf("0x%x", metrics.Address)
 		} else if showEstimates {
-			pipelineState = "Compute Pipeline 0x0"
+			pipelineState = "0x0"
 		} else {
-			pipelineState = "Compute Pipeline ?"
+			pipelineState = "?"
 		}
 
 		// # SIMD Groups = total threadgroups dispatched
 		var simdGroups string
 		if metrics.TotalThreadgroups > 0 {
-			simdGroups = fmt.Sprintf("%d", metrics.TotalThreadgroups)
+			simdGroups = formatLargeNumber(metrics.TotalThreadgroups)
 		} else if showEstimates {
 			simdGroups = "0"
 		} else {
 			simdGroups = "?"
 		}
 
-		// Try to get real register data from performance counters
-		// TODO: Implement GetRegisterDataForShader method
-		// var allocatedRegs, highReg, spilledBytes int
-		// var hasRealData bool
-		// if trace != nil {
-		// 	allocatedRegs, highReg, spilledBytes, hasRealData = trace.GetRegisterDataForShader(metrics.Address)
-		// }
-
-		// Register allocation and spilled bytes
+		// Register allocation and spilled bytes - use real data from metrics if available
 		var allocatedRegsStr, highRegStr, spilledBytesStr string
-		if showEstimates {
+		if metrics.AllocatedRegisters > 0 {
+			// Use real data from PipelineStats (streamData)
+			allocatedRegsStr = fmt.Sprintf("%d", metrics.AllocatedRegisters)
+			highRegStr = fmt.Sprintf("%d", metrics.AllocatedRegisters)
+			spilledBytesStr = formatSpilledBytesShort(metrics.SpilledBytes)
+		} else if showEstimates {
 			// Show estimates
 			allocatedRegs := estimateAllocatedRegisters(metrics)
 			allocatedRegsStr = fmt.Sprintf("%d (est)", allocatedRegs)
 			highRegStr = allocatedRegsStr
-			spilledBytesStr = "0 bytes (est)"
+			spilledBytesStr = "0"
 		} else {
 			// Show ? for uncomputed fields
 			allocatedRegsStr = "?"
@@ -721,12 +819,43 @@ func FormatShadersXcodeStyle(w io.Writer, report *ShaderMetricsReport, trace *Tr
 		}
 
 		// Print row matching Xcode format
-		fmt.Fprintf(w, "%-8s%-60s%-12s%-24s%-16s%-24s%-16s%-16s\n",
+		fmt.Fprintf(w, "%-8s %-50s %-10s %-20s %15s %10s %10s %12s\n",
 			cost, name, shaderType, pipelineState,
 			simdGroups, allocatedRegsStr, highRegStr, spilledBytesStr)
 	}
 
 	return nil
+}
+
+// formatLargeNumber formats large numbers with commas for readability.
+func formatLargeNumber(n uint64) string {
+	if n < 1000 {
+		return fmt.Sprintf("%d", n)
+	}
+	s := fmt.Sprintf("%d", n)
+	var result []byte
+	for i, c := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			result = append(result, ',')
+		}
+		result = append(result, byte(c))
+	}
+	return string(result)
+}
+
+// formatSpilledBytesShort formats spilled bytes in a short format.
+func formatSpilledBytesShort(bytes int) string {
+	if bytes == 0 {
+		return "0"
+	}
+	const KB = 1024
+	const MB = 1024 * KB
+	if bytes >= MB {
+		return fmt.Sprintf("%.1fMB", float64(bytes)/float64(MB))
+	} else if bytes >= KB {
+		return fmt.Sprintf("%.1fKB", float64(bytes)/float64(KB))
+	}
+	return fmt.Sprintf("%dB", bytes)
 }
 
 // formatSpilledBytes formats spilled bytes in a human-readable format.

@@ -91,6 +91,9 @@ func GenerateInsights(t *trace.Trace) (*InsightsReport, error) {
 	// Overall analysis
 	detectOverallPatterns(t, shaderMetrics, report)
 
+	// API usage insights (redundant bindings, etc.)
+	detectRedundantBindings(t, report)
+
 	// Calculate severity counts
 	for _, insight := range report.Insights {
 		switch insight.Severity {
@@ -326,6 +329,116 @@ func detectAntiPatterns(t *trace.Trace, shader *ShaderMetrics, report *InsightsR
 			}
 			report.Insights = append(report.Insights, insight)
 		}
+	}
+}
+
+// detectRedundantBindings detects redundant buffer binding calls.
+// A redundant binding occurs when the same buffer index is bound multiple times
+// before a dispatch, meaning the earlier binding(s) are wasted.
+func detectRedundantBindings(t *trace.Trace, report *InsightsReport) {
+	// Try to parse API call list - this requires unsorted-capture
+	apiList, err := t.ParseAPICallList()
+	if err != nil {
+		// No API call data available (profiler-only trace)
+		return
+	}
+
+	totalRedundant := 0
+	redundantByEncoder := make(map[string]int)
+
+	// Process each command buffer
+	for _, cb := range apiList.CommandBuffers {
+		// Track current bindings within an encoder: index -> (bufferAddr, callNum)
+		currentBindings := make(map[int]struct {
+			bufferAddr uint64
+			callNum    int
+		})
+		currentEncoderLabel := ""
+
+		for _, call := range cb.Calls {
+			switch call.Type {
+			case "encoder":
+				// New encoder - reset tracking
+				currentBindings = make(map[int]struct {
+					bufferAddr uint64
+					callNum    int
+				})
+				currentEncoderLabel = call.Label
+				if currentEncoderLabel == "" {
+					currentEncoderLabel = fmt.Sprintf("0x%x", call.Address)
+				}
+
+			case "setBuffer":
+				// Parse buffer address and index from Details
+				// Format: "setBuffer:0x... offset:0 atIndex:N"
+				var bufAddr uint64
+				var offset int
+				var index int
+				n, _ := fmt.Sscanf(call.Details, "setBuffer:0x%x offset:%d atIndex:%d", &bufAddr, &offset, &index)
+				if n < 3 {
+					continue
+				}
+
+				// Check if this index was already bound
+				if prev, exists := currentBindings[index]; exists {
+					// This is a redundant binding - the previous binding at this index is wasted
+					totalRedundant++
+					if currentEncoderLabel != "" {
+						redundantByEncoder[currentEncoderLabel]++
+					}
+					_ = prev // previous binding was wasted
+				}
+
+				// Update current binding for this index
+				currentBindings[index] = struct {
+					bufferAddr uint64
+					callNum    int
+				}{bufAddr, call.CallNumber}
+
+			case "dispatch":
+				// Dispatch clears the "pending" bindings - they've been used
+				// Reset tracking for next round of bindings
+				currentBindings = make(map[int]struct {
+					bufferAddr uint64
+					callNum    int
+				})
+
+			case "endEncoding":
+				// End of encoder - reset for next encoder
+				currentBindings = make(map[int]struct {
+					bufferAddr uint64
+					callNum    int
+				})
+			}
+		}
+	}
+
+	// Generate insight if redundant bindings found
+	if totalRedundant > 0 {
+		insight := &PerformanceInsight{
+			Type:     InsightAntiPattern,
+			Severity: SeverityMedium,
+			Title:    fmt.Sprintf("Redundant Binding x %d", totalRedundant),
+			Description: fmt.Sprintf("Found %d redundant buffer binding calls. "+
+				"A buffer index was bound multiple times before dispatch, wasting the earlier binding(s).",
+				totalRedundant),
+			Metrics: map[string]interface{}{
+				"total_redundant": totalRedundant,
+			},
+			Recommendations: []string{
+				"Review buffer binding logic to avoid binding the same index twice",
+				"Consider caching binding state to skip redundant setBuffer calls",
+				"Check if conditional binding logic could be simplified",
+			},
+			Impact: "Reduces API call overhead and improves CPU efficiency",
+		}
+
+		// Add per-encoder breakdown if multiple encoders affected
+		if len(redundantByEncoder) > 1 {
+			insight.Metrics["by_encoder"] = redundantByEncoder
+		}
+
+		report.Insights = append(report.Insights, insight)
 	}
 }
 
