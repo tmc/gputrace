@@ -63,7 +63,8 @@ func runDiff(cmd *cobra.Command, args []string) error {
 }
 
 func compareMetadata(t1, t2 *trace.Trace) {
-	fmt.Println(Colorize("=== Metadata Comparison ===", ColorBold))
+	fmt.Println(Colorize("Metadata Comparison", ColorBold))
+	fmt.Println(TableSeparator(60))
 
 	printDiff("Device ID", fmt.Sprintf("%d", t1.Metadata.DeviceID), fmt.Sprintf("%d", t2.Metadata.DeviceID))
 	printDiff("Capture Version", fmt.Sprintf("%d", t1.Metadata.CaptureVersion), fmt.Sprintf("%d", t2.Metadata.CaptureVersion))
@@ -81,12 +82,20 @@ func compareStats(t1, t2 *trace.Trace) error {
 		return fmt.Errorf("stats extract trace 2: %w", err)
 	}
 
-	fmt.Println(Colorize("=== Statistics Comparison ===", ColorBold))
+	fmt.Println(Colorize("Statistics Comparison", ColorBold))
+	fmt.Println(TableSeparator(60))
 
-	printDiff("Total Records", fmt.Sprintf("%d", stats1.TotalRecords), fmt.Sprintf("%d", stats2.TotalRecords))
+	// Memory usage first
+	printDiff("Buffer Memory", fmt.Sprintf("%.2f GB", stats1.BufferUsageGB), fmt.Sprintf("%.2f GB", stats2.BufferUsageGB))
+	printDiff("Heap Memory", fmt.Sprintf("%.2f MB", stats1.HeapUsageMB), fmt.Sprintf("%.2f MB", stats2.HeapUsageMB))
+	printDiff("Unique Buffers", fmt.Sprintf("%d", stats1.UniqueBuffers), fmt.Sprintf("%d", stats2.UniqueBuffers))
+
+	// Execution stats
+	printDiff("Command Buffers", fmt.Sprintf("%d", stats1.CommandBuffers), fmt.Sprintf("%d", stats2.CommandBuffers))
 	printDiff("Compute Encoders", fmt.Sprintf("%d", stats1.ComputeEncoders), fmt.Sprintf("%d", stats2.ComputeEncoders))
 	printDiff("Dispatch Calls", fmt.Sprintf("%d", stats1.DispatchCalls), fmt.Sprintf("%d", stats2.DispatchCalls))
 	printDiff("Unique Kernels", fmt.Sprintf("%d", stats1.UniqueKernels), fmt.Sprintf("%d", stats2.UniqueKernels))
+	printDiff("Total Records", fmt.Sprintf("%d", stats1.TotalRecords), fmt.Sprintf("%d", stats2.TotalRecords))
 
 	// Set difference for Kernel Names
 	set1 := make(map[string]bool)
@@ -132,7 +141,8 @@ func compareStats(t1, t2 *trace.Trace) error {
 }
 
 func compareStructure(t1, t2 *trace.Trace) error {
-	fmt.Println(Colorize("=== Structure Comparison (Top-level) ===", ColorBold))
+	fmt.Println(Colorize("Structure Comparison (Top-level)", ColorBold))
+	fmt.Println(TableSeparator(60))
 
 	recs1, err := t1.ParseMTSPRecords()
 	if err != nil {

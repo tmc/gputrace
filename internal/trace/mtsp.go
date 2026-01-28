@@ -6,6 +6,66 @@ import (
 	"fmt"
 )
 
+// MTLResourceUsage represents Metal resource usage flags.
+// These match Apple's MTLResourceUsage enum values.
+type MTLResourceUsage uint8
+
+const (
+	MTLResourceUsageRead   MTLResourceUsage = 0x01 // Buffer is read by shader
+	MTLResourceUsageWrite  MTLResourceUsage = 0x02 // Buffer is written by shader
+	MTLResourceUsageSample MTLResourceUsage = 0x04 // Texture is sampled
+	// Note: 0x08 (RenderTarget) is typically for textures in render passes
+)
+
+// IsRead returns true if the usage includes read access.
+func (u MTLResourceUsage) IsRead() bool {
+	return u&MTLResourceUsageRead != 0
+}
+
+// IsWrite returns true if the usage includes write access.
+func (u MTLResourceUsage) IsWrite() bool {
+	return u&MTLResourceUsageWrite != 0
+}
+
+// IsReadWrite returns true if the usage includes both read and write access.
+func (u MTLResourceUsage) IsReadWrite() bool {
+	return u.IsRead() && u.IsWrite()
+}
+
+// String returns a human-readable representation of the usage flags.
+func (u MTLResourceUsage) String() string {
+	if u == 0 {
+		return "None"
+	}
+	var parts []string
+	if u.IsRead() {
+		parts = append(parts, "Read")
+	}
+	if u.IsWrite() {
+		parts = append(parts, "Write")
+	}
+	if u&MTLResourceUsageSample != 0 {
+		parts = append(parts, "Sample")
+	}
+	if len(parts) == 0 {
+		return fmt.Sprintf("Unknown(0x%02x)", uint8(u))
+	}
+	result := parts[0]
+	for i := 1; i < len(parts); i++ {
+		result += "|" + parts[i]
+	}
+	return result
+}
+
+// ResourceBinding represents a buffer or texture binding with usage flags.
+type ResourceBinding struct {
+	Address    uint64           // Resource memory address
+	Index      int              // Binding index (argument buffer slot)
+	Usage      MTLResourceUsage // Access flags (Read, Write, Sample)
+	Name       string           // Resource name (if known)
+	BufferSize uint64           // Buffer size (if known)
+}
+
 // MTSP Record Types observed in capture files
 const (
 	RecordTypeCS      = "CS"        // Command submission with kernel name
@@ -47,13 +107,14 @@ type MTSPRecord struct {
 // CtRecord represents a parsed Ct (Command) record containing
 // pipeline state, function, and buffer binding information.
 type CtRecord struct {
-	RecordSize     uint32   // Total record size in bytes
-	CommandFlags   uint32   // Command type/flags
-	PipelineAddr   uint64   // Pipeline state object address
-	FunctionAddr   uint64   // Metal function address
-	BindingCount   uint32   // Number of resource bindings
-	Stride         uint32   // Binding array stride (always 8)
-	BufferBindings []uint64 // Array of buffer addresses
+	RecordSize       uint32            // Total record size in bytes
+	CommandFlags     uint32            // Command type/flags
+	PipelineAddr     uint64            // Pipeline state object address
+	FunctionAddr     uint64            // Metal function address
+	BindingCount     uint32            // Number of resource bindings
+	Stride           uint32            // Binding array stride (always 8)
+	BufferBindings   []uint64          // Array of buffer addresses
+	ResourceBindings []ResourceBinding // Parsed resource bindings with usage flags
 }
 
 // CiRecord represents a parsed Ci (Compute Indirect / ICB) record.
@@ -108,14 +169,15 @@ type CulRecord struct {
 // +0x0C: function addr
 // +0x20: pipeline addr
 type CttRecord struct {
-	RecordSize     uint32
-	CommandFlags   uint32 // Command flags
-	DeviceAddr     uint64
-	FunctionAddr   uint64
-	PipelineAddr   uint64
-	BindingCount   uint32   // Number of resource bindings
-	Stride         uint32   // Binding array stride (always 8)
-	BufferBindings []uint64 // Array of buffer addresses
+	RecordSize       uint32
+	CommandFlags     uint32 // Command flags
+	DeviceAddr       uint64
+	FunctionAddr     uint64
+	PipelineAddr     uint64
+	BindingCount     uint32            // Number of resource bindings
+	Stride           uint32            // Binding array stride (always 8)
+	BufferBindings   []uint64          // Array of buffer addresses
+	ResourceBindings []ResourceBinding // Parsed resource bindings with usage flags
 }
 
 // ParseCttRecord parses a Ctt (Command Type Transfer?) record.
@@ -163,8 +225,17 @@ func (r *MTSPRecord) ParseCttRecord() (*CttRecord, error) {
 			size := int(ctt.BindingCount) * 8
 			if bindingsOffset+size <= len(r.Data) {
 				ctt.BufferBindings = make([]uint64, ctt.BindingCount)
+				ctt.ResourceBindings = make([]ResourceBinding, ctt.BindingCount)
 				for i := 0; i < int(ctt.BindingCount); i++ {
-					ctt.BufferBindings[i] = binary.LittleEndian.Uint64(r.Data[bindingsOffset+i*8 : bindingsOffset+(i+1)*8])
+					addr := binary.LittleEndian.Uint64(r.Data[bindingsOffset+i*8 : bindingsOffset+(i+1)*8])
+					ctt.BufferBindings[i] = addr
+					// Default to ReadWrite since explicit usage flags are not stored
+					// in the MTSP capture format.
+					ctt.ResourceBindings[i] = ResourceBinding{
+						Address: addr,
+						Index:   i,
+						Usage:   MTLResourceUsageRead | MTLResourceUsageWrite,
+					}
 				}
 			}
 		}
@@ -503,12 +574,6 @@ func isHex(b byte) bool {
 	return (b >= '0' && b <= '9') || (b >= 'A' && b <= 'F') || (b >= 'a' && b <= 'f')
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
 
 // AnalyzeMTSPRecords provides a detailed analysis of MTSP records.
 func (t *Trace) AnalyzeMTSPRecords() (string, error) {
@@ -633,8 +698,18 @@ func (r *MTSPRecord) ParseCtRecord() (*CtRecord, error) {
 		size := int(ct.BindingCount) * 8
 		if bindingsOffset+size <= len(r.Data) {
 			ct.BufferBindings = make([]uint64, ct.BindingCount)
+			ct.ResourceBindings = make([]ResourceBinding, ct.BindingCount)
 			for i := 0; i < int(ct.BindingCount); i++ {
-				ct.BufferBindings[i] = binary.LittleEndian.Uint64(r.Data[bindingsOffset+i*8 : bindingsOffset+(i+1)*8])
+				addr := binary.LittleEndian.Uint64(r.Data[bindingsOffset+i*8 : bindingsOffset+(i+1)*8])
+				ct.BufferBindings[i] = addr
+				// Default to ReadWrite since explicit usage flags are not stored
+				// in the MTSP capture format. The actual usage is determined by
+				// shader analysis or must be inferred from buffer naming patterns.
+				ct.ResourceBindings[i] = ResourceBinding{
+					Address: addr,
+					Index:   i,
+					Usage:   MTLResourceUsageRead | MTLResourceUsageWrite,
+				}
 			}
 		}
 	}

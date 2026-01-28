@@ -52,49 +52,29 @@ func runEncoders(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to parse compute encoders: %w", err)
 	}
 
-	// Basic output
-	fmt.Printf("=== Compute Encoders ===\n")
-	fmt.Printf("Total: %d\n\n", len(encoders))
-
-	// List encoders
+	// Compact output: one line per encoder
+	fmt.Printf("%d encoders:\n", len(encoders))
 	for _, encoder := range encoders {
-		fmt.Printf("Encoder #%d\n", encoder.Index)
 		if encoder.Label != "" {
-			fmt.Printf("  Label:   %s\n", encoder.Label)
+			fmt.Printf("  %3d: %s\n", encoder.Index, encoder.Label)
+		} else {
+			fmt.Printf("  %3d: (unlabeled) 0x%x\n", encoder.Index, encoder.Address)
 		}
-		fmt.Printf("  Address: 0x%x\n", encoder.Address)
-		if encodersVerbose {
-			fmt.Printf("  Offset:  0x%08x\n", encoder.Offset)
-		}
-		fmt.Println()
 	}
 
 	// Show per-command-buffer breakdown if verbose
 	if encodersVerbose {
 		commandBuffers, err := trace.ParseCommandBuffers()
 		if err == nil && len(commandBuffers) > 0 {
-			fmt.Printf("\n=== Per-Command-Buffer Breakdown ===\n\n")
-
+			fmt.Printf("\n%d command buffers (%.1f encoders/buffer avg)\n",
+				len(commandBuffers), float64(len(encoders))/float64(len(commandBuffers)))
 			for _, cb := range commandBuffers {
 				dcb, err := gputrace.ParseDetailedCommandBuffer(trace, cb.Index)
 				if err != nil {
-					fmt.Printf("Command Buffer #%d: Error - %v\n", cb.Index, err)
 					continue
 				}
-
-				fmt.Printf("Command Buffer #%d: %d encoder(s)\n", cb.Index, len(dcb.Encoders))
-				for _, encoder := range dcb.Encoders {
-					fmt.Printf("  Encoder 0x%x\n", encoder.Address)
-				}
+				fmt.Printf("  CB %d: %d encoders\n", cb.Index, len(dcb.Encoders))
 			}
-		}
-
-		// Show summary statistics
-		if len(commandBuffers) > 0 {
-			fmt.Printf("\n=== Summary ===\n")
-			fmt.Printf("Total Encoders:        %d\n", len(encoders))
-			fmt.Printf("Total Command Buffers: %d\n", len(commandBuffers))
-			fmt.Printf("Avg Encoders/Buffer:   %.2f\n", float64(len(encoders))/float64(len(commandBuffers)))
 		}
 	}
 

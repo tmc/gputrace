@@ -40,6 +40,23 @@ func (t *Trace) AnalyzeKernels() (map[string]*KernelStat, error) {
 		}
 	}
 
+	// Also use ParseComputeEncoders as a fallback for kernel names
+	// This works better for ICB traces where encoder labels ARE the kernel names
+	computeEncoders, _ := t.ParseComputeEncoders()
+	for _, enc := range computeEncoders {
+		if enc.Label != "" {
+			if _, exists := stats[enc.Label]; !exists {
+				stats[enc.Label] = &KernelStat{
+					Name:          enc.Label,
+					PipelineAddr:  enc.Address,
+					DispatchCount: 0,
+					DebugGroups:   make(map[string]int),
+					EncoderLabels: make(map[string]int),
+				}
+			}
+		}
+	}
+
 	// Parse command buffers to find actual usage
 	cbs, err := t.ParseCommandBuffers()
 	if err != nil {
@@ -276,10 +293,66 @@ func (t *Trace) AnalyzeKernels() (map[string]*KernelStat, error) {
 		}
 	}
 
-    // Cleanup
-    if s, ok := stats["unknown"]; ok && s.DispatchCount == 0 {
-        delete(stats, "unknown")
-    }
+	// Cleanup
+	if s, ok := stats["unknown"]; ok && s.DispatchCount == 0 {
+		delete(stats, "unknown")
+	}
+
+	// If all dispatches are unknown and we have compute encoders with labels,
+	// use encoder labels as kernel names with count=1 each
+	unknownCount := 0
+	if s, ok := stats["unknown"]; ok {
+		unknownCount = s.DispatchCount
+	}
+	totalNonUnknown := 0
+	for name, s := range stats {
+		if name != "unknown" {
+			totalNonUnknown += s.DispatchCount
+		}
+	}
+	if totalNonUnknown == 0 && len(computeEncoders) > 0 {
+		// All dispatches were unknown - use encoder labels instead
+		delete(stats, "unknown")
+		for _, enc := range computeEncoders {
+			if enc.Label != "" {
+				if s, ok := stats[enc.Label]; ok {
+					s.DispatchCount++
+					s.EncoderLabels[enc.Label]++
+				} else {
+					stats[enc.Label] = &KernelStat{
+						Name:          enc.Label,
+						PipelineAddr:  enc.Address,
+						DispatchCount: 1,
+						DebugGroups:   make(map[string]int),
+						EncoderLabels: map[string]int{enc.Label: 1},
+					}
+				}
+			}
+		}
+	} else if unknownCount > 0 && len(computeEncoders) > 0 {
+		// Some dispatches are unknown - distribute them among encoders
+		// This is a heuristic: assume 1 dispatch per encoder
+		perEncoder := unknownCount / len(computeEncoders)
+		if perEncoder == 0 {
+			perEncoder = 1
+		}
+		delete(stats, "unknown")
+		for _, enc := range computeEncoders {
+			if enc.Label != "" {
+				if s, ok := stats[enc.Label]; ok {
+					s.DispatchCount += perEncoder
+				} else {
+					stats[enc.Label] = &KernelStat{
+						Name:          enc.Label,
+						PipelineAddr:  enc.Address,
+						DispatchCount: perEncoder,
+						DebugGroups:   make(map[string]int),
+						EncoderLabels: map[string]int{enc.Label: perEncoder},
+					}
+				}
+			}
+		}
+	}
 
 	return stats, nil
 }

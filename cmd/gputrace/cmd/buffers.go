@@ -468,19 +468,22 @@ func formatBuffersTable(buffers []BufferInfo, trace *gputrace.Trace) error {
 		totalAliases += len(buf.Aliases)
 	}
 
-	// Print summary
-	fmt.Printf("=== GPU Trace Buffers ===\n\n")
-	fmt.Printf("Total Buffers: %d\n", len(buffers))
-	fmt.Printf("Total Size: %s (%.2f MB)\n", formatBytes(totalSize), float64(totalSize)/(1024*1024))
-	fmt.Printf("Total Aliases: %d\n\n", totalAliases)
+	// Print summary line
+	fmt.Printf("%d %s, %s", len(buffers), Pluralize(len(buffers), "buffer", "buffers"), FormatBytes(totalSize))
+	if totalAliases > 0 {
+		fmt.Printf(", %d %s", totalAliases, Pluralize(totalAliases, "alias", "aliases"))
+	}
+	fmt.Println()
+	fmt.Println()
 
 	// Print table header
-	fmt.Printf("%-8s %-25s %12s %10s %s\n", "ID", "Filename", "Size", "Size (MB)", "Aliases")
-	fmt.Println(strings.Repeat("-", 100))
+	fmt.Println(Colorize("Buffers", ColorBold))
+	fmt.Println(TableSeparator(80))
+	fmt.Printf("%-8s %-25s %12s %s\n", "ID", "Filename", "Size", "Aliases")
+	fmt.Println(TableSeparator(80))
 
 	// Print each buffer
 	for _, buf := range buffers {
-		sizeMB := float64(buf.Size) / (1024 * 1024)
 		aliasInfo := ""
 		if len(buf.Aliases) > 0 {
 			if len(buf.Aliases) == 1 {
@@ -490,11 +493,10 @@ func formatBuffersTable(buffers []BufferInfo, trace *gputrace.Trace) error {
 			}
 		}
 
-		fmt.Printf("%-8s %-25s %12s %10.2f %s\n",
+		fmt.Printf("%-8s %-25s %12s %s\n",
 			buf.ID,
 			buf.Filename,
-			formatBytes(buf.Size),
-			sizeMB,
+			FormatBytes(buf.Size),
 			aliasInfo,
 		)
 

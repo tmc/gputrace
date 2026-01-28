@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tmc/gputrace/internal/command"
+	"github.com/tmc/gputrace/internal/counter"
 )
 
 // TimingMetrics represents comprehensive timing data for a trace.
@@ -91,11 +92,38 @@ func (tme *TimingMetricsExtractor) Extract() (*TimingMetrics, error) {
 		CommandBufferTimings: make([]*CommandBufferTiming, 0),
 	}
 
-	// Extract encoder timings first - try real timing, fallback to synthetic
-	encoderTimings, err := ExtractTimingData(tme.trace)
-	if err != nil || len(encoderTimings) == 0 {
-		// Fallback to synthetic timing if real timing extraction fails
-		encoderTimings = GenerateSyntheticTiming(tme.trace)
+	// Extract encoder timings - try profiler timing first (most accurate), then heuristic, then synthetic
+	var encoderTimings []*EncoderTiming
+
+	// 1. Try real profiler timing from .gpuprofiler_raw (most accurate)
+	profilerTimings, _, profilerErr := counter.ExtractEncoderTimingsFromProfiler(tme.trace)
+	if profilerErr == nil && len(profilerTimings) > 0 {
+		var currentTimeNs uint64
+		for _, pt := range profilerTimings {
+			durationNs := uint64(pt.DurationMicros) * 1000 // Convert µs to ns
+			label := pt.Label
+			if label == "" {
+				label = fmt.Sprintf("encoder_%d", pt.Index)
+			}
+			encoderTimings = append(encoderTimings, &EncoderTiming{
+				Label:          label,
+				DurationNs:     durationNs,
+				DurationMs:     float64(durationNs) / 1e6,
+				StartTimestamp: currentTimeNs,
+				EndTimestamp:   currentTimeNs + durationNs,
+			})
+			currentTimeNs += durationNs
+		}
+	}
+
+	// 2. Fall back to heuristic extraction from capture data
+	if len(encoderTimings) == 0 {
+		var err error
+		encoderTimings, err = ExtractTimingData(tme.trace)
+		if err != nil || len(encoderTimings) == 0 {
+			// 3. Last resort: synthetic timing
+			encoderTimings = GenerateSyntheticTiming(tme.trace)
+		}
 	}
 	metrics.EncoderTimings = encoderTimings
 	metrics.TotalEncoders = len(encoderTimings)

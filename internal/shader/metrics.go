@@ -594,10 +594,9 @@ func identifyBottlenecks(metrics *ShaderMetrics) {
 func FormatShaderMetricsReport(report *ShaderMetricsReport) string {
 	var out string
 
-	out += "=== Shader Performance Metrics ===\n\n"
-	out += fmt.Sprintf("Total Shaders:     %d\n", report.TotalShaders)
-	out += fmt.Sprintf("Total Invocations: %d\n", report.TotalInvocations)
-	out += fmt.Sprintf("Total GPU Time:    %.2f ms\n\n", report.TotalGPUTimeMs)
+	// Summary line
+	out += fmt.Sprintf("%d shaders, %d invocations, %.2f ms GPU time\n\n",
+		report.TotalShaders, report.TotalInvocations, report.TotalGPUTimeMs)
 
 	out += "Classification Distribution:\n"
 	out += fmt.Sprintf("  Compute-Bound: %d shaders\n", report.ComputeBoundCount)
@@ -605,8 +604,8 @@ func FormatShaderMetricsReport(report *ShaderMetricsReport) string {
 	out += fmt.Sprintf("  Balanced:      %d shaders\n\n", report.BalancedCount)
 
 	out += fmt.Sprintf("%-40s %8s %10s %10s %8s %12s\n",
-		"Shader Name", "Invokes", "Total(ms)", "Avg(µs)", "% Total", "Classification")
-	out += fmt.Sprintf("%s\n", repeatStr("-", 110))
+		"Shader Name", "Invokes", "Total(ms)", "Avg(us)", "Cost", "Classification")
+	out += repeatStr("─", 110) + "\n"
 
 	for _, metrics := range report.Shaders {
 		avgUs := float64(metrics.AvgDurationNs) / 1000.0
@@ -627,7 +626,8 @@ func FormatShaderMetricsReport(report *ShaderMetricsReport) string {
 	}
 
 	// Show detailed metrics for top 5 shaders
-	out += "\n=== Top 5 Shaders (Detailed) ===\n\n"
+	out += "\nTop 5 Shaders (Detailed)\n"
+	out += repeatStr("─", 40) + "\n\n"
 	maxShaders := 5
 	if len(report.Shaders) < maxShaders {
 		maxShaders = len(report.Shaders)
@@ -781,7 +781,7 @@ func FormatShadersXcodeStyle(w io.Writer, report *ShaderMetricsReport, trace *Tr
 	fmt.Fprintf(w, "%-8s %-50s %-10s %-20s %15s %10s %10s %12s\n",
 		"Cost", "Name", "Type", "Pipeline State",
 		"# SIMD Groups", "Registers", "High Reg", "Spilled")
-	fmt.Fprintf(w, "%s\n", repeatStr("-", 145))
+	fmt.Fprintf(w, "%s\n", repeatStr("─", 145))
 
 	// Sort shaders by percentage (descending) like Xcode does
 	// Already sorted by TotalDurationNs in ExtractShaderMetrics

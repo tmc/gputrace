@@ -573,6 +573,7 @@ func formatUint64(v uint64) string {
 ## Related Documentation
 
 See also:
+- [STREAMDATA_FORMAT.md](STREAMDATA_FORMAT.md) - streamData plist parsing for dispatch timing
 - [PERFCOUNTER_FIELD_OFFSET_MAP.md](../PERFCOUNTER_FIELD_OFFSET_MAP.md) - Detailed field offset discoveries
 - [PERFCOUNTERS_STATUS.md](../PERFCOUNTERS_STATUS.md) - Implementation status
 - [RECORD_FORMATS.md](../RECORD_FORMATS.md) - Overall trace file formats

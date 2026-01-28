@@ -59,29 +59,19 @@ func runCommandBuffers(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to parse command buffers: %w", err)
 	}
 
-	// Basic output
-	fmt.Printf("=== Command Buffers ===\n")
-	fmt.Printf("Total: %d\n\n", len(commandBuffers))
-
-	// List command buffers
+	// Compact one-line-per-buffer output
+	fmt.Printf("%d command buffers:\n", len(commandBuffers))
 	for _, cb := range commandBuffers {
-		fmt.Printf("Command Buffer #%d\n", cb.Index)
-		fmt.Printf("  UUID:      %s\n", cb.UUID)
-		fmt.Printf("  Timestamp: %d (0x%x)\n", cb.Timestamp, cb.Timestamp)
-		fmt.Printf("  Offset:    0x%08x\n", cb.Offset)
-
 		if cmdBuffersVerbose || cmdBuffersDetailed {
-			// Get detailed information
 			dcb, err := gputrace.ParseDetailedCommandBuffer(trace, cb.Index)
 			if err != nil {
-				fmt.Printf("  Error parsing details: %v\n", err)
+				fmt.Printf("  %3d: offset=0x%08x (error: %v)\n", cb.Index, cb.Offset, err)
 			} else {
-				fmt.Printf("  Encoders:  %d\n", len(dcb.Encoders))
-				fmt.Printf("  API Calls: %d\n", len(dcb.Calls))
+				fmt.Printf("  %3d: %d encoders, %d calls\n", cb.Index, len(dcb.Encoders), len(dcb.Calls))
 			}
+		} else {
+			fmt.Printf("  %3d: offset=0x%08x\n", cb.Index, cb.Offset)
 		}
-
-		fmt.Println()
 	}
 
 	// Show detailed analysis if requested
@@ -94,11 +84,10 @@ func runCommandBuffers(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Summary statistics
-	if cmdBuffersVerbose || cmdBuffersDetailed {
+	// Summary statistics (verbose only)
+	if cmdBuffersVerbose && !cmdBuffersDetailed {
 		totalEncoders := 0
 		totalAPICalls := 0
-
 		for _, cb := range commandBuffers {
 			dcb, err := gputrace.ParseDetailedCommandBuffer(trace, cb.Index)
 			if err == nil {
@@ -106,14 +95,11 @@ func runCommandBuffers(cmd *cobra.Command, args []string) error {
 				totalAPICalls += len(dcb.Calls)
 			}
 		}
-
-		fmt.Printf("\n=== Summary ===\n")
-		fmt.Printf("Total Command Buffers: %d\n", len(commandBuffers))
-		fmt.Printf("Total Encoders:        %d\n", totalEncoders)
-		fmt.Printf("Total API Calls:       %d\n", totalAPICalls)
 		if len(commandBuffers) > 0 {
-			fmt.Printf("Avg Encoders/Buffer:   %.1f\n", float64(totalEncoders)/float64(len(commandBuffers)))
-			fmt.Printf("Avg API Calls/Buffer:  %.1f\n", float64(totalAPICalls)/float64(len(commandBuffers)))
+			fmt.Printf("\nTotal: %d encoders, %d calls (%.1f enc/buf, %.1f calls/buf)\n",
+				totalEncoders, totalAPICalls,
+				float64(totalEncoders)/float64(len(commandBuffers)),
+				float64(totalAPICalls)/float64(len(commandBuffers)))
 		}
 	}
 

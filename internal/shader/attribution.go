@@ -250,11 +250,48 @@ func estimateLineCost(line string, instrType string, complexity int) float64 {
 }
 
 // distributeMetrics distributes shader-level metrics across source lines based on estimated cost.
+// When real instruction counts are available (from PipelineStats/streamData), they are used
+// to weight the distribution more accurately.
 func distributeMetrics(lines []SourceLineAttribution, metrics *ShaderMetrics, instrCount int) {
-	// Calculate total cost
+	// Calculate total cost using instruction type weights
+	// If real instruction counts are available, use them to weight line types
+	computeWeight := 1.0
+	memoryWeight := 2.0
+	branchWeight := 0.5
+
+	// Use real instruction counts to adjust weights if available
+	if metrics != nil && metrics.InstructionCount > 0 {
+		totalInstr := float64(metrics.InstructionCount)
+		if totalInstr > 0 {
+			// ALU instructions are compute-heavy
+			aluRatio := float64(metrics.ALUInstructionCount) / totalInstr
+			// FP32/FP16 are compute operations
+			fpRatio := float64(metrics.FP32InstructionCount+metrics.FP16InstructionCount) / totalInstr
+			// Branch instructions have control flow overhead
+			branchRatio := float64(metrics.BranchInstructionCount) / totalInstr
+
+			// Adjust weights based on actual instruction mix
+			if aluRatio+fpRatio > 0.5 {
+				computeWeight = 2.0 // Compute-heavy shader
+			}
+			if branchRatio > 0.1 {
+				branchWeight = 1.5 // Branch-heavy shader (divergence)
+			}
+		}
+	}
+
+	// Calculate total weighted cost
 	totalCost := 0.0
-	for _, line := range lines {
-		totalCost += line.EstimatedCost
+	for i := range lines {
+		switch lines[i].InstructionType {
+		case "compute":
+			lines[i].EstimatedCost *= computeWeight
+		case "memory":
+			lines[i].EstimatedCost *= memoryWeight
+		case "control":
+			lines[i].EstimatedCost *= branchWeight
+		}
+		totalCost += lines[i].EstimatedCost
 	}
 
 	if totalCost == 0 {
@@ -272,11 +309,20 @@ func distributeMetrics(lines []SourceLineAttribution, metrics *ShaderMetrics, in
 		// Distribute GPU time
 		lines[i].GPUTimePercent = costRatio * 100.0
 
-		// Estimate ALU utilization (from shader metrics if available)
+		// Use real ALU utilization if available
 		if metrics != nil {
-			lines[i].ALUUtilization = costRatio * 100.0 // Simplified
+			if metrics.ALUUtilization > 0 {
+				// Scale ALU util by the compute contribution of this line
+				if lines[i].InstructionType == "compute" {
+					lines[i].ALUUtilization = metrics.ALUUtilization * costRatio * 2 // Boost compute lines
+				} else {
+					lines[i].ALUUtilization = metrics.ALUUtilization * costRatio
+				}
+			} else {
+				lines[i].ALUUtilization = costRatio * 100.0
+			}
 
-			// Estimate memory bandwidth for memory ops
+			// Distribute memory bandwidth for memory ops
 			if lines[i].InstructionType == "memory" && metrics.EstimatedBandwidth > 0 {
 				lines[i].MemoryBandwidth = metrics.EstimatedBandwidth * costRatio
 			}

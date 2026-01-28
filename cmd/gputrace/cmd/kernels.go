@@ -135,14 +135,13 @@ func runKernels(cmd *cobra.Command, args []string) error {
 
 	// Output header
 	if kernelsFilter != "" {
-		fmt.Printf("=== Kernels matching %q (%d unique) ===\n", kernelsFilter, uniqueKernels)
+		fmt.Printf("%d %s matching %q:\n", uniqueKernels, Pluralize(uniqueKernels, "kernel", "kernels"), kernelsFilter)
 	} else {
-		fmt.Printf("=== Kernel Functions (%d unique) ===\n", uniqueKernels)
+		fmt.Printf("%d %s:\n", uniqueKernels, Pluralize(uniqueKernels, "kernel", "kernels"))
 	}
 	fmt.Println()
 
 	if uniqueKernels == 0 {
-		fmt.Println("No kernels found.")
 		return nil
 	}
 
@@ -173,14 +172,14 @@ func runKernels(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Println()
 
-	sepLine := strings.Repeat("-", maxNameLen) + "  " + strings.Repeat("-", 18) + "  " + strings.Repeat("-", 10)
+	sepWidth := maxNameLen + 2 + 18 + 2 + 10
 	if hasTiming {
-		sepLine += "  " + strings.Repeat("-", 10) + "  " + strings.Repeat("-", 10)
+		sepWidth += 2 + 10 + 2 + 10
 	}
 	if kernelsVerbose || kernelsStats {
-		sepLine += "  " + strings.Repeat("-", 30)
+		sepWidth += 2 + 30
 	}
-	fmt.Println(sepLine)
+	fmt.Println(TableSeparator(sepWidth))
 
 	// Print rows
 	for _, k := range kernels {

@@ -90,11 +90,30 @@ Represents a compute dispatch.
 
 When enabled, traces include a `.gpuprofiler_raw` directory containing:
 
-- `Counters_f_*.raw`: Binary counter values
-- `Profiling_f_*.raw`: Profiling metadata
-- `Timeline_f_*.raw`: Timeline event data
+| File | Format | Description |
+|------|--------|-------------|
+| `streamData` | NSKeyedArchiver plist | Pipeline metadata, dispatch timing, encoder timing |
+| `Counters_f_*.raw` | Binary | GPU counter samples (464-byte records) |
+| `Profiling_f_*.raw` | Binary | Statistical profiling samples (Execution Cost) |
+| `Timeline_f_*.raw` | Binary | Timeline visualization event data |
 
-These files are raw binary dumps.
+### streamData
+
+The `streamData` file is the key metadata file containing:
+- **pipelineStateInfoData**: Pipeline-to-function mapping (40 bytes/record)
+- **gpuCommandInfoData**: Per-dispatch timing in microseconds (32 bytes/record)
+- **encoderInfoData**: Per-encoder timing (40 bytes/record)
+- **pipelinePerformanceStatistics**: Instruction counts, register usage
+
+See [STREAMDATA_FORMAT.md](STREAMDATA_FORMAT.md) for detailed binary layouts.
+
+### Three Timing Metrics
+
+Xcode shows three distinct metrics:
+
+1. **Dispatch Duration**: Wall clock time per dispatch (from gpuCommandInfoData)
+2. **Kernel Duration**: Aggregated dispatch time per pipeline
+3. **Execution Cost**: Statistical GPU sampling (from Profiling_f_*.raw, not yet parsed)
 
 ## Metal Libraries (MTLB)
 
