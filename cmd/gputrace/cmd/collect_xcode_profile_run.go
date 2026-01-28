@@ -57,6 +57,17 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Input:  %s\n", inputPath)
 	fmt.Printf("  Output: %s\n", outputPath)
 
+	// Save cursor position and restore when done (less disruptive to user)
+	ensureXCUI()
+	origCursorX, origCursorY := getCursorPosition()
+	defer func() {
+		if origCursorX != 0 || origCursorY != 0 {
+			time.Sleep(100 * time.Millisecond) // Let UI settle
+			moveCursor(origCursorX, origCursorY)
+			verboseLog("Restored cursor to (%.0f, %.0f)", origCursorX, origCursorY)
+		}
+	}()
+
 	ctx, cancel := context.WithTimeout(context.Background(), collectProfileTimeout)
 	defer cancel()
 
@@ -71,6 +82,10 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to open trace in Xcode: %w\n    output: %s", err, string(output))
 	}
 	time.Sleep(2 * time.Second)
+
+	if err := CheckCancelAndReturn(); err != nil {
+		return err
+	}
 
 	// Handle any startup dialogs (Reopen, etc.)
 	if err := dismissStartupDialogs(); err != nil {
@@ -91,59 +106,103 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("Xcode window not found: %w", err)
 	}
 
-	// Step 3: Start replay
-	fmt.Println("  Step 3: Starting replay...")
-	if err := clickReplayButton(windowAX); err != nil {
-		return fmt.Errorf("failed to start replay: %w", err)
+	if err := CheckCancelAndReturn(); err != nil {
+		return err
 	}
 
-	// Step 4: Wait for replay
-	fmt.Println("  Step 4: Waiting for replay to complete...")
-	if err := waitForReplayComplete(appAX, traceFileName, windowAX, collectProfileTimeout); err != nil {
-		return fmt.Errorf("replay wait failed: %w", err)
-	}
-	fmt.Println("    Replay completed")
+	// Check if trace already has performance data (Show Performance button visible)
+	alreadyHasPerfData := hasShowPerformance(windowAX)
+	if alreadyHasPerfData {
+		fmt.Println("  Trace already has performance data, skipping replay...")
+	} else {
+		// Step 3: Start replay
+		fmt.Println("  Step 3: Starting replay...")
+		if err := clickReplayButton(windowAX); err != nil {
+			return fmt.Errorf("failed to start replay: %w", err)
+		}
 
-	// Step 5: Export
-	fmt.Println("  Step 5: Exporting trace...")
+		// Step 4: Wait for replay
+		fmt.Println("  Step 4: Waiting for replay to complete...")
+		if err := waitForReplayComplete(appAX, traceFileName, windowAX, collectProfileTimeout); err != nil {
+			return fmt.Errorf("replay wait failed: %w", err)
+		}
+		fmt.Println("    Replay completed")
+	}
+
+	if err := CheckCancelAndReturn(); err != nil {
+		return err
+	}
+
+	// Export step
+	fmt.Println("  Exporting trace...")
+
+	// Remove existing destination to avoid "file exists" dialog
+	if _, err := os.Stat(outputPath); err == nil {
+		verboseLog("removing existing output path: %s", outputPath)
+		if err := os.RemoveAll(outputPath); err != nil {
+			return fmt.Errorf("failed to remove existing output: %w", err)
+		}
+	}
+
 	if err := exportTrace(appAX, windowAX, outputPath); err != nil {
 		return fmt.Errorf("export failed: %w", err)
 	}
 
-	// Check if file was saved - try multiple locations
-	if _, err := os.Stat(outputPath); err == nil {
-		fmt.Printf(Colorize("\nDone! Output saved to: %s\n", ColorGreen), outputPath)
-		return nil
-	}
-
-	// Try the input file's directory (common Xcode default)
+	// Wait for the export to complete (file should appear)
+	var finalPath string
 	outputName := filepath.Base(outputPath)
 	inputDir := filepath.Dir(inputPath)
 	altPath := filepath.Join(inputDir, outputName)
-	if altPath != outputPath {
-		if _, err := os.Stat(altPath); err == nil {
-			// Copy from alternate location to expected output path (use cp -R for directories)
-			if err := copyPath(altPath, outputPath); err != nil {
-				fmt.Printf(Colorize("\nNote: File saved to %s (copy to %s failed: %v)\n", ColorYellow), altPath, outputPath, err)
-				return nil
-			}
-			fmt.Printf(Colorize("\nDone! Output saved to: %s (copied from %s)\n", ColorGreen), outputPath, altPath)
-			return nil
-		}
+	var home string
+	if h, err := os.UserHomeDir(); err == nil {
+		home = h
 	}
 
-	// Try user's Downloads folder
-	if home, err := os.UserHomeDir(); err == nil {
-		downloadsPath := filepath.Join(home, "Downloads", outputName)
-		if _, err := os.Stat(downloadsPath); err == nil {
-			// Copy from Downloads to expected output path (use cp -R for directories)
-			if err := copyPath(downloadsPath, outputPath); err != nil {
-				fmt.Printf(Colorize("\nNote: File saved to %s (copy to %s failed: %v)\n", ColorYellow), downloadsPath, outputPath, err)
-				return nil
+	for i := 0; i < 30; i++ { // Wait up to 30 seconds
+		if _, err := os.Stat(outputPath); err == nil {
+			finalPath = outputPath
+			break
+		}
+		if altPath != outputPath {
+			if _, err := os.Stat(altPath); err == nil {
+				finalPath = altPath
+				break
 			}
-			fmt.Printf(Colorize("\nDone! Output saved to: %s (copied from %s)\n", ColorGreen), outputPath, downloadsPath)
+		}
+		if home != "" {
+			downloadsPath := filepath.Join(home, "Downloads", outputName)
+			if _, err := os.Stat(downloadsPath); err == nil {
+				finalPath = downloadsPath
+				break
+			}
+		}
+		time.Sleep(1 * time.Second)
+	}
+
+	// Close the Xcode window after export completes
+	// Re-fetch window reference since it may have become stale during export
+	// (window title may change or become empty after profiling)
+	if freshWindow := findTraceWindowByButtons(appAX); freshWindow != 0 {
+		closeXcodeWindow(freshWindow)
+	} else if freshWindow := getPreferredTraceWindow(appAX, traceFileName); freshWindow != 0 {
+		closeXcodeWindow(freshWindow)
+	} else {
+		closeXcodeWindow(windowAX) // Try original reference as fallback
+	}
+
+	// Check if file was saved
+	if finalPath != "" {
+		if finalPath != outputPath {
+			// Copy from alternate location to expected output path
+			if err := copyPath(finalPath, outputPath); err != nil {
+				fmt.Printf(Colorize("\nNote: File saved to %s (copy to %s failed: %v)\n", ColorYellow), finalPath, outputPath, err)
+			} else {
+				fmt.Printf(Colorize("\nDone! Output saved to: %s (copied from %s)\n", ColorGreen), outputPath, finalPath)
+			}
 			return nil
 		}
+		fmt.Printf(Colorize("\nDone! Output saved to: %s\n", ColorGreen), outputPath)
+		return nil
 	}
 
 	fmt.Print(Colorize("\nWarning: Output file not found at expected location.\n", ColorYellow))
@@ -152,22 +211,82 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 	return fmt.Errorf("export file not found at expected location: %s", outputPath)
 }
 
+// findTraceWindowByButtons finds an Xcode window with trace-related buttons
+// (Export + Show Performance indicates a completed profiling session)
+func findTraceWindowByButtons(appAX uintptr) uintptr {
+	children := axChildren(appAX)
+	for _, child := range children {
+		if axString(child, "AXRole") != "AXWindow" {
+			continue
+		}
+		// Look for windows with both Export and Show Performance buttons
+		hasExport := findButtonBFS(child, "Export", 200) != 0
+		hasShowPerf := findButtonBFS(child, "Show Performance", 200) != 0
+		if hasExport && hasShowPerf {
+			verboseLog("findTraceWindowByButtons: found window with Export + Show Performance")
+			return child
+		}
+	}
+	return 0
+}
+
+// closeXcodeWindow closes the specified Xcode window
+func closeXcodeWindow(windowAX uintptr) {
+	if windowAX == 0 {
+		return
+	}
+
+	// Try AXCloseButton attribute (standard macOS window close button)
+	var closeBtn uintptr
+	key := mkString("AXCloseButton")
+	defer cfRelease(key)
+	if axCopyAttributeValue(windowAX, key, &closeBtn) == kAXErrorSuccess && closeBtn != 0 {
+		verboseLog("closeXcodeWindow: clicking AXCloseButton")
+		// Try AXPress action directly on the close button
+		pressKey := mkString("AXPress")
+		defer cfRelease(pressKey)
+		if axPerformAction(closeBtn, pressKey) == kAXErrorSuccess {
+			verboseLog("closeXcodeWindow: window closed successfully")
+			return
+		}
+		verboseLog("closeXcodeWindow: AXPress failed, trying fallback")
+		if err := axPressWithFallback(closeBtn); err != nil {
+			verboseLog("closeXcodeWindow: fallback also failed: %v", err)
+		}
+		return
+	}
+	verboseLog("closeXcodeWindow: AXCloseButton not found")
+}
 
 func waitForWindow(appAX uintptr, traceFileName string, timeout time.Duration) (uintptr, error) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
+		var windowAX uintptr
 		// Try to find window by trace file name first
 		if traceFileName != "" {
 			// Get ALL matching windows and prefer ones with Replay button
 			// (multiple windows can have same trace filename)
-			windowAX := getPreferredTraceWindow(appAX, traceFileName)
-			if windowAX != 0 {
-				return windowAX, nil
-			}
+			windowAX = getPreferredTraceWindow(appAX, traceFileName)
 		}
 		// Fallback to first window
-		windowAX := GetFirstWindow(appAX)
+		if windowAX == 0 {
+			windowAX = GetFirstWindow(appAX)
+		}
 		if windowAX != 0 {
+			// Check for off-screen position and reposition if needed
+			x, y := axPosition(windowAX)
+			if x < 0 || y < 0 || y > 5000 {
+				verboseLog("waitForWindow: window at (%d,%d) is off-screen, repositioning to (100,100)", x, y)
+				if err := setWindowPosition(windowAX, 100, 100); err != nil {
+					verboseLog("waitForWindow: failed to reposition window: %v", err)
+				} else {
+					time.Sleep(200 * time.Millisecond)
+				}
+			}
+			// Raise the window to front
+			raiseKey := mkString("AXRaise")
+			axPerformAction(windowAX, raiseKey)
+			cfRelease(raiseKey)
 			return windowAX, nil
 		}
 		time.Sleep(1 * time.Second)
@@ -203,6 +322,26 @@ func getPreferredTraceWindow(appAX uintptr, traceFileName string) uintptr {
 	verboseLog("getPreferredTraceWindow: found %d windows matching %q", len(matchingWindows), traceFileName)
 
 	if len(matchingWindows) == 0 {
+		// No filename matches - try to find any GPU trace window by UI elements
+		// This handles the case where Xcode changes the window title during profiling
+		verboseLog("getPreferredTraceWindow: no filename match, searching for GPU trace UI elements")
+		for _, child := range children {
+			if axString(child, "AXRole") != "AXWindow" {
+				continue
+			}
+			// Check for GPU trace UI elements using targeted traversal
+			if hasShowPerformance(child) {
+				title := axString(child, "AXTitle")
+				verboseLog("getPreferredTraceWindow: found window %q with Show Performance", title)
+				return child
+			}
+			// Also check for Replay button
+			if replayBtn := findButtonBFS(child, "Replay", 500); replayBtn != 0 {
+				title := axString(child, "AXTitle")
+				verboseLog("getPreferredTraceWindow: found window %q with Replay", title)
+				return child
+			}
+		}
 		return 0
 	}
 
@@ -244,7 +383,7 @@ func clickReplayButton(windowAX uintptr) error {
 	verboseLog("clickReplayButton: window=%d title=%q", windowAX, windowTitle)
 
 	// Activate Xcode and raise the target window before clicking
-	// Do this twice with delays to ensure the window is truly active
+	// Note: AXPress on toolbar buttons requires the app to be focused
 	for i := 0; i < 2; i++ {
 		if err := ActivateXcode(); err != nil {
 			verboseLog("clickReplayButton: ActivateXcode failed: %v", err)
@@ -289,7 +428,17 @@ func clickReplayButton(windowAX uintptr) error {
 	verboseLog("clickReplayButton: Replay button (target window)=%d enabled=%v", replayBtn, replayBtn != 0 && IsElementEnabled(replayBtn))
 	if replayBtn != 0 && IsElementEnabled(replayBtn) {
 		if err := axPressWithFallback(replayBtn); err != nil {
-			return fmt.Errorf("failed to click Replay button: %w", err)
+			// Button reference may be stale after window repositioning - retry with fresh reference
+			verboseLog("clickReplayButton: first attempt failed (%v), waiting and retrying", err)
+			time.Sleep(500 * time.Millisecond)
+			replayBtn = findButtonBFS(windowAX, "Replay", 500)
+			if replayBtn != 0 && IsElementEnabled(replayBtn) {
+				if err := axPressWithFallback(replayBtn); err != nil {
+					return fmt.Errorf("failed to click Replay button: %w", err)
+				}
+			} else {
+				return fmt.Errorf("failed to click Replay button: %w (and retry failed to find button)", err)
+			}
 		}
 		fmt.Println("    Clicked Replay button successfully")
 		return nil
@@ -347,20 +496,40 @@ func waitForReplayComplete(appAX uintptr, traceFileName string, initialWindowAX 
 	windowTitle := axString(currentWindow, "AXTitle")
 	verboseLog("waitForReplayComplete: waiting for profiling in window %q", windowTitle)
 
+	// Track consecutive failures to detect Xcode crash/exit
+	consecutiveXcodeFailures := 0
+	const maxXcodeFailures = 3
+
 	// Helper to find a button - tries current window first, then re-fetches window if needed
-	findButton := func(name string) uintptr {
-		btn := findButtonBFS(currentWindow, name, 500)
+	// Returns (button, xcodeRunning)
+	// Note: depth of 2000 required for deep UI hierarchies (e.g., Show Performance in summary panel)
+	const buttonSearchDepth = 2000
+	findButton := func(name string) (uintptr, bool) {
+		// For Show Performance, use targeted traversal which is more reliable for deep hierarchies
+		if name == "Show Performance" && currentWindow != 0 && hasShowPerformance(currentWindow) {
+			// Return a non-zero placeholder to indicate found (actual element not needed)
+			consecutiveXcodeFailures = 0
+			return 1, true
+		}
+		btn := findButtonBFS(currentWindow, name, buttonSearchDepth)
 		if btn != 0 {
-			return btn
+			consecutiveXcodeFailures = 0
+			return btn, true
 		}
 		// Button not found - try re-fetching the window (it may have changed during replay)
 		newWindow := getPreferredTraceWindow(appAX, traceFileName)
 		if newWindow != 0 && newWindow != currentWindow {
 			verboseLog("waitForReplayComplete: window reference updated (old=%v, new=%v)", currentWindow, newWindow)
 			currentWindow = newWindow
-			btn = findButtonBFS(currentWindow, name, 500)
+			// For Show Performance, use targeted traversal
+			if name == "Show Performance" && hasShowPerformance(currentWindow) {
+				consecutiveXcodeFailures = 0
+				return 1, true
+			}
+			btn = findButtonBFS(currentWindow, name, buttonSearchDepth)
 			if btn != 0 {
-				return btn
+				consecutiveXcodeFailures = 0
+				return btn, true
 			}
 		}
 		// Still not found - re-fetch Xcode app and search all windows
@@ -368,23 +537,43 @@ func waitForReplayComplete(appAX uintptr, traceFileName string, initialWindowAX 
 		freshApp, err := FindXcodeApp()
 		if err != nil {
 			verboseLog("waitForReplayComplete: failed to re-fetch Xcode app: %v", err)
-			return 0
+			return 0, false
 		}
+		consecutiveXcodeFailures = 0 // Xcode is running, reset counter
 		children := axChildren(freshApp)
 		verboseLog("waitForReplayComplete: searching %d windows for %q button", len(children), name)
 		for _, child := range children {
 			if axString(child, "AXRole") != "AXWindow" {
 				continue
 			}
-			btn = findButtonBFS(child, name, 500)
+			// For Show Performance, use targeted traversal which is more reliable
+			if name == "Show Performance" && hasShowPerformance(child) {
+				newTitle := axString(child, "AXTitle")
+				verboseLog("waitForReplayComplete: found Show Performance via targeted traversal in window %q", newTitle)
+				currentWindow = child
+				return 1, true
+			}
+			btn = findButtonBFS(child, name, buttonSearchDepth)
 			if btn != 0 {
 				newTitle := axString(child, "AXTitle")
 				verboseLog("waitForReplayComplete: found %q button in window %q", name, newTitle)
 				currentWindow = child
-				return btn
+				return btn, true
 			}
 		}
-		return 0
+		return 0, true
+	}
+
+	// Wrapper that checks for Xcode being down
+	findButtonOrFail := func(name string) (uintptr, error) {
+		btn, xcodeRunning := findButton(name)
+		if !xcodeRunning {
+			consecutiveXcodeFailures++
+			if consecutiveXcodeFailures >= maxXcodeFailures {
+				return 0, fmt.Errorf("Xcode is not running (failed %d consecutive checks)", consecutiveXcodeFailures)
+			}
+		}
+		return btn, nil
 	}
 
 	// First, wait for replay/profiling to actually start
@@ -392,9 +581,18 @@ func waitForReplayComplete(appAX uintptr, traceFileName string, initialWindowAX 
 	// For GPU capture: "Capture GPU workload" disabled OR "Stop GPU workload" enabled
 	profilingStarted := false
 	for time.Since(start) < 30*time.Second {
-		replayBtn := findButton("Replay")
-		captureBtn := findButton("Capture GPU workload")
-		stopBtn := findButton("Stop GPU workload")
+		replayBtn, err := findButtonOrFail("Replay")
+		if err != nil {
+			return err
+		}
+		captureBtn, err := findButtonOrFail("Capture GPU workload")
+		if err != nil {
+			return err
+		}
+		stopBtn, err := findButtonOrFail("Stop GPU workload")
+		if err != nil {
+			return err
+		}
 
 		replayEnabled := replayBtn != 0 && IsElementEnabled(replayBtn)
 		captureEnabled := captureBtn != 0 && IsElementEnabled(captureBtn)
@@ -436,52 +634,79 @@ func waitForReplayComplete(appAX uintptr, traceFileName string, initialWindowAX 
 		// Check for completion indicators (only in target window):
 
 		// 1. Show Performance button appears (most reliable - profiling complete, ready to view)
-		showPerfBtn := findButton("Show Performance")
-		if showPerfBtn != 0 && IsElementEnabled(showPerfBtn) {
+		// Use targeted traversal via hasShowPerformance (same as check-status) for reliability
+		if currentWindow != 0 && hasShowPerformance(currentWindow) {
+			verboseLog("waitForReplayComplete: Show Performance button found (targeted traversal) - complete")
+			return nil
+		}
+		// Also try findButtonOrFail as fallback (searches all windows with deeper BFS)
+		// Note: for Show Performance, findButton returns 1 (placeholder) when found via targeted traversal,
+		// so we don't check IsElementEnabled (which would fail on the placeholder value)
+		showPerfBtn, err := findButtonOrFail("Show Performance")
+		if err != nil {
+			return err
+		}
+		if showPerfBtn != 0 {
 			verboseLog("waitForReplayComplete: Show Performance button found - complete")
 			return nil
 		}
 
-		// 2. Export button appears (indicates performance data is ready)
-		exportBtn := findButton("Export")
-		if exportBtn != 0 && IsElementEnabled(exportBtn) {
-			verboseLog("waitForReplayComplete: Export button found - complete")
-			return nil
-		}
+		// NOTE: Export button is NOT a reliable completion indicator - it's always
+		// visible in the Summary panel even before profiling. Only Show Performance
+		// or Replay button re-enabled indicates profiling is done.
 
-		// 3. Replay button is enabled again (trace replay completed)
-		replayBtn := findButton("Replay")
+		// 2. Replay button is enabled again (trace replay completed)
+		replayBtn, err := findButtonOrFail("Replay")
+		if err != nil {
+			return err
+		}
 		replayEnabled := replayBtn != 0 && IsElementEnabled(replayBtn)
 		if profilingStarted && replayEnabled {
-			// Replay button re-enabled - check if Export/Show Performance available
+			// Replay button re-enabled - wait for Show Performance to appear
+			// (indicates profiler data is ready, not just that replay finished)
 			time.Sleep(2 * time.Second)
-			exportBtn = findButton("Export")
-			showPerfBtn = findButton("Show Performance")
-			if exportBtn != 0 || showPerfBtn != 0 {
-				verboseLog("waitForReplayComplete: Replay enabled, Export/ShowPerf available - complete")
+			// Use targeted traversal first
+			if currentWindow != 0 && hasShowPerformance(currentWindow) {
+				verboseLog("waitForReplayComplete: Replay enabled, Show Performance available (targeted) - complete")
 				return nil
 			}
-			verboseLog("waitForReplayComplete: Replay enabled but no Export yet, waiting...")
+			showPerfBtn, err = findButtonOrFail("Show Performance")
+			if err != nil {
+				return err
+			}
+			if showPerfBtn != 0 {
+				verboseLog("waitForReplayComplete: Replay enabled, Show Performance available - complete")
+				return nil
+			}
+			verboseLog("waitForReplayComplete: Replay enabled but Show Performance not yet available, waiting...")
 		}
 
 		// 4. Stop GPU workload button is disabled/absent AND Capture is enabled
-		captureBtn := findButton("Capture GPU workload")
-		stopBtn := findButton("Stop GPU workload")
+		captureBtn, err := findButtonOrFail("Capture GPU workload")
+		if err != nil {
+			return err
+		}
+		stopBtn, err := findButtonOrFail("Stop GPU workload")
+		if err != nil {
+			return err
+		}
 		captureEnabled := captureBtn != 0 && IsElementEnabled(captureBtn)
 		stopEnabled := stopBtn != 0 && IsElementEnabled(stopBtn)
 
 		if !stopEnabled && captureEnabled {
-			// Additional check: wait for Export or Show Performance to appear
-			// before declaring complete (prevents early false positive)
+			// Additional check: wait for Show Performance button to appear
+			// before declaring complete (indicates profiler data is ready)
 			time.Sleep(2 * time.Second)
-			exportBtn = findButton("Export")
-			showPerfBtn = findButton("Show Performance")
-			if exportBtn != 0 || showPerfBtn != 0 {
-				verboseLog("waitForReplayComplete: Stop disabled, Capture enabled, Export/ShowPerf available - complete")
+			showPerfBtn, err = findButtonOrFail("Show Performance")
+			if err != nil {
+				return err
+			}
+			if showPerfBtn != 0 {
+				verboseLog("waitForReplayComplete: Stop disabled, Capture enabled, Show Performance available - complete")
 				return nil
 			}
-			// If still no Export button, continue waiting
-			verboseLog("waitForReplayComplete: Stop disabled, Capture enabled but no Export yet")
+			// Show Performance not available yet, continue waiting for profiler data
+			verboseLog("waitForReplayComplete: Stop disabled, Capture enabled but Show Performance not yet available")
 		}
 
 		elapsed := time.Since(start).Seconds()
@@ -538,6 +763,7 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 	for i := 0; i < 30; i++ {
 		windows := GetAllWindows(freshApp)
 		for _, w := range windows {
+			// Export sheet is shallow - Save button should be within depth 500
 			saveBtn := findButtonBFS(w, "Save", 500)
 			if saveBtn != 0 {
 				sheetFound = true
@@ -627,20 +853,30 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 		}
 	}
 
-	// Find the "Save As" text field across all windows and set the filename
-	// If there's a remaining path (couldn't navigate to full directory), include it as prefix
-	// macOS save dialogs interpret "/" in filenames as directory navigation
-	filenameToSet := outputName
+	// If there's a remaining path (couldn't fully navigate), try Cmd+Shift+G as final fallback
+	// Note: putting "/" in filename creates ":"-named files due to macOS HFS legacy behavior
 	if remainingPath != "" {
-		filenameToSet = remainingPath + "/" + outputName
-		fmt.Printf("    Setting filename with path: %s\n", filenameToSet)
-		fmt.Printf("    (macOS will navigate to subdirectory: %s)\n", remainingPath)
-	} else {
-		fmt.Printf("    Setting filename: %s\n", outputName)
+		fmt.Printf("    Partial navigation, using Cmd+Shift+G to navigate to: %s\n", outputDir)
+		// Ensure directory exists before trying to navigate
+		if err := os.MkdirAll(outputDir, 0755); err != nil {
+			verboseLog("exportTrace: failed to create output directory: %v", err)
+		}
+		// Try Cmd+Shift+G to navigate to full path
+		if err := NavigateToFolderInSaveDialog(windowAX, outputDir); err != nil {
+			verboseLog("exportTrace: Cmd+Shift+G fallback also failed: %v", err)
+			fmt.Printf("    Warning: Could not navigate to %s, file may save to wrong location\n", outputDir)
+		} else {
+			navigatedToDir = true
+			remainingPath = ""
+			fmt.Println("    Successfully navigated via Cmd+Shift+G")
+		}
 	}
+
+	// Set just the filename (never include path prefix - macOS converts "/" to ":")
+	fmt.Printf("    Setting filename: %s\n", outputName)
 	saveNameField := findInAllWindows(FindSaveAsTextField)
 	if saveNameField != 0 {
-		if err := axSetValue(saveNameField, filenameToSet); err != nil {
+		if err := axSetValue(saveNameField, outputName); err != nil {
 			fmt.Printf("    Warning: SetValue failed: %v (using default filename)\n", err)
 		} else if collectProfileDebug {
 			fmt.Printf("    [DEBUG] Set filename via AX (saveAsNameTextField)\n")
@@ -652,7 +888,7 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 
 	// Check if Save button is enabled before clicking
 	saveBtn := findInAllWindows(func(w uintptr) uintptr {
-		return findButtonBFS(w, "Save", 1000)
+		return findButtonBFS(w, "Save", 500) // Export sheet is shallow
 	})
 
 	if saveBtn == 0 {
@@ -840,10 +1076,9 @@ func navigateViaPathPopup(windowAX uintptr, targetPath string) (remainingPath st
 				// Try file browser navigation first (may work for some dialogs)
 				if err := navigateThroughFileBrowser(windowAX, remainingParts); err != nil {
 					verboseLog("navigateViaPathPopup: file browser navigation failed: %v", err)
-					// Return the remaining path as a prefix for the filename
-					// macOS save dialogs interpret "/" in filenames as directory navigation
+					// Return the remaining path - caller will try Cmd+Shift+G as fallback
 					remaining := strings.Join(remainingParts, "/")
-					verboseLog("navigateViaPathPopup: returning remaining path %q for filename prefix", remaining)
+					verboseLog("navigateViaPathPopup: returning remaining path %q for caller fallback", remaining)
 					return remaining, nil
 				}
 				// File browser navigation succeeded

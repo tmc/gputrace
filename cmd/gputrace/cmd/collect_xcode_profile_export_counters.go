@@ -49,6 +49,16 @@ func runXcodeExportCounters(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Save cursor position and restore when done
+	ensureXCUI()
+	origCursorX, origCursorY := getCursorPosition()
+	defer func() {
+		if origCursorX != 0 || origCursorY != 0 {
+			time.Sleep(100 * time.Millisecond)
+			moveCursor(origCursorX, origCursorY)
+		}
+	}()
+
 	appAX, err := FindXcodeApp()
 	if err != nil {
 		return fmt.Errorf("Xcode not running: %w", err)
@@ -146,8 +156,8 @@ func runXcodeExportCounters(cmd *cobra.Command, args []string) error {
 
 		windows := GetAllWindows(appAX)
 		for _, w := range windows {
-			// Try Save button
-			if btn := findButtonBFS(w, "Save", 200); btn != 0 {
+			// Try Save button (export sheet is shallow)
+			if btn := findButtonBFS(w, "Save", 500); btn != 0 {
 				fmt.Println("Clicking Save...")
 				if err := axAction(btn, "AXPress"); err != nil {
 					clickErr = err
@@ -157,8 +167,8 @@ func runXcodeExportCounters(cmd *cobra.Command, args []string) error {
 				clickErr = nil
 				goto saveClicked
 			}
-			// Try Export button
-			if btn := findButtonBFS(w, "Export", 200); btn != 0 {
+			// Try Export button (export sheet is shallow)
+			if btn := findButtonBFS(w, "Export", 500); btn != 0 {
 				fmt.Println("Clicking Export...")
 				if err := axAction(btn, "AXPress"); err != nil {
 					clickErr = err
@@ -207,7 +217,11 @@ saveClicked:
 }
 
 // activateXcodeQuick activates Xcode using osascript with a timeout.
+// Respects --background flag and does nothing if set.
 func activateXcodeQuick() {
+	if collectProfileBackground {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "osascript", "-e", `tell application "Xcode" to activate`)

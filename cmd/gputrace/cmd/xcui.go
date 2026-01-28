@@ -121,6 +121,7 @@ const (
 	kCGEventFlagMaskCommand = 0x00100000
 
 	// Virtual keycodes (macOS)
+	kVK_A      = 0x00
 	kVK_G      = 0x05
 	kVK_Return = 0x24
 	kVK_Escape = 0x35
@@ -236,8 +237,13 @@ func axString(ax uintptr, attr string) string {
 }
 
 func IsElementEnabled(el uintptr) bool {
+	return axBool(el, "AXEnabled")
+}
+
+// axBool retrieves a boolean attribute from an AX element.
+func axBool(el uintptr, attr string) bool {
 	var val uintptr
-	key := mkString("AXEnabled")
+	key := mkString(attr)
 	defer cfRelease(key)
 
 	if axCopyAttributeValue(el, key, &val) == kAXErrorSuccess {
@@ -283,6 +289,37 @@ func axSize(el uintptr) (w, h int) {
 		w, h = axValueToSize(val)
 	}
 	return
+}
+
+// axParent returns the parent element of an AX element.
+func axParent(el uintptr) uintptr {
+	var val uintptr
+	key := mkString("AXParent")
+	defer cfRelease(key)
+	if axCopyAttributeValue(el, key, &val) == kAXErrorSuccess {
+		return val
+	}
+	return 0
+}
+
+// findParentWindow walks up the AX hierarchy to find the containing window.
+func findParentWindow(el uintptr) uintptr {
+	current := el
+	for i := 0; i < 50; i++ { // Limit iterations to avoid infinite loops
+		if current == 0 {
+			return 0
+		}
+		role := axString(current, "AXRole")
+		if role == "AXWindow" {
+			return current
+		}
+		parent := axParent(current)
+		if parent == 0 || parent == current {
+			return 0
+		}
+		current = parent
+	}
+	return 0
 }
 
 // setWindowPosition moves a window to the specified position.
@@ -360,6 +397,30 @@ func clickElement(el uintptr) error {
 	w, h := axSize(el)
 
 	verboseLog("clickElement: position=(%d,%d) size=(%d,%d)", x, y, w, h)
+
+	// Check for off-screen position (negative coordinates or unreasonably large)
+	if y < 0 || x < 0 || y > 10000 || x > 10000 {
+		verboseLog("clickElement: WARNING - element appears off-screen, attempting to find parent window")
+		// Try to find and reposition the parent window
+		if window := findParentWindow(el); window != 0 {
+			wx, wy := axPosition(window)
+			verboseLog("clickElement: parent window at (%d,%d)", wx, wy)
+			if wy < 0 || wx < 0 {
+				// Reposition window to visible area
+				newX, newY := 100, 100
+				verboseLog("clickElement: repositioning window from (%d,%d) to (%d,%d)", wx, wy, newX, newY)
+				if err := setWindowPosition(window, newX, newY); err != nil {
+					verboseLog("clickElement: failed to reposition window: %v", err)
+				} else {
+					time.Sleep(200 * time.Millisecond)
+					// Re-read element position after window move
+					x, y = axPosition(el)
+					w, h = axSize(el)
+					verboseLog("clickElement: after reposition: position=(%d,%d) size=(%d,%d)", x, y, w, h)
+				}
+			}
+		}
+	}
 
 	if w == 0 && h == 0 {
 		// Try to get bounds via AXFrame attribute
@@ -1150,76 +1211,157 @@ func ActivateXcode() error {
 	return cmd.Run()
 }
 
-// NavigateToFolderInSaveDialog uses Cmd+Shift+G to open the "Go to Folder" dialog
-// in a save sheet, enters the path, and presses Return to navigate there.
+// NavigateToFolderInSaveDialog navigates to a folder in a save dialog.
+// Uses AX APIs to avoid stealing focus from the user.
 // The window parameter should be the main window containing the save sheet.
 func NavigateToFolderInSaveDialog(window uintptr, folderPath string) error {
-	// Bring Xcode to front to receive keyboard events
-	if err := ActivateXcode(); err != nil {
-		return fmt.Errorf("failed to activate Xcode: %w", err)
-	}
-	sleepMs(300)
+	verboseLog("NavigateToFolderInSaveDialog: navigating to %s", folderPath)
 
-	// Send Cmd+Shift+G to open "Go to Folder"
-	if err := sendCmdShiftG(); err != nil {
+	// Try Method 1: Find and set the path bar's combo box directly (no keyboard needed)
+	pathBar := findElement(window, func(el uintptr) bool {
+		role := axString(el, "AXRole")
+		if role == "AXComboBox" {
+			// Look for the path bar combo box (usually has path-related description)
+			desc := axString(el, "AXDescription")
+			subrole := axString(el, "AXSubrole")
+			// The path bar is typically an AXComboBox with AXPathButton subrole
+			if subrole == "AXPathButton" || strings.Contains(strings.ToLower(desc), "path") ||
+				strings.Contains(strings.ToLower(desc), "location") {
+				return true
+			}
+		}
+		return false
+	})
+
+	if pathBar != 0 {
+		verboseLog("NavigateToFolderInSaveDialog: found path bar, setting value directly")
+		if err := axSetValue(pathBar, folderPath); err == nil {
+			// Confirm with Return key via AXConfirm or similar
+			sleepMs(300)
+			// Try to confirm the value
+			axPerformAction(pathBar, mkString("AXConfirm"))
+			sleepMs(500)
+			return nil
+		}
+		verboseLog("NavigateToFolderInSaveDialog: direct path bar set failed, trying Cmd+Shift+G")
+	}
+
+	// Method 2: Use Cmd+Shift+G via CGEventPostToPid (doesn't steal focus)
+	pid := getXcodePID()
+	if pid == 0 {
+		return fmt.Errorf("could not find Xcode PID")
+	}
+
+	verboseLog("NavigateToFolderInSaveDialog: sending Cmd+Shift+G to PID %d", pid)
+	if err := sendKeyToPid(pid, kVK_G, kCGEventFlagMaskCommand|kCGEventFlagMaskShift); err != nil {
 		return fmt.Errorf("failed to send Cmd+Shift+G: %w", err)
 	}
+	sleepMs(500) // Give time for Go to Folder UI to appear
 
-	// Wait for the "Go to Folder" sheet to appear
-	// It contains a text field where we can enter the path
+	// Find the Go to Folder UI (sheet or inline field)
 	var goToSheet uintptr
-	for i := 0; i < 20; i++ {
+	for i := 0; i < 30; i++ {
 		sleepMs(100)
-		// Look for the "Go to the folder" text field (it's typically a ComboBox)
 		goToSheet = findGoToFolderSheet(window)
 		if goToSheet != 0 {
+			verboseLog("NavigateToFolderInSaveDialog: found Go to Folder UI")
 			break
 		}
 	}
 	if goToSheet == 0 {
-		return fmt.Errorf("Go to Folder sheet did not appear")
+		return fmt.Errorf("Go to Folder UI did not appear")
 	}
 
-	// Find the text field in the sheet
-	pathField := FindTextField(goToSheet)
+	// Find the path text field
+	pathField := findElement(goToSheet, func(el uintptr) bool {
+		role := axString(el, "AXRole")
+		if role == "AXTextField" || role == "AXComboBox" {
+			if axBool(el, "AXFocused") {
+				return true
+			}
+		}
+		return false
+	})
 	if pathField == 0 {
-		// Try finding ComboBox (alternate UI)
 		pathField = findElement(goToSheet, func(el uintptr) bool {
-			role := axString(el, "AXRole")
-			return role == "AXComboBox"
+			return axString(el, "AXRole") == "AXComboBox"
 		})
 	}
 	if pathField == 0 {
-		return fmt.Errorf("path text field not found in Go to Folder sheet")
+		pathField = FindTextField(goToSheet)
+	}
+	if pathField == 0 {
+		return fmt.Errorf("path text field not found")
 	}
 
-	// Set the path
+	verboseLog("NavigateToFolderInSaveDialog: setting path: %s", folderPath)
 	if err := axSetValue(pathField, folderPath); err != nil {
 		return fmt.Errorf("failed to set folder path: %w", err)
 	}
+	sleepMs(300)
 
-	// Small delay to let the UI update
-	sleepMs(200)
-
-	// Press Return to navigate
-	if err := sendReturn(); err != nil {
-		return fmt.Errorf("failed to send Return: %w", err)
+	// Click Go button or confirm
+	goBtn := findButtonBFS(goToSheet, "Go", 100)
+	if goBtn != 0 {
+		verboseLog("NavigateToFolderInSaveDialog: clicking Go button")
+		axPressWithFallback(goBtn)
+	} else {
+		// Send Return key to confirm
+		sendKeyToPid(pid, kVK_Return, 0)
 	}
-
-	// Wait for the dialog to close and navigation to complete
 	sleepMs(500)
 
 	return nil
 }
 
-// findGoToFolderSheet finds the "Go to Folder" sheet in a window.
+// sendKeyToPid sends a key event directly to a process without changing focus.
+func sendKeyToPid(pid int32, keyCode uint16, modifiers uint64) error {
+	if cgEventCreateKeyboardEvent == nil || cgEventPostToPid == nil {
+		return fmt.Errorf("CGEvent keyboard functions not available")
+	}
+
+	keyDown := cgEventCreateKeyboardEvent(0, keyCode, true)
+	keyUp := cgEventCreateKeyboardEvent(0, keyCode, false)
+	if keyDown == 0 || keyUp == 0 {
+		return fmt.Errorf("failed to create keyboard events")
+	}
+	defer cfRelease(keyDown)
+	defer cfRelease(keyUp)
+
+	if modifiers != 0 {
+		cgEventSetFlags(keyDown, modifiers)
+		cgEventSetFlags(keyUp, modifiers)
+	}
+
+	cgEventPostToPid(pid, keyDown)
+	sleepMs(50)
+	cgEventPostToPid(pid, keyUp)
+
+	return nil
+}
+
+// getXcodePID returns Xcode's process ID.
+func getXcodePID() int32 {
+	appAX, err := FindXcodeApp()
+	if err != nil {
+		return 0
+	}
+	defer cfRelease(appAX)
+
+	var pid int32
+	if axUIElementGetPid(appAX, &pid) == kAXErrorSuccess {
+		return pid
+	}
+	return 0
+}
+
+// findGoToFolderSheet finds the "Go to Folder" UI in a window.
+// Modern macOS uses an inline text field in the path bar, not a separate sheet.
 func findGoToFolderSheet(window uintptr) uintptr {
-	// The "Go to Folder" dialog appears as a sheet with a text field
-	// Look for a sheet containing text "Go to the folder"
-	return findElement(window, func(el uintptr) bool {
+	// First try: Look for a sheet with "Go" button (older macOS style)
+	sheet := findElement(window, func(el uintptr) bool {
 		role := axString(el, "AXRole")
 		if role == "AXSheet" || role == "AXGroup" {
-			// Check for "Go" button which indicates this is the Go to Folder dialog
 			goBtn := findButtonBFS(el, "Go", 50)
 			if goBtn != 0 {
 				return true
@@ -1227,4 +1369,34 @@ func findGoToFolderSheet(window uintptr) uintptr {
 		}
 		return false
 	})
+	if sheet != 0 {
+		return sheet
+	}
+
+	// Second try: Look for inline "Go to:" text field (modern macOS style)
+	// This appears as a text field/combo box with "Go to:" label
+	field := findElement(window, func(el uintptr) bool {
+		role := axString(el, "AXRole")
+		if role == "AXTextField" || role == "AXComboBox" {
+			// Check if this is focused (Go to field gets focus when Cmd+Shift+G is pressed)
+			focused := axBool(el, "AXFocused")
+			if focused {
+				return true
+			}
+			// Also check for "Go to" in description/placeholder
+			desc := axString(el, "AXDescription")
+			placeholder := axString(el, "AXPlaceholderValue")
+			if strings.Contains(strings.ToLower(desc), "go to") ||
+				strings.Contains(strings.ToLower(placeholder), "go to") {
+				return true
+			}
+		}
+		return false
+	})
+	if field != 0 {
+		// Return the window as context since the field is inline
+		return window
+	}
+
+	return 0
 }

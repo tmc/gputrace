@@ -130,6 +130,31 @@ func runClickButton(cmd *cobra.Command, args []string) error {
 		wg.Wait()
 	}
 
+	// Phase 3: For specific buttons, use targeted traversal (they're deep in the hierarchy)
+	if btn == 0 && buttonName == "Show Performance" {
+		for _, w := range windows {
+			// Use the same targeted approach as check-status
+			editorArea := findGroupByTitle(w, "editor area", 100)
+			if editorArea != 0 {
+				if b := findButtonBFS(editorArea, "Show Performance", 2000); b != 0 {
+					btn = b
+					break
+				}
+			}
+		}
+	}
+
+	// Phase 4: For Save/Export buttons in dialogs, search with moderate depth
+	// (dialogs/sheets are shallow, ~500 elements max)
+	if btn == 0 && (buttonName == "Save" || buttonName == "Export") {
+		for _, w := range windows {
+			if b := findButtonBFS(w, buttonName, 1000); b != 0 {
+				btn = b
+				break
+			}
+		}
+	}
+
 	if btn == 0 {
 		return fmt.Errorf("button %q not found in any Xcode window", buttonName)
 	}

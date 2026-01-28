@@ -100,7 +100,7 @@ func runExport(cmd *cobra.Command, args []string) error {
 
 // isExportDialogOpen checks if an export/save dialog is already open on the window.
 func isExportDialogOpen(window uintptr) bool {
-	saveBtn := findButtonBFS(window, "Save", 500)
+	saveBtn := findButtonBFS(window, "Save", 500) // Export sheet is shallow
 	return saveBtn != 0
 }
 
@@ -154,7 +154,7 @@ func runOpenExport(cmd *cobra.Command, args []string) error {
 		fmt.Println("  Waiting for export sheet...")
 		sheetFound := false
 		for i := 0; i < 30; i++ {
-			saveBtn := findButtonBFS(windowAX, "Save", 500)
+			saveBtn := findButtonBFS(windowAX, "Save", 500) // Export sheet is shallow
 			if saveBtn != 0 {
 				sheetFound = true
 				break
@@ -269,7 +269,7 @@ func runClickSave(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("export dialog not open")
 	}
 
-	saveBtn := findButtonBFS(windowAX, "Save", 500)
+	saveBtn := findButtonBFS(windowAX, "Save", 500) // Export sheet is shallow
 	if saveBtn == 0 {
 		return fmt.Errorf("Save button not found")
 	}
@@ -382,7 +382,7 @@ func runCheckGoToFolder(cmd *cobra.Command, args []string) error {
 	}
 
 	// Also check for Save button to see overall dialog state
-	saveBtn := findButtonBFS(windowAX, "Save", 500)
+	saveBtn := findButtonBFS(windowAX, "Save", 500) // Export sheet is shallow
 	if saveBtn != 0 {
 		fmt.Println("Export dialog: OPEN")
 		// Check if Save is enabled

@@ -177,8 +177,9 @@ func acquireProfileLock() (func(), error) {
 	return func() {}, nil
 }
 
-// isProfilingRunning checks if any Xcode window has a Stop button visible,
-// indicating that profiling/replay is in progress.
+// isProfilingRunning checks if any Xcode window has a Stop button visible AND enabled,
+// AND profiling is not complete (no Show Performance button).
+// The Stop button can be enabled for capturing new workloads even after profiling completes.
 func isProfilingRunning() (bool, string) {
 	appAX, err := FindXcodeApp()
 	if err != nil {
@@ -188,10 +189,26 @@ func isProfilingRunning() (bool, string) {
 	defer cfRelease(appAX)
 
 	windows := GetAllWindows(appAX)
-	for _, w := range windows {
-		if FindStopButton(w) != 0 {
-			title := axString(w, "AXTitle")
-			return true, title
+	verboseLog("isProfilingRunning: checking %d windows", len(windows))
+	for i, w := range windows {
+		title := axString(w, "AXTitle")
+		stopBtn := FindStopButton(w)
+		if stopBtn != 0 {
+			enabled := IsElementEnabled(stopBtn)
+			btnTitle := axString(stopBtn, "AXTitle")
+			btnDesc := axString(stopBtn, "AXDescription")
+			verboseLog("isProfilingRunning: window %d (%q) has Stop button: title=%q desc=%q enabled=%v",
+				i, title, btnTitle, btnDesc, enabled)
+			// Only consider profiling running if Stop button exists AND is enabled
+			// BUT also check if profiling is complete (Show Performance visible)
+			if enabled {
+				// Check if profiling is already complete in this window
+				if hasShowPerformance(w) {
+					verboseLog("isProfilingRunning: window %d has Show Performance - profiling complete, not running", i)
+					continue
+				}
+				return true, title
+			}
 		}
 	}
 	return false, ""
