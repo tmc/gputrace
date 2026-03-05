@@ -322,26 +322,7 @@ func getPreferredTraceWindow(appAX uintptr, traceFileName string) uintptr {
 	verboseLog("getPreferredTraceWindow: found %d windows matching %q", len(matchingWindows), traceFileName)
 
 	if len(matchingWindows) == 0 {
-		// No filename matches - try to find any GPU trace window by UI elements
-		// This handles the case where Xcode changes the window title during profiling
-		verboseLog("getPreferredTraceWindow: no filename match, searching for GPU trace UI elements")
-		for _, child := range children {
-			if axString(child, "AXRole") != "AXWindow" {
-				continue
-			}
-			// Check for GPU trace UI elements using targeted traversal
-			if hasShowPerformance(child) {
-				title := axString(child, "AXTitle")
-				verboseLog("getPreferredTraceWindow: found window %q with Show Performance", title)
-				return child
-			}
-			// Also check for Replay button
-			if replayBtn := findButtonBFS(child, "Replay", 500); replayBtn != 0 {
-				title := axString(child, "AXTitle")
-				verboseLog("getPreferredTraceWindow: found window %q with Replay", title)
-				return child
-			}
-		}
+		// Keep matching strict to avoid drifting into another open trace window.
 		return 0
 	}
 
@@ -376,6 +357,19 @@ func getPreferredTraceWindow(appAX uintptr, traceFileName string) uintptr {
 	// No window with trace UI found - return first match
 	verboseLog("getPreferredTraceWindow: no window with trace UI, using first match")
 	return matchingWindows[0]
+}
+
+func windowMatchesTraceFile(window uintptr, traceFileName string) bool {
+	if traceFileName == "" {
+		return true
+	}
+	name := strings.ToLower(traceFileName)
+	title := strings.ToLower(axString(window, "AXTitle"))
+	if strings.Contains(title, name) {
+		return true
+	}
+	doc := strings.ToLower(axString(window, "AXDocument"))
+	return strings.Contains(doc, name)
 }
 
 func clickReplayButton(windowAX uintptr) error {
@@ -544,6 +538,9 @@ func waitForReplayComplete(appAX uintptr, traceFileName string, initialWindowAX 
 		verboseLog("waitForReplayComplete: searching %d windows for %q button", len(children), name)
 		for _, child := range children {
 			if axString(child, "AXRole") != "AXWindow" {
+				continue
+			}
+			if !windowMatchesTraceFile(child, traceFileName) {
 				continue
 			}
 			// For Show Performance, use targeted traversal which is more reliable
