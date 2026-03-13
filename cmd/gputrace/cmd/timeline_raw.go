@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"howett.net/plist"
+	"github.com/tmc/apple/x/plist"
 )
 
 // TimelineRaw represents the parsed content of a Timeline_f_*.raw file.
@@ -144,10 +144,9 @@ func EnhanceTimelineWithRawData(timeline *Timeline, tracePath string) error {
 		// If timestamp is more than 60 seconds from the reference base, skip it.
 		// baseNsRef is the start of CB#0.
 		// 60s = 60 * 1e6 us
-		if timestampUs > (baseNsRef/1000) + 60_000_000 {
-			 continue
+		if timestampUs > (baseNsRef/1000)+60_000_000 {
+			continue
 		}
-
 
 		event := TimelineEvent{
 			Name:      "Sample",
@@ -222,10 +221,10 @@ func CorrelateSamplesToKernels(timeline *Timeline) {
 
 // GPRWCNTRRecord represents a single 168-byte sample from the GPRWCNTR stream.
 type GPRWCNTRRecord struct {
-	Timestamp uint64
-	Size      uint64
-	Count     uint64
-	Flags     uint32
+	Timestamp    uint64
+	Size         uint64
+	Count        uint64
+	Flags        uint32
 	EncoderIndex int // Added for alignment verification
 	// Add other fields as needed
 }
@@ -393,7 +392,7 @@ func ParseAPSTimelineData(tracePath string) (*RawData, error) {
 	}
 
 	// Parse Blobs
-    gprwcntrIndex := 0
+	gprwcntrIndex := 0
 	for i, blobRef := range nsObjects {
 		uid, ok := blobRef.(plist.UID)
 		if !ok {
@@ -421,10 +420,6 @@ func ParseAPSTimelineData(tracePath string) (*RawData, error) {
 			continue
 		}
 
-		// Mappings (Blobs 13+) -> Logic remains same (omitted for brevity in replacement if not changed)
-        // Actually I need to include the whole loop body to be safe or use multi-replace if I can target just the loop.
-        // Let's rewrite the loop structure to be safe.
-        
 		// Mappings (Blobs 13+)
 		if i >= 13 {
 			var inner map[string]interface{}
@@ -449,7 +444,7 @@ func ParseAPSTimelineData(tracePath string) (*RawData, error) {
 
 									switch keyStr {
 									case "Serial":
-										if v, ok := innerObjs[int(vUid)].(uint64); ok {
+										if v, ok := plistUint64(innerObjs[int(vUid)]); ok {
 											serial = v
 										}
 									case "APSTraceDataFile":
@@ -457,7 +452,7 @@ func ParseAPSTimelineData(tracePath string) (*RawData, error) {
 											filename = v
 										}
 									case "SourceIndex":
-										if v, ok := innerObjs[int(vUid)].(uint64); ok {
+										if v, ok := plistUint64(innerObjs[int(vUid)]); ok {
 											sourceIndex = int(v)
 										}
 									}
@@ -476,50 +471,50 @@ func ParseAPSTimelineData(tracePath string) (*RawData, error) {
 		}
 
 		// GPRWCNTR (Blobs 1-11 approx)
-		if len(blobData) > 50 { 
+		if len(blobData) > 50 {
 			var inner map[string]interface{}
 			if _, err := plist.Unmarshal(blobData, &inner); err == nil {
-                // Check Source == "RDE_0"
-                // Need to traverse inner objects to find "Source" key and its value
+				// Check Source == "RDE_0"
+				// Need to traverse inner objects to find "Source" key and its value
 				if innerObjs, ok := inner["$objects"].([]interface{}); ok {
-                    isRDE0 := false
-                    // Find root object to locate Source key
-                    if top, ok := inner["$top"].(map[string]interface{}); ok {
-                        if rootUID, ok := top["root"].(plist.UID); ok && int(rootUID) < len(innerObjs) {
-                            if rootObj, ok := innerObjs[int(rootUID)].(map[string]interface{}); ok {
-                                if keys, ok := rootObj["NS.keys"].([]interface{}); ok {
-                                    objs := rootObj["NS.objects"].([]interface{})
-                                    for idx, k := range keys {
-                                        if kUID, ok := k.(plist.UID); ok && int(kUID) < len(innerObjs) {
-                                            if kStr, ok := innerObjs[int(kUID)].(string); ok && kStr == "Source" {
-                                                if vUID, ok := objs[idx].(plist.UID); ok && int(vUID) < len(innerObjs) {
-                                                    if vStr, ok := innerObjs[int(vUID)].(string); ok && vStr == "RDE_0" {
-                                                        isRDE0 = true
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+					isRDE0 := false
+					// Find root object to locate Source key
+					if top, ok := inner["$top"].(map[string]interface{}); ok {
+						if rootUID, ok := top["root"].(plist.UID); ok && int(rootUID) < len(innerObjs) {
+							if rootObj, ok := innerObjs[int(rootUID)].(map[string]interface{}); ok {
+								if keys, ok := rootObj["NS.keys"].([]interface{}); ok {
+									objs := rootObj["NS.objects"].([]interface{})
+									for idx, k := range keys {
+										if kUID, ok := k.(plist.UID); ok && int(kUID) < len(innerObjs) {
+											if kStr, ok := innerObjs[int(kUID)].(string); ok && kStr == "Source" {
+												if vUID, ok := objs[idx].(plist.UID); ok && int(vUID) < len(innerObjs) {
+													if vStr, ok := innerObjs[int(vUID)].(string); ok && vStr == "RDE_0" {
+														isRDE0 = true
+													}
+												}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
 
-                    // If not found via root traversal, try heuristic (scan for string "RDE_0")
-                    // But be careful not to match other things.
-                    // The root traversal is safer. If RDE_0 is not found, skip.
-                    // Actually, streamdata.go relies on this.
-                    if !isRDE0 {
-                        continue
-                    }
+					// If not found via root traversal, try heuristic (scan for string "RDE_0")
+					// But be careful not to match other things.
+					// The root traversal is safer. If RDE_0 is not found, skip.
+					// Actually, streamdata.go relies on this.
+					if !isRDE0 {
+						continue
+					}
 
 					for _, innerO := range innerObjs {
 						if dataBlob, ok := innerO.([]byte); ok && len(dataBlob) > 8 && string(dataBlob[0:8]) == "GPRWCNTR" {
 							recs, _ := ParseGPRWCNTR(dataBlob, gprwcntrIndex)
-                            if len(recs) > 0 {
-							    rawData.GPRWCNTRRecords = append(rawData.GPRWCNTRRecords, recs...)
-                                gprwcntrIndex++ // Increment index only for RDE_0 profiles
-                            }
+							if len(recs) > 0 {
+								rawData.GPRWCNTRRecords = append(rawData.GPRWCNTRRecords, recs...)
+								gprwcntrIndex++ // Increment index only for RDE_0 profiles
+							}
 						}
 					}
 				}
@@ -576,6 +571,32 @@ func decodeVarint(buf []byte) (x uint64, n int) {
 		}
 	}
 	return 0, 0
+}
+
+func plistUint64(v any) (uint64, bool) {
+	switch n := v.(type) {
+	case uint64:
+		return n, true
+	case int64:
+		if n < 0 {
+			return 0, false
+		}
+		return uint64(n), true
+	case int:
+		if n < 0 {
+			return 0, false
+		}
+		return uint64(n), true
+	case uint32:
+		return uint64(n), true
+	case float64:
+		if n < 0 {
+			return 0, false
+		}
+		return uint64(n), true
+	default:
+		return 0, false
+	}
 }
 
 // EnhanceTimelineWithKickTraces adds kick trace candidates to the timeline.

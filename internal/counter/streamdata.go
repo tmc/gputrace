@@ -11,54 +11,54 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/tmc/apple/x/plist"
 	"github.com/tmc/gputrace/internal/trace"
-	"howett.net/plist"
 )
 
 // PipelineStats contains shader compilation statistics from streamData.
 type PipelineStats struct {
 	PipelineID             int     `json:"pipeline_id"`
-	PipelineAddress        uint64  `json:"pipeline_address,omitempty"`        // Metal pipeline address (e.g., 0x1051ddd70)
-	FunctionName           string  `json:"function_name,omitempty"`           // Kernel function name
-	TemporaryRegisterCount int     `json:"temporary_register_count"`          // "# Allocated Registers" in Xcode
-	UniformRegisterCount   int     `json:"uniform_register_count"`            // Uniform registers
-	SpilledBytes           int     `json:"spilled_bytes"`                     // Register spill to memory
-	ThreadInvariantSpilled int     `json:"thread_invariant_spilled"`          // Thread-invariant spilled bytes
-	ThreadgroupMemory      int     `json:"threadgroup_memory"`                // Threadgroup memory usage
-	InstructionCount       int     `json:"instruction_count"`                 // Total instructions
-	ALUInstructionCount    int     `json:"alu_instruction_count"`             // ALU instructions
-	FP32InstructionCount   int     `json:"fp32_instruction_count"`            // FP32 instructions
-	FP16InstructionCount   int     `json:"fp16_instruction_count"`            // FP16 instructions
-	INT32InstructionCount  int     `json:"int32_instruction_count"`           // INT32 instructions
-	INT16InstructionCount  int     `json:"int16_instruction_count"`           // INT16 instructions
-	BranchInstructionCount int     `json:"branch_instruction_count"`          // Branch instructions
-	DeviceLoadCount        int     `json:"device_load_instruction_count"`     // Device memory loads
-	DeviceStoreCount       int     `json:"device_store_instruction_count"`    // Device memory stores
-	DeviceAtomicCount      int     `json:"device_atomic_instruction_count"`   // Device atomics
-	TextureReadCount       int     `json:"texture_reads_instruction_count"`   // Texture reads
-	TextureWriteCount      int     `json:"texture_writes_instruction_count"`  // Texture writes
-	ThreadgroupLoadCount   int     `json:"threadgroup_load_instruction_count"`  // Threadgroup loads
-	ThreadgroupStoreCount  int     `json:"threadgroup_store_instruction_count"` // Threadgroup stores
+	PipelineAddress        uint64  `json:"pipeline_address,omitempty"`           // Metal pipeline address (e.g., 0x1051ddd70)
+	FunctionName           string  `json:"function_name,omitempty"`              // Kernel function name
+	TemporaryRegisterCount int     `json:"temporary_register_count"`             // "# Allocated Registers" in Xcode
+	UniformRegisterCount   int     `json:"uniform_register_count"`               // Uniform registers
+	SpilledBytes           int     `json:"spilled_bytes"`                        // Register spill to memory
+	ThreadInvariantSpilled int     `json:"thread_invariant_spilled"`             // Thread-invariant spilled bytes
+	ThreadgroupMemory      int     `json:"threadgroup_memory"`                   // Threadgroup memory usage
+	InstructionCount       int     `json:"instruction_count"`                    // Total instructions
+	ALUInstructionCount    int     `json:"alu_instruction_count"`                // ALU instructions
+	FP32InstructionCount   int     `json:"fp32_instruction_count"`               // FP32 instructions
+	FP16InstructionCount   int     `json:"fp16_instruction_count"`               // FP16 instructions
+	INT32InstructionCount  int     `json:"int32_instruction_count"`              // INT32 instructions
+	INT16InstructionCount  int     `json:"int16_instruction_count"`              // INT16 instructions
+	BranchInstructionCount int     `json:"branch_instruction_count"`             // Branch instructions
+	DeviceLoadCount        int     `json:"device_load_instruction_count"`        // Device memory loads
+	DeviceStoreCount       int     `json:"device_store_instruction_count"`       // Device memory stores
+	DeviceAtomicCount      int     `json:"device_atomic_instruction_count"`      // Device atomics
+	TextureReadCount       int     `json:"texture_reads_instruction_count"`      // Texture reads
+	TextureWriteCount      int     `json:"texture_writes_instruction_count"`     // Texture writes
+	ThreadgroupLoadCount   int     `json:"threadgroup_load_instruction_count"`   // Threadgroup loads
+	ThreadgroupStoreCount  int     `json:"threadgroup_store_instruction_count"`  // Threadgroup stores
 	ThreadgroupAtomicCount int     `json:"threadgroup_atomic_instruction_count"` // Threadgroup atomics
-	WaitInstructionCount   int     `json:"wait_instruction_count"`            // Wait instructions
-	CompilationTimeMs      float64 `json:"compilation_time_ms"`               // Shader compilation time
+	WaitInstructionCount   int     `json:"wait_instruction_count"`               // Wait instructions
+	CompilationTimeMs      float64 `json:"compilation_time_ms"`                  // Shader compilation time
 }
 
 // DispatchInfo contains per-dispatch timing and metadata.
 type DispatchInfo struct {
-	Index            int     `json:"index"`                          // Dispatch index (0-based)
-	PipelineIndex    int     `json:"pipeline_index"`                 // Index into Pipelines array
-	PipelineID       int     `json:"pipeline_id,omitempty"`          // Pipeline ID for execution cost lookup
-	FunctionName     string  `json:"function_name,omitempty"`        // Kernel function name
-	EncoderIndex     int     `json:"encoder_index"`                  // Which encoder this dispatch belongs to
-	CumulativeUs     int     `json:"cumulative_us"`                  // Cumulative time in microseconds
-	DurationUs       int     `json:"duration_us"`                    // Duration of this dispatch in microseconds
-	ExecutionCostPct float64 `json:"execution_cost_pct,omitempty"`   // Execution cost from statistical profiling (0-100%)
+	Index            int     `json:"index"`                        // Dispatch index (0-based)
+	PipelineIndex    int     `json:"pipeline_index"`               // Index into Pipelines array
+	PipelineID       int     `json:"pipeline_id,omitempty"`        // Pipeline ID for execution cost lookup
+	FunctionName     string  `json:"function_name,omitempty"`      // Kernel function name
+	EncoderIndex     int     `json:"encoder_index"`                // Which encoder this dispatch belongs to
+	CumulativeUs     int     `json:"cumulative_us"`                // Cumulative time in microseconds
+	DurationUs       int     `json:"duration_us"`                  // Duration of this dispatch in microseconds
+	ExecutionCostPct float64 `json:"execution_cost_pct,omitempty"` // Execution cost from statistical profiling (0-100%)
 	// GPRWCNTR sample correlation (populated by CorrelateDispatchSamples)
-	SampleCount     int     `json:"sample_count,omitempty"`      // Number of GPRWCNTR samples during this dispatch
-	SamplingDensity float64 `json:"sampling_density,omitempty"`  // Samples per microsecond (GPU utilization proxy)
-	StartTicks      uint64  `json:"start_ticks,omitempty"`       // Absolute start timestamp in ticks
-	EndTicks        uint64  `json:"end_ticks,omitempty"`         // Absolute end timestamp in ticks
+	SampleCount     int     `json:"sample_count,omitempty"`     // Number of GPRWCNTR samples during this dispatch
+	SamplingDensity float64 `json:"sampling_density,omitempty"` // Samples per microsecond (GPU utilization proxy)
+	StartTicks      uint64  `json:"start_ticks,omitempty"`      // Absolute start timestamp in ticks
+	EndTicks        uint64  `json:"end_ticks,omitempty"`        // Absolute end timestamp in ticks
 }
 
 // EncoderTimingInfo contains timing information for a single encoder from streamData.
@@ -99,38 +99,38 @@ type TimelineInfo struct {
 // EncoderProfile contains GPRWCNTR profiler data for a single encoder.
 // Extracted from APSTimelineData blobs 1-11 (Encoder ShaderProfilerData).
 type EncoderProfile struct {
-	Index           int                 `json:"index"`                  // Encoder index (0-based)
-	Source          string              `json:"source,omitempty"`       // Source type (RDE_0, BMPR_RDE_0, Firmware)
-	RingBufferIndex int                 `json:"ring_buffer_index"`      // Ring buffer index
-	SampleCount     int                 `json:"sample_count"`           // Number of profiler samples
-	Timestamps      []GPRWCNTRTimestamp `json:"timestamps,omitempty"`   // Individual timestamp records
-	StartTicks      uint64              `json:"start_ticks,omitempty"`  // First sample timestamp
-	EndTicks        uint64              `json:"end_ticks,omitempty"`    // Last sample timestamp
-	DurationNs      uint64              `json:"duration_ns,omitempty"`  // Total duration in nanoseconds
+	Index           int                 `json:"index"`                 // Encoder index (0-based)
+	Source          string              `json:"source,omitempty"`      // Source type (RDE_0, BMPR_RDE_0, Firmware)
+	RingBufferIndex int                 `json:"ring_buffer_index"`     // Ring buffer index
+	SampleCount     int                 `json:"sample_count"`          // Number of profiler samples
+	Timestamps      []GPRWCNTRTimestamp `json:"timestamps,omitempty"`  // Individual timestamp records
+	StartTicks      uint64              `json:"start_ticks,omitempty"` // First sample timestamp
+	EndTicks        uint64              `json:"end_ticks,omitempty"`   // Last sample timestamp
+	DurationNs      uint64              `json:"duration_ns,omitempty"` // Total duration in nanoseconds
 }
 
 // GPRWCNTRTimestamp represents a single timestamp record from GPRWCNTR data.
 // Format: 168 bytes per record with GPU timestamp, size, count, and flags.
 type GPRWCNTRTimestamp struct {
-	Timestamp uint64 `json:"timestamp"`        // GPU timestamp (500B-700B range typical)
-	Size      uint64 `json:"size"`             // Size field (~10K typical)
-	Count     uint64 `json:"count"`            // Count field (e.g., 6)
-	Flags     uint32 `json:"flags,omitempty"`  // Flags (often 0xFFFFFFFF)
+	Timestamp uint64 `json:"timestamp"`       // GPU timestamp (500B-700B range typical)
+	Size      uint64 `json:"size"`            // Size field (~10K typical)
+	Count     uint64 `json:"count"`           // Count field (e.g., 6)
+	Flags     uint32 `json:"flags,omitempty"` // Flags (often 0xFFFFFFFF)
 }
 
 const (
-	GPRWCNTRMagic      = "GPRWCNTR"      // 8-byte magic for encoder profiler data
-	GPRWCNTRRecordSize = 168             // Bytes per GPRWCNTR record
+	GPRWCNTRMagic      = "GPRWCNTR" // 8-byte magic for encoder profiler data
+	GPRWCNTRRecordSize = 168        // Bytes per GPRWCNTR record
 )
 
 // StreamDataStats contains all parsed statistics from streamData.
 type StreamDataStats struct {
 	Pipelines       []PipelineStats     `json:"pipelines"`
-	Dispatches      []DispatchInfo      `json:"dispatches"`       // Per-dispatch timing and metadata
-	FunctionNames   []string            `json:"function_names"`   // Unique function names from strings array
+	Dispatches      []DispatchInfo      `json:"dispatches"`     // Per-dispatch timing and metadata
+	FunctionNames   []string            `json:"function_names"` // Unique function names from strings array
 	EncoderTimings  []EncoderTimingInfo `json:"encoder_timings"`
-	Timeline        *TimelineInfo       `json:"timeline,omitempty"`        // CB timestamps from APSTimelineData
-	APSTimelineData [][]byte            `json:"-"`                         // Raw APSTimelineData blobs (nested plists)
+	Timeline        *TimelineInfo       `json:"timeline,omitempty"` // CB timestamps from APSTimelineData
+	APSTimelineData [][]byte            `json:"-"`                  // Raw APSTimelineData blobs (nested plists)
 	NumEncoders     int                 `json:"num_encoders"`
 	NumGPUCommands  int                 `json:"num_gpu_commands"`
 	NumPipelines    int                 `json:"num_pipelines"`
@@ -203,7 +203,7 @@ func ParseStreamData(gpuprofilerDir string, addressToName ...map[uint64]string) 
 			// Extract encoder timing from encoderInfoData
 			if encoderInfoUID, ok := obj1["encoderInfoData"].(plist.UID); ok {
 				encoderInfoSize := 40 // default
-				if size, ok := obj1["encoderInfoSize"].(uint64); ok {
+				if size := plistUint64(obj1["encoderInfoSize"]); size > 0 {
 					encoderInfoSize = int(size)
 				}
 				stats.EncoderTimings = extractEncoderTimings(objects, int(encoderInfoUID), encoderInfoSize)
@@ -218,7 +218,7 @@ func ParseStreamData(gpuprofilerDir string, addressToName ...map[uint64]string) 
 			// Extract per-dispatch timing from gpuCommandInfoData
 			if gpuCmdUID, ok := obj1["gpuCommandInfoData"].(plist.UID); ok {
 				gpuCmdSize := 32 // default
-				if size, ok := obj1["gpuCommandInfoSize"].(uint64); ok {
+				if size := plistUint64(obj1["gpuCommandInfoSize"]); size > 0 {
 					gpuCmdSize = int(size)
 				}
 				// Build pipeline index to function name and ID maps from pipelines
@@ -298,7 +298,7 @@ func extractPipelineInfo(objects []any, obj1 map[string]any) ([]uint64, []string
 	}
 
 	pipeSize := 40
-	if size, ok := obj1["pipelineStateInfoSize"].(uint64); ok {
+	if size := plistUint64(obj1["pipelineStateInfoSize"]); size > 0 {
 		pipeSize = int(size)
 	}
 
@@ -319,7 +319,7 @@ func extractPipelineInfo(objects []any, obj1 map[string]any) ([]uint64, []string
 	var funcInfoData []byte
 	funcInfoSize := 48
 	if funcInfoUID, ok := obj1["functionInfoData"].(plist.UID); ok {
-		if size, ok := obj1["functionInfoSize"].(uint64); ok {
+		if size := plistUint64(obj1["functionInfoSize"]); size > 0 {
 			funcInfoSize = int(size)
 		}
 		if funcInfoObj, ok := objects[int(funcInfoUID)].(map[string]any); ok {
@@ -941,10 +941,10 @@ func plistUint64(v any) uint64 {
 // Format:
 //   - [0:8] Magic "GPRWCNTR"
 //   - [8:...] 168-byte records with:
-//     - [0:8] timestamp (GPU ticks)
-//     - [8:16] size
-//     - [16:24] count
-//     - [24:28] flags
+//   - [0:8] timestamp (GPU ticks)
+//   - [8:16] size
+//   - [16:24] count
+//   - [24:28] flags
 func parseGPRWCNTRBlob(data []byte, encoderIndex int, timebaseNumer, timebaseDenom uint64) *EncoderProfile {
 	if len(data) < 8 {
 		return nil
@@ -1225,10 +1225,10 @@ type DispatchSampleStats struct {
 	TotalSamples    int     `json:"total_samples"`
 	TotalDurationUs int     `json:"total_duration_us"`
 	DispatchCount   int     `json:"dispatch_count"`
-	SampleCostPct   float64 `json:"sample_cost_pct"`   // Cost based on sample count
-	TimeCostPct     float64 `json:"time_cost_pct"`     // Cost based on duration
-	CostDelta       float64 `json:"cost_delta"`        // SampleCost - TimeCost (positive = higher GPU utilization)
-	AvgDensity      float64 `json:"avg_density"`       // Average samples per µs
+	SampleCostPct   float64 `json:"sample_cost_pct"` // Cost based on sample count
+	TimeCostPct     float64 `json:"time_cost_pct"`   // Cost based on duration
+	CostDelta       float64 `json:"cost_delta"`      // SampleCost - TimeCost (positive = higher GPU utilization)
+	AvgDensity      float64 `json:"avg_density"`     // Average samples per µs
 }
 
 // AggregateDispatchSamples aggregates per-dispatch sample data by function name.

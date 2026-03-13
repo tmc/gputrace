@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"howett.net/plist"
+	"github.com/tmc/apple/x/plist"
 )
 
 // CommandBuffer represents a Metal command buffer captured in the trace.
@@ -374,7 +374,7 @@ func (t *Trace) countEncodersFromStreamData() int {
 		}
 
 		encoderInfoSize := 40
-		if size, ok := m["encoderInfoSize"].(uint64); ok {
+		if size, ok := plistNumberToInt(m["encoderInfoSize"]); ok && size > 0 {
 			encoderInfoSize = int(size)
 		}
 
@@ -385,6 +385,10 @@ func (t *Trace) countEncodersFromStreamData() int {
 			idx = int(v)
 		case uint64:
 			idx = int(v)
+		case int64:
+			idx = int(v)
+		case int:
+			idx = v
 		default:
 			continue
 		}
@@ -407,6 +411,23 @@ func (t *Trace) countEncodersFromStreamData() int {
 	}
 
 	return 0
+}
+
+func plistNumberToInt(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case uint64:
+		return int(n), true
+	case uint32:
+		return int(n), true
+	case float64:
+		return int(n), true
+	default:
+		return 0, false
+	}
 }
 
 // findGPUProfilerDir returns the path to the .gpuprofiler_raw directory, or empty string.

@@ -16,8 +16,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/tmc/apple/x/plist"
 	"github.com/tmc/gputrace/internal/mtlb"
-	"howett.net/plist"
 )
 
 // DebugGroupLabel represents a hierarchical debug group label with its position in the capture.
@@ -161,19 +161,19 @@ func (t *Trace) parseMetadata() error {
 	if uuid, ok := plistData["(uuid)"].(string); ok {
 		t.Metadata.UUID = uuid
 	}
-	if version, ok := plistData["DYCaptureSession.capture_version"].(int); ok {
+	if version, ok := plistInt(plistData["DYCaptureSession.capture_version"]); ok {
 		t.Metadata.CaptureVersion = version
 	}
-	if api, ok := plistData["DYCaptureSession.graphics_api"].(int); ok {
+	if api, ok := plistInt(plistData["DYCaptureSession.graphics_api"]); ok {
 		t.Metadata.GraphicsAPI = api
 	}
-	if deviceID, ok := plistData["DYCaptureSession.deviceId"].(int); ok {
+	if deviceID, ok := plistInt(plistData["DYCaptureSession.deviceId"]); ok {
 		t.Metadata.DeviceID = deviceID
 	}
-	if ptrSize, ok := plistData["DYCaptureSession.nativePointerSize"].(int); ok {
+	if ptrSize, ok := plistInt(plistData["DYCaptureSession.nativePointerSize"]); ok {
 		t.Metadata.NativePointerSize = ptrSize
 	}
-	if frames, ok := plistData["DYCaptureEngine.captured_frames_count"].(int); ok {
+	if frames, ok := plistInt(plistData["DYCaptureEngine.captured_frames_count"]); ok {
 		t.Metadata.CapturedFramesCount = frames
 	}
 	if boundaryLess, ok := plistData["DYCaptureSession.boundaryLess"].(bool); ok {
@@ -184,30 +184,41 @@ func (t *Trace) parseMetadata() error {
 	if libVersions, ok := plistData["DYCaptureSession.library_link_time_versions"].(map[string]interface{}); ok {
 		t.Metadata.LibraryLinkVersions = make(map[string]int)
 		for k, v := range libVersions {
-			if version, ok := v.(int); ok {
+			if version, ok := plistInt(v); ok {
 				t.Metadata.LibraryLinkVersions[k] = version
 			}
 		}
 	}
 
 	// Extract unused resource counts
-	if count, ok := plistData["DYCaptureSession.unusedBufferCount"].(uint64); ok {
-		t.Metadata.UnusedBufferCount = int(count)
-	} else if count, ok := plistData["DYCaptureSession.unusedBufferCount"].(int); ok {
+	if count, ok := plistInt(plistData["DYCaptureSession.unusedBufferCount"]); ok {
 		t.Metadata.UnusedBufferCount = count
 	}
-	if count, ok := plistData["DYCaptureSession.unusedTextureCount"].(uint64); ok {
-		t.Metadata.UnusedTextureCount = int(count)
-	} else if count, ok := plistData["DYCaptureSession.unusedTextureCount"].(int); ok {
+	if count, ok := plistInt(plistData["DYCaptureSession.unusedTextureCount"]); ok {
 		t.Metadata.UnusedTextureCount = count
 	}
-	if count, ok := plistData["DYCaptureSession.unusedFunctionCount"].(uint64); ok {
-		t.Metadata.UnusedFunctionCount = int(count)
-	} else if count, ok := plistData["DYCaptureSession.unusedFunctionCount"].(int); ok {
+	if count, ok := plistInt(plistData["DYCaptureSession.unusedFunctionCount"]); ok {
 		t.Metadata.UnusedFunctionCount = count
 	}
 
 	return nil
+}
+
+func plistInt(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case uint64:
+		return int(n), true
+	case uint32:
+		return int(n), true
+	case float64:
+		return int(n), true
+	default:
+		return 0, false
+	}
 }
 
 // loadCaptureData loads the main capture file.
