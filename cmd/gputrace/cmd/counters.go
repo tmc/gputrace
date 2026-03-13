@@ -5,9 +5,9 @@ import (
 	"unsafe"
 
 	"github.com/spf13/cobra"
-	"github.com/tmc/appledocs/generated/foundation"
-	"github.com/tmc/appledocs/generated/metal"
-	"github.com/tmc/appledocs/generated/objc"
+	"github.com/tmc/apple/foundation"
+	"github.com/tmc/apple/metal"
+	"github.com/tmc/apple/objc"
 )
 
 // still need foundation for Range type

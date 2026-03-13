@@ -6,15 +6,15 @@ import (
 	"fmt"
 	"unsafe"
 
-	"github.com/tmc/appledocs/generated/foundation"
-	"github.com/tmc/appledocs/generated/metal"
-	"github.com/tmc/appledocs/generated/objc"
+	"github.com/tmc/apple/foundation"
+	"github.com/tmc/apple/metal"
+	"github.com/tmc/apple/objc"
 )
 
 // MetalBridge provides Go bindings to Metal APIs for GPU replay.
 type MetalBridge struct {
-	device       metal.MTLDeviceObject
-	commandQueue metal.MTLCommandQueueObject
+	device       metal.MTLDevice
+	commandQueue metal.MTLCommandQueue
 	caps         *DeviceCapabilities // cached device capabilities
 }
 
@@ -231,7 +231,7 @@ func (mb *MetalBridge) CreateCounterSampleBuffer(counterSet *MetalCounterSetHand
 
 // MetalBufferHandle wraps a Metal buffer.
 type MetalBufferHandle struct {
-	buffer metal.MTLBufferObject
+	buffer metal.MTLBuffer
 }
 
 // Contents returns the buffer's CPU-accessible memory.
@@ -250,7 +250,7 @@ func (h *MetalBufferHandle) Release() {
 
 // MetalFunctionHandle wraps a Metal function.
 type MetalFunctionHandle struct {
-	function metal.MTLFunctionObject
+	function metal.MTLFunction
 }
 
 // Release frees the function.
@@ -259,7 +259,7 @@ func (h *MetalFunctionHandle) Release() {
 
 // MetalPipelineHandle wraps a compute pipeline state.
 type MetalPipelineHandle struct {
-	pipeline metal.MTLComputePipelineStateObject
+	pipeline metal.MTLComputePipelineState
 }
 
 // Release frees the pipeline.
@@ -268,7 +268,7 @@ func (h *MetalPipelineHandle) Release() {
 
 // MetalCommandBufferHandle wraps a command buffer.
 type MetalCommandBufferHandle struct {
-	cmdBuffer metal.MTLCommandBufferObject
+	cmdBuffer metal.MTLCommandBuffer
 }
 
 // CreateComputeEncoder creates a compute command encoder.
@@ -331,7 +331,7 @@ func (h *MetalCommandBufferHandle) Release() {
 
 // MetalComputeEncoderHandle wraps a compute command encoder.
 type MetalComputeEncoderHandle struct {
-	encoder metal.MTLComputeCommandEncoderObject
+	encoder metal.MTLComputeCommandEncoder
 }
 
 // SetPipeline sets the compute pipeline state.
@@ -386,7 +386,7 @@ func (h *MetalComputeEncoderHandle) SampleCounters(sampleBuffer *MetalCounterSam
 
 // MetalCounterSetHandle wraps a Metal counter set.
 type MetalCounterSetHandle struct {
-	set metal.MTLCounterSetObject
+	set metal.MTLCounterSet
 }
 
 // Name returns the counter set name.
@@ -400,7 +400,7 @@ func (h *MetalCounterSetHandle) Release() {
 
 // MetalCounterSampleBufferHandle wraps a Metal counter sample buffer.
 type MetalCounterSampleBufferHandle struct {
-	buffer metal.MTLCounterSampleBufferObject
+	buffer metal.MTLCounterSampleBuffer
 }
 
 // SampleCount returns the number of samples in the buffer.

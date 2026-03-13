@@ -7,8 +7,8 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/tmc/appledocs/generated/metal"
-	"github.com/tmc/appledocs/generated/objc"
+	"github.com/tmc/apple/metal"
+	"github.com/tmc/apple/objc"
 )
 
 // TestMTLBParserAgainstMetal validates that our MTLB parser extracts the same

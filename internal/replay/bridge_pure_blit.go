@@ -3,8 +3,8 @@
 package replay
 
 import (
-	"github.com/tmc/appledocs/generated/metal"
-	"github.com/tmc/appledocs/generated/objc"
+	"github.com/tmc/apple/metal"
+	"github.com/tmc/apple/objc"
 )
 
 // CreateBlitEncoder creates a blit command encoder.

@@ -5,8 +5,8 @@ package replay
 import (
 	"fmt"
 
-	"github.com/tmc/appledocs/generated/metal"
-	"github.com/tmc/appledocs/generated/objc"
+	"github.com/tmc/apple/metal"
+	"github.com/tmc/apple/objc"
 )
 
 // DeviceCapabilities holds Metal device capabilities for validation.

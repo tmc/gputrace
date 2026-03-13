@@ -5,14 +5,14 @@ package mtlb
 import (
 	"fmt"
 
-	"github.com/tmc/appledocs/generated/metal"
-	"github.com/tmc/appledocs/generated/objc"
+	"github.com/tmc/apple/metal"
+	"github.com/tmc/apple/objc"
 )
 
 // MetalLibrary wraps a Metal library loaded via native APIs.
 type MetalLibrary struct {
-	library metal.MTLLibraryObject
-	device  metal.MTLDeviceObject
+	library metal.MTLLibrary
+	device  metal.MTLDevice
 }
 
 // LoadMTLBWithMetal loads an MTLB file using Metal's native APIs.

@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"unsafe"
 
-	"github.com/tmc/appledocs/generated/metal"
-	"github.com/tmc/appledocs/generated/objc"
+	"github.com/tmc/apple/metal"
+	"github.com/tmc/apple/objc"
 	"github.com/tmc/gputrace/internal/mtlb"
 )
 
