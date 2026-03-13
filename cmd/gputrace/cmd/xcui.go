@@ -9,33 +9,34 @@ import (
 	"unsafe"
 
 	"github.com/ebitengine/purego"
+	"github.com/tmc/apple/corefoundation"
 )
 
 // === Minimal AX/CoreFoundation Bindings ===
 
 var (
-	axCreateApplication              func(int32) uintptr
-	axCopyAttributeValue             func(uintptr, uintptr, *uintptr) int32
-	axCopyMultipleAttributeValues    func(uintptr, uintptr, int32, *uintptr) int32 // Batch API
-	axSetAttributeValue              func(uintptr, uintptr, uintptr) int32
-	axCopyAttributeNames             func(uintptr, *uintptr) int32
-	axCopyActionNames                func(uintptr, *uintptr) int32
-	axPerformAction                  func(uintptr, uintptr) int32
-	axUIElementGetPid                func(uintptr, *int32) int32
-	axValueGetValue                  func(uintptr, int32, unsafe.Pointer) bool
-	axValueCreate                    func(int32, unsafe.Pointer) uintptr
-	axIsAttributeSettable            func(uintptr, uintptr, *bool) int32
-	axUIElementGetWindow             func(uintptr, *uint32) int32 // _AXUIElementGetWindow (private but stable)
+	axCreateApplication           func(int32) uintptr
+	axCopyAttributeValue          func(uintptr, uintptr, *uintptr) int32
+	axCopyMultipleAttributeValues func(uintptr, uintptr, int32, *uintptr) int32 // Batch API
+	axSetAttributeValue           func(uintptr, uintptr, uintptr) int32
+	axCopyAttributeNames          func(uintptr, *uintptr) int32
+	axCopyActionNames             func(uintptr, *uintptr) int32
+	axPerformAction               func(uintptr, uintptr) int32
+	axUIElementGetPid             func(uintptr, *int32) int32
+	axValueGetValue               func(uintptr, int32, unsafe.Pointer) bool
+	axValueCreate                 func(int32, unsafe.Pointer) uintptr
+	axIsAttributeSettable         func(uintptr, uintptr, *bool) int32
+	axUIElementGetWindow          func(uintptr, *uint32) int32 // _AXUIElementGetWindow (private but stable)
 
-	cfStringCreateWithCString  func(uintptr, unsafe.Pointer, uint32) uintptr
-	cfRelease                  func(uintptr)
-	cfArrayGetCount            func(uintptr) int
-	cfArrayGetValueAtIndex     func(uintptr, int) uintptr
-	cfArrayCreate              func(uintptr, unsafe.Pointer, int64, uintptr) uintptr // For batch API
-	cfStringGetLength         func(uintptr) int
-	cfStringGetCString        func(uintptr, unsafe.Pointer, int, uint32) bool
-	cfBooleanGetValue         func(uintptr) bool
-	cfRetain                  func(uintptr) uintptr
+	cfStringCreateWithCString     func(uintptr, unsafe.Pointer, uint32) uintptr
+	cfRelease                     func(uintptr)
+	cfArrayGetCount               func(uintptr) int
+	cfArrayGetValueAtIndex        func(uintptr, int) uintptr
+	cfArrayCreate                 func(uintptr, unsafe.Pointer, int64, uintptr) uintptr // For batch API
+	cfStringGetLength             func(uintptr) int
+	cfStringGetCString            func(uintptr, unsafe.Pointer, int, uint32) bool
+	cfBooleanGetValue             func(uintptr) bool
+	cfRetain                      func(uintptr) uintptr
 	cfURLCreateWithFileSystemPath func(uintptr, uintptr, int32, bool) uintptr
 
 	// Screen capture permission check (macOS 10.15+)
@@ -61,12 +62,12 @@ var (
 	cgImageRelease                  func(uintptr)
 
 	// CGEvent for mouse clicks
-	cgEventCreateMouseEvent      func(uintptr, int32, float64, float64, int32) uintptr
-	cgEventPost                  func(int32, uintptr)
-	cgEventSetIntegerValueField  func(uintptr, uint32, int64)
-	cgEventGetDoubleValueField   func(uintptr, uint32) float64
-	cgEventCreate                func(uintptr) uintptr
-	cgWarpMouseCursorPosition    func(float64, float64) int32
+	cgEventCreateMouseEvent     func(uintptr, int32, float64, float64, int32) uintptr
+	cgEventPost                 func(int32, uintptr)
+	cgEventSetIntegerValueField func(uintptr, uint32, int64)
+	cgEventGetDoubleValueField  func(uintptr, uint32) float64
+	cgEventCreate               func(uintptr) uintptr
+	cgWarpMouseCursorPosition   func(float64, float64) int32
 
 	// CGEvent for keyboard events
 	cgEventCreateKeyboardEvent func(uintptr, uint16, bool) uintptr
@@ -105,9 +106,9 @@ const (
 	kCGEventLeftMouseUp   = 2
 
 	// CGEventField
-	kCGMouseEventClickState    = 1
-	kCGMouseEventX             = 56 // CGEventField for mouse X coordinate
-	kCGMouseEventY             = 57 // CGEventField for mouse Y coordinate
+	kCGMouseEventClickState = 1
+	kCGMouseEventX          = 56 // CGEventField for mouse X coordinate
+	kCGMouseEventY          = 57 // CGEventField for mouse Y coordinate
 
 	// CGEventTapLocation
 	kCGHIDEventTap = 0
@@ -156,13 +157,8 @@ func initXCUI() {
 		purego.RegisterLibFunc(&cfRetain, libCF, "CFRetain")
 		purego.RegisterLibFunc(&cfURLCreateWithFileSystemPath, libCF, "CFURLCreateWithFileSystemPath")
 
-		// Get kCFBooleanTrue and kCFBooleanFalse global values
-		if sym, err := purego.Dlsym(libCF, "kCFBooleanTrue"); err == nil {
-			kCFBooleanTrue = *(*uintptr)(unsafe.Pointer(sym))
-		}
-		if sym, err := purego.Dlsym(libCF, "kCFBooleanFalse"); err == nil {
-			kCFBooleanFalse = *(*uintptr)(unsafe.Pointer(sym))
-		}
+		kCFBooleanTrue = uintptr(corefoundation.BooleanTrue)
+		kCFBooleanFalse = uintptr(corefoundation.BooleanFalse)
 	}
 
 	// CoreGraphics for window capture
