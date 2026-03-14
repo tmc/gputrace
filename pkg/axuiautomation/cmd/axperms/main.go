@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tmc/gputrace/pkg/axuiautomation"
+	"github.com/tmc/apple/x/axuiautomation"
 	"github.com/tmc/macgo"
 )
 

@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/tmc/gputrace/pkg/axuiautomation"
+	"github.com/tmc/apple/x/axuiautomation"
 	"github.com/tmc/macgo"
 )
 

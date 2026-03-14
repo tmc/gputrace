@@ -63,8 +63,8 @@ type Metadata struct {
 type RecordType byte
 
 const (
-	RecordTypeCommand      RecordType = 0x43 // 'C'
-	RecordTypeString       RecordType = 0x43 // 'C' followed by 'S'
+	RecordTypeCommand RecordType = 0x43 // 'C' - command record
+	RecordTypeString  RecordType = 0x43 // 'C' - string record (disambiguated by following 'S' byte)
 	RecordTypeFunction     RecordType = 0x46 // 'F'
 	RecordTypeInteger      RecordType = 0x69 // 'i'
 	RecordTypeUnsignedLong RecordType = 0x75 // 'u' followed by 'l'

@@ -88,5 +88,5 @@ func checkScreenRecordingPermission() bool {
 	// This is a heuristic since there's no direct API to check Screen Recording permission
 	// For now, assume true if Accessibility is granted (they're often granted together)
 	// A more accurate check would attempt CGWindowListCreateImage
-	return true // TODO: implement proper check
+	return true // TODO(tmc): implement macOS screen recording permission check; currently always passes
 }

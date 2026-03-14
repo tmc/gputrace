@@ -29,10 +29,10 @@ func TestMetalBridgeInit(t *testing.T) {
 	}
 	defer bridge.Close()
 
-	if bridge.device == nil {
+	if bridge.device.GetID() == 0 {
 		t.Fatal("Device should not be nil")
 	}
-	if bridge.commandQueue == nil {
+	if bridge.commandQueue.GetID() == 0 {
 		t.Fatal("Command queue should not be nil")
 	}
 }
