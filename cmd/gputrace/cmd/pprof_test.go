@@ -14,8 +14,8 @@ func TestPprofCmd(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Path to a valid trace file in the repo
-	tracePath := "../../../testdata/traces/mlx-lm-generate_tokens_8_to_9.gputrace"
+	// Path to a small canonical trace fixture in the repo.
+	tracePath := "../../../testdata/traces/01-single-encoder/01-single-encoder-run1.gputrace"
 
 	// Check if trace exists
 	if _, err := os.Stat(tracePath); os.IsNotExist(err) {

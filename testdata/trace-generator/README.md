@@ -6,6 +6,9 @@
 
 This tool creates Metal workloads with varying complexity to enable systematic analysis of Apple's `.gpuprofiler_raw` binary format.
 
+The repository only checks in a small canonical fixture subset under `testdata/traces`.
+Use this generator to recreate the broader analysis corpus locally when you need it.
+
 ## Scenarios
 
 ### Encoder Count Variations
@@ -205,11 +208,11 @@ testdata/
 .build/release/trace-generator 01-single-encoder
 # [Capture with Instruments]
 
-# Compare with existing 6-encoder LLM trace
+# Compare with the retained six-encoder fixture
 cd ../..
 python3 /tmp/analyze_all_files.py \
-    --trace1 /tmp/llm-tool_1762220084-perf.gputrace \
-    --trace2 testdata/traces/01-single-encoder/trace.gputrace
+    --trace1 testdata/traces/06-six-encoders/06-six-encoders-run1.gputrace \
+    --trace2 testdata/traces/01-single-encoder/01-single-encoder-run1.gputrace
 ```
 
 **Key Question:** Does 1 encoder produce fewer counter files than 6 encoders?
@@ -234,9 +237,9 @@ python3 << 'EOF'
 import struct
 import glob
 
-# Search for 1000 (known invocations)
+# Search for 1000 (known invocations) in a locally generated profiler capture.
 target = 1000
-trace_dir = "testdata/traces/known-invocations-1000/trace.gputrace/trace.gputrace.gpuprofiler_raw"
+trace_dir = "/path/to/known-invocations-1000.gputrace.gpuprofiler_raw"
 
 for file in glob.glob(f"{trace_dir}/Counters_f_*.raw"):
     with open(file, 'rb') as f:

@@ -332,10 +332,9 @@ func ParseAPSCounterDataBlob(blobData []byte) (map[string]string, error) {
 func ParseAPSTimelineData(tracePath string) (*RawData, error) {
 	streamDataPath := filepath.Join(tracePath, "streamData") // Assumes inside gpuprofiler_raw
 	if _, err := os.Stat(streamDataPath); os.IsNotExist(err) {
-		// Try finding it recursively or in standard location
-		streamDataPath = filepath.Join(tracePath, "mlx-lm-generate_tokens_8_to_9.gputrace.gpuprofiler_raw", "streamData")
-		// Just hardcode the likely path for now or look into finding it
-		// In real app we'd pass the full path to gpuprofiler_raw dir
+		if profilerDir := findProfilerDir(tracePath); profilerDir != "" {
+			streamDataPath = filepath.Join(profilerDir, "streamData")
+		}
 	}
 
 	// Allow passing the direct directory or the .gputrace bundle
@@ -623,8 +622,12 @@ func EnhanceTimelineWithKickTraces(timeline *Timeline, tracePath string, rawData
 	var globalMinTs uint64 = ^uint64(0)
 
 	// Iterate mappings
+	profilerDir := tracePath
+	if dir := findProfilerDir(tracePath); dir != "" {
+		profilerDir = dir
+	}
 	for _, mapping := range rawData.Mappings {
-		fPath := filepath.Join(tracePath, "mlx-lm-generate_tokens_8_to_9.gputrace.gpuprofiler_raw", mapping.Filename)
+		fPath := filepath.Join(profilerDir, mapping.Filename)
 
 		if processedFiles[fPath] {
 			continue

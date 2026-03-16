@@ -100,8 +100,12 @@ See [docs/TRACE_DIFF_WORKFLOW.md](./docs/TRACE_DIFF_WORKFLOW.md) for the full wo
 go test ./...
 ```
 
-The repository includes trace fixtures under `testdata/traces`.
-Some success paths require specific fixture capabilities:
+The repository includes a small canonical fixture set under `testdata/traces`:
+
+- `01-single-encoder` for basic parsing and diff smoke tests
+- `06-six-encoders` for multi-encoder parsing and shader/debug coverage
+
+Some success paths require capabilities that are not shipped in the small in-repo fixtures:
 
 - `profiler` requires traces with `.gpuprofiler_raw`
 - `shader-source` requires traces with source attribution data
