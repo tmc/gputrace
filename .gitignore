@@ -43,3 +43,7 @@ test_output.pprof
 
 # Build artifacts
 gputrace_bin
+
+# Local watch/debug artifacts
+watch_*
+beads.svg
