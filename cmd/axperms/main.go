@@ -13,8 +13,9 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/ebitengine/purego"
+	"github.com/tmc/apple/corefoundation"
 	"github.com/tmc/apple/objc"
+	"github.com/tmc/apple/x/axuiautomation"
 	"github.com/tmc/macgo"
 )
 
@@ -55,32 +56,59 @@ func hasArg(arg string) bool {
 }
 
 func initAX() {
-	libAX, err := purego.Dlopen("/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices", purego.RTLD_GLOBAL)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to load ApplicationServices: %v\n", err)
-		os.Exit(1)
+	axIsProcessTrusted = axuiautomation.AXIsProcessTrusted
+	axIsProcessTrustedWithOptions = func(options uintptr) bool {
+		return axuiautomation.AXIsProcessTrustedWithOptions(options)
 	}
-
-	libCF, err := purego.Dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", purego.RTLD_GLOBAL)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to load CoreFoundation: %v\n", err)
-		os.Exit(1)
+	axCreateApplication = func(pid int32) uintptr {
+		return uintptr(axuiautomation.AXUIElementCreateApplication(pid))
 	}
-
-	purego.RegisterLibFunc(&axIsProcessTrusted, libAX, "AXIsProcessTrusted")
-	purego.RegisterLibFunc(&axIsProcessTrustedWithOptions, libAX, "AXIsProcessTrustedWithOptions")
-	purego.RegisterLibFunc(&axCreateApplication, libAX, "AXUIElementCreateApplication")
-	purego.RegisterLibFunc(&axCopyAttributeValue, libAX, "AXUIElementCopyAttributeValue")
-	purego.RegisterLibFunc(&axPerformAction, libAX, "AXUIElementPerformAction")
-
-	purego.RegisterLibFunc(&cfRelease, libCF, "CFRelease")
-	purego.RegisterLibFunc(&cfRetain, libCF, "CFRetain")
-	purego.RegisterLibFunc(&cfStringCreateWithCString, libCF, "CFStringCreateWithCString")
-	purego.RegisterLibFunc(&cfStringGetLength, libCF, "CFStringGetLength")
-	purego.RegisterLibFunc(&cfStringGetCString, libCF, "CFStringGetCString")
-	purego.RegisterLibFunc(&cfArrayGetCount, libCF, "CFArrayGetCount")
-	purego.RegisterLibFunc(&cfArrayGetValueAtIndex, libCF, "CFArrayGetValueAtIndex")
-	purego.RegisterLibFunc(&cfBooleanGetValue, libCF, "CFBooleanGetValue")
+	axCopyAttributeValue = func(element uintptr, attribute uintptr, value *uintptr) int32 {
+		return int32(axuiautomation.AXUIElementCopyAttributeValue(
+			axuiautomation.AXUIElementRef(element),
+			attribute,
+			value,
+		))
+	}
+	axPerformAction = func(element uintptr, action uintptr) int32 {
+		return int32(axuiautomation.AXUIElementPerformAction(
+			axuiautomation.AXUIElementRef(element),
+			action,
+		))
+	}
+	cfRelease = func(value uintptr) {
+		corefoundation.CFRelease(corefoundation.CFTypeRef(value))
+	}
+	cfRetain = func(value uintptr) uintptr {
+		return uintptr(corefoundation.CFRetain(corefoundation.CFTypeRef(value)))
+	}
+	cfStringCreateWithCString = func(allocator uintptr, cstr unsafe.Pointer, encoding uint32) uintptr {
+		return uintptr(corefoundation.CFStringCreateWithCString(
+			corefoundation.CFAllocatorRef(allocator),
+			(*byte)(cstr),
+			encoding,
+		))
+	}
+	cfStringGetLength = func(value uintptr) int {
+		return corefoundation.CFStringGetLength(corefoundation.CFStringRef(value))
+	}
+	cfStringGetCString = func(value uintptr, buffer unsafe.Pointer, bufferSize int, encoding uint32) bool {
+		return corefoundation.CFStringGetCString(
+			corefoundation.CFStringRef(value),
+			(*byte)(buffer),
+			bufferSize,
+			encoding,
+		)
+	}
+	cfArrayGetCount = func(array uintptr) int {
+		return corefoundation.CFArrayGetCount(corefoundation.CFArrayRef(array))
+	}
+	cfArrayGetValueAtIndex = func(array uintptr, idx int) uintptr {
+		return uintptr(corefoundation.CFArrayGetValueAtIndex(corefoundation.CFArrayRef(array), idx))
+	}
+	cfBooleanGetValue = func(value uintptr) bool {
+		return corefoundation.CFBooleanGetValue(corefoundation.CFBooleanRef(value))
+	}
 }
 
 // Privacy pane types

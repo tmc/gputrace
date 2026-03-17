@@ -10,6 +10,9 @@ import (
 
 	"github.com/ebitengine/purego"
 	"github.com/tmc/apple/corefoundation"
+	"github.com/tmc/apple/coregraphics"
+	"github.com/tmc/apple/private/hiservices"
+	"github.com/tmc/apple/x/axuiautomation"
 )
 
 // === Minimal AX/CoreFoundation Bindings ===
@@ -129,48 +132,178 @@ const (
 )
 
 func initXCUI() {
-	libAX, err := purego.Dlopen("/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices", purego.RTLD_GLOBAL)
-	if err == nil {
-		purego.RegisterLibFunc(&axCreateApplication, libAX, "AXUIElementCreateApplication")
-		purego.RegisterLibFunc(&axCopyAttributeValue, libAX, "AXUIElementCopyAttributeValue")
-		purego.RegisterLibFunc(&axCopyMultipleAttributeValues, libAX, "AXUIElementCopyMultipleAttributeValues")
-		purego.RegisterLibFunc(&axSetAttributeValue, libAX, "AXUIElementSetAttributeValue")
-		purego.RegisterLibFunc(&axCopyAttributeNames, libAX, "AXUIElementCopyAttributeNames")
-		purego.RegisterLibFunc(&axCopyActionNames, libAX, "AXUIElementCopyActionNames")
-		purego.RegisterLibFunc(&axPerformAction, libAX, "AXUIElementPerformAction")
-		purego.RegisterLibFunc(&axUIElementGetPid, libAX, "AXUIElementGetPid")
-		purego.RegisterLibFunc(&axValueGetValue, libAX, "AXValueGetValue")
-		purego.RegisterLibFunc(&axValueCreate, libAX, "AXValueCreate")
-		purego.RegisterLibFunc(&axIsAttributeSettable, libAX, "AXUIElementIsAttributeSettable")
+	axCreateApplication = func(pid int32) uintptr {
+		return uintptr(axuiautomation.AXUIElementCreateApplication(pid))
+	}
+	axCopyAttributeValue = func(element uintptr, attribute uintptr, value *uintptr) int32 {
+		return int32(axuiautomation.AXUIElementCopyAttributeValue(
+			axuiautomation.AXUIElementRef(element),
+			attribute,
+			value,
+		))
+	}
+	axSetAttributeValue = func(element uintptr, attribute uintptr, value uintptr) int32 {
+		return int32(axuiautomation.AXUIElementSetAttributeValue(
+			axuiautomation.AXUIElementRef(element),
+			attribute,
+			value,
+		))
+	}
+	axPerformAction = func(element uintptr, action uintptr) int32 {
+		return int32(axuiautomation.AXUIElementPerformAction(
+			axuiautomation.AXUIElementRef(element),
+			action,
+		))
+	}
+	axUIElementGetPid = func(element uintptr, pid *int32) int32 {
+		return int32(axuiautomation.AXUIElementGetPid(
+			axuiautomation.AXUIElementRef(element),
+			pid,
+		))
+	}
+	axValueGetValue = func(value uintptr, valueType int32, valuePtr unsafe.Pointer) bool {
+		return axuiautomation.AXValueGetValue(
+			axuiautomation.AXValueRef(value),
+			axuiautomation.AXValueType(valueType),
+			valuePtr,
+		)
+	}
+	axValueCreate = func(valueType int32, valuePtr unsafe.Pointer) uintptr {
+		return uintptr(axuiautomation.AXValueCreate(
+			axuiautomation.AXValueType(valueType),
+			valuePtr,
+		))
+	}
+	cfStringCreateWithCString = func(allocator uintptr, cstr unsafe.Pointer, encoding uint32) uintptr {
+		return uintptr(corefoundation.CFStringCreateWithCString(
+			corefoundation.CFAllocatorRef(allocator),
+			(*byte)(cstr),
+			encoding,
+		))
+	}
+	cfRelease = func(value uintptr) {
+		corefoundation.CFRelease(corefoundation.CFTypeRef(value))
+	}
+	cfArrayGetCount = func(array uintptr) int {
+		return corefoundation.CFArrayGetCount(corefoundation.CFArrayRef(array))
+	}
+	cfArrayGetValueAtIndex = func(array uintptr, idx int) uintptr {
+		return uintptr(corefoundation.CFArrayGetValueAtIndex(corefoundation.CFArrayRef(array), idx))
+	}
+	cfArrayCreate = func(allocator uintptr, values unsafe.Pointer, numValues int64, callBacks uintptr) uintptr {
+		_ = callBacks
+		var callbacks *corefoundation.CFArrayCallBacks
+		return uintptr(corefoundation.CFArrayCreate(
+			corefoundation.CFAllocatorRef(allocator),
+			values,
+			int(numValues),
+			callbacks,
+		))
+	}
+	cfStringGetLength = func(value uintptr) int {
+		return corefoundation.CFStringGetLength(corefoundation.CFStringRef(value))
+	}
+	cfStringGetCString = func(value uintptr, buffer unsafe.Pointer, bufferSize int, encoding uint32) bool {
+		return corefoundation.CFStringGetCString(
+			corefoundation.CFStringRef(value),
+			(*byte)(buffer),
+			bufferSize,
+			encoding,
+		)
+	}
+	cfBooleanGetValue = func(value uintptr) bool {
+		return corefoundation.CFBooleanGetValue(corefoundation.CFBooleanRef(value))
+	}
+	cfRetain = func(value uintptr) uintptr {
+		return uintptr(corefoundation.CFRetain(corefoundation.CFTypeRef(value)))
+	}
+	cfURLCreateWithFileSystemPath = func(allocator uintptr, filePath uintptr, pathStyle int32, isDirectory bool) uintptr {
+		return uintptr(corefoundation.CFURLCreateWithFileSystemPath(
+			corefoundation.CFAllocatorRef(allocator),
+			corefoundation.CFStringRef(filePath),
+			corefoundation.CFURLPathStyle(pathStyle),
+			isDirectory,
+		))
+	}
+	cgPreflightScreenCaptureAccess = coregraphics.CGPreflightScreenCaptureAccess
+	cgWindowListCopyWindowInfo = func(option uint32, relativeToWindow uint32) uintptr {
+		return uintptr(coregraphics.CGWindowListCopyWindowInfo(
+			coregraphics.CGWindowListOption(option),
+			coregraphics.CGWindowID(relativeToWindow),
+		))
+	}
+	cgMainDisplayID = coregraphics.CGMainDisplayID
+	cgDisplayCreateImage = func(displayID uint32) uintptr {
+		return uintptr(coregraphics.CGDisplayCreateImage(displayID))
+	}
+	cgWindowListCreateImage = func(x, y, width, height float64, listOption uint32, windowID uint32, imageOption uint32) uintptr {
+		return uintptr(coregraphics.CGWindowListCreateImage(
+			corefoundation.CGRect{
+				Origin: corefoundation.CGPoint{X: x, Y: y},
+				Size:   corefoundation.CGSize{Width: width, Height: height},
+			},
+			coregraphics.CGWindowListOption(listOption),
+			coregraphics.CGWindowID(windowID),
+			coregraphics.CGWindowImageOption(imageOption),
+		))
+	}
+	cgImageRelease = func(image uintptr) {
+		coregraphics.CGImageRelease(coregraphics.CGImageRef(image))
+	}
+	cgEventCreateMouseEvent = func(source uintptr, eventType int32, x, y float64, button int32) uintptr {
+		return uintptr(coregraphics.CGEventCreateMouseEvent(
+			coregraphics.CGEventSourceRef(source),
+			coregraphics.CGEventType(eventType),
+			corefoundation.CGPoint{X: x, Y: y},
+			coregraphics.CGMouseButton(button),
+		))
+	}
+	cgEventPost = func(tap int32, event uintptr) {
+		coregraphics.CGEventPost(
+			coregraphics.CGEventTapLocation(tap),
+			coregraphics.CGEventRef(event),
+		)
+	}
+	cgEventSetIntegerValueField = func(event uintptr, field uint32, value int64) {
+		coregraphics.CGEventSetIntegerValueField(
+			coregraphics.CGEventRef(event),
+			coregraphics.CGEventField(field),
+			value,
+		)
+	}
+	cgEventGetDoubleValueField = func(event uintptr, field uint32) float64 {
+		return coregraphics.CGEventGetDoubleValueField(
+			coregraphics.CGEventRef(event),
+			coregraphics.CGEventField(field),
+		)
+	}
+	cgEventCreate = func(source uintptr) uintptr {
+		return uintptr(coregraphics.CGEventCreate(coregraphics.CGEventSourceRef(source)))
+	}
+	cgWarpMouseCursorPosition = func(x, y float64) int32 {
+		return int32(coregraphics.CGWarpMouseCursorPosition(corefoundation.CGPoint{X: x, Y: y}))
+	}
+	cgEventCreateKeyboardEvent = func(source uintptr, keyCode uint16, keyDown bool) uintptr {
+		return uintptr(coregraphics.CGEventCreateKeyboardEvent(
+			coregraphics.CGEventSourceRef(source),
+			keyCode,
+			keyDown,
+		))
+	}
+	cgEventSetFlags = func(event uintptr, flags uint64) {
+		coregraphics.CGEventSetFlags(coregraphics.CGEventRef(event), coregraphics.CGEventFlags(flags))
+	}
+	cgEventPostToPid = func(pid int32, event uintptr) {
+		coregraphics.CGEventPostToPid(pid, coregraphics.CGEventRef(event))
 	}
 
-	libCF, err := purego.Dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", purego.RTLD_GLOBAL)
-	if err == nil {
-		purego.RegisterLibFunc(&cfStringCreateWithCString, libCF, "CFStringCreateWithCString")
-		purego.RegisterLibFunc(&cfRelease, libCF, "CFRelease")
-		purego.RegisterLibFunc(&cfArrayGetCount, libCF, "CFArrayGetCount")
-		purego.RegisterLibFunc(&cfArrayGetValueAtIndex, libCF, "CFArrayGetValueAtIndex")
-		purego.RegisterLibFunc(&cfArrayCreate, libCF, "CFArrayCreate")
-		purego.RegisterLibFunc(&cfStringGetLength, libCF, "CFStringGetLength")
-		purego.RegisterLibFunc(&cfStringGetCString, libCF, "CFStringGetCString")
-		purego.RegisterLibFunc(&cfBooleanGetValue, libCF, "CFBooleanGetValue")
-		purego.RegisterLibFunc(&cfRetain, libCF, "CFRetain")
-		purego.RegisterLibFunc(&cfURLCreateWithFileSystemPath, libCF, "CFURLCreateWithFileSystemPath")
-
-		kCFBooleanTrue = uintptr(corefoundation.BooleanTrue)
-		kCFBooleanFalse = uintptr(corefoundation.BooleanFalse)
-	}
-
-	// CoreGraphics for window capture
-	libCG, err := purego.Dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", purego.RTLD_GLOBAL)
-	if err == nil {
-		purego.RegisterLibFunc(&cgWindowListCreateImage, libCG, "CGWindowListCreateImage")
-		purego.RegisterLibFunc(&cgImageRelease, libCG, "CGImageRelease")
-		purego.RegisterLibFunc(&cgPreflightScreenCaptureAccess, libCG, "CGPreflightScreenCaptureAccess")
-		purego.RegisterLibFunc(&cgWindowListCopyWindowInfo, libCG, "CGWindowListCopyWindowInfo")
-		purego.RegisterLibFunc(&cgMainDisplayID, libCG, "CGMainDisplayID")
-		purego.RegisterLibFunc(&cgDisplayCreateImage, libCG, "CGDisplayCreateImage")
-	}
+	registerSymbolFunc(&axCopyMultipleAttributeValues, hiservices.AXUIElementCopyMultipleAttributeValuesSymbol())
+	registerSymbolFunc(&axCopyAttributeNames, hiservices.AXUIElementCopyAttributeNamesSymbol())
+	registerSymbolFunc(&axCopyActionNames, hiservices.AXUIElementCopyActionNamesSymbol())
+	registerSymbolFunc(&axIsAttributeSettable, hiservices.AXUIElementIsAttributeSettableSymbol())
+	registerSymbolFunc(&axUIElementGetWindow, hiservices.AXUIElementGetWindowSymbol())
+	kCFBooleanTrue = uintptr(corefoundation.BooleanTrue)
+	kCFBooleanFalse = uintptr(corefoundation.BooleanFalse)
 
 	// ImageIO for saving images
 	libImageIO, err := purego.Dlopen("/System/Library/Frameworks/ImageIO.framework/ImageIO", purego.RTLD_GLOBAL)
@@ -180,25 +313,14 @@ func initXCUI() {
 		purego.RegisterLibFunc(&cgImageDestinationFinalize, libImageIO, "CGImageDestinationFinalize")
 	}
 
-	// Private but stable API for getting window ID from AX element
-	// This is in HIServices framework (part of ApplicationServices)
-	if libAX != 0 {
-		// _AXUIElementGetWindow is not documented but widely used and stable
-		purego.RegisterLibFunc(&axUIElementGetWindow, libAX, "_AXUIElementGetWindow")
-	}
-
 	// CGEvent for mouse events (part of CoreGraphics)
-	if libCG != 0 {
-		purego.RegisterLibFunc(&cgEventCreateMouseEvent, libCG, "CGEventCreateMouseEvent")
-		purego.RegisterLibFunc(&cgEventPost, libCG, "CGEventPost")
-		purego.RegisterLibFunc(&cgEventSetIntegerValueField, libCG, "CGEventSetIntegerValueField")
-		purego.RegisterLibFunc(&cgEventGetDoubleValueField, libCG, "CGEventGetDoubleValueField")
-		purego.RegisterLibFunc(&cgEventCreate, libCG, "CGEventCreate")
-		purego.RegisterLibFunc(&cgWarpMouseCursorPosition, libCG, "CGWarpMouseCursorPosition")
-		purego.RegisterLibFunc(&cgEventCreateKeyboardEvent, libCG, "CGEventCreateKeyboardEvent")
-		purego.RegisterLibFunc(&cgEventSetFlags, libCG, "CGEventSetFlags")
-		purego.RegisterLibFunc(&cgEventPostToPid, libCG, "CGEventPostToPid")
+}
+
+func registerSymbolFunc(fptr any, symbol uintptr) {
+	if symbol == 0 {
+		return
 	}
+	purego.RegisterFunc(fptr, symbol)
 }
 
 // Ensure initialized
