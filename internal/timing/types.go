@@ -12,6 +12,5 @@ type (
 
 // Function aliases from trace package
 var (
-	NewKDebugParser   = trace.NewKDebugParser
-	NewSignpostParser = trace.NewSignpostParser
+	NewKDebugParser = trace.NewKDebugParser
 )
