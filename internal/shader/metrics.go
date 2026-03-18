@@ -332,7 +332,7 @@ func estimateTimingMetrics(t *trace.Trace, metricsMap map[string]*ShaderMetrics)
 	}
 
 	// Map timings to metrics
-	timingMap := make(map[string]*EncoderTiming)
+	timingMap := make(map[string]*timing.EncoderTiming)
 	for _, timing := range timings {
 		timingMap[timing.Label] = timing
 	}
@@ -877,19 +877,6 @@ func formatSpilledBytesShort(bytes int) string {
 		return fmt.Sprintf("%.1fKB", float64(bytes)/float64(KB))
 	}
 	return fmt.Sprintf("%dB", bytes)
-}
-
-// formatSpilledBytes formats spilled bytes in a human-readable format.
-func formatSpilledBytes(bytes int) string {
-	const KB = 1024
-	const MB = 1024 * KB
-
-	if bytes >= MB {
-		return fmt.Sprintf("%.2f MB", float64(bytes)/float64(MB))
-	} else if bytes >= KB {
-		return fmt.Sprintf("%.2f KB", float64(bytes)/float64(KB))
-	}
-	return fmt.Sprintf("%d bytes", bytes)
 }
 
 // estimateAllocatedRegisters estimates register usage based on shader characteristics.

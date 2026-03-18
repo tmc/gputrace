@@ -239,23 +239,10 @@ func ParsePerfCounters(t *trace.Trace) (*PerfCounterStats, error) {
 	return stats, nil
 }
 
-// CountFromPerfCounters attempts to count dispatches from performance counter files.
-// Deprecated: Use ParsePerfCounters() instead for full hardware metrics.
-func CountFromPerfCounters(t *trace.Trace) (*PerfCounterStats, error) {
-	return ParsePerfCounters(t)
-}
-
 // counterFileStats represents statistics from a single counter file.
 type counterFileStats struct {
 	DispatchCount int
 	TotalRecords  int
-}
-
-// parseCounterFile parses a single performance counter file (legacy version).
-// Counter files contain GPU execution metrics in a binary format.
-func parseCounterFile(path string) (*counterFileStats, error) {
-	stats, _, err := parseCounterFileWithMetrics(path)
-	return stats, err
 }
 
 // parseCounterFileWithMetrics parses a counter file and returns both statistics and extracted metrics.
@@ -809,44 +796,6 @@ var counterConfigs = []counterConfig{
 		func(m *ShaderHardwareMetrics, v float64) { m.ControlFlowUtilization = v }, nil},
 }
 
-// plistDataTypeToCounterType converts GPUCounterGraph.plist DataType to CounterType.
-// plist datatype: 0=percentage, 1=bandwidth, 2=count, 3=bytes
-func plistDataTypeToCounterType(dt CounterDataType) CounterType {
-	switch dt {
-	case DataTypeBytes:
-		return CounterTypeBytes
-	case DataTypeBandwidth:
-		return CounterTypeBandwidth
-	case DataTypeCount:
-		return CounterTypeCount
-	default:
-		return CounterTypePercentage
-	}
-}
-
-// GetCounterTypeFromPlist returns the counter type for a given counter name
-// by looking it up in GPUCounterGraph.plist via plist_mapping.go.
-// Returns CounterTypePercentage as default if not found.
-func GetCounterTypeFromPlist(counterName string) CounterType {
-	return plistDataTypeToCounterType(GetDataTypeForCounter(counterName))
-}
-
-// GetVendorCountersForFile returns the vendor counter names for a given file index.
-// Uses file_mapping.go to get user name, then plist_mapping.go to get vendor names.
-func GetVendorCountersForFile(fileIndex int) []string {
-	userName, ok := CounterFileToName[fileIndex]
-	if !ok {
-		return nil
-	}
-	return GetVendorCounterNames(userName)
-}
-
-// GetCounterInfoForFile returns comprehensive counter info for a file index.
-// Combines file_mapping.go and plist_mapping.go data.
-func GetCounterInfoForFile(fileIndex int) *CounterFileMapping {
-	return getCounterFileMappingByIndex(fileIndex)
-}
-
 func getCounterFileMappingByIndex(fileIndex int) *CounterFileMapping {
 	mapping, ok := GetCounterFileMappingByIndex(fileIndex)
 	if !ok {
@@ -1147,88 +1096,6 @@ func findRecordBoundaries(data []byte) []int {
 	}
 
 	return boundaries
-}
-
-// HasPerfCounters returns true if the trace has performance counter data.
-func HasPerfCounters(t *trace.Trace) bool {
-	// Check for .gpuprofiler_raw directory adjacent to trace
-	perfDir := t.Path + ".gpuprofiler_raw"
-	if info, err := os.Stat(perfDir); err == nil && info.IsDir() {
-		return true
-	}
-
-	// Check for .gpuprofiler_raw directory inside trace bundle
-	// (Xcode sometimes creates it with the original trace name)
-	entries, err := os.ReadDir(t.Path)
-	if err != nil {
-		return false
-	}
-
-	for _, entry := range entries {
-		if entry.IsDir() && filepath.Ext(entry.Name()) == ".gpuprofiler_raw" {
-			return true
-		}
-	}
-
-	return false
-}
-
-// GetDispatchCountMethod returns a description of which method will be used to count dispatches.
-func GetDispatchCountMethod(t *trace.Trace) string {
-	if t.HasPerfCounters() {
-		return "Performance Counters (100% accurate)"
-	}
-	return "MTSP Estimation (95%+ accuracy for standard workloads)"
-}
-
-// GetRegisterDataForShader returns register allocation data for a specific shader if available.
-// Returns (allocatedRegs, highRegister, spilledBytes, found).
-func GetRegisterDataForShader(t *trace.Trace, pipelineStateAddr uint64) (int, int, int, bool) {
-	if !t.HasPerfCounters() {
-		return 0, 0, 0, false
-	}
-
-	stats, err := ParsePerfCounters(t)
-	if err != nil {
-		return 0, 0, 0, false
-	}
-
-	// Find metrics for this pipeline state
-	for _, metric := range stats.ShaderMetrics {
-		if metric.PipelineState == pipelineStateAddr {
-			// Only return if we actually have register data
-			if metric.AllocatedRegs > 0 {
-				return metric.AllocatedRegs, metric.HighRegister, metric.SpilledBytes, true
-			}
-		}
-	}
-
-	return 0, 0, 0, false
-}
-
-// GetRegisterDataByName returns register allocation data for a shader by name.
-// Returns (allocatedRegs, highRegister, spilledBytes, found).
-func GetRegisterDataByName(t *trace.Trace, shaderName string) (int, int, int, bool) {
-	if !t.HasPerfCounters() {
-		return 0, 0, 0, false
-	}
-
-	stats, err := ParsePerfCounters(t)
-	if err != nil {
-		return 0, 0, 0, false
-	}
-
-	// Find metrics for this shader name
-	for _, metric := range stats.ShaderMetrics {
-		if metric.ShaderName == shaderName {
-			// Only return if we actually have register data
-			if metric.AllocatedRegs > 0 {
-				return metric.AllocatedRegs, metric.HighRegister, metric.SpilledBytes, true
-			}
-		}
-	}
-
-	return 0, 0, 0, false
 }
 
 // enhanceFromStreamData enhances metrics with native pipeline compilation stats from streamData.

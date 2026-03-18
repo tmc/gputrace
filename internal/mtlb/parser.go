@@ -123,9 +123,3 @@ func (m *MTLBFile) ListFunctions() ([]string, error) {
 
 	return functions, nil
 }
-
-func cleanString(s string) string {
-	// Filter out non-printable or short strings if necessary
-	// For now just return as is
-	return s
-}

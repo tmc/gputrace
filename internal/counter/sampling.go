@@ -405,26 +405,6 @@ func (cs *CounterSampler) ResolveCounterSamples() error {
 
 // Helper functions
 
-func (cs *CounterSampler) getSamplesForEncoder(encoderIndex int) []CounterSample {
-	var samples []CounterSample
-	for _, sample := range cs.Samples {
-		if sample.EncoderIndex == encoderIndex {
-			samples = append(samples, sample)
-		}
-	}
-	return samples
-}
-
-func (cs *CounterSampler) getSamplesForDispatch(dispatchIndex int) []CounterSample {
-	var samples []CounterSample
-	for _, sample := range cs.Samples {
-		if sample.CommandIndex == dispatchIndex {
-			samples = append(samples, sample)
-		}
-	}
-	return samples
-}
-
 // func (cs *CounterSampler) aggregateEncoderSamples(encoder ReplayEncoderInfo, samples []CounterSample) EncoderCounterMetrics {
 // 	// Sort samples by index
 // 	sort.Slice(samples, func(i, j int) bool {

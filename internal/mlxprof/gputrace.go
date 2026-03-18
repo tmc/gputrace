@@ -227,16 +227,6 @@ func (p *GPUTraceProfiler) PrintSummary() {
 	}
 }
 
-// GetTrace returns the underlying gputrace.Trace.
-func (p *GPUTraceProfiler) GetTrace() *gputrace.Trace {
-	return p.trace
-}
-
-// GetTimings returns the extracted timing data.
-func (p *GPUTraceProfiler) GetTimings() []*gputrace.EncoderTiming {
-	return p.timings
-}
-
 // Close closes any resources held by the profiler.
 func (p *GPUTraceProfiler) Close() error {
 	// Currently no resources to close
@@ -431,37 +421,4 @@ func indexOf(s, substr string) int {
 		}
 	}
 	return -1
-}
-
-// ConvertGPUTrace is a convenience function that converts a .gputrace file
-// to pprof format and writes it to the specified output path.
-//
-// Example:
-//
-//	err := mlxprof.ConvertGPUTrace("trace.gputrace", "output.pprof")
-func ConvertGPUTrace(tracePath, outputPath string) error {
-	prof, err := FromGPUTrace(tracePath)
-	if err != nil {
-		return err
-	}
-	defer prof.Close()
-
-	return prof.WriteGPUProfile(outputPath)
-}
-
-// ConvertGPUTraceAll is a convenience function that converts a .gputrace file
-// to multiple pprof formats with a common prefix.
-//
-// Example:
-//
-//	err := mlxprof.ConvertGPUTraceAll("trace.gputrace", "output")
-//	// Creates: output.gpu.pprof, output.combined.pprof, output.txt
-func ConvertGPUTraceAll(tracePath, outputPrefix string) error {
-	prof, err := FromGPUTrace(tracePath)
-	if err != nil {
-		return err
-	}
-	defer prof.Close()
-
-	return prof.WriteAll(outputPrefix)
 }

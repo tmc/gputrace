@@ -131,34 +131,3 @@ func ParseXcodeCountersCSV(t *trace.Trace, csvPath string) (*XcodeCounterData, e
 
 	return data, nil
 }
-
-// HasXcodeCountersCSV returns true if an Xcode Counters.csv file can be found.
-func HasXcodeCountersCSV(t *trace.Trace) bool {
-	_, err := ParseXcodeCountersCSV(t, "")
-	return err == nil
-}
-
-// GetCounterValue retrieves a specific counter value for an encoder by index.
-func (xcd *XcodeCounterData) GetCounterValue(encoderIndex int, counterName string) (float64, bool) {
-	if encoderIndex < 0 || encoderIndex >= len(xcd.Encoders) {
-		return 0, false
-	}
-
-	val, ok := xcd.Encoders[encoderIndex].Counters[counterName]
-	return val, ok
-}
-
-// GetMetricNames returns all available metric names.
-func (xcd *XcodeCounterData) GetMetricNames() []string {
-	return xcd.Metrics
-}
-
-// GetEncoderByFunctionIndex finds an encoder by its function index.
-func (xcd *XcodeCounterData) GetEncoderByFunctionIndex(functionIndex int) (*XcodeEncoderCounters, bool) {
-	for i := range xcd.Encoders {
-		if xcd.Encoders[i].FunctionIndex == functionIndex {
-			return &xcd.Encoders[i], true
-		}
-	}
-	return nil, false
-}

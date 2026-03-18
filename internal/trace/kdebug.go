@@ -153,11 +153,6 @@ func (event *KDebugEvent) GetEventSubclass() uint8 {
 	return uint8((event.DebugID >> 16) & 0xFF)
 }
 
-// GetEventCode extracts the event code from debug ID.
-func (event *KDebugEvent) GetEventCode() uint16 {
-	return uint16(event.DebugID & 0xFFFF)
-}
-
 // IsGPUSubmission checks if this is a GPU command submission event.
 func (event *KDebugEvent) IsGPUSubmission() bool {
 	return event.GetEventClass() == KDebugClassGPU &&
@@ -191,14 +186,6 @@ func (interval *GPUExecutionInterval) Duration() uint64 {
 		return 0
 	}
 	return interval.EndEvent.Timestamp - interval.StartEvent.Timestamp
-}
-
-// QueueLatency returns the queue latency (submission to execution) in nanoseconds.
-func (interval *GPUExecutionInterval) QueueLatency() uint64 {
-	if interval.SubmissionEvent == nil || interval.StartEvent == nil {
-		return 0
-	}
-	return interval.StartEvent.Timestamp - interval.SubmissionEvent.Timestamp
 }
 
 // CorrelateGPUExecution correlates submission, start, and end events into intervals.
@@ -249,72 +236,4 @@ func CorrelateGPUExecution(events []*KDebugEvent) []*GPUExecutionInterval {
 	}
 
 	return intervals
-}
-
-// EnhancedTimingFromKDebug creates enhanced timing data from kdebug events.
-func (p *KDebugParser) EnhancedTimingFromKDebug() ([]*EncoderTiming, error) {
-	events, err := p.ParseKDebugEvents()
-	if err != nil {
-		return nil, err
-	}
-
-	intervals := CorrelateGPUExecution(events)
-
-	// Convert to EncoderTiming format
-	timings := make([]*EncoderTiming, 0, len(intervals))
-
-	for i, interval := range intervals {
-		if interval.StartEvent == nil || interval.EndEvent == nil {
-			continue
-		}
-
-		timing := &EncoderTiming{
-			Label:          fmt.Sprintf("GPU_Encoder_%d", i),
-			StartTimestamp: interval.StartEvent.Timestamp,
-			EndTimestamp:   interval.EndEvent.Timestamp,
-			DurationNs:     interval.Duration(),
-		}
-
-		timing.DurationMs = float64(timing.DurationNs) / 1e6
-
-		// Calculate percentage (will be updated once we have total)
-		timings = append(timings, timing)
-	}
-
-	// Calculate percentages
-	if len(timings) > 0 {
-		var totalNs uint64
-		for _, t := range timings {
-			totalNs += t.DurationNs
-		}
-
-		for _, t := range timings {
-			t.Percentage = float32(t.DurationNs) * 100.0 / float32(totalNs)
-		}
-	}
-
-	return timings, nil
-}
-
-// FormatKDebugEvent returns a human-readable representation of a kdebug event.
-func FormatKDebugEvent(event *KDebugEvent) string {
-	subclass := event.GetEventSubclass()
-	code := event.GetEventCode()
-
-	var eventType string
-	if event.IsGPUSubmission() {
-		eventType = "GPU_SUBMISSION"
-	} else if event.IsGPUExecutionStart() {
-		eventType = "GPU_EXEC_START"
-	} else if event.IsGPUExecutionEnd() {
-		eventType = "GPU_EXEC_END"
-	} else {
-		eventType = fmt.Sprintf("GPU_%02X_%02X", subclass, code)
-	}
-
-	return fmt.Sprintf("%s ts=%d thread=%d args=[%d,%d,%d,%d]",
-		eventType,
-		event.Timestamp,
-		event.ThreadID,
-		event.Args[0], event.Args[1], event.Args[2], event.Args[3])
 }

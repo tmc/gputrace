@@ -1,7 +1,5 @@
 package difftrace
 
-import "fmt"
-
 const SchemaVersion = "gputrace.diff.v2"
 
 // TraceData is parsed dispatch-level timing data for a single trace.
@@ -211,10 +209,6 @@ func safeFunctionName(name string) string {
 		return "(unnamed)"
 	}
 	return name
-}
-
-func functionKey(name string, pipelineID int) string {
-	return kernelIdentity(name, fmt.Sprintf("pid%d", pipelineID), "unknown")
 }
 
 func kernelIdentity(functionName, pipelineHash, threadgroupSig string) string {

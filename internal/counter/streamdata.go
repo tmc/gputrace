@@ -363,65 +363,6 @@ func extractPipelineInfo(objects []any, obj1 map[string]any) ([]uint64, []string
 	return addrs, funcs
 }
 
-// extractDispatchInfo extracts per-dispatch timing from gpuCommandInfoData.
-// Each record is 32 bytes with structure:
-//
-//	[0:4]   command index
-//	[4:8]   unknown
-//	[8:16]  upper 32 bits = pipeline index, lower 32 bits = flags
-//	[16:24] cumulative time in microseconds
-//	[24:32] flags/encoder index
-func extractDispatchInfo(objects []any, gpuCmdIdx, recordSize int, funcNames []string) []DispatchInfo {
-	if gpuCmdIdx >= len(objects) {
-		return nil
-	}
-
-	dataObj, ok := objects[gpuCmdIdx].(map[string]any)
-	if !ok {
-		return nil
-	}
-
-	nsData, ok := dataObj["NS.data"].([]byte)
-	if !ok || len(nsData) < recordSize {
-		return nil
-	}
-
-	numRecords := len(nsData) / recordSize
-	dispatches := make([]DispatchInfo, 0, numRecords)
-
-	var prevTime int
-	for i := range numRecords {
-		off := i * recordSize
-		rec := nsData[off : off+recordSize]
-
-		pipelineIdx := int(binary.LittleEndian.Uint64(rec[8:16]) >> 32)
-		cumTime := int(binary.LittleEndian.Uint64(rec[16:24]))
-		encoderIdx := int(binary.LittleEndian.Uint32(rec[24:28])) // Lower 32 bits of [24:32]
-
-		duration := cumTime
-		if i > 0 {
-			duration = cumTime - prevTime
-		}
-		prevTime = cumTime
-
-		funcName := ""
-		if pipelineIdx < len(funcNames) {
-			funcName = funcNames[pipelineIdx]
-		}
-
-		dispatches = append(dispatches, DispatchInfo{
-			Index:         i,
-			PipelineIndex: pipelineIdx,
-			FunctionName:  funcName,
-			EncoderIndex:  encoderIdx,
-			CumulativeUs:  cumTime,
-			DurationUs:    duration,
-		})
-	}
-
-	return dispatches
-}
-
 // extractDispatchInfoWithMap is like extractDispatchInfo but uses maps for pipeline-to-name and pipeline-to-ID lookup.
 func extractDispatchInfoWithMap(objects []any, gpuCmdIdx, recordSize int, pipelineToName map[int]string, pipelineToID map[int]int) []DispatchInfo {
 	if gpuCmdIdx >= len(objects) {

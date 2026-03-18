@@ -246,27 +246,3 @@ func calculateMean(values []float64) float64 {
 	}
 	return sum / float64(len(values))
 }
-
-// MergeProfilingMetricsWithShaderMetrics merges profiling metrics into shader metrics.
-//
-// Strategy:
-// - Match by encoder index/order
-// - Update KernelOccupancy field in ShaderHardwareMetrics
-// - Preserve existing shader metric data
-func MergeProfilingMetricsWithShaderMetrics(
-	shaderMetrics []ShaderHardwareMetrics,
-	profilingMetrics []*ProfilingMetrics,
-) []ShaderHardwareMetrics {
-	// Create a copy to avoid modifying original
-	merged := make([]ShaderHardwareMetrics, len(shaderMetrics))
-	copy(merged, shaderMetrics)
-
-	// Match by index (assuming order corresponds)
-	for i := range merged {
-		if i < len(profilingMetrics) && profilingMetrics[i] != nil {
-			merged[i].KernelOccupancy = profilingMetrics[i].KernelOccupancy
-		}
-	}
-
-	return merged
-}

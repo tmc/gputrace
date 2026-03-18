@@ -168,12 +168,3 @@ func (m *ShaderSourceMapper) Stats() (files int, kernels int) {
 	}
 	return len(fileSet), len(m.kernelToFile)
 }
-
-// GetAllKernels returns all indexed kernel names.
-func (m *ShaderSourceMapper) GetAllKernels() []string {
-	kernels := make([]string, 0, len(m.kernelToFile))
-	for kernel := range m.kernelToFile {
-		kernels = append(kernels, kernel)
-	}
-	return kernels
-}

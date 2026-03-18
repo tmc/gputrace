@@ -76,35 +76,6 @@ void prompt_accessibility_permission() {
 
 */
 import "C"
-import (
-	"fmt"
-	"unsafe"
-)
-
-// Execute runs an AppleScript in-process and returns the result.
-// This inherits the calling process's TCC permissions, avoiding the
-// child-process TCC issues that occur when spawning osascript.
-func Execute(script string) (string, error) {
-	cScript := C.CString(script)
-	defer C.free(unsafe.Pointer(cScript))
-
-	var cResult *C.char
-
-	cErr := C.execute_applescript(cScript, &cResult)
-	if cErr != nil {
-		errStr := C.GoString(cErr)
-		C.free(unsafe.Pointer(cErr))
-		return "", fmt.Errorf("%s", errStr)
-	}
-
-	var result string
-	if cResult != nil {
-		result = C.GoString(cResult)
-		C.free(unsafe.Pointer(cResult))
-	}
-
-	return result, nil
-}
 
 // HasAccessibilityPermission checks if the app has Accessibility permissions.
 func HasAccessibilityPermission() bool {

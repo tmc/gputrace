@@ -208,19 +208,6 @@ func parseEncodersInRegion(data []byte, baseOffset int64) ([]*ComputeEncoder, er
 
 // ParseDispatchInRegion parses dispatch calls within a command buffer region.
 
-// FormatCommandBuffer returns a human-readable representation of a command buffer.
-func (dcb *DetailedCommandBuffer) FormatCommandBuffer() string {
-	var buf bytes.Buffer
-
-	fmt.Fprintf(&buf, "Command Buffer #%d (UUID: %s)\n", dcb.Index, dcb.UUID)
-	fmt.Fprintf(&buf, "  Timestamp: %d\n", dcb.Timestamp)
-	fmt.Fprintf(&buf, "  Offset: 0x%08x\n", dcb.Offset)
-	fmt.Fprintf(&buf, "  Encoders: %d\n", len(dcb.Encoders))
-	fmt.Fprintf(&buf, "  API Calls: %d\n", len(dcb.Calls))
-
-	return buf.String()
-}
-
 // DumpCommandBuffer writes a detailed command buffer dump similar to Instruments output.
 func DumpCommandBuffer(t *trace.Trace, w io.Writer, cbIndex int) error {
 	dcb, err := ParseDetailedCommandBuffer(t, cbIndex)
