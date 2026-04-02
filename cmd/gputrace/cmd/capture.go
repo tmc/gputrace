@@ -63,8 +63,8 @@ func setupCaptureBundle() error {
 			"com.apple.security.get-task-allow",          // Enable debugger attach (GPU capture)
 			"com.apple.security.automation.apple-events", // AppleScript automation
 		},
-		AdHocSign: true,
-		DevMode:   true,
+		AutoSign: true,
+		DevMode:  true,
 		UIMode:    macgo.UIModeBackground,
 		Info: map[string]interface{}{
 			"NSAppleEventsUsageDescription": "gputrace needs to control applications for GPU trace capture.",

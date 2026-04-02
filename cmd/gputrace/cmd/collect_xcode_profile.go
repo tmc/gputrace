@@ -239,8 +239,8 @@ func setupMacgo() error {
 		Custom: []string{
 			"com.apple.security.automation.apple-events",
 		},
-		AdHocSign: true,
-		DevMode:   true, // Preserve TCC permissions across rebuilds
+		AutoSign: true,  // Use Developer ID cert for stable TCC identity across rebuilds
+		DevMode:  true,  // Stable wrapper bundle preserves TCC permissions
 		UIMode:    macgo.UIModeBackground,
 		Info: map[string]interface{}{
 			"NSAppleEventsUsageDescription":   "gputrace needs to control Xcode to automate GPU trace operations.",

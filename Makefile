@@ -22,7 +22,16 @@ vet:
 install: clean build setup-permissions
 	@echo "Reinstall complete with fresh permissions"
 
-reinstall: clean build setup-permissions
+reinstall: build
+	@# DevMode bundle reuses the stable wrapper across rebuilds, preserving TCC.
+	@# Only run setup-permissions if the bundle doesn't exist yet.
+	@if [ ! -d "$(GPUTRACE_APP)" ]; then \
+		echo "App bundle missing, running setup-permissions..."; \
+		$(MAKE) setup-permissions; \
+	else \
+		echo "Triggering bundle update (DevMode preserves TCC)..."; \
+		gputrace xp check-status --no-prompt 2>/dev/null || true; \
+	fi
 
 # Clean app bundle to force macgo to recreate it
 clean:
@@ -65,6 +74,9 @@ reset-permissions:
 	@echo ""
 	@echo "Please manually enable axperms and gputrace in System Settings,"
 	@echo "then run 'make setup-permissions'"
+
+fullreinstall: clean build setup-permissions
+	@echo "Full reinstall complete (bundle recreated, permissions reset)"
 
 reset: clean build setup-permissions
 
@@ -110,7 +122,8 @@ help:
 	@echo "  build              - Build gputrace"
 	@echo "  test               - Run Go tests"
 	@echo "  vet                - Run go vet"
-	@echo "  rebuild            - Clean app bundle and rebuild with fresh permissions"
+	@echo "  reinstall          - Rebuild binary (preserves TCC permissions via DevMode)"
+	@echo "  fullreinstall      - Clean + rebuild + fresh permissions (resets TCC)"
 	@echo "  clean              - Remove app bundle (forces macgo to recreate)"
 	@echo ""
 	@echo "Permission setup (run in order for first-time setup):"
