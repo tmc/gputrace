@@ -947,10 +947,29 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 			}
 			time.Sleep(500 * time.Millisecond)
 
-			// Re-check Save button
-			saveBtn = findInAllWindows(func(w uintptr) uintptr {
-				return findButtonBFS(w, "Save", 500)
-			})
+			// Cmd+Shift+G navigation may have cleared the filename field.
+			// Re-set it to ensure Save can enable.
+			saveNameField = findInAllWindows(FindSaveAsTextField)
+			if saveNameField != 0 {
+				currentName := axString(saveNameField, "AXValue")
+				if currentName == "" || currentName != outputName {
+					verboseLog("exportTrace: filename field was %q, re-setting to %q", currentName, outputName)
+					axSetValue(saveNameField, outputName)
+					time.Sleep(300 * time.Millisecond)
+				}
+			}
+
+			// Wait for Save to enable (Xcode may validate directory/filename)
+			saveBtn = 0
+			for i := 0; i < 10; i++ {
+				saveBtn = findInAllWindows(func(w uintptr) uintptr {
+					return findButtonBFS(w, "Save", 500)
+				})
+				if saveBtn != 0 && IsElementEnabled(saveBtn) {
+					break
+				}
+				time.Sleep(300 * time.Millisecond)
+			}
 			if saveBtn != 0 && IsElementEnabled(saveBtn) {
 				fmt.Println("    Save enabled after unchecking embed (perf data not embeddable for this trace)")
 			} else {
