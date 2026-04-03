@@ -58,7 +58,6 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Output: %s\n", outputPath)
 
 	// Save cursor position and restore when done (less disruptive to user)
-	ensureXCUI()
 	origCursorX, origCursorY := getCursorPosition()
 	defer func() {
 		if origCursorX != 0 || origCursorY != 0 {

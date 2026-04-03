@@ -22,7 +22,6 @@ func init() {
 
 func DebugXCUI() {
 	fmt.Println("Debugging XCUI...")
-	ensureXCUI()
 
 	app, err := FindXcodeApp()
 	if err != nil {

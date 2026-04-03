@@ -46,7 +46,6 @@ func runXcodeExportMemory(cmd *cobra.Command, args []string) error {
 	}
 
 	// Save cursor position and restore when done
-	ensureXCUI()
 	origCursorX, origCursorY := getCursorPosition()
 	defer func() {
 		if origCursorX != 0 || origCursorY != 0 {

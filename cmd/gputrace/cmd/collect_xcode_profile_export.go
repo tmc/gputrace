@@ -617,7 +617,6 @@ func runSetExportFilename(cmd *cobra.Command, args []string) error {
 
 func runSendEnter(cmd *cobra.Command, args []string) error {
 	// No setupMacgo needed - we just use AppleScript
-	ensureXCUI()
 
 	fmt.Println("Sending Enter to Xcode...")
 	if err := sendReturn(); err != nil {

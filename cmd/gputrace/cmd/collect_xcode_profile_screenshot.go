@@ -110,17 +110,9 @@ func runScreenshot(cmd *cobra.Command, args []string) error {
 // database entry for Screen Recording permission without prompting the user.
 func triggerScreenRecordingTCC() error {
 	// Don't call setupMacgo() - we just need CoreGraphics, not Accessibility
-	ensureXCUI()
-
-	if cgMainDisplayID == nil || cgDisplayCreateImage == nil {
-		return fmt.Errorf("CGDisplayCreateImage not available")
-	}
 
 	// First check current status
-	hasPermission := false
-	if cgPreflightScreenCaptureAccess != nil {
-		hasPermission = cgPreflightScreenCaptureAccess()
-	}
+	hasPermission := cgPreflightScreenCaptureAccess()
 
 	// CGDisplayCreateImage triggers TCC registration for screen recording.
 	// This should create the TCC entry. The image will be null if permission denied.

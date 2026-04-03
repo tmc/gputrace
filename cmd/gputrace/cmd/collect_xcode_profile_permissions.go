@@ -84,9 +84,5 @@ func permissionStatus(granted bool) string {
 }
 
 func checkScreenRecordingPermission() bool {
-	ensureXCUI()
-	if cgPreflightScreenCaptureAccess == nil {
-		return false
-	}
 	return cgPreflightScreenCaptureAccess()
 }
