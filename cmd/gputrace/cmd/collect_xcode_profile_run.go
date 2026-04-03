@@ -774,9 +774,11 @@ func findExportOrSaveButton() uintptr {
 	defer cfRelease(appAX)
 	windows := GetAllWindows(appAX)
 
-	// Try "Export" first (Xcode's custom action button)
+	// Try "Export" first (Xcode's custom action button).
+	// Use depth 3000 — the Export button is deep in the AX tree, after Save,
+	// PathTextField, checkboxes, file browser entries, etc.
 	for _, w := range windows {
-		btn := findButtonBFS(w, "Export", 500)
+		btn := findButtonBFS(w, "Export", 3000)
 		if btn != 0 && IsElementEnabled(btn) {
 			verboseLog("findExportOrSaveButton: found enabled Export button")
 			return btn
@@ -784,7 +786,7 @@ func findExportOrSaveButton() uintptr {
 	}
 	// Fall back to "Save" (standard NSSavePanel)
 	for _, w := range windows {
-		btn := findButtonBFS(w, "Save", 500)
+		btn := findButtonBFS(w, "Save", 3000)
 		if btn != 0 {
 			verboseLog("findExportOrSaveButton: found Save button (enabled=%v)", IsElementEnabled(btn))
 			return btn
@@ -877,8 +879,8 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 		windows := GetAllWindows(freshApp)
 		for _, w := range windows {
 			// Export sheet has either "Export" or "Save" button
-			exportBtn := findButtonBFS(w, "Export", 500)
-			saveBtn := findButtonBFS(w, "Save", 500)
+			exportBtn := findButtonBFS(w, "Export", 3000)
+			saveBtn := findButtonBFS(w, "Save", 3000)
 			if exportBtn != 0 || saveBtn != 0 {
 				sheetFound = true
 				saveWindow = w
