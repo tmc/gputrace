@@ -1041,8 +1041,40 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 
 		if embedChecked && embedEnabled {
 			fmt.Println("    Save disabled with 'Embed performance data' checked, unchecking...")
-			if err := axPressWithFallback(embedChk); err != nil {
-				verboseLog("exportTrace: failed to uncheck embed checkbox: %v", err)
+			// Try multiple methods to uncheck — AXPress can fail with -25205 in modal sheets
+			unchecked := false
+			// Method 1: Set AXValue to 0 (unchecked)
+			if err := axSetValue(embedChk, "0"); err == nil {
+				time.Sleep(300 * time.Millisecond)
+				if !IsCheckboxChecked(embedChk) {
+					unchecked = true
+					verboseLog("exportTrace: unchecked embed via AXValue=0")
+				}
+			}
+			// Method 2: AXPress
+			if !unchecked {
+				if err := axPressWithFallback(embedChk); err != nil {
+					verboseLog("exportTrace: AXPress failed on embed checkbox: %v", err)
+				}
+				time.Sleep(300 * time.Millisecond)
+				if !IsCheckboxChecked(embedChk) {
+					unchecked = true
+					verboseLog("exportTrace: unchecked embed via AXPress")
+				}
+			}
+			// Method 3: Set AXValue to integer 0 via CFBoolean
+			if !unchecked {
+				key := mkString("AXValue")
+				defer cfRelease(key)
+				axSetAttributeValue(embedChk, key, kCFBooleanFalse)
+				time.Sleep(300 * time.Millisecond)
+				if !IsCheckboxChecked(embedChk) {
+					unchecked = true
+					verboseLog("exportTrace: unchecked embed via CFBooleanFalse")
+				}
+			}
+			if !unchecked {
+				verboseLog("exportTrace: WARNING - could not uncheck embed checkbox (still checked=%v)", IsCheckboxChecked(embedChk))
 			}
 			time.Sleep(500 * time.Millisecond)
 
