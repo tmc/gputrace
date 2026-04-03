@@ -1078,58 +1078,30 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 			}
 			time.Sleep(500 * time.Millisecond)
 
-			// Re-set the filename — Xcode may auto-append .gputrace, so try
-			// both with and without the extension.
-			saveNameField = findInAllWindows(FindSaveAsTextField)
-			if saveNameField != 0 {
-				currentName := axString(saveNameField, "AXValue")
-				verboseLog("exportTrace: filename field value after embed toggle: %q (expected %q)", currentName, outputName)
-
-				// Try setting without extension first (Xcode auto-appends .gputrace)
-				nameNoExt := strings.TrimSuffix(outputName, ".gputrace")
-				axSetValue(saveNameField, nameNoExt)
-				time.Sleep(200 * time.Millisecond)
-
-				// Focus the filename field and confirm with a small delay
-				// (Xcode validates on field focus change)
-				axAction(saveNameField, "AXConfirm")
-				time.Sleep(300 * time.Millisecond)
+			// Debug dump after uncheck to confirm state
+			if collectProfileDebug {
+				fmt.Fprintln(os.Stderr, "    [DEBUG] Sheet state AFTER embed uncheck:")
+				dumpExportSheetState(windowAX)
 			}
 
-			// Wait for Save to enable — re-query the button each iteration
-			// since AX refs can go stale after UI changes.
-			saveBtn = 0
-			for i := 0; i < 15; i++ {
-				saveBtn = findSaveButtonInSheet()
-				if saveBtn != 0 && IsElementEnabled(saveBtn) {
-					break
-				}
-				saveBtn = 0
-
-				// On iteration 5, try setting with original extension
-				if i == 5 && saveNameField != 0 {
-					verboseLog("exportTrace: retrying with original filename %q", outputName)
-					axSetValue(saveNameField, outputName)
-					axAction(saveNameField, "AXConfirm")
-				}
-				time.Sleep(300 * time.Millisecond)
-			}
+			// Re-query Save button
+			saveBtn = findSaveButtonInSheet()
 			if saveBtn != 0 && IsElementEnabled(saveBtn) {
-				fmt.Println("    Save enabled after unchecking embed (perf data not embeddable for this trace)")
+				fmt.Println("    Save enabled after unchecking embed")
 			} else {
-				// Last resort: try clicking the filename field to trigger validation
-				if saveNameField != 0 {
-					axPressWithFallback(saveNameField)
-					time.Sleep(500 * time.Millisecond)
-					saveBtn = findSaveButtonInSheet()
-				}
-				if saveBtn == 0 || !IsElementEnabled(saveBtn) {
-					return fmt.Errorf("Save button still disabled after unchecking embed")
-				}
-				fmt.Println("    Save enabled after field focus")
+				verboseLog("exportTrace: Save still disabled after embed uncheck — trying to click anyway")
 			}
-		} else {
-			return fmt.Errorf("Save button is disabled (performance data may not be available)")
+		}
+
+		// If Save is still disabled, try clicking it anyway — Xcode may show a
+		// prompt, or the disabled state may be a stale AX cache. Re-query fresh.
+		if saveBtn == 0 || !IsElementEnabled(saveBtn) {
+			saveBtn = findSaveButtonInSheet()
+			if saveBtn != 0 {
+				fmt.Println("    Save appears disabled, attempting click anyway...")
+			} else {
+				return fmt.Errorf("Save button not found in export sheet")
+			}
 		}
 	}
 
