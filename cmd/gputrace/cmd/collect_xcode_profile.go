@@ -85,9 +85,17 @@ Example:
 			}()
 		}
 
+		if collectProfileDebug || collectProfileVerbose {
+			logProcessIdentity("pre-macgo")
+		}
+
 		// Setup macgo and verify Accessibility permission for all subcommands
 		if err := setupMacgo(); err != nil {
 			return err
+		}
+
+		if collectProfileDebug || collectProfileVerbose {
+			logProcessIdentity("post-macgo")
 		}
 
 		// Check and request permissions with polling (Accessibility & Automation)
@@ -97,6 +105,7 @@ Example:
 
 		// Double-Check: Verify we actually have Accessibility permission by testing AX API
 		if err := verifyAccessibilityPermission(); err != nil {
+			logProcessIdentity("ax-failed")
 			return err
 		}
 		return nil
@@ -239,8 +248,7 @@ func setupMacgo() error {
 		Custom: []string{
 			"com.apple.security.automation.apple-events",
 		},
-		AutoSign: true,  // Use Developer ID cert for stable TCC identity across rebuilds
-		DevMode:  true,  // Stable wrapper bundle preserves TCC permissions
+		AutoSign: true, // Use Developer ID cert for stable TCC identity across rebuilds
 		UIMode:    macgo.UIModeBackground,
 		Info: map[string]interface{}{
 			"NSAppleEventsUsageDescription":   "gputrace needs to control Xcode to automate GPU trace operations.",
@@ -262,6 +270,37 @@ func setupMacgo() error {
 	}
 	verboseLog("setupMacgo: macgo.Start completed successfully")
 	return nil
+}
+
+// logProcessIdentity prints diagnostic info about the current process's TCC identity.
+// This helps debug cases where check-status passes but runtime fails (different process identities).
+func logProcessIdentity(phase string) {
+	exe, _ := os.Executable()
+	inBundle := strings.Contains(exe, ".app/")
+	bundlePath := os.Getenv("MACGO_BUNDLE_PATH")
+	origExe := os.Getenv("MACGO_ORIGINAL_EXECUTABLE")
+	trusted := osa.HasAccessibilityPermission()
+
+	fmt.Fprintf(os.Stderr, "[debug:%s] PID=%d executable=%s\n", phase, os.Getpid(), exe)
+	fmt.Fprintf(os.Stderr, "[debug:%s] in_bundle=%v AXIsProcessTrusted=%v\n", phase, inBundle, trusted)
+	if bundlePath != "" {
+		fmt.Fprintf(os.Stderr, "[debug:%s] MACGO_BUNDLE_PATH=%s\n", phase, bundlePath)
+	}
+	if origExe != "" {
+		fmt.Fprintf(os.Stderr, "[debug:%s] MACGO_ORIGINAL_EXECUTABLE=%s\n", phase, origExe)
+	}
+
+	// Show codesign identity of the running executable
+	if out, err := exec.Command("codesign", "-dvvv", exe).CombinedOutput(); err == nil {
+		for _, line := range strings.Split(string(out), "\n") {
+			if strings.HasPrefix(line, "Identifier=") ||
+				strings.HasPrefix(line, "Authority=") ||
+				strings.HasPrefix(line, "TeamIdentifier=") ||
+				strings.HasPrefix(line, "Signature=") {
+				fmt.Fprintf(os.Stderr, "[debug:%s] %s\n", phase, line)
+			}
+		}
+	}
 }
 
 // verifyAccessibilityPermission tests if we actually have Accessibility permission
