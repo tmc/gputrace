@@ -28,11 +28,10 @@ func init() {
 
 func runCounters(cmd *cobra.Command, args []string) error {
 	// 1. Get Default Device
-	devPtr := metal.MTLCreateSystemDefaultDevice()
-	if devPtr == nil {
+	device := metal.MTLCreateSystemDefaultDevice()
+	if device.GetID() == 0 {
 		return fmt.Errorf("failed to get default metal device")
 	}
-	device := metal.MTLDeviceObjectFromID(objc.IDFrom(devPtr))
 
 	nameID := objc.Send[objc.ID](device.GetID(), objc.Sel("name"))
 	if nameID != 0 {

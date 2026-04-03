@@ -23,11 +23,10 @@ func LoadMTLBWithMetal(data []byte) (*MetalLibrary, error) {
 	}
 
 	// Get the default Metal device
-	devicePtr := metal.MTLCreateSystemDefaultDevice()
-	if devicePtr == nil {
+	device := metal.MTLCreateSystemDefaultDevice()
+	if device.GetID() == 0 {
 		return nil, fmt.Errorf("no Metal device available")
 	}
-	device := metal.MTLDeviceObjectFromID(objc.IDFrom(devicePtr))
 
 	// Create NSData from bytes
 	nsDataClass := objc.GetClass("NSData")

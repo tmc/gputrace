@@ -105,11 +105,10 @@ func runCapture(cmd *cobra.Command, args []string) error {
 	}
 
 	// 1. Get Metal device
-	devPtr := metal.MTLCreateSystemDefaultDevice()
-	if devPtr == nil {
+	device := metal.MTLCreateSystemDefaultDevice()
+	if device.GetID() == 0 {
 		return fmt.Errorf("failed to get default Metal device")
 	}
-	device := metal.MTLDeviceObjectFromID(objc.IDFrom(devPtr))
 	nameID := objc.Send[objc.ID](device.GetID(), objc.Sel("name"))
 	if nameID != 0 {
 		nameCStr := objc.Send[*byte](nameID, objc.Sel("UTF8String"))

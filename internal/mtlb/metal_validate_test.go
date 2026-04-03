@@ -117,11 +117,10 @@ func TestMTLBParserAgainstMetal(t *testing.T) {
 // loadMTLBWithMetal uses Metal APIs to load an MTLB and extract function names.
 func loadMTLBWithMetal(data []byte) ([]string, error) {
 	// Get the default Metal device
-	devicePtr := metal.MTLCreateSystemDefaultDevice()
-	if devicePtr == nil {
+	device := metal.MTLCreateSystemDefaultDevice()
+	if device.GetID() == 0 {
 		return nil, nil // No Metal device available
 	}
-	device := metal.MTLDeviceObjectFromID(objc.IDFrom(devicePtr))
 
 	// Create dispatch_data_t from the MTLB bytes
 	// Use NSData as intermediary

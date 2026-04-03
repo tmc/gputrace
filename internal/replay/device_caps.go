@@ -36,11 +36,10 @@ type DeviceCapabilities struct {
 
 // QueryDeviceCapabilities returns the capabilities of the default Metal device.
 func QueryDeviceCapabilities() (*DeviceCapabilities, error) {
-	devicePtr := metal.MTLCreateSystemDefaultDevice()
-	if devicePtr == nil {
+	device := metal.MTLCreateSystemDefaultDevice()
+	if device.GetID() == 0 {
 		return nil, fmt.Errorf("no Metal device available")
 	}
-	device := metal.MTLDeviceObjectFromID(objc.IDFrom(devicePtr))
 
 	caps := &DeviceCapabilities{
 		device:         device,

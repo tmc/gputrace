@@ -20,12 +20,10 @@ type MetalBridge struct {
 
 // NewMetalBridge initializes a Metal bridge with the default GPU device.
 func NewMetalBridge() (*MetalBridge, error) {
-	devicePtr := metal.MTLCreateSystemDefaultDevice()
-	if devicePtr == nil {
+	device := metal.MTLCreateSystemDefaultDevice()
+	if device.GetID() == 0 {
 		return nil, fmt.Errorf("failed to initialize Metal device")
 	}
-
-	device := metal.MTLDeviceObjectFromID(objc.IDFrom(devicePtr))
 
 	queueID := objc.Send[objc.ID](device.GetID(), objc.Sel("newCommandQueue"))
 	if queueID == 0 {

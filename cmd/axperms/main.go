@@ -83,11 +83,8 @@ func initAX() {
 		return uintptr(corefoundation.CFRetain(corefoundation.CFTypeRef(value)))
 	}
 	cfStringCreateWithCString = func(allocator uintptr, cstr unsafe.Pointer, encoding uint32) uintptr {
-		return uintptr(corefoundation.CFStringCreateWithCString(
-			corefoundation.CFAllocatorRef(allocator),
-			(*byte)(cstr),
-			encoding,
-		))
+		// Unused — mkString calls corefoundation directly
+		return 0
 	}
 	cfStringGetLength = func(value uintptr) int {
 		return corefoundation.CFStringGetLength(corefoundation.CFStringRef(value))
@@ -354,8 +351,7 @@ func setupMacgo(debug, devMode bool) {
 
 // mkString creates a CFString from a Go string
 func mkString(s string) uintptr {
-	cstr := append([]byte(s), 0)
-	return cfStringCreateWithCString(0, unsafe.Pointer(&cstr[0]), kCFStringEncodingUTF8)
+	return uintptr(corefoundation.CFStringCreateWithCString(0, s, kCFStringEncodingUTF8))
 }
 
 // axString gets a string attribute from an AX element

@@ -11,7 +11,6 @@ import (
 	"github.com/ebitengine/purego"
 	"github.com/tmc/apple/corefoundation"
 	"github.com/tmc/apple/coregraphics"
-	"github.com/tmc/apple/private/hiservices"
 	"github.com/tmc/apple/x/axuiautomation"
 )
 
@@ -20,16 +19,13 @@ import (
 var (
 	axCreateApplication           func(int32) uintptr
 	axCopyAttributeValue          func(uintptr, uintptr, *uintptr) int32
-	axCopyMultipleAttributeValues func(uintptr, uintptr, int32, *uintptr) int32 // Batch API
-	axSetAttributeValue           func(uintptr, uintptr, uintptr) int32
-	axCopyAttributeNames          func(uintptr, *uintptr) int32
-	axCopyActionNames             func(uintptr, *uintptr) int32
+	axSetAttributeValue func(uintptr, uintptr, uintptr) int32
+	axCopyActionNames   func(uintptr, *uintptr) int32
 	axPerformAction               func(uintptr, uintptr) int32
 	axUIElementGetPid             func(uintptr, *int32) int32
 	axValueGetValue               func(uintptr, int32, unsafe.Pointer) bool
 	axValueCreate                 func(int32, unsafe.Pointer) uintptr
-	axIsAttributeSettable         func(uintptr, uintptr, *bool) int32
-	axUIElementGetWindow          func(uintptr, *uint32) int32 // _AXUIElementGetWindow (private but stable)
+	// axUIElementGetWindow — use axuiautomation.AXUIElementGetWindow instead
 
 	cfStringCreateWithCString     func(uintptr, unsafe.Pointer, uint32) uintptr
 	cfRelease                     func(uintptr)
@@ -174,13 +170,7 @@ func initXCUI() {
 			valuePtr,
 		))
 	}
-	cfStringCreateWithCString = func(allocator uintptr, cstr unsafe.Pointer, encoding uint32) uintptr {
-		return uintptr(corefoundation.CFStringCreateWithCString(
-			corefoundation.CFAllocatorRef(allocator),
-			(*byte)(cstr),
-			encoding,
-		))
-	}
+	_ = cfStringCreateWithCString // unused — mkString calls corefoundation directly
 	cfRelease = func(value uintptr) {
 		corefoundation.CFRelease(corefoundation.CFTypeRef(value))
 	}
@@ -297,13 +287,13 @@ func initXCUI() {
 		coregraphics.CGEventPostToPid(pid, coregraphics.CGEventRef(event))
 	}
 
-	registerSymbolFunc(&axCopyMultipleAttributeValues, hiservices.AXUIElementCopyMultipleAttributeValuesSymbol())
-	registerSymbolFunc(&axCopyAttributeNames, hiservices.AXUIElementCopyAttributeNamesSymbol())
-	registerSymbolFunc(&axCopyActionNames, hiservices.AXUIElementCopyActionNamesSymbol())
-	registerSymbolFunc(&axIsAttributeSettable, hiservices.AXUIElementIsAttributeSettableSymbol())
-	registerSymbolFunc(&axUIElementGetWindow, hiservices.AXUIElementGetWindowSymbol())
-	kCFBooleanTrue = uintptr(corefoundation.BooleanTrue)
-	kCFBooleanFalse = uintptr(corefoundation.BooleanFalse)
+	// Load AX symbols directly from ApplicationServices (replaces hiservices dependency)
+	libAS, err := purego.Dlopen("/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices", purego.RTLD_GLOBAL)
+	if err == nil {
+		purego.RegisterLibFunc(&axCopyActionNames, libAS, "AXUIElementCopyActionNames")
+	}
+	kCFBooleanTrue = uintptr(corefoundation.KCFBooleanTrue)
+	kCFBooleanFalse = uintptr(corefoundation.KCFBooleanFalse)
 
 	// ImageIO for saving images
 	libImageIO, err := purego.Dlopen("/System/Library/Frameworks/ImageIO.framework/ImageIO", purego.RTLD_GLOBAL)
@@ -314,13 +304,6 @@ func initXCUI() {
 	}
 
 	// CGEvent for mouse events (part of CoreGraphics)
-}
-
-func registerSymbolFunc(fptr any, symbol uintptr) {
-	if symbol == 0 {
-		return
-	}
-	purego.RegisterFunc(fptr, symbol)
 }
 
 // Ensure initialized
@@ -336,10 +319,7 @@ func ensureXCUI() {
 // === Usage Helpers ===
 
 func mkString(s string) uintptr {
-	b := make([]byte, len(s)+1)
-	copy(b, s)
-	b[len(s)] = 0
-	return cfStringCreateWithCString(0, unsafe.Pointer(&b[0]), kCFStringEncodingUTF8)
+	return uintptr(corefoundation.CFStringCreateWithCString(0, s, kCFStringEncodingUTF8))
 }
 
 func axString(ax uintptr, attr string) string {
@@ -764,7 +744,7 @@ func axPressWithFallback(el uintptr) error {
 // axActionNames returns the list of actions supported by an element.
 func axActionNames(ax uintptr) []string {
 	var ptr uintptr
-	if axCopyActionNames(ax, &ptr) != kAXErrorSuccess {
+	if axCopyActionNames == nil || axCopyActionNames(ax, &ptr) != kAXErrorSuccess {
 		return nil
 	}
 	defer cfRelease(ptr)
@@ -1068,11 +1048,8 @@ func FindPathTextField(root uintptr) uintptr {
 
 // getWindowID extracts the CGWindowID from an AXUIElement (window).
 func getWindowID(windowAX uintptr) (uint32, error) {
-	if axUIElementGetWindow == nil {
-		return 0, fmt.Errorf("_AXUIElementGetWindow not available")
-	}
 	var windowID uint32
-	if axUIElementGetWindow(windowAX, &windowID) != 0 {
+	if axuiautomation.AXUIElementGetWindow(axuiautomation.AXUIElementRef(windowAX), &windowID) != 0 {
 		return 0, fmt.Errorf("failed to get window ID from AX element")
 	}
 	return windowID, nil
