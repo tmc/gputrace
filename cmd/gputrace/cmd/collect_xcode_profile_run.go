@@ -764,6 +764,55 @@ func waitForReplayComplete(appAX uintptr, traceFileName string, initialWindowAX 
 	return fmt.Errorf("timed out waiting for replay completion")
 }
 
+// dumpExportSheetState prints the buttons, checkboxes, and text fields in the export dialog.
+func dumpExportSheetState(windowAX uintptr) {
+	appAX, _ := FindXcodeApp()
+	if appAX != 0 {
+		defer cfRelease(appAX)
+	}
+
+	// Search all windows for export-related elements
+	searchWindows := []uintptr{windowAX}
+	if appAX != 0 {
+		for _, w := range GetAllWindows(appAX) {
+			if w != windowAX {
+				searchWindows = append(searchWindows, w)
+			}
+		}
+	}
+
+	for wi, w := range searchWindows {
+		title := axString(w, "AXTitle")
+		fmt.Fprintf(os.Stderr, "    [DEBUG] Window %d: %q\n", wi, title)
+
+		findElement(w, func(el uintptr) bool {
+			role := axString(el, "AXRole")
+			switch role {
+			case "AXButton":
+				t := axString(el, "AXTitle")
+				if t != "" {
+					enabled := IsElementEnabled(el)
+					fmt.Fprintf(os.Stderr, "    [DEBUG]   Button: %q enabled=%v\n", t, enabled)
+				}
+			case "AXCheckBox":
+				t := axString(el, "AXTitle")
+				desc := axString(el, "AXDescription")
+				if t == "" {
+					t = desc
+				}
+				checked := IsCheckboxChecked(el)
+				enabled := IsElementEnabled(el)
+				fmt.Fprintf(os.Stderr, "    [DEBUG]   Checkbox: %q checked=%v enabled=%v\n", t, checked, enabled)
+			case "AXTextField":
+				ident := axString(el, "AXIdentifier")
+				val := axString(el, "AXValue")
+				fmt.Fprintf(os.Stderr, "    [DEBUG]   TextField: id=%q value=%q\n", ident, val)
+			}
+			return false // keep searching
+		})
+	}
+}
+
 func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 	// Try clicking Export button in Summary panel first
 	exportBtn := FindExportButton(windowAX)
@@ -920,6 +969,12 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 		fmt.Println("    Warning: saveAsNameTextField not found (using default filename)")
 	}
 	time.Sleep(300 * time.Millisecond)
+
+	// Debug: dump the export sheet state so we can see exactly what's happening
+	if collectProfileDebug {
+		fmt.Fprintln(os.Stderr, "    [DEBUG] Export sheet state after navigation:")
+		dumpExportSheetState(windowAX)
+	}
 
 	// Check if Save button is enabled before clicking
 	saveBtn := findInAllWindows(func(w uintptr) uintptr {

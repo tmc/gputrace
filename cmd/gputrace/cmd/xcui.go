@@ -20,7 +20,6 @@ var (
 	axCreateApplication           func(int32) uintptr
 	axCopyAttributeValue          func(uintptr, uintptr, *uintptr) int32
 	axSetAttributeValue func(uintptr, uintptr, uintptr) int32
-	axCopyActionNames   func(uintptr, *uintptr) int32
 	axPerformAction               func(uintptr, uintptr) int32
 	axUIElementGetPid             func(uintptr, *int32) int32
 	axValueGetValue               func(uintptr, int32, unsafe.Pointer) bool
@@ -287,11 +286,6 @@ func initXCUI() {
 		coregraphics.CGEventPostToPid(pid, coregraphics.CGEventRef(event))
 	}
 
-	// Load AX symbols directly from ApplicationServices (replaces hiservices dependency)
-	libAS, err := purego.Dlopen("/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices", purego.RTLD_GLOBAL)
-	if err == nil {
-		purego.RegisterLibFunc(&axCopyActionNames, libAS, "AXUIElementCopyActionNames")
-	}
 	kCFBooleanTrue = uintptr(corefoundation.KCFBooleanTrue)
 	kCFBooleanFalse = uintptr(corefoundation.KCFBooleanFalse)
 
@@ -744,7 +738,7 @@ func axPressWithFallback(el uintptr) error {
 // axActionNames returns the list of actions supported by an element.
 func axActionNames(ax uintptr) []string {
 	var ptr uintptr
-	if axCopyActionNames == nil || axCopyActionNames(ax, &ptr) != kAXErrorSuccess {
+	if axuiautomation.AXUIElementCopyActionNames(axuiautomation.AXUIElementRef(ax), &ptr) != 0 {
 		return nil
 	}
 	defer cfRelease(ptr)
