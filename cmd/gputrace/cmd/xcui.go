@@ -440,10 +440,6 @@ func moveCursor(x, y float64) {
 // It saves and restores the cursor position.
 // This is useful as a fallback when AXPress fails with error -25205.
 func clickElement(el uintptr) error {
-
-	// Save cursor position
-	origX, origY := getCursorPosition()
-
 	x, y := axPosition(el)
 	w, h := axSize(el)
 
@@ -498,11 +494,9 @@ func clickElement(el uintptr) error {
 	cx := float64(x + w/2)
 	cy := float64(y + h/2)
 
-	// Move cursor to the element first (required for some UI elements)
-	moveCursor(cx, cy)
-	time.Sleep(50 * time.Millisecond)
-
-	// Create mouse events
+	// Create mouse events at element coordinates without moving the visible cursor.
+	// CGEvent mouse events carry their own location — posting them directly delivers
+	// the click to the target without a visible cursor jump.
 	down := cgEventCreateMouseEvent(0, kCGEventLeftMouseDown, cx, cy, 0)
 	if down == 0 {
 		return fmt.Errorf("failed to create mouse down event")
@@ -520,22 +514,11 @@ func clickElement(el uintptr) error {
 	time.Sleep(50 * time.Millisecond)
 	cgEventPost(kCGHIDEventTap, up)
 
-	// Restore cursor position
-	if origX != 0 || origY != 0 {
-		time.Sleep(50 * time.Millisecond)
-		moveCursor(origX, origY)
-	}
-
 	return nil
 }
 
 // doubleClickElement simulates a double-click on an AX element using CGEvent.
-// It saves and restores the cursor position.
 func doubleClickElement(el uintptr) error {
-
-	// Save cursor position
-	origX, origY := getCursorPosition()
-
 	x, y := axPosition(el)
 	w, h := axSize(el)
 
@@ -584,11 +567,6 @@ func doubleClickElement(el uintptr) error {
 	}
 	if up2 != 0 {
 		cfRelease(up2)
-	}
-
-	// Restore cursor position
-	if origX != 0 || origY != 0 {
-		moveCursor(origX, origY)
 	}
 
 	return nil
