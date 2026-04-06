@@ -213,6 +213,9 @@ func isProfilingRunning() (bool, string) {
 					verboseLog("isProfilingRunning: window %d has Show Performance - profiling complete, not running", i)
 					continue
 				}
+				if title == "" {
+					title = "(untitled Xcode window)"
+				}
 				return true, title
 			}
 		}
