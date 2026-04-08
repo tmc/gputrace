@@ -289,10 +289,16 @@ func waitForWindow(appAX uintptr, traceFileName string, timeout time.Duration) (
 		if traceFileName != "" {
 			// Get ALL matching windows and prefer ones with Replay button
 			// (multiple windows can have same trace filename)
+			// getPreferredTraceWindow includes title match, basename match,
+			// and GPU-trace-UI heuristic (third pass).
 			windowAX = getPreferredTraceWindow(appAX, traceFileName)
 		}
-		// Fallback to first window
-		if windowAX == 0 {
+		// Only fall back to GetFirstWindow when no traceFileName was given.
+		// When we have a filename, falling back to an arbitrary window
+		// (e.g., a source editor) causes the automation to operate on the
+		// wrong window. getPreferredTraceWindow already includes a UI
+		// heuristic fallback for windows with GPU trace controls.
+		if windowAX == 0 && traceFileName == "" {
 			windowAX = GetFirstWindow(appAX)
 		}
 		if windowAX != 0 {
@@ -340,11 +346,21 @@ func getPreferredTraceWindow(appAX uintptr, traceFileName string) uintptr {
 	titleLower := strings.ToLower(traceFileName)
 	children := axChildren(appAX)
 
-	var matchingWindows []uintptr
+	// Log all visible windows for diagnostics
+	var allWindows []uintptr
 	for _, child := range children {
 		if axString(child, "AXRole") != "AXWindow" {
 			continue
 		}
+		allWindows = append(allWindows, child)
+		title := axString(child, "AXTitle")
+		doc := axString(child, "AXDocument")
+		verboseLog("getPreferredTraceWindow: visible window: title=%q doc=%q", title, doc)
+	}
+	verboseLog("getPreferredTraceWindow: %d total Xcode windows, looking for %q", len(allWindows), traceFileName)
+
+	var matchingWindows []uintptr
+	for _, child := range allWindows {
 		// Check AXTitle
 		windowTitle := strings.ToLower(axString(child, "AXTitle"))
 		if strings.Contains(windowTitle, titleLower) {
@@ -362,10 +378,7 @@ func getPreferredTraceWindow(appAX uintptr, traceFileName string) uintptr {
 	if len(matchingWindows) == 0 {
 		baseName := strings.ToLower(strings.TrimSuffix(traceFileName, filepath.Ext(traceFileName)))
 		if baseName != titleLower {
-			for _, child := range children {
-				if axString(child, "AXRole") != "AXWindow" {
-					continue
-				}
+			for _, child := range allWindows {
 				windowTitle := strings.ToLower(axString(child, "AXTitle"))
 				if strings.Contains(windowTitle, baseName) {
 					matchingWindows = append(matchingWindows, child)
@@ -382,10 +395,33 @@ func getPreferredTraceWindow(appAX uintptr, traceFileName string) uintptr {
 		}
 	}
 
+	// Third pass: if still no match, look for any window with GPU trace UI elements.
+	// Xcode may title the window differently than the filename (e.g., showing a
+	// descriptive name or abbreviated path). A window with Replay/Profile/Export
+	// buttons is almost certainly our trace window.
+	if len(matchingWindows) == 0 {
+		verboseLog("getPreferredTraceWindow: no title/doc match, scanning for windows with GPU trace UI elements")
+		for _, child := range allWindows {
+			title := axString(child, "AXTitle")
+			// Skip windows that are clearly source editors (common extensions)
+			titleLow := strings.ToLower(title)
+			if isSourceEditorWindow(titleLow) {
+				verboseLog("getPreferredTraceWindow: skipping source-editor window %q", title)
+				continue
+			}
+			if hasGPUTraceUI(child) {
+				verboseLog("getPreferredTraceWindow: window %q has GPU trace UI elements, accepting", title)
+				matchingWindows = append(matchingWindows, child)
+			}
+		}
+		if len(matchingWindows) > 0 {
+			verboseLog("getPreferredTraceWindow: matched %d windows by GPU trace UI heuristic", len(matchingWindows))
+		}
+	}
+
 	verboseLog("getPreferredTraceWindow: found %d windows matching %q", len(matchingWindows), traceFileName)
 
 	if len(matchingWindows) == 0 {
-		// Keep matching strict to avoid drifting into another open trace window.
 		return 0
 	}
 
@@ -420,6 +456,29 @@ func getPreferredTraceWindow(appAX uintptr, traceFileName string) uintptr {
 	// No window with trace UI found - return first match
 	verboseLog("getPreferredTraceWindow: no window with trace UI, using first match")
 	return matchingWindows[0]
+}
+
+// isSourceEditorWindow returns true if the window title looks like a source code editor
+// (e.g., "GatedDelta.swift", "main.cpp") rather than a trace document.
+func isSourceEditorWindow(titleLower string) bool {
+	sourceExts := []string{".swift", ".m", ".mm", ".c", ".cpp", ".h", ".hpp", ".metal", ".py", ".js", ".ts"}
+	for _, ext := range sourceExts {
+		if strings.HasSuffix(titleLower, ext) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasGPUTraceUI checks whether a window contains GPU trace UI elements
+// (Replay, Profile, Export, or Show Performance buttons).
+func hasGPUTraceUI(windowAX uintptr) bool {
+	for _, name := range []string{"Replay", "Profile", "Export", "Show Performance"} {
+		if btn := findButtonBFS(windowAX, name, 500); btn != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func windowMatchesTraceFile(window uintptr, traceFileName string) bool {
