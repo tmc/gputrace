@@ -14,10 +14,11 @@ import (
 
 func init() {
 	runCmd := &cobra.Command{
-		Use:   "run <trace_file>",
-		Short: "Run full automation (open, replay, export)",
-		Args:  cobra.ExactArgs(1),
-		RunE:  runCollectXcodeProfileFull,
+		Use:          "run <trace_file>",
+		Short:        "Run full automation (open, replay, export)",
+		Args:         cobra.ExactArgs(1),
+		SilenceUsage: true,
+		RunE:         runCollectXcodeProfileFull,
 	}
 	runCmd.Flags().StringVarP(&collectProfileOutput, "output", "o", "", "Output path for the exported trace")
 	collectXcodeProfileCmd.AddCommand(runCmd)
