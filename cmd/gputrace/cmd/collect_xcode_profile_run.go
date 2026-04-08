@@ -60,11 +60,16 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), collectProfileTimeout)
 	defer cancel()
 
-	// Step 1: Open File in Xcode
-	fmt.Println("  Step 1: Opening trace in Xcode...")
+	// Validate trace bundle before opening in Xcode
 	if _, err := os.Stat(inputPath); os.IsNotExist(err) {
 		return fmt.Errorf("trace file does not exist: %s", inputPath)
 	}
+	if err := validateTraceBundle(inputPath); err != nil {
+		return err
+	}
+
+	// Step 1: Open File in Xcode
+	fmt.Println("  Step 1: Opening trace in Xcode...")
 
 	openCmd := exec.CommandContext(ctx, "open", "-a", "Xcode", inputPath)
 	if output, err := openCmd.CombinedOutput(); err != nil {
@@ -479,6 +484,39 @@ func hasGPUTraceUI(windowAX uintptr) bool {
 		}
 	}
 	return false
+}
+
+// validateTraceBundle checks whether a .gputrace bundle contains enough data
+// to be worth profiling. An empty capture (header-only MTSP file, ≤8 bytes)
+// means the original Metal capture recorded no GPU commands.
+func validateTraceBundle(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("trace bundle: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("trace bundle is not a directory: %s", path)
+	}
+
+	// Check capture file size — an 8-byte capture is just the MTSP header
+	// with no GPU command data.
+	capturePath := filepath.Join(path, "capture")
+	capInfo, err := os.Stat(capturePath)
+	if err == nil && capInfo.Size() <= 8 {
+		// Also check for unsorted-capture as an alternative
+		unsortedPath := filepath.Join(path, "unsorted-capture")
+		if _, unsortedErr := os.Stat(unsortedPath); os.IsNotExist(unsortedErr) {
+			return fmt.Errorf("trace capture is empty (capture file is %d bytes with no unsorted-capture): %s\n    This trace contains no GPU commands — the Metal capture may have recorded an empty frame", capInfo.Size(), path)
+		}
+	}
+	if os.IsNotExist(err) {
+		// No capture file at all — check for unsorted-capture
+		unsortedPath := filepath.Join(path, "unsorted-capture")
+		if _, unsortedErr := os.Stat(unsortedPath); os.IsNotExist(unsortedErr) {
+			return fmt.Errorf("trace bundle has no capture data (missing capture and unsorted-capture): %s", path)
+		}
+	}
+	return nil
 }
 
 func windowMatchesTraceFile(window uintptr, traceFileName string) bool {
