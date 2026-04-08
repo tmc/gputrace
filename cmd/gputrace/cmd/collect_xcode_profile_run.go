@@ -144,6 +144,19 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Verify performance data is actually available after replay.
+	// Some traces replay successfully but produce no profiling data
+	// (Xcode shows "Performance data not available").
+	if !alreadyHasPerfData {
+		// Re-fetch window in case the reference went stale during replay
+		if freshWindow := getPreferredTraceWindow(appAX, traceFileName); freshWindow != 0 {
+			windowAX = freshWindow
+		}
+		if !hasShowPerformance(windowAX) {
+			return fmt.Errorf("replay completed but performance data is not available — the trace may not contain enough GPU work to profile")
+		}
+	}
+
 	// Export step
 	fmt.Println("  Exporting trace...")
 
