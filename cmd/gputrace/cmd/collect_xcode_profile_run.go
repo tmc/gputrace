@@ -107,17 +107,32 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 
 	// Check if trace already has performance data (Show Performance button visible)
 	alreadyHasPerfData := hasShowPerformance(windowAX)
-	// Check if profiling is already in progress (Stop button enabled, no Show Performance)
-	profilingInProgress := false
+	// Check if replay is already complete: Stop button exists but Replay button is gone.
+	// In GPU debugger mode, there's no "Show Performance" button after replay.
+	replayAlreadyDone := false
 	if !alreadyHasPerfData {
 		stopBtn := FindStopButton(windowAX)
-		if stopBtn != 0 && IsElementEnabled(stopBtn) {
+		replayBtn := FindReplayButton(windowAX)
+		if stopBtn != 0 && IsElementEnabled(stopBtn) && replayBtn == 0 {
+			// Stop exists, Replay gone → replay completed
+			replayAlreadyDone = true
+			verboseLog("runCollectXcodeProfileFull: Stop button present but Replay gone - replay already complete")
+		}
+	}
+	// Check if profiling is actually in progress (Stop enabled AND Replay still visible)
+	profilingInProgress := false
+	if !alreadyHasPerfData && !replayAlreadyDone {
+		stopBtn := FindStopButton(windowAX)
+		replayBtn := FindReplayButton(windowAX)
+		if stopBtn != 0 && IsElementEnabled(stopBtn) && replayBtn != 0 {
 			profilingInProgress = true
 		}
 	}
 
 	if alreadyHasPerfData {
 		fmt.Println("  Trace already has performance data, skipping replay...")
+	} else if replayAlreadyDone {
+		fmt.Println("  Replay already complete, proceeding to export...")
 	} else if profilingInProgress {
 		// Profiling already running (e.g., from a prior attempt or --force) — just wait for it
 		fmt.Println("  Profiling already in progress, waiting for completion...")
@@ -145,14 +160,19 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 	}
 
 	// Verify performance data is actually available after replay.
-	// Some traces replay successfully but produce no profiling data
-	// (Xcode shows "Performance data not available").
-	if !alreadyHasPerfData {
-		// Re-fetch window in case the reference went stale during replay
+	// Skip this check for GPU debugger mode traces (render traces) where
+	// Show Performance never appears. Detect by checking if Replay button is gone.
+	if !alreadyHasPerfData && !replayAlreadyDone {
 		if freshWindow := getPreferredTraceWindow(appAX, traceFileName); freshWindow != 0 {
 			windowAX = freshWindow
 		}
-		if !hasShowPerformance(windowAX) {
+		// In GPU debugger mode, Replay disappears after completion and
+		// Show Performance never appears. Only fail if Replay is still visible
+		// (meaning replay didn't actually complete).
+		replayBtn := FindReplayButton(windowAX)
+		if replayBtn == 0 {
+			verboseLog("runCollectXcodeProfileFull: Replay gone after our replay, GPU debugger mode - skipping perf data check")
+		} else if !hasShowPerformance(windowAX) {
 			return fmt.Errorf("replay completed but performance data is not available — the trace may not contain enough GPU work to profile")
 		}
 	}
@@ -273,6 +293,22 @@ func findTraceWindowByButtons(appAX uintptr) uintptr {
 }
 
 // closeXcodeWindow closes the specified Xcode window
+// closeAllXcodeWindows closes all open Xcode windows to clear stale GPU trace sessions.
+func closeAllXcodeWindows() {
+	appAX, err := FindXcodeApp()
+	if err != nil {
+		return
+	}
+	defer cfRelease(appAX)
+
+	windows := GetAllWindows(appAX)
+	verboseLog("closeAllXcodeWindows: closing %d windows", len(windows))
+	for _, w := range windows {
+		closeXcodeWindow(w)
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
 func closeXcodeWindow(windowAX uintptr) {
 	if windowAX == 0 {
 		return
@@ -524,10 +560,14 @@ func validateTraceBundle(path string) error {
 		}
 	}
 	if os.IsNotExist(err) {
-		// No capture file at all — check for unsorted-capture
+		// No capture file at all — check for unsorted-capture or store0 (newer Xcode format)
 		unsortedPath := filepath.Join(path, "unsorted-capture")
+		store0Path := filepath.Join(path, "store0")
 		if _, unsortedErr := os.Stat(unsortedPath); os.IsNotExist(unsortedErr) {
-			return fmt.Errorf("trace bundle has no capture data (missing capture and unsorted-capture): %s", path)
+			if _, store0Err := os.Stat(store0Path); os.IsNotExist(store0Err) {
+				return fmt.Errorf("trace bundle has no capture data (missing capture, unsorted-capture, and store0): %s", path)
+			}
+			// store0 exists — newer Xcode format, valid for Xcode replay
 		}
 	}
 	return nil
@@ -838,12 +878,16 @@ func waitForReplayComplete(appAX uintptr, traceFileName string, initialWindowAX 
 		// visible in the Summary panel even before profiling. Only Show Performance
 		// or Replay button re-enabled indicates profiling is done.
 
-		// 2. Replay button is enabled again (trace replay completed)
+		// 2. Replay button disappeared (GPU debugger mode: Replay vanishes after completion)
 		replayBtn, err := findButtonOrFail("Replay")
 		if err != nil {
 			return err
 		}
 		replayEnabled := replayBtn != 0 && IsElementEnabled(replayBtn)
+		if profilingStarted && replayBtn == 0 {
+			verboseLog("waitForReplayComplete: Replay button gone - replay complete (GPU debugger mode)")
+			return nil
+		}
 		if profilingStarted && replayEnabled {
 			// Replay button re-enabled - wait for Show Performance to appear
 			// (indicates profiler data is ready, not just that replay finished)

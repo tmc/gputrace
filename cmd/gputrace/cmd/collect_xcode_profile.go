@@ -163,6 +163,17 @@ func acquireProfileLock() (func(), error) {
 			break
 		}
 
+		// Stale window from a previous session — close all Xcode GPU trace windows and retry.
+		// This is common when a trace was already replayed but the window is still open.
+		if firstAttempt {
+			verboseLog("acquireProfileLock: detected stale GPU trace window %q, closing all Xcode windows and retrying", windowTitle)
+			fmt.Printf("  Closing stale Xcode GPU trace window %q...\n", windowTitle)
+			closeAllXcodeWindows()
+			time.Sleep(2 * time.Second)
+			firstAttempt = false
+			continue
+		}
+
 		// Check if we should wait
 		if collectProfileWait == 0 || time.Now().After(deadline) {
 			if collectProfileWait > 0 {
@@ -172,10 +183,7 @@ func acquireProfileLock() (func(), error) {
 		}
 
 		// Wait for profiling to complete
-		if firstAttempt {
-			fmt.Printf("Waiting for profiling to complete in %q (timeout: %v)...\n", windowTitle, collectProfileWait)
-			firstAttempt = false
-		}
+		fmt.Printf("Waiting for profiling to complete in %q (timeout: %v)...\n", windowTitle, collectProfileWait)
 		time.Sleep(pollInterval)
 	}
 
@@ -211,6 +219,13 @@ func isProfilingRunning() (bool, string) {
 				// Check if profiling is already complete in this window
 				if hasShowPerformance(w) {
 					verboseLog("isProfilingRunning: window %d has Show Performance - profiling complete, not running", i)
+					continue
+				}
+				// Xcode 26: if Stop button exists but Replay button is gone,
+				// replay has completed (Stop stays enabled for new captures).
+				replayBtn := FindReplayButton(w)
+				if replayBtn == 0 {
+					verboseLog("isProfilingRunning: window %d has Stop but no Replay - replay complete, not running", i)
 					continue
 				}
 				if title == "" {

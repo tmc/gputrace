@@ -487,6 +487,29 @@ func clickElement(el uintptr) error {
 	}
 
 	if w == 0 && h == 0 {
+		// Xcode 26+ SwiftUI toolbar buttons may not expose AXPosition/AXSize.
+		// Walk up the AX hierarchy to find the nearest ancestor with valid bounds,
+		// then click at its center (the ancestor typically wraps just the button).
+		verboseLog("clickElement: element has no bounds, walking up hierarchy for clickable ancestor")
+		parent := el
+		for i := 0; i < 10; i++ {
+			parent = axParent(parent)
+			if parent == 0 {
+				break
+			}
+			px, py := axPosition(parent)
+			pw, ph := axSize(parent)
+			parentRole := axString(parent, "AXRole")
+			verboseLog("clickElement: ancestor[%d] role=%s pos=(%d,%d) size=(%d,%d)", i, parentRole, px, py, pw, ph)
+			if pw > 0 && ph > 0 && px >= 0 && py >= 0 {
+				x, y, w, h = px, py, pw, ph
+				verboseLog("clickElement: using ancestor bounds: pos=(%d,%d) size=(%d,%d)", x, y, w, h)
+				break
+			}
+		}
+	}
+
+	if w == 0 && h == 0 {
 		return fmt.Errorf("could not get element bounds (position=%d,%d size=%d,%d)", x, y, w, h)
 	}
 
@@ -652,7 +675,15 @@ func axPressWithFallback(el uintptr) error {
 
 // axPressWithFallbackWindow tries AXPress first (which works without raising the window).
 // If AXPress fails, it raises the window (if provided) and falls back to a CGEvent click.
+// If CGEvent also fails (e.g. element has no bounds in Xcode 26), falls back to osascript.
+//
+// IMPORTANT: On Xcode 26, SwiftUI toolbar buttons return -25205 from AXPress but the
+// action actually succeeds. We detect this by checking if the button disappeared after
+// the "failed" press.
 func axPressWithFallbackWindow(el uintptr, windowAX uintptr) error {
+	title := axString(el, "AXTitle")
+	desc := axString(el, "AXDescription")
+
 	key := mkString("AXPress")
 	defer cfRelease(key)
 	err := axPerformAction(el, key)
@@ -660,24 +691,100 @@ func axPressWithFallbackWindow(el uintptr, windowAX uintptr) error {
 		return nil
 	}
 
-	// AXPress failed - check if it's an action-not-supported error (-25205)
-	// or API disabled (-25204)
 	if err == -25205 || err == -25204 {
-		verboseLog("axPressWithFallbackWindow: AXPress failed (error %d), raising window for CGEvent click", err)
-		// CGEvent click requires the window to be visible and frontmost.
+		// Xcode 26 quirk: SwiftUI toolbar buttons report -25205 but the action
+		// actually fires. Wait and check if the UI state changed.
+		time.Sleep(500 * time.Millisecond)
+
+		postRole := axString(el, "AXRole")
+		postEnabled := IsElementEnabled(el)
+		verboseLog("axPressWithFallbackWindow: AXPress returned %d for %q/%q, post-check: role=%q enabled=%v",
+			err, title, desc, postRole, postEnabled)
+
+		if postRole == "" || postRole == "missing value" || !postEnabled {
+			verboseLog("axPressWithFallbackWindow: button state changed, treating -25205 as success")
+			return nil
+		}
+
+		// If the button has a name, check if it's gone from the tree (e.g. Replay disappears after click)
+		if windowAX != 0 && title != "" && title != "missing value" {
+			refound := findButtonBFS(windowAX, title, 500)
+			if refound == 0 {
+				verboseLog("axPressWithFallbackWindow: button %q no longer in window, treating as success", title)
+				return nil
+			}
+		}
+
+		// AXPress truly failed. Try AppleScript click first (most reliable on Xcode 26).
+		verboseLog("axPressWithFallbackWindow: AXPress failed, trying AppleScript click for %q/%q", title, desc)
 		if windowAX != 0 {
 			ActivateXcode()
 			time.Sleep(200 * time.Millisecond)
 			axAction(windowAX, "AXRaise")
 			time.Sleep(200 * time.Millisecond)
 		}
+
+		if osErr := clickButtonViaAppleScript(title, desc); osErr == nil {
+			return nil
+		} else {
+			verboseLog("axPressWithFallbackWindow: AppleScript failed: %v, trying CGEvent", osErr)
+		}
+
 		if clickErr := clickElement(el); clickErr != nil {
-			return fmt.Errorf("AX error %d, CGEvent fallback: %w", err, clickErr)
+			return fmt.Errorf("all click methods failed for %q/%q: AXPress=%d", title, desc, err)
 		}
 		return nil
 	}
 
 	return fmt.Errorf("AX error %d", err)
+}
+
+// clickButtonViaAppleScript clicks a button in the frontmost Xcode window using AppleScript.
+// Uses `entire contents` + `first UI element whose role is "AXWindow"` which reliably
+// resolves element positions on Xcode 26, even when the Go AX API returns (0,0).
+func clickButtonViaAppleScript(title, description string) error {
+	candidates := []string{}
+	if title != "" && title != "missing value" {
+		candidates = append(candidates, title)
+	}
+	if description != "" && description != "missing value" && description != title {
+		candidates = append(candidates, description)
+	}
+	if len(candidates) == 0 {
+		return fmt.Errorf("no title or description to match")
+	}
+
+	for _, name := range candidates {
+		script := fmt.Sprintf(`
+tell application "System Events"
+	tell process "Xcode"
+		set frontmost to true
+		delay 0.3
+		set w to first UI element whose role is "AXWindow"
+		set allContents to entire contents of w
+		repeat with elem in allContents
+			try
+				if role of elem is "AXButton" then
+					if name of elem is "%s" or description of elem is "%s" then
+						click elem
+						return "ok"
+					end if
+				end if
+			end try
+		end repeat
+		return "not found"
+	end tell
+end tell`, name, name)
+
+		out, err := exec.Command("osascript", "-e", script).CombinedOutput()
+		result := strings.TrimSpace(string(out))
+		verboseLog("clickButtonViaAppleScript: name=%q result=%q err=%v", name, result, err)
+		if err == nil && result == "ok" {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("button not found via AppleScript (title=%q desc=%q)", title, description)
 }
 
 // axActionNames returns the list of actions supported by an element.
