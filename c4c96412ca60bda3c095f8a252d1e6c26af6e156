@@ -1,0 +1,5 @@
+claude-code: opus-4-7-1m-context
+date: 2026-05-06T03:45:38Z
+pid: 60032
+iterm: w0t6p9:993C0865-287C-4E50-B11D-380635F14B8E
+context: cherry-picked from Kudo233/gputrace fork (a655f13). go.mod/go.sum conflicts resolved by keeping v0.5.5. Build, vet, tests all pass.
