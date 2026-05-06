@@ -16,6 +16,7 @@ package agxps
 import (
 	"fmt"
 	"os"
+	"sync"
 	"unsafe"
 
 	"github.com/tmc/apple/private/xcode/gtshaderprofiler"
@@ -23,7 +24,10 @@ import (
 
 const gtShaderProfilerPath = "/Applications/Xcode.app/Contents/PlugIns/GPUDebugger.ideplugin/Contents/Frameworks/GTShaderProfiler.framework/Versions/A/GTShaderProfiler"
 
-var loaded bool
+var (
+	loadMu sync.Mutex
+	loaded bool
+)
 
 // GPU is an opaque handle for GPU configuration.
 type GPU uintptr
@@ -58,6 +62,8 @@ type Descriptor struct {
 // Init reports whether GTShaderProfiler is available through the generated
 // bindings package.
 func Init() error {
+	loadMu.Lock()
+	defer loadMu.Unlock()
 	if loaded {
 		return nil
 	}
@@ -73,6 +79,8 @@ func Close() {}
 
 // IsLoaded reports whether Init confirmed GTShaderProfiler availability.
 func IsLoaded() bool {
+	loadMu.Lock()
+	defer loadMu.Unlock()
 	return loaded
 }
 
