@@ -1,0 +1,20 @@
+# Compressed trace archives
+*.tar.gz filter=lfs diff=lfs merge=lfs -text
+
+# Metal Library Binaries (compiled shader code, ~200MB each)
+# Files with hex names like F98EC4E82B8CACCA, B3EE96AF3DEB107D
+**/[A-F0-9][A-F0-9][A-F0-9][A-F0-9][A-F0-9][A-F0-9][A-F0-9][A-F0-9][A-F0-9][A-F0-9][A-F0-9][A-F0-9][A-F0-9][A-F0-9][A-F0-9][A-F0-9] filter=lfs diff=lfs merge=lfs -text
+
+# GPU Profiler raw data directories (performance counters)
+**/*.gpuprofiler_raw/** filter=lfs diff=lfs merge=lfs -text
+
+# Large trace metadata files
+**/capture filter=lfs diff=lfs merge=lfs -text
+**/store0 filter=lfs diff=lfs merge=lfs -text
+**/device-resources-* filter=lfs diff=lfs merge=lfs -text
+
+# Buffer data files (should be zeroed, but track with LFS if present)
+**/MTLBuffer-* filter=lfs diff=lfs merge=lfs -text
+
+# All Metal capture data files within trace bundles
+**/*.gputrace/* filter=lfs diff=lfs merge=lfs -text
