@@ -14,8 +14,8 @@ import (
 	"unsafe"
 
 	"github.com/tmc/apple/corefoundation"
-	"github.com/tmc/apple/objc"
 	"github.com/tmc/apple/x/axuiautomation"
+	"github.com/tmc/gputrace/internal/osa"
 	"github.com/tmc/macgo"
 )
 
@@ -331,7 +331,8 @@ func setupMacgo(debug, devMode bool) {
 	}
 
 	cfg := &macgo.Config{
-		AppName: "axperms",
+		AppName:  "axperms",
+		BundleID: "com.github.tmc.gputrace.axperms",
 		Permissions: []macgo.Permission{
 			macgo.Accessibility,
 		},
@@ -909,10 +910,8 @@ func removeAppFromList(appName string, paneURL string) {
 }
 
 func triggerPrompt() {
-	key := objc.Send[uintptr](objc.ID(objc.GetClass("NSString")), objc.Sel("stringWithUTF8String:"), "AXTrustedCheckOptionPrompt\x00")
-	val := objc.Send[uintptr](objc.ID(objc.GetClass("NSNumber")), objc.Sel("numberWithBool:"), true)
-	opts := objc.Send[uintptr](objc.ID(objc.GetClass("NSDictionary")), objc.Sel("dictionaryWithObject:forKey:"), val, key)
-	result := axIsProcessTrustedWithOptions(opts)
+	osa.PromptAccessibilityPermission()
+	result := osa.HasAccessibilityPermission()
 	fmt.Printf("AXIsProcessTrustedWithOptions (with prompt): %v\n", result)
 }
 
