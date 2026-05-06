@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/google/pprof/profile"
 	"github.com/tmc/gputrace"
@@ -370,12 +371,12 @@ func (p *GPUTraceProfiler) buildKernelMap() map[string]string {
 
 // matchesEncoderLabel checks if a kernel name matches an encoder label.
 func matchesEncoderLabel(label, kernel string) bool {
-	labelLower := toLower(label)
-	kernelLower := toLower(kernel)
+	labelLower := strings.ToLower(label)
+	kernelLower := strings.ToLower(kernel)
 
 	// Check for number match
 	for i := '1'; i <= '9'; i++ {
-		if contains(labelLower, string(i)) && contains(kernelLower, string(i)) {
+		if strings.ContainsRune(labelLower, i) && strings.ContainsRune(kernelLower, i) {
 			return true
 		}
 	}
@@ -383,42 +384,10 @@ func matchesEncoderLabel(label, kernel string) bool {
 	// Check for name component match
 	keywords := []string{"normalize", "relu", "scale", "conv", "matmul", "softmax"}
 	for _, keyword := range keywords {
-		if contains(labelLower, keyword) && contains(kernelLower, keyword) {
+		if strings.Contains(labelLower, keyword) && strings.Contains(kernelLower, keyword) {
 			return true
 		}
 	}
 
 	return false
-}
-
-func toLower(s string) string {
-	result := make([]byte, len(s))
-	for i := 0; i < len(s); i++ {
-		if s[i] >= 'A' && s[i] <= 'Z' {
-			result[i] = s[i] + 32
-		} else {
-			result[i] = s[i]
-		}
-	}
-	return string(result)
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && indexOf(s, substr) >= 0
-}
-
-func indexOf(s, substr string) int {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		match := true
-		for j := 0; j < len(substr); j++ {
-			if s[i+j] != substr[j] {
-				match = false
-				break
-			}
-		}
-		if match {
-			return i
-		}
-	}
-	return -1
 }

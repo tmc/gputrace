@@ -4,10 +4,10 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
-	"unsafe"
 
 	"github.com/tmc/gputrace/internal/command"
 	"github.com/tmc/gputrace/internal/trace"
@@ -607,10 +607,8 @@ func isNaNOrInf(val float64) bool {
 	return val != val || val > 1e308 || val < -1e308
 }
 
-// intBitsToFloat32 converts uint32 bits to float32 (equivalent to math.Float32frombits)
 func intBitsToFloat32(bits uint32) float32 {
-	// Inline implementation to avoid importing math
-	return *(*float32)(unsafe.Pointer(&bits))
+	return math.Float32frombits(bits)
 }
 
 // groupRecordsByEncoder groups records by encoder for aggregation.
@@ -1073,7 +1071,6 @@ func averageValues(values []float64) float64 {
 	}
 	return sum / float64(len(values))
 }
-
 
 // findRecordBoundaries finds the start positions of all records in counter data.
 // Records appear to start with the 0x4E marker.

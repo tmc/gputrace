@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/tmc/apple/x/plist"
 )
@@ -243,7 +244,7 @@ func isActualFunctionName(name string) bool {
 	}
 
 	// Must have at least one underscore
-	if !stringContains(name, '_') {
+	if !strings.ContainsRune(name, '_') {
 		return false
 	}
 
@@ -254,16 +255,6 @@ func isActualFunctionName(name string) bool {
 	}
 
 	return true
-}
-
-// stringContains checks if s contains the byte c (helper to avoid importing strings)
-func stringContains(s string, c byte) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] == c {
-			return true
-		}
-	}
-	return false
 }
 
 // CountComputeEncoders returns the number of unique compute encoders (Cuw) in the trace.
