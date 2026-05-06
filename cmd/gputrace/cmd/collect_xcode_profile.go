@@ -263,7 +263,11 @@ func setupMacgo() error {
 		Permissions: []macgo.Permission{
 			macgo.Accessibility,
 		},
+		Custom: []string{
+			"com.apple.security.automation.apple-events",
+		},
 		AdHocSign: true,
+		DevMode:   true,
 		UIMode:    macgo.UIModeAccessory,
 		Info: map[string]interface{}{
 			"NSAppleEventsUsageDescription":   "gputrace needs to control Xcode to automate GPU trace operations.",
@@ -271,7 +275,7 @@ func setupMacgo() error {
 		},
 	}
 
-	verboseLog("setupMacgo: calling macgo.Start with BundleID=%s, UIMode=Background, DevMode=true", cfg.BundleID)
+	verboseLog("setupMacgo: calling macgo.Start with BundleID=%s, UIMode=Accessory, DevMode=true", cfg.BundleID)
 
 	if err := macgo.Start(cfg); err != nil {
 		fmt.Printf(Colorize("macgo app bundle setup failed: %v\n", ColorRed), err)
