@@ -23,7 +23,8 @@ install: clean build setup-permissions
 	@echo "Reinstall complete with fresh permissions"
 
 reinstall: build
-	@# macgo detects the new binary hash and re-creates the bundle.
+	@# Recreate the bundle so macgo copies the current binary and signature.
+	@rm -rf "$(GPUTRACE_APP)"
 	@# Trigger bundle creation, then check the bundle's current TCC state.
 	@echo "Updating bundle..."
 	@tmp=$$(mktemp); \
@@ -44,20 +45,29 @@ reinstall: build
 clean:
 	rm -rf $(GPUTRACE_APP)
 
-# Sign the app bundle for local development.
-# Ad-hoc signing avoids team-specific Gatekeeper/notarization failures.
+# Ensure the app bundle exists with the same macgo configuration used at runtime.
 sign-bundle:
 	@if [ ! -d "$(GPUTRACE_APP)" ]; then \
 		echo "No app bundle found, triggering creation..."; \
-		gputrace xp check-status --no-prompt 2>/dev/null || true; \
+		gputrace xp check-permissions --no-prompt --json >/dev/null 2>&1 || true; \
 	fi
 	@# Remove stale .dev_target if present (left over from DevMode, breaks codesign).
 	@rm -f "$(GPUTRACE_APP)/Contents/.dev_target"
-	@echo "Signing bundle with ad-hoc identity"; \
-	codesign --force --sign - --identifier $(BUNDLE_ID) "$(GPUTRACE_APP)"
+	@echo "Using macgo-managed bundle signature"
+	@codesign --verify --deep --strict "$(GPUTRACE_APP)"
 
 # Setup permissions after clean rebuild
 setup-permissions: sign-bundle
+	@tmp=$$(mktemp); \
+	$(AXPERMS_BIN) -list-ui >$$tmp 2>&1 || true; \
+	if grep -q "axperms needs Accessibility permission" $$tmp; then \
+		cat $$tmp; \
+		rm -f $$tmp; \
+		echo "axperms Accessibility permission is not granted."; \
+		echo "Run 'make setup-axperms', toggle axperms.app on in System Settings, then rerun 'make setup-permissions'."; \
+		exit 1; \
+	fi; \
+	rm -f $$tmp
 	@echo "Step 1: Resetting TCC for Accessibility (clears stale code requirement)..."
 	-tccutil reset Accessibility $(BUNDLE_ID) 2>/dev/null || true
 	@echo "Step 2: Resetting TCC for Screen Recording..."
@@ -72,7 +82,12 @@ setup-permissions: sign-bundle
 	$(AXPERMS_BIN) -enable gputrace.app 2>/dev/null | grep -v "macgo:" || true
 	@sleep 2
 	@echo "Step 6: Verifying permissions..."
-	@gputrace xp check-status --no-prompt && echo "✓ Accessibility OK" || echo "✗ Accessibility permission may need manual intervention"
+	@if gputrace xp check-permissions --no-prompt --json | grep -q '"accessibility": true'; then \
+		echo "✓ Accessibility OK"; \
+	else \
+		echo "✗ Accessibility permission may need manual intervention"; \
+		exit 1; \
+	fi
 
 # Full permission reset (use when TCC database is stale)
 reset-permissions:
@@ -100,10 +115,9 @@ test-permissions:
 # Build axperms helper and update bundle
 axperms:
 	go build -o $(AXPERMS_BIN) ./cmd/axperms
-	@# Update the binary inside the app bundle if it exists
-	@if [ -d "$(AXPERMS_APP)/Contents/MacOS" ]; then \
-		cp $(AXPERMS_BIN) $(AXPERMS_APP)/Contents/MacOS/axperms; \
-	fi
+	@# Recreate the helper bundle so macgo updates the signed identifier.
+	@rm -rf $(AXPERMS_APP)
+	@$(AXPERMS_BIN) -prompt >/dev/null 2>&1 || true
 
 # First-time setup for axperms - requires manual user action
 # Run this ONCE before using axperms to manage permissions
