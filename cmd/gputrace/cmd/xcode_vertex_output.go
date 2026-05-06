@@ -1,7 +1,10 @@
 package cmd
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +16,31 @@ import (
 
 var vertexOutputDrawCall int
 var vertexOutputFile string
+var vertexOutputFormat string
+
+type vertexOutputResult struct {
+	Status        string   `json:"status"`
+	Trace         string   `json:"trace"`
+	DrawCall      int      `json:"draw_call"`
+	Mode          string   `json:"mode,omitempty"`
+	Data          string   `json:"data,omitempty"`
+	NavigatorRows []string `json:"navigator_rows,omitempty"`
+	Message       string   `json:"message,omitempty"`
+	Suggestion    string   `json:"suggestion,omitempty"`
+}
+
+type drawCallNotFoundError struct {
+	DrawCall    int
+	Rows        []string
+	ComputeOnly bool
+}
+
+func (e *drawCallNotFoundError) Error() string {
+	if e.ComputeOnly {
+		return fmt.Sprintf("draw call #%d not found: trace shows compute shader work, not vertex draw calls\n%s", e.DrawCall, formatNavigatorRows(e.Rows))
+	}
+	return fmt.Sprintf("draw call #%d not found in outline (%d rows)", e.DrawCall, len(e.Rows))
+}
 
 func init() {
 	cmd := &cobra.Command{
@@ -33,10 +61,20 @@ This automates what you'd normally do manually:
 	}
 	cmd.Flags().IntVar(&vertexOutputDrawCall, "draw", 21, "Draw call number to inspect")
 	cmd.Flags().StringVarP(&vertexOutputFile, "output", "o", "", "Output file path (default: stdout)")
+	cmd.Flags().StringVar(&vertexOutputFormat, "format", "text", "Output format: text, json")
 	collectXcodeProfileCmd.AddCommand(cmd)
 }
 
 func runVertexOutput(cmd *cobra.Command, args []string) error {
+	jsonOutput, err := vertexOutputJSON(collectProfileJSON, vertexOutputFormat)
+	if err != nil {
+		return err
+	}
+	statusOut := io.Writer(os.Stdout)
+	if jsonOutput {
+		statusOut = os.Stderr
+	}
+
 	inputPath, err := filepath.Abs(args[0])
 	if err != nil {
 		return fmt.Errorf("invalid input path: %w", err)
@@ -46,11 +84,11 @@ func runVertexOutput(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	fmt.Printf("Extracting vertex output for draw call #%d...\n", vertexOutputDrawCall)
+	fmt.Fprintf(statusOut, "Extracting vertex output for draw call #%d...\n", vertexOutputDrawCall)
 
 	// Step 1: Open trace in Xcode
-	fmt.Println("  Step 1: Opening trace in Xcode...")
-	openCmd := exec.Command("open", "-a", "Xcode", inputPath)
+	fmt.Fprintln(statusOut, "  Step 1: Opening trace in Xcode...")
+	openCmd := exec.Command("open", append(xcodeOpenArgs(), inputPath)...)
 	if output, err := openCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to open trace: %w\n    output: %s", err, string(output))
 	}
@@ -78,63 +116,125 @@ func runVertexOutput(cmd *cobra.Command, args []string) error {
 	}
 
 	// Step 2: Check if replay is needed and trigger it
-	fmt.Println("  Step 2: Checking replay status...")
+	fmt.Fprintln(statusOut, "  Step 2: Checking replay status...")
 	stopBtn := FindStopButton(windowAX)
 	hasPerfData := hasShowPerformance(windowAX)
 	if stopBtn != 0 && IsElementEnabled(stopBtn) && !hasPerfData {
 		// Already replaying, wait for completion
-		fmt.Println("    Replay in progress, waiting...")
+		fmt.Fprintln(statusOut, "    Replay in progress, waiting...")
 		if err := waitForReplayComplete(appAX, traceFileName, windowAX, 120*time.Second); err != nil {
-			verboseLog("waitForReplayComplete: %v", err)
+			return fmt.Errorf("replay wait failed: %w", err)
 		}
 		time.Sleep(2 * time.Second)
 	} else if !hasPerfData {
 		// Need to start replay
-		fmt.Println("    Starting replay...")
+		fmt.Fprintln(statusOut, "    Starting replay...")
 		if err := clickReplayButton(windowAX); err != nil {
 			return fmt.Errorf("failed to start replay: %w", err)
 		}
-		fmt.Println("    Waiting for replay to complete...")
+		fmt.Fprintln(statusOut, "    Waiting for replay to complete...")
 		time.Sleep(3 * time.Second)
 		if err := waitForReplayComplete(appAX, traceFileName, windowAX, 120*time.Second); err != nil {
-			verboseLog("waitForReplayComplete: %v", err)
+			return fmt.Errorf("replay wait failed: %w", err)
 		}
 		time.Sleep(2 * time.Second)
 	} else {
-		fmt.Println("    Trace already replayed")
+		fmt.Fprintln(statusOut, "    Trace already replayed")
 	}
 
 	// Step 3: Switch to Debug navigator
-	fmt.Println("  Step 3: Switching to Debug navigator...")
+	fmt.Fprintln(statusOut, "  Step 3: Switching to Debug navigator...")
 	if err := switchToDebugNavigator(windowAX); err != nil {
 		return fmt.Errorf("failed to switch navigator: %w", err)
 	}
 	time.Sleep(500 * time.Millisecond)
 
 	// Step 4: Expand tree and find draw call
-	fmt.Printf("  Step 4: Finding draw call #%d...\n", vertexOutputDrawCall)
+	fmt.Fprintf(statusOut, "  Step 4: Finding draw call #%d...\n", vertexOutputDrawCall)
 	if err := navigateToDrawCall(windowAX, vertexOutputDrawCall); err != nil {
+		if jsonOutput {
+			var notFound *drawCallNotFoundError
+			if errors.As(err, &notFound) {
+				mode := "render"
+				suggestion := "Use a render .gputrace with draw calls to extract vertex output."
+				if notFound.ComputeOnly {
+					mode = "compute"
+					suggestion = "This trace contains compute shader work; use shader, profiler, timing, or API-call commands for compute traces."
+				}
+				return writeVertexOutput(vertexOutputResult{
+					Status:        "unsupported",
+					Trace:         inputPath,
+					DrawCall:      vertexOutputDrawCall,
+					Mode:          mode,
+					NavigatorRows: notFound.Rows,
+					Message:       notFound.Error(),
+					Suggestion:    suggestion,
+				}, "")
+			}
+		}
 		return fmt.Errorf("failed to navigate to draw call: %w", err)
 	}
 	time.Sleep(1 * time.Second)
 
 	// Step 5: Read vertex output from editor area
-	fmt.Println("  Step 5: Reading vertex output...")
+	fmt.Fprintln(statusOut, "  Step 5: Reading vertex output...")
 	data, err := readVertexOutput(windowAX)
 	if err != nil {
 		return fmt.Errorf("failed to read vertex output: %w", err)
 	}
 
-	if vertexOutputFile != "" {
-		if err := os.WriteFile(vertexOutputFile, []byte(data), 0644); err != nil {
-			return fmt.Errorf("failed to write output: %w", err)
-		}
-		fmt.Printf("  Wrote vertex output to %s\n", vertexOutputFile)
-	} else {
-		fmt.Println(data)
+	if jsonOutput {
+		return writeVertexOutput(vertexOutputResult{
+			Status:   "ok",
+			Trace:    inputPath,
+			DrawCall: vertexOutputDrawCall,
+			Mode:     "render",
+			Data:     data,
+		}, "")
 	}
 
+	if err := writeVertexOutput(data, data); err != nil {
+		return err
+	}
+	if vertexOutputFile != "" {
+		fmt.Fprintf(statusOut, "  Wrote vertex output to %s\n", vertexOutputFile)
+	}
 	return nil
+}
+
+func writeVertexOutput(v any, text string) error {
+	jsonOutput, err := vertexOutputJSON(collectProfileJSON, vertexOutputFormat)
+	if err != nil {
+		return err
+	}
+	if vertexOutputFile != "" {
+		if jsonOutput {
+			data, err := json.MarshalIndent(v, "", "  ")
+			if err != nil {
+				return fmt.Errorf("marshal vertex output json: %w", err)
+			}
+			return os.WriteFile(vertexOutputFile, append(data, '\n'), 0644)
+		}
+		return os.WriteFile(vertexOutputFile, []byte(text), 0644)
+	}
+	if jsonOutput {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(v)
+	}
+	fmt.Println(text)
+	return nil
+}
+
+func vertexOutputJSON(globalJSON bool, format string) (bool, error) {
+	switch format {
+	case "text":
+		return globalJSON, nil
+	case "json":
+		return true, nil
+	default:
+		return false, fmt.Errorf("unknown vertex output format %q (use text or json)", format)
+	}
 }
 
 func switchToDebugNavigator(windowAX uintptr) error {
@@ -252,18 +352,54 @@ func navigateToDrawCall(windowAX uintptr, drawCallNum int) error {
 	}
 
 	verboseLog("navigateToDrawCall: searching %d rows for draw call #%d", len(rows), drawCallNum)
+	var rowTexts []string
+	hasDrawCalls := false
+	hasCompute := false
 	for i, row := range rows {
 		text := extractRowText(row)
+		if text != "" {
+			rowTexts = append(rowTexts, text)
+		}
 		if strings.Contains(text, "drawIndexedPrimitives") {
+			hasDrawCalls = true
 			verboseLog("navigateToDrawCall: row[%d] has drawIndexedPrimitives: %q", i, text)
 			if strings.Contains(text, target) || (strings.Contains(text, altTarget) && strings.Contains(text, "drawIndexedPrimitives:Line indexCount:64")) {
 				verboseLog("navigateToDrawCall: MATCH at row[%d]", i)
 				return axPressWithFallback(row)
 			}
 		}
+		if isComputeNavigatorRow(text) {
+			hasCompute = true
+		}
 	}
 
-	return fmt.Errorf("draw call #%d not found in outline (%d rows)", drawCallNum, len(rows))
+	if !hasDrawCalls && hasCompute {
+		return &drawCallNotFoundError{DrawCall: drawCallNum, Rows: rowTexts, ComputeOnly: true}
+	}
+	return &drawCallNotFoundError{DrawCall: drawCallNum, Rows: rowTexts}
+}
+
+func isComputeNavigatorRow(text string) bool {
+	return strings.Contains(text, "newComputePipelineStateWithFunction:") ||
+		strings.Contains(text, "newFunctionWithName:") ||
+		strings.Contains(text, "Performance ") ||
+		strings.Contains(text, "SingleEncoder")
+}
+
+func formatNavigatorRows(rows []string) string {
+	if len(rows) == 0 {
+		return "debug navigator had no readable rows"
+	}
+	var b strings.Builder
+	b.WriteString("debug navigator rows:\n")
+	for i, row := range rows {
+		if i >= 20 {
+			fmt.Fprintf(&b, "  ... %d more rows\n", len(rows)-i)
+			break
+		}
+		fmt.Fprintf(&b, "  %s\n", row)
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func expandOutlineRowByText(outline uintptr, label string) error {
