@@ -94,7 +94,10 @@ func Initialize() error {
 	if err := Init(); err != nil {
 		return err
 	}
-	result := gtshaderprofiler.Agxps_initialize()
+	result, err := gtshaderprofiler.Agxps_initialize()
+	if err != nil {
+		return fmt.Errorf("agxps_initialize: %w", err)
+	}
 	if result != 0 {
 		return fmt.Errorf("agxps_initialize returned error: %d", result)
 	}
@@ -109,30 +112,50 @@ func NewParser() (*Parser, error) {
 // NewParserWithGPU creates a parser configured for the specified GPU.
 func NewParserWithGPU(gpu GPU) (*Parser, error) {
 	desc := &Descriptor{ChunkSize: 262144}
-	descPtr := gtshaderprofiler.Agxps_aps_descriptor_create(unsafe.Pointer(desc))
+	descPtr, err := gtshaderprofiler.Agxps_aps_descriptor_create(unsafe.Pointer(desc))
+	if err != nil {
+		return nil, fmt.Errorf("create descriptor: %w", err)
+	}
 	if descPtr == 0 {
 		return nil, fmt.Errorf("failed to initialize descriptor")
 	}
 	desc.GPU = gpu
 
-	handle := ParserHandle(gtshaderprofiler.Agxps_aps_parser_create(descPtr))
-	if handle == 0 || !gtshaderprofiler.Agxps_aps_parser_is_valid(gtshaderprofiler.AGXPSParserHandle(handle)) {
+	handle, err := gtshaderprofiler.Agxps_aps_parser_create(descPtr)
+	if err != nil {
+		return nil, fmt.Errorf("create parser: %w", err)
+	}
+	valid, err := gtshaderprofiler.Agxps_aps_parser_is_valid(handle)
+	if err != nil {
+		return nil, fmt.Errorf("validate parser: %w", err)
+	}
+	if handle == 0 || !valid {
 		return nil, fmt.Errorf("failed to create parser")
 	}
-	return &Parser{handle: handle}, nil
+	return &Parser{handle: ParserHandle(handle)}, nil
 }
 
 // NewParserWithDescriptor creates a parser with an explicit descriptor.
 func NewParserWithDescriptor(desc *Descriptor) (*Parser, error) {
-	descPtr := gtshaderprofiler.Agxps_aps_descriptor_create(unsafe.Pointer(desc))
+	descPtr, err := gtshaderprofiler.Agxps_aps_descriptor_create(unsafe.Pointer(desc))
+	if err != nil {
+		return nil, fmt.Errorf("create descriptor: %w", err)
+	}
 	if descPtr == 0 {
 		return nil, fmt.Errorf("failed to create descriptor")
 	}
-	handle := ParserHandle(gtshaderprofiler.Agxps_aps_parser_create(descPtr))
-	if handle == 0 || !gtshaderprofiler.Agxps_aps_parser_is_valid(gtshaderprofiler.AGXPSParserHandle(handle)) {
+	handle, err := gtshaderprofiler.Agxps_aps_parser_create(descPtr)
+	if err != nil {
+		return nil, fmt.Errorf("create parser: %w", err)
+	}
+	valid, err := gtshaderprofiler.Agxps_aps_parser_is_valid(handle)
+	if err != nil {
+		return nil, fmt.Errorf("validate parser: %w", err)
+	}
+	if handle == 0 || !valid {
 		return nil, fmt.Errorf("failed to create parser")
 	}
-	return &Parser{handle: handle}, nil
+	return &Parser{handle: ParserHandle(handle)}, nil
 }
 
 // Close destroys the parser.
@@ -140,7 +163,7 @@ func (p *Parser) Close() {
 	if p.handle == 0 {
 		return
 	}
-	gtshaderprofiler.Agxps_aps_parser_destroy(gtshaderprofiler.AGXPSParserHandle(p.handle))
+	_ = gtshaderprofiler.Agxps_aps_parser_destroy(gtshaderprofiler.AGXPSParserHandle(p.handle))
 	p.handle = 0
 }
 
@@ -150,12 +173,15 @@ func (p *Parser) Parse(data []byte) (ProfileData, error) {
 		return 0, fmt.Errorf("empty data")
 	}
 	var pd gtshaderprofiler.AGXPSProfileData
-	result := gtshaderprofiler.Agxps_aps_parser_parse(
+	result, err := gtshaderprofiler.Agxps_aps_parser_parse(
 		gtshaderprofiler.AGXPSParserHandle(p.handle),
 		unsafe.Pointer(&data[0]),
 		uint64(len(data)),
 		&pd,
 	)
+	if err != nil {
+		return 0, fmt.Errorf("parse: %w", err)
+	}
 	if result != 0 {
 		return 0, fmt.Errorf("parse failed with code %d", result)
 	}
@@ -170,7 +196,8 @@ func (p *Parser) IsValid() bool {
 	if p.handle == 0 {
 		return false
 	}
-	return gtshaderprofiler.Agxps_aps_parser_is_valid(gtshaderprofiler.AGXPSParserHandle(p.handle))
+	valid, err := gtshaderprofiler.Agxps_aps_parser_is_valid(gtshaderprofiler.AGXPSParserHandle(p.handle))
+	return err == nil && valid
 }
 
 // IsValid returns true if the profile data handle is valid.
@@ -178,7 +205,8 @@ func (pd ProfileData) IsValid() bool {
 	if pd == 0 {
 		return false
 	}
-	return gtshaderprofiler.Agxps_aps_profile_data_is_valid(gtshaderprofiler.AGXPSProfileData(pd))
+	valid, err := gtshaderprofiler.Agxps_aps_profile_data_is_valid(gtshaderprofiler.AGXPSProfileData(pd))
+	return err == nil && valid
 }
 
 // Destroy releases the profile data.
@@ -186,7 +214,7 @@ func (pd ProfileData) Destroy() {
 	if pd == 0 {
 		return
 	}
-	gtshaderprofiler.Agxps_aps_profile_data_destroy(gtshaderprofiler.AGXPSProfileData(pd))
+	_ = gtshaderprofiler.Agxps_aps_profile_data_destroy(gtshaderprofiler.AGXPSProfileData(pd))
 }
 
 // KickTiming represents timing data for a single GPU kick.
@@ -204,7 +232,10 @@ func GetKickTimings(profileData ProfileData) ([]KickTiming, error) {
 		return nil, fmt.Errorf("invalid profile data")
 	}
 	pd := gtshaderprofiler.AGXPSProfileData(profileData)
-	numKicks := gtshaderprofiler.Agxps_aps_profile_data_get_kicks_num(pd)
+	numKicks, err := gtshaderprofiler.Agxps_aps_profile_data_get_kicks_num(pd)
+	if err != nil {
+		return nil, fmt.Errorf("get kicks count: %w", err)
+	}
 	if numKicks == 0 {
 		return nil, nil
 	}
@@ -212,9 +243,18 @@ func GetKickTimings(profileData ProfileData) ([]KickTiming, error) {
 	timings := make([]KickTiming, numKicks)
 	for i := range timings {
 		idx := uint64(i)
-		startNs := gtshaderprofiler.Agxps_aps_profile_data_get_kick_start(pd, idx)
-		endNs := gtshaderprofiler.Agxps_aps_profile_data_get_kick_end(pd, idx)
-		kickID := gtshaderprofiler.Agxps_aps_profile_data_get_kick_id(pd, idx)
+		startNs, err := gtshaderprofiler.Agxps_aps_profile_data_get_kick_start(pd, idx)
+		if err != nil {
+			return nil, fmt.Errorf("get kick %d start: %w", idx, err)
+		}
+		endNs, err := gtshaderprofiler.Agxps_aps_profile_data_get_kick_end(pd, idx)
+		if err != nil {
+			return nil, fmt.Errorf("get kick %d end: %w", idx, err)
+		}
+		kickID, err := gtshaderprofiler.Agxps_aps_profile_data_get_kick_id(pd, idx)
+		if err != nil {
+			return nil, fmt.Errorf("get kick %d id: %w", idx, err)
+		}
 		timings[i] = KickTiming{
 			Index:       idx,
 			ID:          kickID,
@@ -236,11 +276,15 @@ type TimingStats struct {
 
 // GetTimingStats extracts timing statistics from a timing analyzer.
 func GetTimingStats(analyzer uintptr) TimingStats {
+	numCommands, _ := gtshaderprofiler.Agxps_aps_timing_analyzer_get_num_commands(analyzer)
+	avgDuration, _ := gtshaderprofiler.Agxps_aps_timing_analyzer_get_work_cliques_average_duration(analyzer)
+	minDuration, _ := gtshaderprofiler.Agxps_aps_timing_analyzer_get_work_cliques_min_duration(analyzer)
+	maxDuration, _ := gtshaderprofiler.Agxps_aps_timing_analyzer_get_work_cliques_max_duration(analyzer)
 	return TimingStats{
-		NumCommands: gtshaderprofiler.Agxps_aps_timing_analyzer_get_num_commands(analyzer),
-		AvgDuration: gtshaderprofiler.Agxps_aps_timing_analyzer_get_work_cliques_average_duration(analyzer),
-		MinDuration: gtshaderprofiler.Agxps_aps_timing_analyzer_get_work_cliques_min_duration(analyzer),
-		MaxDuration: gtshaderprofiler.Agxps_aps_timing_analyzer_get_work_cliques_max_duration(analyzer),
+		NumCommands: numCommands,
+		AvgDuration: avgDuration,
+		MinDuration: minDuration,
+		MaxDuration: maxDuration,
 	}
 }
 
@@ -262,7 +306,10 @@ func GetESLCliqueTimings(profileData ProfileData) ([]ESLCliqueTiming, error) {
 		return nil, fmt.Errorf("invalid profile data")
 	}
 	pd := gtshaderprofiler.AGXPSProfileData(profileData)
-	numCliques := gtshaderprofiler.Agxps_aps_profile_data_get_esl_cliques_num(pd)
+	numCliques, err := gtshaderprofiler.Agxps_aps_profile_data_get_esl_cliques_num(pd)
+	if err != nil {
+		return nil, fmt.Errorf("get esl clique count: %w", err)
+	}
 	if numCliques == 0 {
 		return nil, nil
 	}
@@ -270,17 +317,39 @@ func GetESLCliqueTimings(profileData ProfileData) ([]ESLCliqueTiming, error) {
 	timings := make([]ESLCliqueTiming, numCliques)
 	for i := range timings {
 		idx := uint64(i)
-		start := gtshaderprofiler.Agxps_aps_profile_data_get_esl_clique_start(pd, idx)
-		end := gtshaderprofiler.Agxps_aps_profile_data_get_esl_clique_end(pd, idx)
+		start, err := gtshaderprofiler.Agxps_aps_profile_data_get_esl_clique_start(pd, idx)
+		if err != nil {
+			return nil, fmt.Errorf("get esl clique %d start: %w", idx, err)
+		}
+		end, err := gtshaderprofiler.Agxps_aps_profile_data_get_esl_clique_end(pd, idx)
+		if err != nil {
+			return nil, fmt.Errorf("get esl clique %d end: %w", idx, err)
+		}
+		cliqueID, err := gtshaderprofiler.Agxps_aps_profile_data_get_esl_clique_clique_id(pd, idx)
+		if err != nil {
+			return nil, fmt.Errorf("get esl clique %d clique id: %w", idx, err)
+		}
+		kickID, err := gtshaderprofiler.Agxps_aps_profile_data_get_esl_clique_kick_id(pd, idx)
+		if err != nil {
+			return nil, fmt.Errorf("get esl clique %d kick id: %w", idx, err)
+		}
+		eslID, err := gtshaderprofiler.Agxps_aps_profile_data_get_esl_clique_esl_id(pd, idx)
+		if err != nil {
+			return nil, fmt.Errorf("get esl clique %d esl id: %w", idx, err)
+		}
+		missingEnd, err := gtshaderprofiler.Agxps_aps_profile_data_get_esl_clique_missing_end(pd, idx)
+		if err != nil {
+			return nil, fmt.Errorf("get esl clique %d missing end: %w", idx, err)
+		}
 		timings[i] = ESLCliqueTiming{
 			Index:      idx,
-			CliqueID:   gtshaderprofiler.Agxps_aps_profile_data_get_esl_clique_clique_id(pd, idx),
-			KickID:     gtshaderprofiler.Agxps_aps_profile_data_get_esl_clique_kick_id(pd, idx),
-			EslID:      gtshaderprofiler.Agxps_aps_profile_data_get_esl_clique_esl_id(pd, idx),
+			CliqueID:   cliqueID,
+			KickID:     kickID,
+			EslID:      eslID,
 			StartTime:  start,
 			EndTime:    end,
 			Duration:   end - start,
-			MissingEnd: gtshaderprofiler.Agxps_aps_profile_data_get_esl_clique_missing_end(pd, idx),
+			MissingEnd: missingEnd,
 		}
 	}
 	return timings, nil
@@ -291,10 +360,14 @@ func GetESLCliqueInstructionTrace(profileData ProfileData, cliqueIndex uint64) u
 	if profileData == 0 {
 		return 0
 	}
-	return uintptr(gtshaderprofiler.Agxps_aps_profile_data_get_esl_clique_instruction_trace(
+	ref, err := gtshaderprofiler.Agxps_aps_profile_data_get_esl_clique_instruction_trace(
 		gtshaderprofiler.AGXPSProfileData(profileData),
 		cliqueIndex,
-	))
+	)
+	if err != nil {
+		return 0
+	}
+	return uintptr(ref)
 }
 
 // InstructionTraceStats represents statistics from an instruction trace.
@@ -310,10 +383,13 @@ func GetInstructionTraceStats(trace uintptr) InstructionTraceStats {
 		return InstructionTraceStats{}
 	}
 	ref := gtshaderprofiler.AGXPSCliqueInstructionTraceRef(trace)
+	numTimestampRefs, _ := gtshaderprofiler.Agxps_aps_clique_instruction_trace_get_timestamp_references_num(ref)
+	numExecutionEvents, _ := gtshaderprofiler.Agxps_aps_clique_instruction_trace_get_execution_events_num(ref)
+	numPcAdvances, _ := gtshaderprofiler.Agxps_aps_clique_instruction_trace_get_pc_advances_num(ref)
 	return InstructionTraceStats{
-		NumTimestampRefs:   gtshaderprofiler.Agxps_aps_clique_instruction_trace_get_timestamp_references_num(ref),
-		NumExecutionEvents: gtshaderprofiler.Agxps_aps_clique_instruction_trace_get_execution_events_num(ref),
-		NumPcAdvances:      gtshaderprofiler.Agxps_aps_clique_instruction_trace_get_pc_advances_num(ref),
+		NumTimestampRefs:   numTimestampRefs,
+		NumExecutionEvents: numExecutionEvents,
+		NumPcAdvances:      numPcAdvances,
 	}
 }
 
@@ -322,15 +398,23 @@ func CreateCliqueTimeStats(profileData ProfileData, cliqueIndex uint64) uintptr 
 	if profileData == 0 {
 		return 0
 	}
-	return uintptr(gtshaderprofiler.Agxps_aps_clique_time_stats_create(
+	ref, err := gtshaderprofiler.Agxps_aps_clique_time_stats_create(
 		gtshaderprofiler.AGXPSProfileData(profileData),
 		cliqueIndex,
-	))
+	)
+	if err != nil {
+		return 0
+	}
+	return uintptr(ref)
 }
 
 // CreateGPU creates a GPU handle for the given generation, variant, and revision.
 func CreateGPU(gen, variant, rev uint32) (GPU, error) {
-	gpu := GPU(gtshaderprofiler.Agxps_gpu_create(uint(gen), uint(variant), uint(rev)))
+	gpuHandle, err := gtshaderprofiler.Agxps_gpu_create(uint(gen), uint(variant), uint(rev))
+	if err != nil {
+		return 0, fmt.Errorf("create GPU: %w", err)
+	}
+	gpu := GPU(gpuHandle)
 	if !gpu.IsValid() {
 		return 0, fmt.Errorf("failed to create GPU for gen=%d variant=%d rev=%d", gen, variant, rev)
 	}
@@ -342,7 +426,8 @@ func (g GPU) IsValid() bool {
 	if g == 0 {
 		return false
 	}
-	return gtshaderprofiler.Agxps_gpu_is_valid(gtshaderprofiler.AGXPSGPU(g))
+	valid, err := gtshaderprofiler.Agxps_gpu_is_valid(gtshaderprofiler.AGXPSGPU(g))
+	return err == nil && valid
 }
 
 // Destroy releases the GPU handle.
@@ -350,7 +435,7 @@ func (g GPU) Destroy() {
 	if g == 0 {
 		return
 	}
-	gtshaderprofiler.Agxps_gpu_destroy(gtshaderprofiler.AGXPSGPU(g))
+	_ = gtshaderprofiler.Agxps_gpu_destroy(gtshaderprofiler.AGXPSGPU(g))
 }
 
 // Gen returns the GPU generation.
@@ -358,7 +443,11 @@ func (g GPU) Gen() uint32 {
 	if g == 0 {
 		return 0
 	}
-	return uint32(gtshaderprofiler.Agxps_gpu_get_gen(gtshaderprofiler.AGXPSGPU(g)))
+	gen, err := gtshaderprofiler.Agxps_gpu_get_gen(gtshaderprofiler.AGXPSGPU(g))
+	if err != nil {
+		return 0
+	}
+	return uint32(gen)
 }
 
 // Variant returns the GPU variant.
@@ -366,7 +455,11 @@ func (g GPU) Variant() uint32 {
 	if g == 0 {
 		return 0
 	}
-	return uint32(gtshaderprofiler.Agxps_gpu_get_variant(gtshaderprofiler.AGXPSGPU(g)))
+	variant, err := gtshaderprofiler.Agxps_gpu_get_variant(gtshaderprofiler.AGXPSGPU(g))
+	if err != nil {
+		return 0
+	}
+	return uint32(variant)
 }
 
 // Rev returns the GPU revision.
@@ -374,7 +467,11 @@ func (g GPU) Rev() uint32 {
 	if g == 0 {
 		return 0
 	}
-	return uint32(gtshaderprofiler.Agxps_gpu_get_rev(gtshaderprofiler.AGXPSGPU(g)))
+	rev, err := gtshaderprofiler.Agxps_gpu_get_rev(gtshaderprofiler.AGXPSGPU(g))
+	if err != nil {
+		return 0
+	}
+	return uint32(rev)
 }
 
 // Name returns the formatted GPU name.
@@ -383,7 +480,9 @@ func (g GPU) Name() string {
 		return ""
 	}
 	buf := make([]byte, 256)
-	gtshaderprofiler.Agxps_gpu_format_name(gtshaderprofiler.AGXPSGPU(g), &buf[0], uint64(len(buf)))
+	if _, err := gtshaderprofiler.Agxps_gpu_format_name(gtshaderprofiler.AGXPSGPU(g), &buf[0], uint64(len(buf))); err != nil {
+		return ""
+	}
 	for i, b := range buf {
 		if b == 0 {
 			return string(buf[:i])
@@ -397,5 +496,6 @@ func (g GPU) IsSupported() bool {
 	if g == 0 {
 		return false
 	}
-	return gtshaderprofiler.Agxps_aps_gpu_is_supported(gtshaderprofiler.AGXPSGPU(g))
+	supported, err := gtshaderprofiler.Agxps_aps_gpu_is_supported(gtshaderprofiler.AGXPSGPU(g))
+	return err == nil && supported
 }
