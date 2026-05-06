@@ -8,7 +8,7 @@ require (
 	github.com/spf13/cobra v1.10.1
 	github.com/spf13/pflag v1.0.9
 	github.com/tmc/apple v0.5.5
-	github.com/tmc/macgo v0.1.0
+	github.com/tmc/macgo v0.1.2
 )
 
 require (
