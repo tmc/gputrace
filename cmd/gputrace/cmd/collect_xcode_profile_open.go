@@ -16,7 +16,7 @@ func init() {
 	openCmd := &cobra.Command{
 		Use:   "open <trace_file>",
 		Short: "Open a trace file in Xcode",
-		Long:  `Opens a GPU trace file in Xcode and waits for the window to be ready.
+		Long: `Opens a GPU trace file in Xcode and waits for the window to be ready.
 By default, opens in background without stealing focus. Use --foreground to bring Xcode to front.`,
 		Args: cobra.ExactArgs(1),
 		RunE: runOpenTrace,
@@ -38,7 +38,7 @@ func runOpenTrace(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Opening trace in Xcode: %s\n", inputPath)
 
 	// Use -g to open in background by default (doesn't steal focus)
-	openArgs := []string{"-a", "Xcode"}
+	openArgs := xcodeOpenArgs()
 	if !openForeground {
 		openArgs = append(openArgs, "-g")
 	}
@@ -103,4 +103,11 @@ func runOpenTrace(cmd *cobra.Command, args []string) error {
 
 	fmt.Print(Colorize("Trace opened successfully in Xcode\n", ColorGreen))
 	return nil
+}
+
+func xcodeOpenArgs() []string {
+	if app := os.Getenv("GPUTRACE_XCODE_APP"); app != "" {
+		return []string{"-a", app}
+	}
+	return []string{"-a", "Xcode"}
 }

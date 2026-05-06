@@ -72,7 +72,7 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 	// Step 1: Open File in Xcode
 	fmt.Println("  Step 1: Opening trace in Xcode...")
 
-	openCmd := exec.CommandContext(ctx, "open", "-a", "Xcode", inputPath)
+	openCmd := exec.CommandContext(ctx, "open", append(xcodeOpenArgs(), inputPath)...)
 	if output, err := openCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to open trace in Xcode: %w\n    output: %s", err, string(output))
 	}
@@ -713,7 +713,7 @@ func waitForReplayComplete(appAX uintptr, traceFileName string, initialWindowAX 
 
 	// Track consecutive failures to detect Xcode crash/exit
 	consecutiveXcodeFailures := 0
-	const maxXcodeFailures = 3
+	const maxXcodeFailures = 1
 
 	// Helper to find a button - tries current window first, then re-fetches window if needed
 	// Returns (button, xcodeRunning)
@@ -778,7 +778,7 @@ func waitForReplayComplete(appAX uintptr, traceFileName string, initialWindowAX 
 		if !xcodeRunning {
 			consecutiveXcodeFailures++
 			if consecutiveXcodeFailures >= maxXcodeFailures {
-				return 0, fmt.Errorf("Xcode is not running (failed %d consecutive checks)", consecutiveXcodeFailures)
+				return 0, fmt.Errorf("Xcode exited while waiting for replay completion")
 			}
 		}
 		return btn, nil
@@ -1058,6 +1058,9 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 		}
 	} else {
 		// Fall back to menu
+		if freshApp, err := FindXcodeApp(); err == nil && freshApp != 0 {
+			appAX = freshApp
+		}
 		if err := debugCheckExportMenu(appAX); err != nil {
 			fmt.Printf("    Debug: Export menu check failed: %v\n", err)
 		}
