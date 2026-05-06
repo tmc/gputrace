@@ -78,6 +78,20 @@ func axUIElementGetPid(element uintptr, pid *int32) int32 {
 	))
 }
 
+func axCopyActionNames(element uintptr, names *uintptr) int32 {
+	return int32(axuiautomation.AXUIElementCopyActionNames(
+		axuiautomation.AXUIElementRef(element),
+		names,
+	))
+}
+
+func axGetWindow(element uintptr, windowID *uint32) int32 {
+	return int32(axuiautomation.AXUIElementGetWindow(
+		axuiautomation.AXUIElementRef(element),
+		windowID,
+	))
+}
+
 func axValueGetValue(value uintptr, valueType int32, valuePtr unsafe.Pointer) bool {
 	return axuiautomation.AXValueGetValue(
 		axuiautomation.AXValueRef(value),
@@ -790,7 +804,7 @@ end tell`, name, name)
 // axActionNames returns the list of actions supported by an element.
 func axActionNames(ax uintptr) []string {
 	var ptr uintptr
-	if axuiautomation.AXUIElementCopyActionNames(axuiautomation.AXUIElementRef(ax), &ptr) != 0 {
+	if axCopyActionNames(ax, &ptr) != 0 {
 		return nil
 	}
 	defer cfRelease(ptr)
@@ -1094,7 +1108,7 @@ func FindPathTextField(root uintptr) uintptr {
 // getWindowID extracts the CGWindowID from an AXUIElement (window).
 func getWindowID(windowAX uintptr) (uint32, error) {
 	var windowID uint32
-	if axuiautomation.AXUIElementGetWindow(axuiautomation.AXUIElementRef(windowAX), &windowID) != 0 {
+	if axGetWindow(windowAX, &windowID) != 0 {
 		return 0, fmt.Errorf("failed to get window ID from AX element")
 	}
 	return windowID, nil
