@@ -10,6 +10,10 @@ classes, but gputrace only wraps the C-style AGXPS entry points in
 
 ## Useful Bound Bindings
 
+Run `gputrace xcode-bindings --json` to inspect these classes and selectors on
+the local Xcode installation. The command only checks runtime availability; it
+does not instantiate profiler objects or parse capture data.
+
 - `GTShaderProfilerStreamData` exposes archived stream data entry points and
   properties for `encoderInfoData`, `gpuCommandInfoData`,
   `pipelineStateInfoData`, and `pipelinePerformanceStatistics`.
@@ -56,3 +60,7 @@ Keep the risky Objective-C calls behind an internal adapter that can be probed
 independently from the timeline and pprof exporters. Export paths should keep
 reporting metric provenance so missing Xcode-equivalent values are visible in
 Perfetto, the web UI, and pprof comments rather than silently appearing as zero.
+
+On this machine, `gputrace xcode-bindings --json` reports all four target
+classes and all 42 checked selectors present. The remaining gaps are adapter
+work rather than missing Objective-C bindings.
