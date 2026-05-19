@@ -26,18 +26,28 @@ does not instantiate profiler objects or parse capture data.
   and register-pressure accessors, including
   `LiveRegisterForInstructionAtIndex`.
 
-## Remaining Metric Gaps
+## Current Probe Results
 
-- `high_register`: use `GTMioShaderBinaryData.LiveRegisterForInstructionAtIndex`
-  after gputrace can map pipeline or shader binary data to the corresponding
-  kernel event.
-- `occupancy_pct`: use `XRGPUAPSDataProcessor` derived counters instead of
-  relying only on streamData plist keys and raw counter fallback.
-- `alu_utilization_pct`: use `XRGPUAPSDataProcessor` derived counters for the
-  Xcode display value when streamData does not already carry it.
-- effective GPU time: prefer APSTimelineData `ReplayerGPUTime` when present.
-  Some traces do not archive that key; gputrace currently reports the fallback
-  source explicitly.
+On the qwen-native trace, `gputrace xcode-parity --json` loads stream data
+through `GTShaderProfilerStreamData.dataFromArchivedDataURL:` and reports:
+
+- 436 GPU command records, 8 pipeline states, and 8 functions.
+- APS timeline and counter dictionaries contain `ReplayerGPUTime`, but both
+  values are `0`.
+- APS timeline and counter dictionaries contain `Binaries` with 734 entries.
+- The APS counter dictionary contains `Derived Counter Sample Data` with 16
+  groups and an empty `Derived Counters Info Data` dictionary.
+
+The dispatch occupancy gap is closed for this trace through the encoder counter
+fallback. The remaining exporter gaps are:
+
+- `high_register`: binary blobs are present in stream data, but gputrace does
+  not yet have a safe adapter from those blobs to per-kernel live register
+  values.
+- `alu_utilization_pct`: derived counter samples are present, but gputrace does
+  not yet decode them into the Xcode display value.
+- effective GPU time: `ReplayerGPUTime` is archived as zero for this trace, so
+  gputrace keeps reporting the command-buffer active-time fallback.
 
 ## Generated Signature Risks
 
@@ -53,6 +63,12 @@ before gputrace should call them in normal export paths.
 - `XRGPUAPSDataProcessor` raw and derived counter accessors return timestamp and
   count metadata separately from caller-owned buffers. Wrappers should allocate
   buffers, validate returned counts, and name the counter source.
+- `GTMioShaderBinaryData` should not be constructed from a `Binaries` NSData
+  byte pointer with a nil parent object. An isolated probe produced a non-nil
+  object, but `InstructionInfoCount` returned garbage and
+  `LiveRegisterForInstructionAtIndex(0)` crashed. The high-register adapter
+  needs the correct parent trace object, likely from processed stream data, or a
+  separate offline binary decoder.
 
 ## Implementation Direction
 
