@@ -311,11 +311,12 @@ type EncoderInfo struct {
 
 // KernelInfo contains information about a kernel execution.
 type KernelInfo struct {
-	Name      string `json:"name"`
-	Encoder   int    `json:"encoder"`
-	StartTime uint64 `json:"start_time"`
-	EndTime   uint64 `json:"end_time"`
-	Duration  uint64 `json:"duration"`
+	Name      string                 `json:"name"`
+	Encoder   int                    `json:"encoder"`
+	StartTime uint64                 `json:"start_time"`
+	EndTime   uint64                 `json:"end_time"`
+	Duration  uint64                 `json:"duration"`
+	Args      map[string]interface{} `json:"args,omitempty"`
 }
 
 // APICall represents an API call event.
@@ -350,6 +351,28 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 		APICallseq: make([]APICall, 0),
 	}
 
+	var streamStats *counter.StreamDataStats
+	var profilerDir string
+	if stats, err := counter.ExtractPipelineStatsFromTraceStreamData(trace); err == nil {
+		streamStats = stats
+		counter.CorrelateDispatchSamples(streamStats)
+		profilerDir = findProfilerDir(trace.Path)
+		if profilerDir != "" {
+			annotateDispatchExecutionCosts(streamStats, profilerDir)
+		}
+	}
+
+	var perfStats *gputrace.PerfCounterStats
+	if stats, err := gputrace.ParsePerfCounters(trace); err == nil {
+		perfStats = stats
+	}
+	var shaderReport *gputrace.ShaderMetricsReport
+	if profilerDir != "" {
+		if report, err := extractSIMDBasedMetrics(trace, profilerDir); err == nil {
+			shaderReport = report
+		}
+	}
+
 	// Try to get real timing from profiler data first (streamData plist)
 	profilerTimings, totalTimeUs, profilerErr := gputrace.ExtractEncoderTimingsFromProfiler(trace)
 	useProfilerTiming := profilerErr == nil && len(profilerTimings) > 0
@@ -371,10 +394,9 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 		timeline.StartTime = 0
 		timeline.EndTime = timeline.Duration
 
-		streamStats, statsErr := gputrace.ExtractPipelineStats(trace)
-		if statsErr == nil {
+		if streamStats != nil {
 			timeline.Timing = timelineTimingFromStats(streamStats)
-			if streamStats != nil && streamStats.Timeline != nil {
+			if streamStats.Timeline != nil {
 				timeline.AbsoluteTime = streamStats.Timeline.AbsoluteTime
 				timeline.TimebaseNumer = streamStats.Timeline.TimebaseNumer
 				timeline.TimebaseDenom = streamStats.Timeline.TimebaseDenom
@@ -532,55 +554,14 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 		}
 	}
 
-	// Add kernel events - generate one per encoder to show sequence
-	// This avoids the "stacking" issue where aggregated stats were placed at arbitrary timestamps.
-	for _, encoder := range timeline.Encoders {
-		kernelInfo := KernelInfo{
-			Name:      encoder.Label,
-			Encoder:   encoder.Index,
-			StartTime: encoder.StartTime,
-			EndTime:   encoder.EndTime,
-			Duration:  encoder.Duration,
-		}
-		timeline.Kernels = append(timeline.Kernels, kernelInfo)
-
-		// 1. Generate "Encoder" event on ThreadID 1 (Encoders Lane 0)
-		// This matches Xcode's top track.
-		encoderEvent := TimelineEvent{
-			Name:      encoder.Label,
-			Category:  "encoder",
-			Phase:     "X",
-			Timestamp: encoder.StartTime / 1000,
-			Duration:  encoder.Duration / 1000,
-			ProcessID: 1,
-			ThreadID:  1 + (encoder.Index % 2), // Use 2 lanes for encoders (ID 1-2) to handle overlaps
-			Args: map[string]interface{}{
-				"encoder_index": encoder.Index,
-				"duration_us":   float64(encoder.Duration) / 1e3,
-			},
-		}
-		timeline.Events = append(timeline.Events, encoderEvent)
-
-		// 2. Generate "Kernel" event on ThreadIDs 3-6 (Kernels Lane 0-3)
-		kernelEvent := TimelineEvent{
-			Name:      encoder.Label,
-			Category:  "kernel",
-			Phase:     "X",
-			Timestamp: encoder.StartTime / 1000,
-			Duration:  encoder.Duration / 1000,
-			ProcessID: 1,
-			ThreadID:  3 + (encoder.Index % 4),
-			Args: map[string]interface{}{
-				"encoder_index": encoder.Index,
-				"duration_us":   float64(encoder.Duration) / 1e3,
-			},
-		}
-		timeline.Events = append(timeline.Events, kernelEvent)
+	// Add shader/kernel events. Prefer streamData dispatches so the Shaders lane
+	// matches Xcode's pipeline table instead of duplicating whole encoder spans.
+	if !addDispatchKernelEvents(timeline, streamStats, shaderReport, perfStats) {
+		addEncoderKernelEvents(timeline)
 	}
 
 	// Add command buffer events - try to get real timing from APSTimelineData
-	streamStats, statsErr := gputrace.ExtractPipelineStats(trace)
-	if statsErr == nil && streamStats != nil && streamStats.Timeline != nil && len(streamStats.Timeline.CommandBufferTimestamps) > 0 {
+	if streamStats != nil && streamStats.Timeline != nil && len(streamStats.Timeline.CommandBufferTimestamps) > 0 {
 		// Use real CB timing from APSTimelineData
 		ti := streamStats.Timeline
 		timeline.AbsoluteTime = ti.AbsoluteTime
@@ -1231,6 +1212,259 @@ func calculateTrackStats(track *CounterTrack) {
 	track.AvgValue = sum / float64(len(track.Samples))
 }
 
+func annotateDispatchExecutionCosts(stats *counter.StreamDataStats, profilerDir string) {
+	if stats == nil || len(stats.Pipelines) == 0 || profilerDir == "" {
+		return
+	}
+	pipelineIDs := make([]int, 0, len(stats.Pipelines))
+	for _, p := range stats.Pipelines {
+		pipelineIDs = append(pipelineIDs, p.PipelineID)
+	}
+	costs, err := counter.ParseExecutionCost(profilerDir, pipelineIDs)
+	if err != nil {
+		return
+	}
+	for i := range stats.Dispatches {
+		if cost, ok := costs.PipelineCosts[stats.Dispatches[i].PipelineID]; ok {
+			stats.Dispatches[i].ExecutionCostPct = cost
+		}
+	}
+}
+
+func addEncoderKernelEvents(timeline *Timeline) {
+	for _, encoder := range timeline.Encoders {
+		args := map[string]interface{}{
+			"encoder_index": encoder.Index,
+			"duration_us":   float64(encoder.Duration) / 1e3,
+			"source":        "encoder span",
+		}
+		kernelInfo := KernelInfo{
+			Name:      encoder.Label,
+			Encoder:   encoder.Index,
+			StartTime: encoder.StartTime,
+			EndTime:   encoder.EndTime,
+			Duration:  encoder.Duration,
+			Args:      args,
+		}
+		timeline.Kernels = append(timeline.Kernels, kernelInfo)
+
+		timeline.Events = append(timeline.Events, TimelineEvent{
+			Name:      encoder.Label,
+			Category:  "kernel",
+			Phase:     "X",
+			Timestamp: encoder.StartTime / 1000,
+			Duration:  encoder.Duration / 1000,
+			ProcessID: 1,
+			ThreadID:  3 + (encoder.Index % 4),
+			Args:      args,
+		})
+	}
+}
+
+func addDispatchKernelEvents(timeline *Timeline, stats *counter.StreamDataStats, shaderReport *gputrace.ShaderMetricsReport, perfStats *gputrace.PerfCounterStats) bool {
+	if timeline == nil || stats == nil || len(stats.Dispatches) == 0 {
+		return false
+	}
+	pipelineByIndex := make(map[int]*counter.PipelineStats)
+	for i := range stats.Pipelines {
+		pipelineByIndex[i] = &stats.Pipelines[i]
+	}
+	metrics := shaderMetricLookup(perfStats)
+	shaderMetrics := timelineShaderReportLookup(shaderReport)
+	encoderOffsets := make(map[int]uint64)
+	var fallbackStartNs uint64
+
+	for _, d := range stats.Dispatches {
+		name := d.FunctionName
+		if name == "" {
+			name = fmt.Sprintf("(pipeline_%d)", d.PipelineID)
+		}
+		durationNs := uint64(d.DurationUs) * 1000
+
+		var startNs uint64
+		if d.EncoderIndex >= 0 && d.EncoderIndex < len(timeline.Encoders) {
+			enc := timeline.Encoders[d.EncoderIndex]
+			startNs = enc.StartTime + encoderOffsets[d.EncoderIndex]
+			encoderOffsets[d.EncoderIndex] += durationNs
+		} else {
+			startNs = fallbackStartNs
+			fallbackStartNs += durationNs
+		}
+
+		pipeline := pipelineByIndex[d.PipelineIndex]
+		metric := metrics.find(name, pipeline)
+		shaderMetric := shaderMetrics.find(name, pipeline)
+		args := dispatchKernelArgs(d, pipeline, shaderMetric, metric)
+
+		info := KernelInfo{
+			Name:      name,
+			Encoder:   d.EncoderIndex,
+			StartTime: startNs,
+			EndTime:   startNs + durationNs,
+			Duration:  durationNs,
+			Args:      args,
+		}
+		timeline.Kernels = append(timeline.Kernels, info)
+		if info.EndTime > timeline.EndTime {
+			timeline.EndTime = info.EndTime
+		}
+
+		timeline.Events = append(timeline.Events, TimelineEvent{
+			Name:      name,
+			Category:  "kernel",
+			Phase:     "X",
+			Timestamp: startNs / 1000,
+			Duration:  durationNs / 1000,
+			ProcessID: 1,
+			ThreadID:  3 + (d.Index % 4),
+			Args:      args,
+		})
+	}
+	return true
+}
+
+func dispatchKernelArgs(d counter.DispatchInfo, p *counter.PipelineStats, shader *gputrace.ShaderMetrics, hardware *counter.ShaderHardwareMetrics) map[string]interface{} {
+	args := map[string]interface{}{
+		"dispatch_index": d.Index,
+		"duration_us":    float64(d.DurationUs),
+		"duration_ms":    float64(d.DurationUs) / 1000,
+		"cumulative_us":  d.CumulativeUs,
+		"encoder_index":  d.EncoderIndex,
+		"pipeline_idx":   d.PipelineIndex,
+		"pipeline_id":    d.PipelineID,
+		"xcode_type":     "Compute",
+		"xcode_view":     "Shaders",
+		"timing_source":  "streamData gpuCommandInfoData",
+	}
+	if d.ExecutionCostPct > 0 {
+		args["xcode_cost_pct"] = d.ExecutionCostPct
+		args["profiling_cost_pct"] = d.ExecutionCostPct
+	}
+	if d.SampleCount > 0 {
+		args["gprwcntr_sample_count"] = d.SampleCount
+		args["sampling_density"] = d.SamplingDensity
+	}
+	if d.StartTicks != 0 || d.EndTicks != 0 {
+		args["start_ticks"] = d.StartTicks
+		args["end_ticks"] = d.EndTicks
+	}
+	if p != nil {
+		if p.FunctionName != "" {
+			args["function_name"] = p.FunctionName
+		}
+		if p.PipelineAddress != 0 {
+			args["pipeline_state"] = fmt.Sprintf("0x%x", p.PipelineAddress)
+		}
+		args["allocated_registers"] = p.TemporaryRegisterCount
+		args["uniform_registers"] = p.UniformRegisterCount
+		args["spilled_bytes"] = p.SpilledBytes
+		args["threadgroup_memory"] = p.ThreadgroupMemory
+		args["instruction_count"] = p.InstructionCount
+		args["alu_instruction_count"] = p.ALUInstructionCount
+		args["fp32_instruction_count"] = p.FP32InstructionCount
+		args["fp16_instruction_count"] = p.FP16InstructionCount
+	}
+	if shader != nil {
+		if shader.PercentOfTotal > 0 {
+			args["xcode_cost_pct"] = shader.PercentOfTotal
+		}
+		if shader.TotalThreadgroups > 0 {
+			args["simd_groups"] = shader.TotalThreadgroups
+		}
+		if shader.TotalDurationNs > 0 {
+			args["shader_duration_ns"] = shader.TotalDurationNs
+		}
+	}
+	if hardware != nil {
+		if hardware.SIMDGroups > 0 && args["simd_groups"] == nil {
+			args["simd_groups"] = hardware.SIMDGroups
+		}
+		if hardware.AllocatedRegs > 0 {
+			args["allocated_registers"] = hardware.AllocatedRegs
+		}
+		if hardware.HighRegister > 0 {
+			args["high_register"] = hardware.HighRegister
+		}
+		if hardware.SpilledBytes > 0 {
+			args["spilled_bytes"] = hardware.SpilledBytes
+		}
+		if hardware.KernelOccupancy > 0 {
+			args["occupancy_pct"] = hardware.KernelOccupancy
+		}
+		if hardware.ALUUtilization > 0 {
+			args["alu_utilization_pct"] = hardware.ALUUtilization
+		}
+	}
+	return args
+}
+
+type timelineShaderReport struct {
+	byName map[string]*gputrace.ShaderMetrics
+}
+
+func timelineShaderReportLookup(report *gputrace.ShaderMetricsReport) timelineShaderReport {
+	out := timelineShaderReport{byName: make(map[string]*gputrace.ShaderMetrics)}
+	if report == nil {
+		return out
+	}
+	for _, m := range report.Shaders {
+		if m != nil && m.Name != "" {
+			out.byName[m.Name] = m
+		}
+	}
+	return out
+}
+
+func (m timelineShaderReport) find(name string, pipeline *counter.PipelineStats) *gputrace.ShaderMetrics {
+	if metric := m.byName[name]; metric != nil {
+		return metric
+	}
+	if pipeline != nil && pipeline.FunctionName != "" {
+		return m.byName[pipeline.FunctionName]
+	}
+	return nil
+}
+
+type timelineShaderMetrics struct {
+	byName    map[string]*counter.ShaderHardwareMetrics
+	byAddress map[uint64]*counter.ShaderHardwareMetrics
+}
+
+func shaderMetricLookup(stats *gputrace.PerfCounterStats) timelineShaderMetrics {
+	out := timelineShaderMetrics{
+		byName:    make(map[string]*counter.ShaderHardwareMetrics),
+		byAddress: make(map[uint64]*counter.ShaderHardwareMetrics),
+	}
+	if stats == nil {
+		return out
+	}
+	for i := range stats.ShaderMetrics {
+		m := &stats.ShaderMetrics[i]
+		if m.ShaderName != "" {
+			out.byName[m.ShaderName] = m
+		}
+		if m.PipelineState != 0 {
+			out.byAddress[m.PipelineState] = m
+		}
+	}
+	return out
+}
+
+func (m timelineShaderMetrics) find(name string, pipeline *counter.PipelineStats) *counter.ShaderHardwareMetrics {
+	if pipeline != nil && pipeline.PipelineAddress != 0 {
+		if metric := m.byAddress[pipeline.PipelineAddress]; metric != nil {
+			return metric
+		}
+	}
+	if metric := m.byName[name]; metric != nil {
+		return metric
+	}
+	if pipeline != nil && pipeline.FunctionName != "" {
+		return m.byName[pipeline.FunctionName]
+	}
+	return nil
+}
+
 func timelineTimingFromStats(stats *counter.StreamDataStats) *TimelineTiming {
 	if stats == nil {
 		return nil
@@ -1605,6 +1839,8 @@ func runTimelineFromProfiler(tracePath string) error {
 	if err != nil {
 		return fmt.Errorf("parse streamData: %w", err)
 	}
+	counter.CorrelateDispatchSamples(stats)
+	annotateDispatchExecutionCosts(stats, profilerDir)
 
 	// Build timeline from profiler data
 	timeline := buildTimelineFromProfilerData(tracePath, stats)
@@ -1792,56 +2028,9 @@ func buildTimelineFromProfilerData(tracePath string, stats *counter.StreamDataSt
 		}
 	}
 
-	// Add kernel events from streamData dispatches
-	var kernelStartNs uint64
-	encoderOffsets := make(map[int]uint64)
-
-	for _, d := range stats.Dispatches {
-		name := d.FunctionName
-		if name == "" {
-			name = fmt.Sprintf("(pipeline_%d)", d.PipelineIndex)
-		}
-		durationNs := uint64(d.DurationUs) * 1000
-
-		var startTime uint64
-		// Try to place dispatch inside its encoder
-		if d.EncoderIndex >= 0 && d.EncoderIndex < len(timeline.Encoders) {
-			enc := timeline.Encoders[d.EncoderIndex]
-			startTime = enc.StartTime + encoderOffsets[d.EncoderIndex]
-			encoderOffsets[d.EncoderIndex] += durationNs
-		} else {
-			// Fallback if encoder info is missing
-			startTime = kernelStartNs
-			kernelStartNs += durationNs
-		}
-
-		kernelInfo := KernelInfo{
-			Name:      name,
-			Encoder:   d.EncoderIndex,
-			StartTime: startTime,
-			EndTime:   startTime + durationNs,
-			Duration:  durationNs,
-		}
-		timeline.Kernels = append(timeline.Kernels, kernelInfo)
-		if kernelInfo.EndTime > timeline.EndTime {
-			timeline.EndTime = kernelInfo.EndTime
-		}
-
-		event := TimelineEvent{
-			Name:      name,
-			Category:  "kernel",
-			Phase:     "X",
-			Timestamp: startTime / 1000,
-			Duration:  durationNs / 1000,
-			ProcessID: 1,
-			ThreadID:  3 + (d.Index % 4),
-			Args: map[string]interface{}{
-				"duration_us":   float64(d.DurationUs),
-				"encoder_index": d.EncoderIndex,
-				"pipeline_idx":  d.PipelineIndex,
-			},
-		}
-		timeline.Events = append(timeline.Events, event)
+	// Add kernel events from streamData dispatches.
+	if !addDispatchKernelEvents(timeline, stats, nil, nil) {
+		addEncoderKernelEvents(timeline)
 	}
 
 	// Set timeline duration
@@ -2564,10 +2753,16 @@ func generateInteractiveHTML(timelineJSON string) string {
             const startTime = state.timeline.start_time;
 
             let trackY = LAYOUT.headerHeight;
-            if (state.timeline.events.some(ev => ev.cat === 'command_buffer')) {
+            const commandBuffers = state.timeline.events.filter(ev => ev.cat === 'command_buffer');
+            if (commandBuffers.length) {
+                const hit = hitTestEventLane('command_buffer', commandBuffers, x, y, trackY, timeScale, startTime);
+                if (hit) return hit;
                 trackY += LAYOUT.trackHeight;
             }
-            if (state.timeline.events.some(ev => ev.cat === 'kernel')) {
+            const kernels = state.timeline.events.filter(ev => ev.cat === 'kernel');
+            if (kernels.length) {
+                const hit = hitTestEventLane('kernel', kernels, x, y, trackY, timeScale, startTime);
+                if (hit) return hit;
                 trackY += LAYOUT.trackHeight;
             }
 
@@ -2588,6 +2783,22 @@ func generateInteractiveHTML(timelineJSON string) string {
                 trackY += LAYOUT.trackHeight;
             }
 
+            return null;
+        }
+
+        function hitTestEventLane(type, events, x, y, trackY, timeScale, startTime) {
+            const barHeight = LAYOUT.minBarHeight;
+            const barY = trackY + (LAYOUT.trackHeight - barHeight) / 2;
+            for (let i = events.length - 1; i >= 0; i--) {
+                const event = events[i];
+                const relStart = ((event.ts * 1000) - startTime) / 1000000;
+                const duration = (event.dur || 1) / 1000;
+                const barX = 50 + relStart * timeScale + state.panX;
+                const barWidth = Math.max(duration * timeScale, 2);
+                if (x >= barX && x <= barX + barWidth && y >= barY && y <= barY + barHeight) {
+                    return { type, index: i, data: event };
+                }
+            }
             return null;
         }
 
@@ -2614,7 +2825,7 @@ func generateInteractiveHTML(timelineJSON string) string {
                 const hit = hitTest(x, y);
                 state.hoveredItem = hit;
 
-                if (hit && hit.type === 'encoder') {
+                if (hit) {
                     showTooltip(e.clientX, e.clientY, hit.data, hit.index);
                     cursorOverlay.style.left = x + 'px';
                     cursorOverlay.classList.add('visible');
@@ -2660,28 +2871,52 @@ func generateInteractiveHTML(timelineJSON string) string {
 
         // Tooltip
         function showTooltip(x, y, data, index) {
-            const duration = (data.duration / 1000000).toFixed(3);
-            const startTime = (data.start_time / 1000000).toFixed(3);
+            const isEvent = data.ts !== undefined;
+            const title = data.label || data.name || ('Encoder ' + index);
+            const duration = isEvent ? ((data.dur || 0) / 1000).toFixed(3) : (data.duration / 1000000).toFixed(3);
+            const startTime = isEvent ? (data.ts / 1000).toFixed(3) : (data.start_time / 1000000).toFixed(3);
+            const args = data.args || {};
 
-            tooltip.innerHTML = ` + "`" + `
-                <div class="tooltip-title">${data.label || 'Encoder ' + index}</div>
-                <div class="tooltip-row">
-                    <span class="tooltip-label">Duration:</span>
-                    <span class="tooltip-value">${duration} ms</span>
-                </div>
-                <div class="tooltip-row">
-                    <span class="tooltip-label">Start:</span>
-                    <span class="tooltip-value">${startTime} ms</span>
-                </div>
-                <div class="tooltip-row">
-                    <span class="tooltip-label">Type:</span>
-                    <span class="tooltip-value">${data.type || 'compute'}</span>
-                </div>
-            ` + "`" + `;
+            let html = '<div class="tooltip-title">' + escapeHTML(title) + '</div>' +
+                tooltipRow('Duration', duration + ' ms') +
+                tooltipRow('Start', startTime + ' ms') +
+                tooltipRow('Type', args.xcode_type || data.type || data.cat || 'compute');
+
+            const fields = [
+                ['Cost', args.xcode_cost_pct !== undefined ? args.xcode_cost_pct.toFixed(2) + '%' : undefined],
+                ['Pipeline', args.pipeline_state],
+                ['SIMD Groups', args.simd_groups],
+                ['Registers', args.allocated_registers],
+                ['High Register', args.high_register],
+                ['Spilled Bytes', args.spilled_bytes],
+                ['Samples', args.gprwcntr_sample_count],
+                ['Source', args.timing_source],
+            ];
+            fields.forEach(([label, value]) => {
+                if (value !== undefined && value !== null && value !== '') {
+                    html += tooltipRow(label, value);
+                }
+            });
+            tooltip.innerHTML = html;
 
             tooltip.style.left = (x + 15) + 'px';
             tooltip.style.top = (y + 15) + 'px';
             tooltip.classList.add('visible');
+        }
+
+        function tooltipRow(label, value) {
+            return '<div class="tooltip-row"><span class="tooltip-label">' + escapeHTML(label) +
+                ':</span><span class="tooltip-value">' + escapeHTML(String(value)) + '</span></div>';
+        }
+
+        function escapeHTML(value) {
+            return String(value).replace(/[&<>"']/g, c => ({
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#39;',
+            }[c]));
         }
 
         function hideTooltip() {
