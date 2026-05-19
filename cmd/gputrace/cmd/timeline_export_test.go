@@ -350,6 +350,32 @@ func TestGenerateCounterTracksFromPerfDataUsesEncoderCounters(t *testing.T) {
 	}
 }
 
+func TestGenerateCounterTracksFromPerfDataKeepsSourceBackedZeroValues(t *testing.T) {
+	timeline := &Timeline{
+		Encoders: []EncoderInfo{{
+			Index:     0,
+			Label:     "kernel0",
+			Type:      "compute",
+			StartTime: 10,
+			EndTime:   20,
+			Duration:  10,
+		}},
+	}
+	encoderMetrics := []counter.EncoderCounterMetrics{{
+		EncoderIndex: 0,
+		EncoderLabel: "kernel0",
+	}}
+
+	tracks := generateCounterTracksFromPerfData(&gputrace.PerfCounterStats{}, nil, encoderMetrics, timeline)
+	alu := findCounterTrackForTest(t, tracks, "ALU Utilization")
+	if len(alu.Samples) != 2 {
+		t.Fatalf("ALU samples = %d, want 2", len(alu.Samples))
+	}
+	if got := alu.Samples[0].Value; got != 0 {
+		t.Fatalf("ALU value = %v, want 0", got)
+	}
+}
+
 func findCounterTrackForTest(t *testing.T, tracks []CounterTrack, name string) CounterTrack {
 	t.Helper()
 	for _, track := range tracks {

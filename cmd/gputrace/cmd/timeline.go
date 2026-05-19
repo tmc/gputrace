@@ -969,14 +969,16 @@ func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, str
 			continue
 		}
 
-		// Add samples at start and end of encoder execution
+		// Add samples at start and end of encoder execution. For source-backed
+		// Xcode counters, zero is a meaningful value and should appear as a
+		// flat track instead of being reported as unavailable.
 		appendCounterTrackSample(&activeCoresTrack, encoder, activeCores)
-		appendCounterTrackSample(&occupancyTrack, encoder, occupancy)
-		appendCounterTrackSample(&aluTrack, encoder, aluUtil)
-		appendCounterTrackSample(&bandwidthTrack, encoder, bandwidth)
-		appendCounterTrackSample(&throughputTrack, encoder, throughput)
-		appendCounterTrackSample(&occupancyManagerTrack, encoder, occupancyManager)
-		appendCounterTrackSample(&shaderLaunchLimiterTrack, encoder, shaderLaunchLimiter)
+		appendCounterTrackSampleValue(&occupancyTrack, encoder, occupancy)
+		appendCounterTrackSampleValue(&aluTrack, encoder, aluUtil)
+		appendCounterTrackSampleValue(&bandwidthTrack, encoder, bandwidth)
+		appendCounterTrackSampleValue(&throughputTrack, encoder, throughput)
+		appendCounterTrackSampleValue(&occupancyManagerTrack, encoder, occupancyManager)
+		appendCounterTrackSampleValue(&shaderLaunchLimiterTrack, encoder, shaderLaunchLimiter)
 	}
 
 	// Calculate statistics for each track
@@ -1077,11 +1079,11 @@ func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, str
 			}
 		}
 
-		appendCounterTrackSample(&l1MissTrack, encoder, l1Miss)
-		appendCounterTrackSample(&memReadTrack, encoder, memRead)
-		appendCounterTrackSample(&memWriteTrack, encoder, memWrite)
-		appendCounterTrackSample(&computeLimiterTrack, encoder, compLimit)
-		appendCounterTrackSample(&memoryLimiterTrack, encoder, memLimit)
+		appendCounterTrackSampleValue(&l1MissTrack, encoder, l1Miss)
+		appendCounterTrackSampleValue(&memReadTrack, encoder, memRead)
+		appendCounterTrackSampleValue(&memWriteTrack, encoder, memWrite)
+		appendCounterTrackSampleValue(&computeLimiterTrack, encoder, compLimit)
+		appendCounterTrackSampleValue(&memoryLimiterTrack, encoder, memLimit)
 	}
 
 	calculateTrackStats(&l1MissTrack)
@@ -1292,6 +1294,13 @@ func calculateTrackStats(track *CounterTrack) {
 
 func appendCounterTrackSample(track *CounterTrack, encoder EncoderInfo, value float64) {
 	if track == nil || value <= 0 {
+		return
+	}
+	appendCounterTrackSampleValue(track, encoder, value)
+}
+
+func appendCounterTrackSampleValue(track *CounterTrack, encoder EncoderInfo, value float64) {
+	if track == nil {
 		return
 	}
 	track.Samples = append(track.Samples,
