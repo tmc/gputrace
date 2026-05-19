@@ -140,8 +140,21 @@ func runProfiler(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Dispatch Calls:    %s\n", FormatCount(stats.NumGPUCommands))
 	fmt.Printf("  Unique Pipelines:  %s\n", FormatCount(stats.NumPipelines))
 	fmt.Printf("  Encoder Span Time: %s\n", FormatDuration(stats.TotalEncoderTimeUs))
-	fmt.Printf("  Dispatch Span Time:%s\n", FormatDuration(totalDispatchTime))
-	fmt.Println("  Effective GPU Time: (not parsed from Xcode)")
+	fmt.Printf("  Dispatch Span Time: %s\n", FormatDuration(totalDispatchTime))
+	if stats.EffectiveGPUTimeNs != nil {
+		fmt.Printf("  Effective GPU Time: %s\n", FormatDurationNs(*stats.EffectiveGPUTimeNs))
+	} else {
+		fmt.Println("  Effective GPU Time: (not present in streamData)")
+	}
+	if stats.CommandBufferActiveNs > 0 {
+		fmt.Printf("  CB Active Time:    %s\n", FormatDurationNs(stats.CommandBufferActiveNs))
+	}
+	if stats.CommandBufferWallNs > 0 {
+		fmt.Printf("  CB Wall Time:      %s\n", FormatDurationNs(stats.CommandBufferWallNs))
+	}
+	if stats.TimingSource != "" {
+		fmt.Printf("  Timing Source:     %s\n", stats.TimingSource)
+	}
 	if totalThreadgroupMem > 0 {
 		fmt.Printf("  Threadgroup Mem:   %s (max per pipeline)\n", FormatBytes(uint64(totalThreadgroupMem)))
 	}

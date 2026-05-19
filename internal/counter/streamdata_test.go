@@ -63,3 +63,35 @@ func TestParseStreamData(t *testing.T) {
 		t.Logf("  [%d] %s", i, fn)
 	}
 }
+
+func TestTimelineTimingTotals(t *testing.T) {
+	info := &TimelineInfo{
+		TimebaseNumer: 125,
+		TimebaseDenom: 3,
+		CommandBufferTimestamps: []CommandBufferTimestamp{
+			{Index: 0, StartTicks: 100, EndTicks: 124},
+			{Index: 1, StartTicks: 200, EndTicks: 248},
+		},
+		RestoreTimestamps: []TimestampRange{
+			{Index: 0, StartTicks: 124, EndTicks: 200},
+		},
+	}
+	info.computeTimingTotals()
+
+	if got, want := info.CommandBufferActiveNs, uint64(3000); got != want {
+		t.Fatalf("CommandBufferActiveNs = %d, want %d", got, want)
+	}
+	if got, want := info.CommandBufferWallNs, uint64(6166); got != want {
+		t.Fatalf("CommandBufferWallNs = %d, want %d", got, want)
+	}
+	if got, want := info.RestoreActiveNs, uint64(3166); got != want {
+		t.Fatalf("RestoreActiveNs = %d, want %d", got, want)
+	}
+}
+
+func TestCommandBufferTimestampDurationRejectsNegativeRange(t *testing.T) {
+	cb := CommandBufferTimestamp{StartTicks: 200, EndTicks: 100}
+	if got := cb.DurationNs(125, 3); got != 0 {
+		t.Fatalf("DurationNs = %d, want 0", got)
+	}
+}
