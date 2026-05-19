@@ -65,6 +65,7 @@ func runXcodeParity(cmd *cobra.Command, args []string) error {
 	if streamPath := streamDataPathForTrace(args[0]); streamPath != "" {
 		if summary, err := xcodebindings.ProbeStreamData(streamPath); err == nil {
 			report.StreamData = &summary
+			report.applyStreamDataEvidence()
 		}
 	}
 	if xcodeParityJSON {
@@ -213,6 +214,35 @@ func buildXcodeParityReport(tracePath string, timeline *Timeline, bindings xcode
 		return report.RemainingGaps[i].Metric < report.RemainingGaps[j].Metric
 	})
 	return report
+}
+
+func (r *xcodeParityReport) applyStreamDataEvidence() {
+	if r == nil || r.StreamData == nil {
+		return
+	}
+	hasReplayerKey := false
+	for _, value := range r.StreamData.SelectedValues {
+		if value.Key == "ReplayerGPUTime" {
+			hasReplayerKey = true
+			break
+		}
+	}
+	if r.StreamData.ReplayerGPUTimeNs > 0 {
+		r.Timing["xcode_stream_replayer_gpu_time_ns"] = r.StreamData.ReplayerGPUTimeNs
+		r.ClosedExamples = append(r.ClosedExamples, "ReplayerGPUTime decoded from Xcode streamData")
+		return
+	}
+	if !hasReplayerKey {
+		return
+	}
+	for i := range r.RemainingGaps {
+		if r.RemainingGaps[i].Metric != "effective_gpu_time" {
+			continue
+		}
+		r.RemainingGaps[i].Status = "archived as zero in Xcode streamData"
+		r.RemainingGaps[i].Next = "keep command-buffer active time fallback; compare with a capture whose ReplayerGPUTime is nonzero"
+		return
+	}
 }
 
 func intFromMetrics(metrics map[string]interface{}, key string) int {
