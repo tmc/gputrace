@@ -11,6 +11,7 @@ import (
 	"github.com/tmc/gputrace"
 	"github.com/tmc/gputrace/internal/counter"
 	tracepkg "github.com/tmc/gputrace/internal/trace"
+	"github.com/tmc/gputrace/internal/xcodebindings"
 )
 
 func TestExportChromeTracingIncludesTimingMetadata(t *testing.T) {
@@ -235,6 +236,65 @@ func TestAddDispatchKernelEventsUsesEncoderCounterFallback(t *testing.T) {
 	}
 	if got, want := args["alu_utilization_source"], "encoder counter fallback"; got != want {
 		t.Fatalf("alu_utilization_source = %#v, want %#v", got, want)
+	}
+}
+
+func TestBuildXcodeParityReport(t *testing.T) {
+	timeline := &Timeline{
+		Timing: &TimelineTiming{
+			TimingSource:          "command buffer active time",
+			DisplayDurationSource: "command buffer active time",
+		},
+		Events: []TimelineEvent{{
+			Category: "kernel",
+			Args: map[string]interface{}{
+				"occupancy_pct":       62.5,
+				"allocated_registers": 13,
+			},
+		}},
+	}
+	report := buildXcodeParityReport("trace.gputrace", timeline, xcodebindingsReportForTest())
+	if report.KernelEvents != 1 {
+		t.Fatalf("KernelEvents = %d, want 1", report.KernelEvents)
+	}
+	if len(report.RemainingGaps) == 0 {
+		t.Fatal("missing remaining gaps")
+	}
+	for _, gap := range report.RemainingGaps {
+		if gap.Metric == "occupancy_pct" {
+			t.Fatalf("occupancy_pct should be closed: %+v", report.RemainingGaps)
+		}
+	}
+}
+
+func xcodebindingsReportForTest() xcodebindings.Report {
+	return xcodebindings.Report{
+		Summary: map[string]int{
+			"classes_present":   4,
+			"classes_missing":   0,
+			"selectors_present": 42,
+			"selectors_missing": 0,
+		},
+		Gaps: []xcodebindings.Gap{
+			{
+				Metric:  "high_register",
+				Binding: "GTMioShaderBinaryData.liveRegisterForInstructionAtIndex:",
+				Status:  "binding present; adapter missing",
+				Next:    "map shader binary data",
+			},
+			{
+				Metric:  "alu_utilization_pct",
+				Binding: "XRGPUAPSDataProcessor derived counters",
+				Status:  "binding present; adapter missing",
+				Next:    "resolve ALU counter",
+			},
+			{
+				Metric:  "occupancy_pct",
+				Binding: "XRGPUAPSDataProcessor derived counters",
+				Status:  "binding present; adapter missing",
+				Next:    "resolve occupancy counter",
+			},
+		},
 	}
 }
 
