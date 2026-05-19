@@ -81,19 +81,36 @@ type CommandBufferTimestamp struct {
 
 // DurationNs returns the duration in nanoseconds using the provided timebase.
 func (cb CommandBufferTimestamp) DurationNs(numer, denom uint64) uint64 {
-	if denom == 0 {
-		denom = 1
-	}
-	return (cb.EndTicks - cb.StartTicks) * numer / denom
+	return ticksToNs(cb.StartTicks, cb.EndTicks, numer, denom)
+}
+
+// TimestampRange contains a start/end pair in GPU ticks.
+type TimestampRange struct {
+	Index      int    `json:"index"`
+	StartTicks uint64 `json:"start_ticks"`
+	EndTicks   uint64 `json:"end_ticks"`
+}
+
+// DurationNs returns the range duration in nanoseconds using the provided timebase.
+func (r TimestampRange) DurationNs(numer, denom uint64) uint64 {
+	return ticksToNs(r.StartTicks, r.EndTicks, numer, denom)
 }
 
 // TimelineInfo contains timeline data extracted from APSTimelineData blobs.
 type TimelineInfo struct {
 	CommandBufferTimestamps []CommandBufferTimestamp `json:"command_buffer_timestamps"`
+	RestoreTimestamps       []TimestampRange         `json:"restore_timestamps,omitempty"`
 	EncoderProfiles         []EncoderProfile         `json:"encoder_profiles,omitempty"` // GPRWCNTR data per encoder
 	TimebaseNumer           uint64                   `json:"timebase_numer"`             // Tick-to-ns numerator (e.g., 125)
 	TimebaseDenom           uint64                   `json:"timebase_denom"`             // Tick-to-ns denominator (e.g., 3)
 	AbsoluteTime            uint64                   `json:"absolute_time"`              // Capture start time in ticks
+	ContinuousTime          uint64                   `json:"continuous_time,omitempty"`
+	PState                  int                      `json:"pstate,omitempty"`
+	ReplayerGPUTimeNs       uint64                   `json:"replayer_gpu_time_ns,omitempty"`
+	CommandBufferActiveNs   uint64                   `json:"command_buffer_active_time_ns,omitempty"`
+	CommandBufferWallNs     uint64                   `json:"command_buffer_wall_time_ns,omitempty"`
+	RestoreActiveNs         uint64                   `json:"restore_active_time_ns,omitempty"`
+	RestoreWallNs           uint64                   `json:"restore_wall_time_ns,omitempty"`
 }
 
 // EncoderProfile contains GPRWCNTR profiler data for a single encoder.
@@ -125,20 +142,23 @@ const (
 
 // StreamDataStats contains all parsed statistics from streamData.
 type StreamDataStats struct {
-	Pipelines           []PipelineStats     `json:"pipelines"`
-	Dispatches          []DispatchInfo      `json:"dispatches"`     // Per-dispatch timing and metadata
-	FunctionNames       []string            `json:"function_names"` // Unique function names from strings array
-	EncoderTimings      []EncoderTimingInfo `json:"encoder_timings"`
-	Timeline            *TimelineInfo       `json:"timeline,omitempty"` // CB timestamps from APSTimelineData
-	APSTimelineData     [][]byte            `json:"-"`                  // Raw APSTimelineData blobs (nested plists)
-	NumEncoders         int                 `json:"num_encoders"`
-	NumGPUCommands      int                 `json:"num_gpu_commands"`
-	NumPipelines        int                 `json:"num_pipelines"`
-	TotalTimeUs         int                 `json:"total_time_us"` // Backward-compatible alias for TotalEncoderTimeUs.
-	TotalEncoderTimeUs  int                 `json:"total_encoder_time_us"`
-	TotalDispatchTimeUs int                 `json:"total_dispatch_time_us"`
-	EffectiveGPUTimeUs  *int                `json:"effective_gpu_time_us"` // Not yet parsed from Xcode's effective-time metric.
-	TimingSource        string              `json:"timing_source"`
+	Pipelines             []PipelineStats     `json:"pipelines"`
+	Dispatches            []DispatchInfo      `json:"dispatches"`     // Per-dispatch timing and metadata
+	FunctionNames         []string            `json:"function_names"` // Unique function names from strings array
+	EncoderTimings        []EncoderTimingInfo `json:"encoder_timings"`
+	Timeline              *TimelineInfo       `json:"timeline,omitempty"` // CB timestamps from APSTimelineData
+	APSTimelineData       [][]byte            `json:"-"`                  // Raw APSTimelineData blobs (nested plists)
+	NumEncoders           int                 `json:"num_encoders"`
+	NumGPUCommands        int                 `json:"num_gpu_commands"`
+	NumPipelines          int                 `json:"num_pipelines"`
+	TotalTimeUs           int                 `json:"total_time_us"` // Backward-compatible alias for TotalEncoderTimeUs.
+	TotalEncoderTimeUs    int                 `json:"total_encoder_time_us"`
+	TotalDispatchTimeUs   int                 `json:"total_dispatch_time_us"`
+	EffectiveGPUTimeUs    *int                `json:"effective_gpu_time_us"` // APSTimelineData ReplayerGPUTime, when present.
+	EffectiveGPUTimeNs    *uint64             `json:"effective_gpu_time_ns,omitempty"`
+	CommandBufferActiveNs uint64              `json:"command_buffer_active_time_ns,omitempty"`
+	CommandBufferWallNs   uint64              `json:"command_buffer_wall_time_ns,omitempty"`
+	TimingSource          string              `json:"timing_source"`
 }
 
 // ParseStreamData parses the streamData plist from a .gpuprofiler_raw directory.
@@ -244,12 +264,38 @@ func ParseStreamData(gpuprofilerDir string, addressToName ...map[uint64]string) 
 			stats.APSTimelineData = extractDataArray(objects, obj1, "APSTimelineData")
 			if len(stats.APSTimelineData) > 0 {
 				stats.Timeline = parseAPSTimelineData(stats.APSTimelineData)
+				stats.applyTimelineTiming()
 			}
 		}
 	}
 
-	stats.TimingSource = "streamData encoderInfoData/gpuCommandInfoData cumulative offsets; not Xcode Effective GPU Time"
+	stats.setTimingSource()
 	return stats, nil
+}
+
+func (stats *StreamDataStats) applyTimelineTiming() {
+	if stats.Timeline == nil {
+		return
+	}
+	stats.CommandBufferActiveNs = stats.Timeline.CommandBufferActiveNs
+	stats.CommandBufferWallNs = stats.Timeline.CommandBufferWallNs
+	if stats.Timeline.ReplayerGPUTimeNs > 0 {
+		ns := stats.Timeline.ReplayerGPUTimeNs
+		us := int(ns / 1000)
+		stats.EffectiveGPUTimeNs = &ns
+		stats.EffectiveGPUTimeUs = &us
+	}
+}
+
+func (stats *StreamDataStats) setTimingSource() {
+	switch {
+	case stats.EffectiveGPUTimeNs != nil:
+		stats.TimingSource = "APSTimelineData ReplayerGPUTime (Xcode Effective GPU Time)"
+	case stats.CommandBufferActiveNs > 0:
+		stats.TimingSource = "APSTimelineData Command Buffer Timestamps active time; encoderInfoData/gpuCommandInfoData cumulative offsets"
+	default:
+		stats.TimingSource = "streamData encoderInfoData/gpuCommandInfoData cumulative offsets"
+	}
 }
 
 // extractFunctionNames extracts kernel function names from the strings array.
@@ -762,6 +808,7 @@ func parseAPSTimelineData(blobs [][]byte) *TimelineInfo {
 
 	// Parse encoder profiler data from blobs 1-11 (GPRWCNTR format)
 	info.EncoderProfiles = parseEncoderProfileBlobs(blobs, info.TimebaseNumer, info.TimebaseDenom)
+	info.computeTimingTotals()
 
 	return info
 }
@@ -834,6 +881,18 @@ func parseTimelineMetadataBlob(data []byte, info *TimelineInfo) bool {
 			}
 		case "Absolute Time":
 			info.AbsoluteTime = plistUint64(val)
+		case "Continuous Time":
+			info.ContinuousTime = plistUint64(val)
+		case "PState":
+			info.PState = int(plistUint64(val))
+		case "ReplayerGPUTime":
+			if v, ok := val.(float64); ok && v > 0 {
+				info.ReplayerGPUTimeNs = uint64(v*1e9 + 0.5)
+			}
+		case "Restore Timestamps":
+			if ranges := parseTimestampRanges(val, objects); len(ranges) > 0 {
+				info.RestoreTimestamps = ranges
+			}
 		case "Timebase":
 			if m, ok := val.(map[string]any); ok {
 				if arr, ok := m["NS.objects"].([]any); ok && len(arr) >= 2 {
@@ -849,6 +908,50 @@ func parseTimelineMetadataBlob(data []byte, info *TimelineInfo) bool {
 	}
 
 	return found
+}
+
+func parseTimestampRanges(val any, objects []any) []TimestampRange {
+	m, ok := val.(map[string]any)
+	if !ok {
+		return nil
+	}
+	arr, ok := m["NS.objects"].([]any)
+	if !ok {
+		return nil
+	}
+	ranges := make([]TimestampRange, 0, len(arr))
+	for i, elem := range arr {
+		uid, ok := elem.(plist.UID)
+		if !ok || int(uid) >= len(objects) {
+			continue
+		}
+		pair, ok := objects[int(uid)].(map[string]any)
+		if !ok {
+			continue
+		}
+		pairObjects, ok := pair["NS.objects"].([]any)
+		if !ok || len(pairObjects) < 2 {
+			continue
+		}
+		start := uidValue(pairObjects[0], objects)
+		end := uidValue(pairObjects[1], objects)
+		if start == 0 && end == 0 {
+			continue
+		}
+		ranges = append(ranges, TimestampRange{
+			Index:      i,
+			StartTicks: start,
+			EndTicks:   end,
+		})
+	}
+	return ranges
+}
+
+func uidValue(v any, objects []any) uint64 {
+	if uid, ok := v.(plist.UID); ok && int(uid) < len(objects) {
+		return plistUint64(objects[int(uid)])
+	}
+	return plistUint64(v)
 }
 
 // parseCBTimestamps parses "Command Buffer Timestamps" data.
@@ -868,6 +971,57 @@ func parseCBTimestamps(data []byte, info *TimelineInfo) {
 			EndTicks:   end,
 		})
 	}
+}
+
+func (info *TimelineInfo) computeTimingTotals() {
+	if info == nil {
+		return
+	}
+	info.CommandBufferActiveNs, info.CommandBufferWallNs = rangeTotals(info.CommandBufferTimestamps, info.TimebaseNumer, info.TimebaseDenom)
+	info.RestoreActiveNs, info.RestoreWallNs = rangeTotals(info.RestoreTimestamps, info.TimebaseNumer, info.TimebaseDenom)
+}
+
+type tickRange interface {
+	rangeTicks() (uint64, uint64)
+}
+
+func (cb CommandBufferTimestamp) rangeTicks() (uint64, uint64) {
+	return cb.StartTicks, cb.EndTicks
+}
+
+func (r TimestampRange) rangeTicks() (uint64, uint64) {
+	return r.StartTicks, r.EndTicks
+}
+
+func rangeTotals[T tickRange](ranges []T, numer, denom uint64) (activeNs, wallNs uint64) {
+	var minStart, maxEnd uint64
+	for _, r := range ranges {
+		start, end := r.rangeTicks()
+		if end < start {
+			continue
+		}
+		activeNs += ticksToNs(start, end, numer, denom)
+		if minStart == 0 || start < minStart {
+			minStart = start
+		}
+		if end > maxEnd {
+			maxEnd = end
+		}
+	}
+	if maxEnd >= minStart && minStart != 0 {
+		wallNs = ticksToNs(minStart, maxEnd, numer, denom)
+	}
+	return activeNs, wallNs
+}
+
+func ticksToNs(start, end, numer, denom uint64) uint64 {
+	if end < start {
+		return 0
+	}
+	if denom == 0 {
+		denom = 1
+	}
+	return (end - start) * numer / denom
 }
 
 // plistUint64 extracts a uint64 from various plist number types.
