@@ -85,6 +85,41 @@ func streamDisplayDuration(stats *counter.StreamDataStats) (uint64, string) {
 	}
 }
 
+func dispatchSIMDGroupsByIndex(t *trace.Trace, stats *counter.StreamDataStats) []int64 {
+	if t == nil || stats == nil || len(stats.Dispatches) == 0 || len(t.CaptureData) == 0 {
+		return nil
+	}
+	dispatches, err := t.ParseDispatchInRegion(t.CaptureData, 0)
+	if err != nil || len(dispatches) != len(stats.Dispatches) {
+		return nil
+	}
+	groups := make([]int64, len(dispatches))
+	for i, d := range dispatches {
+		groups[i] = dispatchSIMDGroups(d)
+	}
+	return groups
+}
+
+func dispatchSIMDGroups(d trace.DispatchThreads) int64 {
+	const simdWidth uint64 = 32
+	tgX, tgY, tgZ := uint64(1), uint64(1), uint64(1)
+	if d.ThreadsPerGroupX > 0 {
+		tgX = (d.ThreadsX + d.ThreadsPerGroupX - 1) / d.ThreadsPerGroupX
+	}
+	if d.ThreadsPerGroupY > 0 {
+		tgY = (d.ThreadsY + d.ThreadsPerGroupY - 1) / d.ThreadsPerGroupY
+	}
+	if d.ThreadsPerGroupZ > 0 {
+		tgZ = (d.ThreadsZ + d.ThreadsPerGroupZ - 1) / d.ThreadsPerGroupZ
+	}
+	threadsPerGroup := d.ThreadsPerGroupX * d.ThreadsPerGroupY * d.ThreadsPerGroupZ
+	if threadsPerGroup == 0 {
+		return 0
+	}
+	totalThreads := tgX * tgY * tgZ * threadsPerGroup
+	return int64((totalThreads + simdWidth - 1) / simdWidth)
+}
+
 // ToPprofWithMetrics converts GPU trace timing metrics to pprof format with improved accuracy.
 // This version constructs a full hierarchy (GPU -> Queue -> CommandBuffer -> Encoder)
 // and includes dependency information.
@@ -191,6 +226,10 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 	}
 	if useDispatchTiming {
 		applyStreamTimingMetadata(prof, streamStats)
+	}
+	dispatchSIMDGroups := dispatchSIMDGroupsByIndex(t, streamStats)
+	if len(dispatchSIMDGroups) > 0 {
+		prof.Comments = append(prof.Comments, "gputrace simd_groups_source: capture dispatch geometry")
 	}
 
 	// Create root node
@@ -488,54 +527,56 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 		// Use 1-based index to match counters sequential ID
 		lookupKey := uint64(i + 1)
 		if m, ok := metricsMap[lookupKey]; ok {
-			// Hardware metrics matching Xcode's view (indices 3-6)
-			// Calculate SIMD groups from kernel invocations if not set
-			// SIMD width on Apple Silicon is 32 threads
-			simdGroups := m.SIMDGroups
-			if simdGroups == 0 && m.ExecutionCount > 0 {
-				simdGroups = m.ExecutionCount / 32
+			if !useDispatchTiming {
+				// Hardware metrics matching Xcode's view (indices 3-6)
+				// Calculate SIMD groups from kernel invocations if not set
+				// SIMD width on Apple Silicon is 32 threads
+				simdGroups := m.SIMDGroups
+				if simdGroups == 0 && m.ExecutionCount > 0 {
+					simdGroups = m.ExecutionCount / 32
+				}
+				values[3] = int64(simdGroups)      // simd_groups - Xcode "Cost" is based on this
+				values[4] = int64(m.AllocatedRegs) // alloc_regs
+				values[5] = int64(m.HighRegister)  // high_reg
+				values[6] = int64(m.SpilledBytes)  // spilled_bytes
+
+				// Utilization percentages (scale by 100 for 2 decimal precision)
+				values[7] = int64(m.ALUUtilization * 100)             // alu_util
+				values[8] = int64(m.KernelOccupancy * 100)            // occupancy
+				values[9] = int64(m.ComputeShaderUtilization * 100)   // compute_util
+				values[10] = int64(m.FragmentShaderUtilization * 100) // fragment_util
+				values[11] = int64(m.VertexShaderUtilization * 100)   // vertex_util
+				values[12] = int64(m.F32Utilization * 100)            // f32_util
+
+				// Limiter percentages (scale by 100)
+				values[13] = int64(m.F32Limiter * 100)                   // f32_limiter
+				values[14] = int64(m.L1CacheLimiter * 100)               // l1_limiter
+				values[15] = int64(m.LastLevelCacheLimiter * 100)        // llc_limiter
+				values[16] = int64(m.ControlFlowLimiter * 100)           // control_flow_limiter
+				values[17] = int64(m.BufferL1MissRate * 100)             // buffer_l1_miss
+				values[18] = int64(m.InstructionThroughputLimiter * 100) // instruction_throughput
+
+				// Byte metrics
+				values[19] = int64(m.BytesReadFromDeviceMemory)      // read_bytes
+				values[20] = int64(m.BytesWrittenToDeviceMemory)     // write_bytes
+				values[21] = int64(m.BufferDeviceMemoryBytesRead)    // buffer_read_bytes
+				values[22] = int64(m.BufferDeviceMemoryBytesWritten) // buffer_write_bytes
+
+				// Bandwidth metrics (scale by 1000 to preserve 3 decimal places, GB/s -> MB/s * 1000)
+				values[23] = int64(m.DeviceMemoryBandwidthGBps * 1000) // device_bandwidth
+				values[24] = int64(m.BufferL1ReadBandwidth * 1000)     // buffer_l1_read_bw
+				values[25] = int64(m.BufferL1WriteBandwidth * 1000)    // buffer_l1_write_bw
+
+				// Instruction counts from PipelineStats/streamData (indices 26-33)
+				values[26] = int64(m.InstructionCount)       // instructions
+				values[27] = int64(m.ALUInstructionCount)    // alu_instructions
+				values[28] = int64(m.FP32InstructionCount)   // fp32_instructions
+				values[29] = int64(m.FP16InstructionCount)   // fp16_instructions
+				values[30] = int64(m.INT32InstructionCount)  // int32_instructions
+				values[31] = int64(m.INT16InstructionCount)  // int16_instructions
+				values[32] = int64(m.BranchInstructionCount) // branch_instructions
+				values[33] = int64(m.ThreadgroupMemory)      // threadgroup_mem
 			}
-			values[3] = int64(simdGroups)      // simd_groups - Xcode "Cost" is based on this
-			values[4] = int64(m.AllocatedRegs) // alloc_regs
-			values[5] = int64(m.HighRegister)  // high_reg
-			values[6] = int64(m.SpilledBytes)  // spilled_bytes
-
-			// Utilization percentages (scale by 100 for 2 decimal precision)
-			values[7] = int64(m.ALUUtilization * 100)             // alu_util
-			values[8] = int64(m.KernelOccupancy * 100)            // occupancy
-			values[9] = int64(m.ComputeShaderUtilization * 100)   // compute_util
-			values[10] = int64(m.FragmentShaderUtilization * 100) // fragment_util
-			values[11] = int64(m.VertexShaderUtilization * 100)   // vertex_util
-			values[12] = int64(m.F32Utilization * 100)            // f32_util
-
-			// Limiter percentages (scale by 100)
-			values[13] = int64(m.F32Limiter * 100)                   // f32_limiter
-			values[14] = int64(m.L1CacheLimiter * 100)               // l1_limiter
-			values[15] = int64(m.LastLevelCacheLimiter * 100)        // llc_limiter
-			values[16] = int64(m.ControlFlowLimiter * 100)           // control_flow_limiter
-			values[17] = int64(m.BufferL1MissRate * 100)             // buffer_l1_miss
-			values[18] = int64(m.InstructionThroughputLimiter * 100) // instruction_throughput
-
-			// Byte metrics
-			values[19] = int64(m.BytesReadFromDeviceMemory)      // read_bytes
-			values[20] = int64(m.BytesWrittenToDeviceMemory)     // write_bytes
-			values[21] = int64(m.BufferDeviceMemoryBytesRead)    // buffer_read_bytes
-			values[22] = int64(m.BufferDeviceMemoryBytesWritten) // buffer_write_bytes
-
-			// Bandwidth metrics (scale by 1000 to preserve 3 decimal places, GB/s -> MB/s * 1000)
-			values[23] = int64(m.DeviceMemoryBandwidthGBps * 1000) // device_bandwidth
-			values[24] = int64(m.BufferL1ReadBandwidth * 1000)     // buffer_l1_read_bw
-			values[25] = int64(m.BufferL1WriteBandwidth * 1000)    // buffer_l1_write_bw
-
-			// Instruction counts from PipelineStats/streamData (indices 26-33)
-			values[26] = int64(m.InstructionCount)       // instructions
-			values[27] = int64(m.ALUInstructionCount)    // alu_instructions
-			values[28] = int64(m.FP32InstructionCount)   // fp32_instructions
-			values[29] = int64(m.FP16InstructionCount)   // fp16_instructions
-			values[30] = int64(m.INT32InstructionCount)  // int32_instructions
-			values[31] = int64(m.INT16InstructionCount)  // int16_instructions
-			values[32] = int64(m.BranchInstructionCount) // branch_instructions
-			values[33] = int64(m.ThreadgroupMemory)      // threadgroup_mem
 
 			matches++
 		}
@@ -683,6 +724,9 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 			dispValues := make([]int64, 36)
 			dispValues[0] = int64(d.DurationUs) * 1000 // Convert µs to ns
 			dispValues[1] = 1                          // count
+			if d.Index >= 0 && d.Index < len(dispatchSIMDGroups) {
+				dispValues[3] = dispatchSIMDGroups[d.Index]
+			}
 
 			// Add execution cost if available
 			if d.ExecutionCostPct > 0 {
@@ -692,6 +736,8 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 			// Add instruction count from pipeline if available
 			if d.PipelineIndex >= 0 && d.PipelineIndex < len(streamStats.Pipelines) {
 				p := streamStats.Pipelines[d.PipelineIndex]
+				dispValues[4] = int64(p.TemporaryRegisterCount)
+				dispValues[6] = int64(p.SpilledBytes)
 				dispValues[26] = int64(p.InstructionCount)
 				dispValues[27] = int64(p.ALUInstructionCount)
 				dispValues[28] = int64(p.FP32InstructionCount)
@@ -718,6 +764,9 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 				"encoder_idx":  {int64(d.EncoderIndex)},
 				"duration_us":  {int64(d.DurationUs)},
 				"cost_pct":     {int64(costPct * 100)}, // Scale for precision
+			}
+			if d.Index >= 0 && d.Index < len(dispatchSIMDGroups) {
+				dispNumLabels["simd_groups"] = []int64{dispatchSIMDGroups[d.Index]}
 			}
 
 			prof.Sample = append(prof.Sample, &profile.Sample{

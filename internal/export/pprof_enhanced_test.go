@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/pprof/profile"
 	"github.com/tmc/gputrace/internal/counter"
+	"github.com/tmc/gputrace/internal/trace"
 )
 
 func TestApplyStreamTimingMetadata(t *testing.T) {
@@ -54,5 +55,24 @@ func TestAddStreamTimingLabels(t *testing.T) {
 	}
 	if got := labels["display_duration_source"]; len(got) != 1 || got[0] != "APSTimelineData command buffer active time" {
 		t.Fatalf("display_duration_source label = %#v", got)
+	}
+}
+
+func TestDispatchSIMDGroups(t *testing.T) {
+	dispatch := trace.DispatchThreads{
+		ThreadsX:         1000,
+		ThreadsY:         1,
+		ThreadsZ:         1,
+		ThreadsPerGroupX: 256,
+		ThreadsPerGroupY: 1,
+		ThreadsPerGroupZ: 1,
+	}
+	if got, want := dispatchSIMDGroups(dispatch), int64(32); got != want {
+		t.Fatalf("dispatchSIMDGroups = %d, want %d", got, want)
+	}
+
+	dispatch.ThreadsPerGroupX = 0
+	if got := dispatchSIMDGroups(dispatch); got != 0 {
+		t.Fatalf("dispatchSIMDGroups with missing group size = %d, want 0", got)
 	}
 }
