@@ -151,7 +151,7 @@ func TestAddDispatchKernelEventsIncludesXcodeShaderArgs(t *testing.T) {
 		total:  4096,
 	}
 
-	if !addDispatchKernelEvents(timeline, stats, simd, shaderReport, perfStats) {
+	if !addDispatchKernelEvents(timeline, stats, simd, shaderReport, perfStats, nil) {
 		t.Fatal("addDispatchKernelEvents returned false")
 	}
 	if got := len(timeline.Kernels); got != 1 {
@@ -187,6 +187,55 @@ func TestAddDispatchKernelEventsIncludesXcodeShaderArgs(t *testing.T) {
 	checkArg("shader_duration_ns", uint64(7000))
 	checkArg("gprwcntr_sample_count", 3)
 	checkArg("xcode_view", "Shaders")
+}
+
+func TestAddDispatchKernelEventsUsesEncoderCounterFallback(t *testing.T) {
+	timeline := &Timeline{
+		Encoders: []EncoderInfo{{
+			Index:     0,
+			Label:     "encoder0",
+			Type:      "compute",
+			StartTime: 1000,
+			EndTime:   21000,
+			Duration:  20000,
+		}},
+	}
+	stats := &counter.StreamDataStats{
+		Pipelines: []counter.PipelineStats{{
+			PipelineID:             42,
+			TemporaryRegisterCount: 13,
+		}},
+		Dispatches: []counter.DispatchInfo{{
+			Index:         0,
+			PipelineIndex: 0,
+			PipelineID:    42,
+			EncoderIndex:  0,
+			DurationUs:    5,
+		}},
+	}
+	encoderMetrics := []counter.EncoderCounterMetrics{{
+		EncoderIndex:       0,
+		KernelOccupancy:    62.5,
+		ALUUtilization:     71.25,
+		ComputeUtilization: 80,
+	}}
+
+	if !addDispatchKernelEvents(timeline, stats, timelineDispatchSIMDStats{}, nil, nil, encoderMetrics) {
+		t.Fatal("addDispatchKernelEvents returned false")
+	}
+	args := timeline.Events[0].Args
+	if got, want := args["occupancy_pct"], 62.5; got != want {
+		t.Fatalf("occupancy_pct = %#v, want %#v", got, want)
+	}
+	if got, want := args["alu_utilization_pct"], 71.25; got != want {
+		t.Fatalf("alu_utilization_pct = %#v, want %#v", got, want)
+	}
+	if got, want := args["occupancy_source"], "encoder counter fallback"; got != want {
+		t.Fatalf("occupancy_source = %#v, want %#v", got, want)
+	}
+	if got, want := args["alu_utilization_source"], "encoder counter fallback"; got != want {
+		t.Fatalf("alu_utilization_source = %#v, want %#v", got, want)
+	}
 }
 
 func TestTimelineDispatchSIMDGroup(t *testing.T) {
