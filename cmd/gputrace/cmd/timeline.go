@@ -779,7 +779,8 @@ func generateCounterTracks(trace *gputrace.Trace, timeline *Timeline) []CounterT
 	if err == nil && len(perfStats.ShaderMetrics) > 0 {
 		// Also get PipelineStats from streamData for instruction counts
 		streamStats, _ := gputrace.ExtractPipelineStats(trace)
-		return generateCounterTracksFromPerfData(perfStats, streamStats, timeline)
+		encoderMetrics, _ := counter.PopulateEncoderMetricsFromPerfCounterStats(trace, perfStats)
+		return generateCounterTracksFromPerfData(perfStats, streamStats, encoderMetrics, timeline)
 	}
 
 	// No synthetic data - return empty if no real perf data available
@@ -787,7 +788,7 @@ func generateCounterTracks(trace *gputrace.Trace, timeline *Timeline) []CounterT
 }
 
 // generateCounterTracksFromPerfData creates counter tracks from real performance counter data.
-func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, streamStats *gputrace.StreamDataStats, timeline *Timeline) []CounterTrack {
+func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, streamStats *gputrace.StreamDataStats, encoderMetrics []counter.EncoderCounterMetrics, timeline *Timeline) []CounterTrack {
 	tracks := make([]CounterTrack, 0)
 
 	// Initialize counter tracks
@@ -841,6 +842,15 @@ func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, str
 			shaderMetricsMap[metric.ShaderName] = metric
 		}
 	}
+	encoderMetricsByIndex := make(map[int]*counter.EncoderCounterMetrics)
+	encoderMetricsByLabel := make(map[string]*counter.EncoderCounterMetrics)
+	for i := range encoderMetrics {
+		m := &encoderMetrics[i]
+		encoderMetricsByIndex[m.EncoderIndex] = m
+		if m.EncoderLabel != "" {
+			encoderMetricsByLabel[m.EncoderLabel] = m
+		}
+	}
 
 	// Build map of function name to PipelineStats for instruction counts
 	// This provides instruction counts by kernel name directly
@@ -862,8 +872,14 @@ func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, str
 		if m, exists := shaderMetricsMap[encoder.Label]; exists {
 			metrics = m
 		}
+		var encoderMetric *counter.EncoderCounterMetrics
+		if m, exists := encoderMetricsByLabel[encoder.Label]; exists {
+			encoderMetric = m
+		} else if m, exists := encoderMetricsByIndex[encoder.Index]; exists {
+			encoderMetric = m
+		}
 
-		// Calculate values from real hardware data or use defaults
+		// Calculate values from real hardware data.
 		var activeCores float64
 		var occupancy float64
 		var aluUtil float64
@@ -888,24 +904,24 @@ func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, str
 				if activeCores < 1.0 {
 					activeCores = 1.0
 				}
-			} else {
-				activeCores = 4.0 // Default
 			}
 
 			// Calculate bandwidth from memory bandwidth counter (convert bytes to GB/s)
 			if metrics.MemoryBandwidth > 0 && encoder.Duration > 0 {
 				durationSec := float64(encoder.Duration) / 1e9
 				bandwidth = float64(metrics.MemoryBandwidth) / 1e9 / durationSec
-			} else {
-				bandwidth = 50.0 // Default
 			}
 
 			// Estimate throughput from occupancy and ALU utilization
-			throughput = (occupancy + aluUtil) / 2.0
+			if occupancy > 0 && aluUtil > 0 {
+				throughput = (occupancy + aluUtil) / 2.0
+			}
 
 			// Occupancy Manager: Tracks how well the GPU scheduler manages threadgroup dispatch
 			// High when occupancy is maintained well, low when there are bubbles
-			occupancyManager = occupancy * 0.95 // Typically slightly lower than raw occupancy
+			if occupancy > 0 {
+				occupancyManager = occupancy * 0.95 // Typically slightly lower than raw occupancy
+			}
 
 			// Shader Launch Limiter: Percentage of time shader launches are limited by resources
 			// High values indicate resource contention (registers, threadgroup memory, etc.)
@@ -917,43 +933,47 @@ func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, str
 					regPressure = 1.0
 				}
 				shaderLaunchLimiter = regPressure * 100.0
-			} else {
-				// Estimate from inverse of occupancy
-				shaderLaunchLimiter = (1.0 - occupancy/100.0) * 100.0
 			}
-		} else {
+		}
+		if encoderMetric != nil {
+			if occupancy == 0 {
+				occupancy = encoderMetric.KernelOccupancy
+			}
+			if aluUtil == 0 {
+				aluUtil = encoderMetric.ALUUtilization
+			}
+			if bandwidth == 0 {
+				switch {
+				case encoderMetric.DeviceMemoryBandwidthGBps > 0:
+					bandwidth = encoderMetric.DeviceMemoryBandwidthGBps
+				case encoderMetric.MemoryBandwidth > 0 && encoder.Duration > 0:
+					durationSec := float64(encoder.Duration) / 1e9
+					bandwidth = float64(encoderMetric.MemoryBandwidth) / 1e9 / durationSec
+				}
+			}
+			if throughput == 0 {
+				throughput = encoderMetric.InstructionThroughputUtil
+			}
+			if occupancyManager == 0 {
+				occupancyManager = encoderMetric.ComputeUtilization
+			}
+			if shaderLaunchLimiter == 0 {
+				shaderLaunchLimiter = encoderMetric.ComputeShaderLaunchLimiter
+			}
+		}
+		if metrics == nil && encoderMetric == nil {
 			// No real data for this encoder - skip it (no synthetic data)
 			continue
 		}
 
 		// Add samples at start and end of encoder execution
-		activeCoresTrack.Samples = append(activeCoresTrack.Samples,
-			CounterSample{Timestamp: encoder.StartTime, Value: activeCores},
-			CounterSample{Timestamp: encoder.EndTime, Value: activeCores})
-
-		occupancyTrack.Samples = append(occupancyTrack.Samples,
-			CounterSample{Timestamp: encoder.StartTime, Value: occupancy},
-			CounterSample{Timestamp: encoder.EndTime, Value: occupancy})
-
-		aluTrack.Samples = append(aluTrack.Samples,
-			CounterSample{Timestamp: encoder.StartTime, Value: aluUtil},
-			CounterSample{Timestamp: encoder.EndTime, Value: aluUtil})
-
-		bandwidthTrack.Samples = append(bandwidthTrack.Samples,
-			CounterSample{Timestamp: encoder.StartTime, Value: bandwidth},
-			CounterSample{Timestamp: encoder.EndTime, Value: bandwidth})
-
-		throughputTrack.Samples = append(throughputTrack.Samples,
-			CounterSample{Timestamp: encoder.StartTime, Value: throughput},
-			CounterSample{Timestamp: encoder.EndTime, Value: throughput})
-
-		occupancyManagerTrack.Samples = append(occupancyManagerTrack.Samples,
-			CounterSample{Timestamp: encoder.StartTime, Value: occupancyManager},
-			CounterSample{Timestamp: encoder.EndTime, Value: occupancyManager})
-
-		shaderLaunchLimiterTrack.Samples = append(shaderLaunchLimiterTrack.Samples,
-			CounterSample{Timestamp: encoder.StartTime, Value: shaderLaunchLimiter},
-			CounterSample{Timestamp: encoder.EndTime, Value: shaderLaunchLimiter})
+		appendCounterTrackSample(&activeCoresTrack, encoder, activeCores)
+		appendCounterTrackSample(&occupancyTrack, encoder, occupancy)
+		appendCounterTrackSample(&aluTrack, encoder, aluUtil)
+		appendCounterTrackSample(&bandwidthTrack, encoder, bandwidth)
+		appendCounterTrackSample(&throughputTrack, encoder, throughput)
+		appendCounterTrackSample(&occupancyManagerTrack, encoder, occupancyManager)
+		appendCounterTrackSample(&shaderLaunchLimiterTrack, encoder, shaderLaunchLimiter)
 	}
 
 	// Calculate statistics for each track
@@ -1212,6 +1232,15 @@ func calculateTrackStats(track *CounterTrack) {
 	}
 
 	track.AvgValue = sum / float64(len(track.Samples))
+}
+
+func appendCounterTrackSample(track *CounterTrack, encoder EncoderInfo, value float64) {
+	if track == nil || value <= 0 {
+		return
+	}
+	track.Samples = append(track.Samples,
+		CounterSample{Timestamp: encoder.StartTime, Value: value},
+		CounterSample{Timestamp: encoder.EndTime, Value: value})
 }
 
 func annotateDispatchExecutionCosts(stats *counter.StreamDataStats, profilerDir string) {

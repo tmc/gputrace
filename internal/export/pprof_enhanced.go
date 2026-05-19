@@ -88,6 +88,13 @@ func streamDisplayDuration(stats *counter.StreamDataStats) (uint64, string) {
 	}
 }
 
+func profileBasisPoints(v float64) int64 {
+	if v <= 0 {
+		return 0
+	}
+	return int64(math.Round(v * 100))
+}
+
 func dispatchSIMDGroupsByIndex(t *trace.Trace, stats *counter.StreamDataStats) []int64 {
 	if t == nil || stats == nil || len(stats.Dispatches) == 0 || len(t.CaptureData) == 0 {
 		return nil
@@ -296,21 +303,21 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 			{Type: "high_reg", Unit: "count"},      // High Register
 			{Type: "spilled_bytes", Unit: "bytes"}, // Spilled Bytes
 
-			// Percentage metrics - utilization (indices 7-12)
-			{Type: "alu_util", Unit: "percent"},
-			{Type: "occupancy", Unit: "percent"},
-			{Type: "compute_util", Unit: "percent"},
-			{Type: "fragment_util", Unit: "percent"},
-			{Type: "vertex_util", Unit: "percent"},
-			{Type: "f32_util", Unit: "percent"},
+			// Percentage metrics - utilization (indices 7-12).
+			{Type: "alu_util", Unit: "basis_points"},
+			{Type: "occupancy", Unit: "basis_points"},
+			{Type: "compute_util", Unit: "basis_points"},
+			{Type: "fragment_util", Unit: "basis_points"},
+			{Type: "vertex_util", Unit: "basis_points"},
+			{Type: "f32_util", Unit: "basis_points"},
 
-			// Percentage metrics - limiters (indices 13-18)
-			{Type: "f32_limiter", Unit: "percent"},
-			{Type: "l1_limiter", Unit: "percent"},
-			{Type: "llc_limiter", Unit: "percent"},
-			{Type: "control_flow_limiter", Unit: "percent"},
-			{Type: "buffer_l1_miss", Unit: "percent"},
-			{Type: "instruction_throughput", Unit: "percent"},
+			// Percentage metrics - limiters (indices 13-18).
+			{Type: "f32_limiter", Unit: "basis_points"},
+			{Type: "l1_limiter", Unit: "basis_points"},
+			{Type: "llc_limiter", Unit: "basis_points"},
+			{Type: "control_flow_limiter", Unit: "basis_points"},
+			{Type: "buffer_l1_miss", Unit: "basis_points"},
+			{Type: "instruction_throughput", Unit: "basis_points"},
 
 			// Byte metrics (indices 19-22)
 			{Type: "read_bytes", Unit: "bytes"},
@@ -371,6 +378,14 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 		)
 	}
 	dispatchExecutionCosts := dispatchExecutionCostValues(streamStats, executionCosts)
+	encoderCounters, _ := counter.PopulateEncoderMetricsFromPerfCounterStats(t, stats)
+	encoderCounterByIndex := make(map[int]*counter.EncoderCounterMetrics)
+	for i := range encoderCounters {
+		encoderCounterByIndex[encoderCounters[i].EncoderIndex] = &encoderCounters[i]
+	}
+	if len(encoderCounters) > 0 {
+		prof.Comments = append(prof.Comments, "gputrace encoder_counters_source: Counters_f_*.raw and Profiling_f_*.raw")
+	}
 
 	// Create root node
 	gpuTraceFunc := &profile.Function{
@@ -663,6 +678,7 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 		values[1] = 1        // count
 		// values[2] = edges (set later for dependency samples)
 		numLabels := make(map[string][]int64)
+		counterSource := false
 
 		// Use 1-based index to match counters sequential ID
 		lookupKey := uint64(i + 1)
@@ -681,20 +697,20 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 				values[6] = int64(m.SpilledBytes)  // spilled_bytes
 
 				// Utilization percentages (scale by 100 for 2 decimal precision)
-				values[7] = int64(m.ALUUtilization * 100)             // alu_util
-				values[8] = int64(m.KernelOccupancy * 100)            // occupancy
-				values[9] = int64(m.ComputeShaderUtilization * 100)   // compute_util
-				values[10] = int64(m.FragmentShaderUtilization * 100) // fragment_util
-				values[11] = int64(m.VertexShaderUtilization * 100)   // vertex_util
-				values[12] = int64(m.F32Utilization * 100)            // f32_util
+				values[7] = profileBasisPoints(m.ALUUtilization)             // alu_util
+				values[8] = profileBasisPoints(m.KernelOccupancy)            // occupancy
+				values[9] = profileBasisPoints(m.ComputeShaderUtilization)   // compute_util
+				values[10] = profileBasisPoints(m.FragmentShaderUtilization) // fragment_util
+				values[11] = profileBasisPoints(m.VertexShaderUtilization)   // vertex_util
+				values[12] = profileBasisPoints(m.F32Utilization)            // f32_util
 
 				// Limiter percentages (scale by 100)
-				values[13] = int64(m.F32Limiter * 100)                   // f32_limiter
-				values[14] = int64(m.L1CacheLimiter * 100)               // l1_limiter
-				values[15] = int64(m.LastLevelCacheLimiter * 100)        // llc_limiter
-				values[16] = int64(m.ControlFlowLimiter * 100)           // control_flow_limiter
-				values[17] = int64(m.BufferL1MissRate * 100)             // buffer_l1_miss
-				values[18] = int64(m.InstructionThroughputLimiter * 100) // instruction_throughput
+				values[13] = profileBasisPoints(m.F32Limiter)                   // f32_limiter
+				values[14] = profileBasisPoints(m.L1CacheLimiter)               // l1_limiter
+				values[15] = profileBasisPoints(m.LastLevelCacheLimiter)        // llc_limiter
+				values[16] = profileBasisPoints(m.ControlFlowLimiter)           // control_flow_limiter
+				values[17] = profileBasisPoints(m.BufferL1MissRate)             // buffer_l1_miss
+				values[18] = profileBasisPoints(m.InstructionThroughputLimiter) // instruction_throughput
 
 				// Byte metrics
 				values[19] = int64(m.BytesReadFromDeviceMemory)      // read_bytes
@@ -720,9 +736,55 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 
 			matches++
 		}
+		if m := encoderCounterByIndex[i]; m != nil {
+			if values[7] == 0 {
+				values[7] = profileBasisPoints(m.ALUUtilization)
+			}
+			if values[8] == 0 {
+				values[8] = profileBasisPoints(m.KernelOccupancy)
+			}
+			if values[9] == 0 {
+				if m.ComputeShaderUtilization > 0 {
+					values[9] = profileBasisPoints(m.ComputeShaderUtilization)
+				} else {
+					values[9] = profileBasisPoints(m.ComputeUtilization)
+				}
+			}
+			if values[10] == 0 {
+				values[10] = profileBasisPoints(m.FragmentShaderUtilization)
+			}
+			if values[11] == 0 {
+				values[11] = profileBasisPoints(m.VertexShaderUtilization)
+			}
+			if values[12] == 0 {
+				values[12] = profileBasisPoints(m.F32Utilization)
+			}
+			if values[13] == 0 {
+				values[13] = profileBasisPoints(m.F32Limiter)
+			}
+			if values[14] == 0 {
+				values[14] = profileBasisPoints(m.L1CacheLimiter)
+			}
+			if values[15] == 0 {
+				values[15] = profileBasisPoints(m.LastLevelCacheLimiter)
+			}
+			if values[16] == 0 {
+				values[16] = profileBasisPoints(m.ControlFlowLimiter)
+			}
+			if values[17] == 0 {
+				values[17] = profileBasisPoints(m.BufferL1MissRate)
+			}
+			if values[18] == 0 {
+				values[18] = profileBasisPoints(m.InstructionThroughputLimiter)
+			}
+			counterSource = true
+		}
 
 		labels := map[string][]string{
 			"label": {enc.Label},
+		}
+		if counterSource {
+			labels["counter_source"] = []string{"Counters_f_*.raw/Profiling_f_*.raw"}
 		}
 		addStreamTimingLabels(labels, streamStats)
 		if gridSize != "" {

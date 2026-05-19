@@ -119,3 +119,22 @@ func TestExecutionCostBasisPointsSumsTo10000(t *testing.T) {
 		t.Fatalf("basis point sum = %d, want %d", got, want)
 	}
 }
+
+func TestProfileBasisPoints(t *testing.T) {
+	tests := []struct {
+		name string
+		in   float64
+		want int64
+	}{
+		{"zero", 0, 0},
+		{"fractional percent", 0.805, 81},
+		{"whole percent", 80.5, 8050},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := profileBasisPoints(tt.in); got != tt.want {
+				t.Fatalf("profileBasisPoints(%v) = %d, want %d", tt.in, got, tt.want)
+			}
+		})
+	}
+}

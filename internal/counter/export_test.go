@@ -204,3 +204,60 @@ func TestExportComparison(t *testing.T) {
 		t.Logf("Note: Exported %d rows vs reference %d encoders", len(exportedRows)-1, len(csvData.Encoders))
 	}
 }
+
+func TestPopulateEncoderMetricsFromPerfCounterStats(t *testing.T) {
+	stats := &PerfCounterStats{
+		ShaderMetrics: []ShaderHardwareMetrics{{
+			ShaderName:                     "kernel0",
+			ALUUtilization:                 3.25,
+			KernelOccupancy:                0.81,
+			MemoryBandwidth:                4096,
+			ExecutionCount:                 7,
+			DeviceMemoryBandwidthGBps:      12.5,
+			ComputeShaderLaunchLimiter:     0.17,
+			L1CacheLimiter:                 0.04,
+			InstructionThroughputUtil:      2.5,
+			BytesReadFromDeviceMemory:      1024,
+			BufferDeviceMemoryBytesWritten: 512,
+		}},
+	}
+
+	got, err := PopulateEncoderMetricsFromPerfCounterStats(nil, stats)
+	if err != nil {
+		t.Fatalf("PopulateEncoderMetricsFromPerfCounterStats: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len(metrics) = %d, want 1", len(got))
+	}
+	m := got[0]
+	if m.EncoderIndex != 0 || m.EncoderLabel != "kernel0" || m.EncoderType != "compute" {
+		t.Fatalf("encoder identity = (%d, %q, %q), want (0, kernel0, compute)", m.EncoderIndex, m.EncoderLabel, m.EncoderType)
+	}
+	if m.ALUUtilization != 3.25 {
+		t.Fatalf("ALUUtilization = %v, want 3.25", m.ALUUtilization)
+	}
+	if m.KernelOccupancy != 0.81 {
+		t.Fatalf("KernelOccupancy = %v, want 0.81", m.KernelOccupancy)
+	}
+	if m.ComputeUtilization != 3.25 {
+		t.Fatalf("ComputeUtilization = %v, want 3.25", m.ComputeUtilization)
+	}
+	if m.MemoryBandwidth != 4096 || m.DeviceMemoryBandwidthGBps != 12.5 {
+		t.Fatalf("bandwidth = (%d, %v), want (4096, 12.5)", m.MemoryBandwidth, m.DeviceMemoryBandwidthGBps)
+	}
+	if m.ComputeShaderLaunchLimiter != 0.17 || m.L1CacheLimiter != 0.04 || m.InstructionThroughputUtil != 2.5 {
+		t.Fatalf("counter details not copied: %+v", m)
+	}
+	if m.DispatchCount != 7 {
+		t.Fatalf("DispatchCount = %d, want 7", m.DispatchCount)
+	}
+	if m.BytesReadFromDeviceMemory != 1024 || m.BufferDeviceMemoryBytesWritten != 512 {
+		t.Fatalf("memory byte counters not copied: %+v", m)
+	}
+}
+
+func TestPopulateEncoderMetricsFromPerfCounterStatsNilStats(t *testing.T) {
+	if _, err := PopulateEncoderMetricsFromPerfCounterStats(nil, nil); err == nil {
+		t.Fatal("PopulateEncoderMetricsFromPerfCounterStats(nil, nil) succeeded, want error")
+	}
+}

@@ -545,11 +545,25 @@ func PopulateEncoderMetricsFromBinaryParsing(t *trace.Trace) ([]EncoderCounterMe
 		return nil, err
 	}
 
-	// Also parse Kernel Occupancy from Profiling_f_*.raw files (gputrace-78)
-	profilingMetrics, err := ParseProfilingFiles(t)
-	if err != nil {
-		// Profiling data is optional - if not available, continue without it
-		profilingMetrics = nil
+	return PopulateEncoderMetricsFromPerfCounterStats(t, stats)
+}
+
+// PopulateEncoderMetricsFromPerfCounterStats converts parsed performance counter
+// data into encoder-level counter metrics.
+func PopulateEncoderMetricsFromPerfCounterStats(t *trace.Trace, stats *PerfCounterStats) ([]EncoderCounterMetrics, error) {
+	if stats == nil {
+		return nil, fmt.Errorf("nil performance counter stats")
+	}
+
+	var profilingMetrics []*ProfilingMetrics
+	if t != nil {
+		// Also parse Kernel Occupancy from Profiling_f_*.raw files (gputrace-78)
+		var err error
+		profilingMetrics, err = ParseProfilingFiles(t)
+		if err != nil {
+			// Profiling data is optional - if not available, continue without it
+			profilingMetrics = nil
+		}
 	}
 
 	// Create a map of encoder index to profiling metrics for easy lookup
