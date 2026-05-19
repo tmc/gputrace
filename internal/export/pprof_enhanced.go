@@ -2,6 +2,9 @@ package export
 
 import (
 	"fmt"
+	"math"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -15,6 +18,244 @@ import (
 
 // Type aliases
 var NewTimingMetricsExtractor = timing.NewTimingMetricsExtractor
+
+func applyStreamTimingMetadata(prof *profile.Profile, stats *counter.StreamDataStats) {
+	if prof == nil || stats == nil {
+		return
+	}
+	prof.DefaultSampleType = "time"
+	if stats.TotalDispatchTimeUs > 0 {
+		prof.DurationNanos = int64(stats.TotalDispatchTimeUs) * 1000
+	} else if stats.TotalEncoderTimeUs > 0 {
+		prof.DurationNanos = int64(stats.TotalEncoderTimeUs) * 1000
+	}
+	if prof.TimeNanos == 0 {
+		prof.TimeNanos = time.Now().UnixNano()
+	}
+
+	displayNs, displaySource := streamDisplayDuration(stats)
+	if stats.TimingSource != "" {
+		prof.Comments = append(prof.Comments, "gputrace timing_source: "+stats.TimingSource)
+	}
+	if displayNs > 0 {
+		prof.Comments = append(prof.Comments, fmt.Sprintf("gputrace display_duration_ns: %d", displayNs))
+	}
+	if displaySource != "" {
+		prof.Comments = append(prof.Comments, "gputrace display_duration_source: "+displaySource)
+	}
+	if stats.EffectiveGPUTimeNs != nil {
+		prof.Comments = append(prof.Comments, fmt.Sprintf("gputrace effective_gpu_time_ns: %d", *stats.EffectiveGPUTimeNs))
+	}
+	if stats.CommandBufferActiveNs > 0 {
+		prof.Comments = append(prof.Comments, fmt.Sprintf("gputrace command_buffer_active_time_ns: %d", stats.CommandBufferActiveNs))
+	}
+	if stats.CommandBufferWallNs > 0 {
+		prof.Comments = append(prof.Comments, fmt.Sprintf("gputrace command_buffer_wall_time_ns: %d", stats.CommandBufferWallNs))
+	}
+	if stats.TotalEncoderTimeUs > 0 {
+		prof.Comments = append(prof.Comments, fmt.Sprintf("gputrace encoder_span_ns: %d", int64(stats.TotalEncoderTimeUs)*1000))
+	}
+	if stats.TotalDispatchTimeUs > 0 {
+		prof.Comments = append(prof.Comments, fmt.Sprintf("gputrace dispatch_span_ns: %d", int64(stats.TotalDispatchTimeUs)*1000))
+	}
+}
+
+func addStreamTimingLabels(labels map[string][]string, stats *counter.StreamDataStats) {
+	if labels == nil || stats == nil {
+		return
+	}
+	if stats.TimingSource != "" {
+		labels["timing_source"] = []string{stats.TimingSource}
+	}
+	if _, displaySource := streamDisplayDuration(stats); displaySource != "" {
+		labels["display_duration_source"] = []string{displaySource}
+	}
+}
+
+func streamDisplayDuration(stats *counter.StreamDataStats) (uint64, string) {
+	if stats == nil {
+		return 0, ""
+	}
+	switch {
+	case stats.EffectiveGPUTimeNs != nil:
+		return *stats.EffectiveGPUTimeNs, "APSTimelineData ReplayerGPUTime"
+	case stats.CommandBufferActiveNs > 0:
+		return stats.CommandBufferActiveNs, "APSTimelineData command buffer active time"
+	case stats.TotalEncoderTimeUs > 0:
+		return uint64(stats.TotalEncoderTimeUs) * 1000, "encoderInfoData cumulative encoder span"
+	default:
+		return 0, ""
+	}
+}
+
+func dispatchSIMDGroupsByIndex(t *trace.Trace, stats *counter.StreamDataStats) []int64 {
+	if t == nil || stats == nil || len(stats.Dispatches) == 0 || len(t.CaptureData) == 0 {
+		return nil
+	}
+	dispatches, err := t.ParseDispatchInRegion(t.CaptureData, 0)
+	if err != nil || len(dispatches) != len(stats.Dispatches) {
+		return nil
+	}
+	groups := make([]int64, len(dispatches))
+	for i, d := range dispatches {
+		groups[i] = dispatchSIMDGroups(d)
+	}
+	return groups
+}
+
+func dispatchSIMDGroups(d trace.DispatchThreads) int64 {
+	const simdWidth uint64 = 32
+	tgX, tgY, tgZ := uint64(1), uint64(1), uint64(1)
+	if d.ThreadsPerGroupX > 0 {
+		tgX = (d.ThreadsX + d.ThreadsPerGroupX - 1) / d.ThreadsPerGroupX
+	}
+	if d.ThreadsPerGroupY > 0 {
+		tgY = (d.ThreadsY + d.ThreadsPerGroupY - 1) / d.ThreadsPerGroupY
+	}
+	if d.ThreadsPerGroupZ > 0 {
+		tgZ = (d.ThreadsZ + d.ThreadsPerGroupZ - 1) / d.ThreadsPerGroupZ
+	}
+	threadsPerGroup := d.ThreadsPerGroupX * d.ThreadsPerGroupY * d.ThreadsPerGroupZ
+	if threadsPerGroup == 0 {
+		return 0
+	}
+	totalThreads := tgX * tgY * tgZ * threadsPerGroup
+	return int64((totalThreads + simdWidth - 1) / simdWidth)
+}
+
+func findTraceProfilerDir(tracePath string) string {
+	if tracePath == "" {
+		return ""
+	}
+	if filepath.Ext(tracePath) == ".gpuprofiler_raw" {
+		if info, err := os.Stat(tracePath); err == nil && info.IsDir() {
+			return tracePath
+		}
+		return ""
+	}
+	profilerDir := tracePath + ".gpuprofiler_raw"
+	if info, err := os.Stat(profilerDir); err == nil && info.IsDir() {
+		return profilerDir
+	}
+	entries, err := os.ReadDir(tracePath)
+	if err != nil {
+		return ""
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && filepath.Ext(entry.Name()) == ".gpuprofiler_raw" {
+			return filepath.Join(tracePath, entry.Name())
+		}
+	}
+	return ""
+}
+
+func applyProfilingExecutionCosts(stats *counter.StreamDataStats, tracePath string) *counter.ExecutionCostMetrics {
+	if stats == nil || len(stats.Pipelines) == 0 {
+		return nil
+	}
+	profilerDir := findTraceProfilerDir(tracePath)
+	if profilerDir == "" {
+		return nil
+	}
+	pipelineIDs := make([]int, 0, len(stats.Pipelines))
+	for _, p := range stats.Pipelines {
+		pipelineIDs = append(pipelineIDs, p.PipelineID)
+	}
+	costs, err := counter.ParseExecutionCost(profilerDir, pipelineIDs)
+	if err != nil {
+		return nil
+	}
+	for i := range stats.Dispatches {
+		if cost, ok := costs.PipelineCosts[stats.Dispatches[i].PipelineID]; ok {
+			stats.Dispatches[i].ExecutionCostPct = cost
+		}
+	}
+	return costs
+}
+
+func executionCostBasisPoints(costs *counter.ExecutionCostMetrics) map[int]int64 {
+	if costs == nil || costs.TotalSamples == 0 {
+		return nil
+	}
+	type pipelineCost struct {
+		pipelineID int
+		value      int64
+		remainder  int64
+	}
+	pipelines := make([]pipelineCost, 0, len(costs.SamplesPerPipeline))
+	var sum int64
+	for pipelineID, samples := range costs.SamplesPerPipeline {
+		numer := int64(samples) * 10000
+		value := numer / int64(costs.TotalSamples)
+		pipelines = append(pipelines, pipelineCost{
+			pipelineID: pipelineID,
+			value:      value,
+			remainder:  numer % int64(costs.TotalSamples),
+		})
+		sum += value
+	}
+	sort.Slice(pipelines, func(i, j int) bool {
+		if pipelines[i].remainder != pipelines[j].remainder {
+			return pipelines[i].remainder > pipelines[j].remainder
+		}
+		return pipelines[i].pipelineID < pipelines[j].pipelineID
+	})
+	for i := int64(0); i < 10000-sum && int(i) < len(pipelines); i++ {
+		pipelines[i].value++
+	}
+	out := make(map[int]int64, len(pipelines))
+	for _, p := range pipelines {
+		out[p.pipelineID] = p.value
+	}
+	return out
+}
+
+func dispatchExecutionCostValues(stats *counter.StreamDataStats, costs *counter.ExecutionCostMetrics) []int64 {
+	if stats == nil || len(stats.Dispatches) == 0 {
+		return nil
+	}
+	values := make([]int64, len(stats.Dispatches))
+	counts := make(map[int]int)
+	totals := executionCostBasisPoints(costs)
+	if totals == nil {
+		totals = make(map[int]int64)
+		for _, d := range stats.Dispatches {
+			if d.ExecutionCostPct <= 0 {
+				continue
+			}
+			totals[d.PipelineID] = int64(math.Round(d.ExecutionCostPct * 100))
+		}
+	}
+	for _, d := range stats.Dispatches {
+		if totals[d.PipelineID] > 0 {
+			counts[d.PipelineID]++
+		}
+	}
+	seen := make(map[int]int64)
+	for i, d := range stats.Dispatches {
+		count := counts[d.PipelineID]
+		total := totals[d.PipelineID]
+		if count == 0 || total == 0 {
+			continue
+		}
+		base := total / int64(count)
+		rem := total % int64(count)
+		n := seen[d.PipelineID]
+		values[i] = base
+		if n < rem {
+			values[i]++
+		}
+		seen[d.PipelineID] = n + 1
+	}
+	return values
+}
+
+func streamDispatchName(d counter.DispatchInfo) string {
+	if d.FunctionName != "" {
+		return d.FunctionName
+	}
+	return fmt.Sprintf("(pipeline_%d)", d.PipelineID)
+}
 
 // ToPprofWithMetrics converts GPU trace timing metrics to pprof format with improved accuracy.
 // This version constructs a full hierarchy (GPU -> Queue -> CommandBuffer -> Encoder)
@@ -36,9 +277,12 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 	}
 
 	// Try to get per-dispatch timing with function names from streamData
-	streamStats, streamStatsErr := counter.ExtractPipelineStatsFromTrace(t)
+	streamStats, streamStatsErr := counter.ExtractPipelineStatsFromTraceStreamData(t)
 	useDispatchTiming := streamStatsErr == nil && len(streamStats.Dispatches) > 0
+	var executionCosts *counter.ExecutionCostMetrics
 	if useDispatchTiming {
+		counter.CorrelateDispatchSamples(streamStats)
+		executionCosts = applyProfilingExecutionCosts(streamStats, t.Path)
 		fmt.Printf("Using dispatch timing: %d dispatches, %d pipelines\n",
 			len(streamStats.Dispatches), len(streamStats.Pipelines))
 	}
@@ -54,10 +298,10 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 			{Type: "edges", Unit: "count"},
 
 			// Hardware metrics matching Xcode's view (indices 3-6)
-			{Type: "simd_groups", Unit: "count"},     // Xcode "Cost" is based on this
-			{Type: "alloc_regs", Unit: "count"},      // Allocated Registers
-			{Type: "high_reg", Unit: "count"},        // High Register
-			{Type: "spilled_bytes", Unit: "bytes"},   // Spilled Bytes
+			{Type: "simd_groups", Unit: "count"},   // Xcode "Cost" is based on this
+			{Type: "alloc_regs", Unit: "count"},    // Allocated Registers
+			{Type: "high_reg", Unit: "count"},      // High Register
+			{Type: "spilled_bytes", Unit: "bytes"}, // Spilled Bytes
 
 			// Percentage metrics - utilization (indices 7-12)
 			{Type: "alu_util", Unit: "percent"},
@@ -87,17 +331,17 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 			{Type: "buffer_l1_write_bw", Unit: "GB/s"},
 
 			// Instruction counts from PipelineStats/streamData (indices 26-33)
-			{Type: "instructions", Unit: "count"},       // Total instruction count
-			{Type: "alu_instructions", Unit: "count"},   // ALU instruction count
-			{Type: "fp32_instructions", Unit: "count"},  // FP32 instruction count
-			{Type: "fp16_instructions", Unit: "count"},  // FP16 instruction count
-			{Type: "int32_instructions", Unit: "count"}, // INT32 instruction count
-			{Type: "int16_instructions", Unit: "count"}, // INT16 instruction count
+			{Type: "instructions", Unit: "count"},        // Total instruction count
+			{Type: "alu_instructions", Unit: "count"},    // ALU instruction count
+			{Type: "fp32_instructions", Unit: "count"},   // FP32 instruction count
+			{Type: "fp16_instructions", Unit: "count"},   // FP16 instruction count
+			{Type: "int32_instructions", Unit: "count"},  // INT32 instruction count
+			{Type: "int16_instructions", Unit: "count"},  // INT16 instruction count
 			{Type: "branch_instructions", Unit: "count"}, // Branch instruction count
-			{Type: "threadgroup_mem", Unit: "bytes"},    // Threadgroup memory
+			{Type: "threadgroup_mem", Unit: "bytes"},     // Threadgroup memory
 
 			// Execution cost from Profiling_f_*.raw (index 34)
-			{Type: "execution_cost", Unit: "percent"}, // Statistical GPU profiling cost
+			{Type: "execution_cost", Unit: "basis_points"}, // Statistical GPU profiling cost
 
 			// GPRWCNTR encoder profile data (index 35)
 			{Type: "profiler_samples", Unit: "count"}, // GPRWCNTR sample count from ShaderProfilerData
@@ -106,7 +350,8 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 			Type: "gpu",
 			Unit: "nanoseconds",
 		},
-		Period: 1,
+		Period:            1,
+		DefaultSampleType: "time",
 	}
 
 	// Set timing info - prefer real timing from profiler data
@@ -118,6 +363,21 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 		prof.DurationNanos = metrics.TotalDuration.Nanoseconds()
 		prof.TimeNanos = time.Now().UnixNano()
 	}
+	if useDispatchTiming {
+		applyStreamTimingMetadata(prof, streamStats)
+	}
+	dispatchSIMDGroups := dispatchSIMDGroupsByIndex(t, streamStats)
+	if len(dispatchSIMDGroups) > 0 {
+		prof.Comments = append(prof.Comments, "gputrace simd_groups_source: capture dispatch geometry")
+	}
+	if executionCosts != nil {
+		prof.Comments = append(prof.Comments,
+			"gputrace execution_cost_source: Profiling_f_*.raw",
+			"gputrace execution_cost_unit: basis points",
+			fmt.Sprintf("gputrace execution_cost_samples: %d", executionCosts.TotalSamples),
+		)
+	}
+	dispatchExecutionCosts := dispatchExecutionCostValues(streamStats, executionCosts)
 
 	// Create root node
 	gpuTraceFunc := &profile.Function{
@@ -390,9 +650,12 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 		}
 		locStack = append(locStack, queueLoc, gpuTraceLoc)
 
-		// Get duration - prefer real timing from profiler data
+		// Get duration - prefer dispatch samples when streamData is available so
+		// encoder summary nodes do not double-count the primary time sample.
 		duration := int64(0)
-		if useRealTiming && i < len(realTimings) {
+		if useDispatchTiming {
+			duration = 0
+		} else if useRealTiming && i < len(realTimings) {
 			// Use real GPU timing (microseconds to nanoseconds)
 			duration = int64(realTimings[i].DurationMicros) * 1000
 		} else if t, ok := timingMap[enc.Label]; ok {
@@ -411,54 +674,56 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 		// Use 1-based index to match counters sequential ID
 		lookupKey := uint64(i + 1)
 		if m, ok := metricsMap[lookupKey]; ok {
-			// Hardware metrics matching Xcode's view (indices 3-6)
-			// Calculate SIMD groups from kernel invocations if not set
-			// SIMD width on Apple Silicon is 32 threads
-			simdGroups := m.SIMDGroups
-			if simdGroups == 0 && m.ExecutionCount > 0 {
-				simdGroups = m.ExecutionCount / 32
+			if !useDispatchTiming {
+				// Hardware metrics matching Xcode's view (indices 3-6)
+				// Calculate SIMD groups from kernel invocations if not set
+				// SIMD width on Apple Silicon is 32 threads
+				simdGroups := m.SIMDGroups
+				if simdGroups == 0 && m.ExecutionCount > 0 {
+					simdGroups = m.ExecutionCount / 32
+				}
+				values[3] = int64(simdGroups)      // simd_groups - Xcode "Cost" is based on this
+				values[4] = int64(m.AllocatedRegs) // alloc_regs
+				values[5] = int64(m.HighRegister)  // high_reg
+				values[6] = int64(m.SpilledBytes)  // spilled_bytes
+
+				// Utilization percentages (scale by 100 for 2 decimal precision)
+				values[7] = int64(m.ALUUtilization * 100)             // alu_util
+				values[8] = int64(m.KernelOccupancy * 100)            // occupancy
+				values[9] = int64(m.ComputeShaderUtilization * 100)   // compute_util
+				values[10] = int64(m.FragmentShaderUtilization * 100) // fragment_util
+				values[11] = int64(m.VertexShaderUtilization * 100)   // vertex_util
+				values[12] = int64(m.F32Utilization * 100)            // f32_util
+
+				// Limiter percentages (scale by 100)
+				values[13] = int64(m.F32Limiter * 100)                   // f32_limiter
+				values[14] = int64(m.L1CacheLimiter * 100)               // l1_limiter
+				values[15] = int64(m.LastLevelCacheLimiter * 100)        // llc_limiter
+				values[16] = int64(m.ControlFlowLimiter * 100)           // control_flow_limiter
+				values[17] = int64(m.BufferL1MissRate * 100)             // buffer_l1_miss
+				values[18] = int64(m.InstructionThroughputLimiter * 100) // instruction_throughput
+
+				// Byte metrics
+				values[19] = int64(m.BytesReadFromDeviceMemory)      // read_bytes
+				values[20] = int64(m.BytesWrittenToDeviceMemory)     // write_bytes
+				values[21] = int64(m.BufferDeviceMemoryBytesRead)    // buffer_read_bytes
+				values[22] = int64(m.BufferDeviceMemoryBytesWritten) // buffer_write_bytes
+
+				// Bandwidth metrics (scale by 1000 to preserve 3 decimal places, GB/s -> MB/s * 1000)
+				values[23] = int64(m.DeviceMemoryBandwidthGBps * 1000) // device_bandwidth
+				values[24] = int64(m.BufferL1ReadBandwidth * 1000)     // buffer_l1_read_bw
+				values[25] = int64(m.BufferL1WriteBandwidth * 1000)    // buffer_l1_write_bw
+
+				// Instruction counts from PipelineStats/streamData (indices 26-33)
+				values[26] = int64(m.InstructionCount)       // instructions
+				values[27] = int64(m.ALUInstructionCount)    // alu_instructions
+				values[28] = int64(m.FP32InstructionCount)   // fp32_instructions
+				values[29] = int64(m.FP16InstructionCount)   // fp16_instructions
+				values[30] = int64(m.INT32InstructionCount)  // int32_instructions
+				values[31] = int64(m.INT16InstructionCount)  // int16_instructions
+				values[32] = int64(m.BranchInstructionCount) // branch_instructions
+				values[33] = int64(m.ThreadgroupMemory)      // threadgroup_mem
 			}
-			values[3] = int64(simdGroups)        // simd_groups - Xcode "Cost" is based on this
-			values[4] = int64(m.AllocatedRegs)   // alloc_regs
-			values[5] = int64(m.HighRegister)    // high_reg
-			values[6] = int64(m.SpilledBytes)    // spilled_bytes
-
-			// Utilization percentages (scale by 100 for 2 decimal precision)
-			values[7] = int64(m.ALUUtilization * 100)           // alu_util
-			values[8] = int64(m.KernelOccupancy * 100)          // occupancy
-			values[9] = int64(m.ComputeShaderUtilization * 100) // compute_util
-			values[10] = int64(m.FragmentShaderUtilization * 100) // fragment_util
-			values[11] = int64(m.VertexShaderUtilization * 100)   // vertex_util
-			values[12] = int64(m.F32Utilization * 100)            // f32_util
-
-			// Limiter percentages (scale by 100)
-			values[13] = int64(m.F32Limiter * 100)                    // f32_limiter
-			values[14] = int64(m.L1CacheLimiter * 100)                // l1_limiter
-			values[15] = int64(m.LastLevelCacheLimiter * 100)         // llc_limiter
-			values[16] = int64(m.ControlFlowLimiter * 100)            // control_flow_limiter
-			values[17] = int64(m.BufferL1MissRate * 100)              // buffer_l1_miss
-			values[18] = int64(m.InstructionThroughputLimiter * 100)  // instruction_throughput
-
-			// Byte metrics
-			values[19] = int64(m.BytesReadFromDeviceMemory)      // read_bytes
-			values[20] = int64(m.BytesWrittenToDeviceMemory)     // write_bytes
-			values[21] = int64(m.BufferDeviceMemoryBytesRead)    // buffer_read_bytes
-			values[22] = int64(m.BufferDeviceMemoryBytesWritten) // buffer_write_bytes
-
-			// Bandwidth metrics (scale by 1000 to preserve 3 decimal places, GB/s -> MB/s * 1000)
-			values[23] = int64(m.DeviceMemoryBandwidthGBps * 1000) // device_bandwidth
-			values[24] = int64(m.BufferL1ReadBandwidth * 1000)     // buffer_l1_read_bw
-			values[25] = int64(m.BufferL1WriteBandwidth * 1000)    // buffer_l1_write_bw
-
-			// Instruction counts from PipelineStats/streamData (indices 26-33)
-			values[26] = int64(m.InstructionCount)       // instructions
-			values[27] = int64(m.ALUInstructionCount)    // alu_instructions
-			values[28] = int64(m.FP32InstructionCount)   // fp32_instructions
-			values[29] = int64(m.FP16InstructionCount)   // fp16_instructions
-			values[30] = int64(m.INT32InstructionCount)  // int32_instructions
-			values[31] = int64(m.INT16InstructionCount)  // int16_instructions
-			values[32] = int64(m.BranchInstructionCount) // branch_instructions
-			values[33] = int64(m.ThreadgroupMemory)      // threadgroup_mem
 
 			matches++
 		}
@@ -466,6 +731,7 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 		labels := map[string][]string{
 			"label": {enc.Label},
 		}
+		addStreamTimingLabels(labels, streamStats)
 		if gridSize != "" {
 			labels["grid_size"] = []string{gridSize}
 			labels["group_size"] = []string{groupSize}
@@ -525,8 +791,9 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 				"grid":         {fmt.Sprintf("%d,%d,%d", d.ThreadsX, d.ThreadsY, d.ThreadsZ)},
 				"group":        {fmt.Sprintf("%d,%d,%d", d.ThreadsPerGroupX, d.ThreadsPerGroupY, d.ThreadsPerGroupZ)},
 			}
+			addStreamTimingLabels(dispLabels, streamStats)
 			dispNumLabels := map[string][]int64{
-				"threads":      {totalThreads},
+				"threads":       {totalThreads},
 				"thread_groups": {numGroups},
 			}
 
@@ -553,11 +820,8 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 			totalDispatchTimeUs += d.DurationUs
 		}
 
-		for _, d := range streamStats.Dispatches {
-			funcName := d.FunctionName
-			if funcName == "" {
-				funcName = fmt.Sprintf("pipeline_%d", d.PipelineIndex)
-			}
+		for i, d := range streamStats.Dispatches {
+			funcName := streamDispatchName(d)
 
 			// Get or create location for this function
 			var funcLoc *profile.Location
@@ -594,30 +858,28 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 				dispatchFuncLocs[funcName] = funcLoc
 			}
 
-			// Build location stack: kernel -> encoder -> queue -> gpu
-			dispLocStack := []*profile.Location{funcLoc}
-
-			// Try to find encoder location for this dispatch
-			if d.EncoderIndex >= 0 && d.EncoderIndex < len(encoders) {
-				if encLoc, ok := encLocs[encoders[d.EncoderIndex].Address]; ok {
-					dispLocStack = append(dispLocStack, encLoc)
-				}
-			}
-			dispLocStack = append(dispLocStack, queueLoc, gpuTraceLoc)
+			// Keep the streamData dispatch stack shader-centric so pprof -top
+			// matches Xcode's Shaders view. Encoder context is preserved in
+			// numeric labels below; capture encoder names can otherwise skew
+			// flat shader totals when pprof merges duplicate function names.
+			dispLocStack := []*profile.Location{funcLoc, queueLoc, gpuTraceLoc}
 
 			// Create sample with real timing
 			dispValues := make([]int64, 36)
 			dispValues[0] = int64(d.DurationUs) * 1000 // Convert µs to ns
 			dispValues[1] = 1                          // count
-
-			// Add execution cost if available
-			if d.ExecutionCostPct > 0 {
-				dispValues[34] = int64(d.ExecutionCostPct * 100) // Scale to preserve 2 decimal places
+			if d.Index >= 0 && d.Index < len(dispatchSIMDGroups) {
+				dispValues[3] = dispatchSIMDGroups[d.Index]
+			}
+			if i < len(dispatchExecutionCosts) {
+				dispValues[34] = dispatchExecutionCosts[i]
 			}
 
 			// Add instruction count from pipeline if available
 			if d.PipelineIndex >= 0 && d.PipelineIndex < len(streamStats.Pipelines) {
 				p := streamStats.Pipelines[d.PipelineIndex]
+				dispValues[4] = int64(p.TemporaryRegisterCount)
+				dispValues[6] = int64(p.SpilledBytes)
 				dispValues[26] = int64(p.InstructionCount)
 				dispValues[27] = int64(p.ALUInstructionCount)
 				dispValues[28] = int64(p.FP32InstructionCount)
@@ -638,11 +900,18 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 				"source":   {"streamData"},
 				"dispatch": {fmt.Sprintf("%d", d.Index)},
 			}
+			addStreamTimingLabels(dispLabels, streamStats)
 			dispNumLabels := map[string][]int64{
 				"pipeline_idx": {int64(d.PipelineIndex)},
 				"encoder_idx":  {int64(d.EncoderIndex)},
 				"duration_us":  {int64(d.DurationUs)},
 				"cost_pct":     {int64(costPct * 100)}, // Scale for precision
+			}
+			if d.ExecutionCostPct > 0 {
+				dispNumLabels["profiling_cost_bp"] = []int64{int64(math.Round(d.ExecutionCostPct * 100))}
+			}
+			if d.Index >= 0 && d.Index < len(dispatchSIMDGroups) {
+				dispNumLabels["simd_groups"] = []int64{dispatchSIMDGroups[d.Index]}
 			}
 
 			prof.Sample = append(prof.Sample, &profile.Sample{
@@ -686,14 +955,14 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 
 				// Create sample with encoder profile data
 				epValues := make([]int64, 36)
-				epValues[0] = int64(ep.DurationNs)   // time
-				epValues[1] = 1                       // count
+				epValues[1] = 1                      // count
 				epValues[35] = int64(ep.SampleCount) // profiler_samples
 
 				epLabels := map[string][]string{
 					"source":      {ep.Source},
 					"data_source": {"GPRWCNTR"},
 				}
+				addStreamTimingLabels(epLabels, streamStats)
 				epNumLabels := map[string][]int64{
 					"ring_buffer_idx": {int64(ep.RingBufferIndex)},
 					"sample_count":    {int64(ep.SampleCount)},

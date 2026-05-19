@@ -4,7 +4,12 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/tmc/gputrace"
+	"github.com/tmc/gputrace/internal/counter"
+	tracepkg "github.com/tmc/gputrace/internal/trace"
 )
 
 func TestExportChromeTracingIncludesTimingMetadata(t *testing.T) {
@@ -62,5 +67,136 @@ func TestExportChromeTracingIncludesTimingMetadata(t *testing.T) {
 	}
 	if !foundDuration {
 		t.Fatal("missing Xcode Display Duration event")
+	}
+}
+
+func TestAddDispatchKernelEventsIncludesXcodeShaderArgs(t *testing.T) {
+	timeline := &Timeline{
+		Encoders: []EncoderInfo{{
+			Index:     0,
+			Label:     "encoder0",
+			Type:      "compute",
+			StartTime: 1000,
+			EndTime:   21000,
+			Duration:  20000,
+		}},
+	}
+	stats := &counter.StreamDataStats{
+		Pipelines: []counter.PipelineStats{{
+			PipelineID:             42,
+			PipelineAddress:        0xabc,
+			FunctionName:           "kernel0",
+			TemporaryRegisterCount: 13,
+			UniformRegisterCount:   4,
+			SpilledBytes:           8,
+			InstructionCount:       99,
+			ALUInstructionCount:    77,
+			FP16InstructionCount:   55,
+		}},
+		Dispatches: []counter.DispatchInfo{{
+			Index:            2,
+			PipelineIndex:    0,
+			PipelineID:       42,
+			FunctionName:     "kernel0",
+			EncoderIndex:     0,
+			CumulativeUs:     7,
+			DurationUs:       7,
+			ExecutionCostPct: 85.25,
+			SampleCount:      3,
+			SamplingDensity:  0.42,
+			StartTicks:       10,
+			EndTicks:         20,
+		}},
+	}
+	perfStats := &gputrace.PerfCounterStats{
+		ShaderMetrics: []gputrace.ShaderHardwareMetrics{{
+			ShaderName:      "kernel0",
+			PipelineState:   0xabc,
+			SIMDGroups:      128,
+			AllocatedRegs:   17,
+			HighRegister:    19,
+			SpilledBytes:    16,
+			KernelOccupancy: 62.5,
+			ALUUtilization:  71.25,
+		}},
+	}
+	shaderReport := &gputrace.ShaderMetricsReport{
+		Shaders: []*gputrace.ShaderMetrics{{
+			Name:              "kernel0",
+			PercentOfTotal:    88.5,
+			TotalThreadgroups: 4096,
+			TotalDurationNs:   7000,
+		}},
+	}
+	simd := timelineDispatchSIMDStats{
+		byName: map[string]uint64{"kernel0": 4096},
+		total:  4096,
+	}
+
+	if !addDispatchKernelEvents(timeline, stats, simd, shaderReport, perfStats) {
+		t.Fatal("addDispatchKernelEvents returned false")
+	}
+	if got := len(timeline.Kernels); got != 1 {
+		t.Fatalf("kernels = %d, want 1", got)
+	}
+	if got := len(timeline.Events); got != 1 {
+		t.Fatalf("events = %d, want 1", got)
+	}
+	ev := timeline.Events[0]
+	if ev.Name != "kernel0" || ev.Category != "kernel" {
+		t.Fatalf("event = %s/%s, want kernel0/kernel", ev.Name, ev.Category)
+	}
+	if got, want := ev.Timestamp, uint64(1); got != want {
+		t.Fatalf("timestamp = %d, want %d", got, want)
+	}
+	if got, want := ev.Duration, uint64(7); got != want {
+		t.Fatalf("duration = %d, want %d", got, want)
+	}
+	checkArg := func(key string, want interface{}) {
+		t.Helper()
+		if got := ev.Args[key]; got != want {
+			t.Fatalf("arg %s = %#v, want %#v", key, got, want)
+		}
+	}
+	checkArg("xcode_cost_pct", 100.0)
+	checkArg("profiling_cost_pct", 85.25)
+	checkArg("pipeline_state", "0xabc")
+	checkArg("simd_groups", uint64(4096))
+	checkArg("allocated_registers", 17)
+	checkArg("high_register", 19)
+	checkArg("spilled_bytes", 16)
+	checkArg("instruction_count", 99)
+	checkArg("shader_duration_ns", uint64(7000))
+	checkArg("gprwcntr_sample_count", 3)
+	checkArg("xcode_view", "Shaders")
+}
+
+func TestTimelineDispatchSIMDGroup(t *testing.T) {
+	dispatch := tracepkg.DispatchThreads{
+		ThreadsX:         1000,
+		ThreadsY:         1,
+		ThreadsZ:         1,
+		ThreadsPerGroupX: 256,
+		ThreadsPerGroupY: 1,
+		ThreadsPerGroupZ: 1,
+	}
+	if got, want := timelineDispatchSIMDGroup(dispatch), uint64(32); got != want {
+		t.Fatalf("timelineDispatchSIMDGroup = %d, want %d", got, want)
+	}
+}
+
+func TestGenerateInteractiveHTMLIncludesShaderTooltipFields(t *testing.T) {
+	html := generateInteractiveHTML(`{"events":[]}`)
+	for _, want := range []string{
+		"Profiling Cost",
+		"Pipeline ID",
+		"Instructions",
+		"ALU Instructions",
+		"FP32 Instructions",
+		"FP16 Instructions",
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("generated HTML missing %q", want)
+		}
 	}
 }
