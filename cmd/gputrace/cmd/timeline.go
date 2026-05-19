@@ -1433,8 +1433,46 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 		},
 	}
 
+	if timeline.Timing != nil {
+		metadataEvents = append(metadataEvents,
+			TimelineEvent{
+				Name:      "thread_name",
+				Category:  "__metadata",
+				Phase:     "M",
+				ProcessID: 1,
+				ThreadID:  15,
+				Args: map[string]interface{}{
+					"name": "Timing / Provenance",
+				},
+			},
+			TimelineEvent{
+				Name:      "Xcode Timing Summary",
+				Category:  "xcode_timing",
+				Phase:     "i",
+				ProcessID: 1,
+				ThreadID:  15,
+				Args:      timelineTimingArgs(timeline.Timing),
+			},
+		)
+		if timeline.Timing.DisplayDurationNs > 0 {
+			metadataEvents = append(metadataEvents, TimelineEvent{
+				Name:      "Xcode Display Duration",
+				Category:  "xcode_timing",
+				Phase:     "X",
+				Timestamp: 0,
+				Duration:  timeline.Timing.DisplayDurationNs / 1000,
+				ProcessID: 1,
+				ThreadID:  15,
+				Args:      timelineTimingArgs(timeline.Timing),
+			})
+		}
+	}
+
 	// Add counter track metadata and events
-	threadID := 15 // Start after GPRWCNTR lanes (7-14)
+	threadID := 15 // Start after GPRWCNTR lanes (7-14).
+	if timeline.Timing != nil {
+		threadID = 16
+	}
 	for _, track := range timeline.CounterTracks {
 		// Add thread name for this counter track
 		metadataEvents = append(metadataEvents, TimelineEvent{
@@ -1477,10 +1515,31 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 	tracing := map[string]interface{}{
 		"traceEvents": allEvents,
 	}
+	if timeline.Timing != nil {
+		tracing["gputrace_timing"] = timelineTimingArgs(timeline.Timing)
+	}
 
 	encoder := json.NewEncoder(f)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(tracing)
+}
+
+func timelineTimingArgs(timing *TimelineTiming) map[string]interface{} {
+	args := map[string]interface{}{
+		"encoder_span_ns":               timing.EncoderSpanNs,
+		"dispatch_span_ns":              timing.DispatchSpanNs,
+		"command_buffer_active_time_ns": timing.CommandBufferActiveNs,
+		"command_buffer_wall_time_ns":   timing.CommandBufferWallNs,
+		"restore_active_time_ns":        timing.RestoreActiveNs,
+		"restore_wall_time_ns":          timing.RestoreWallNs,
+		"display_duration_ns":           timing.DisplayDurationNs,
+		"display_duration_source":       timing.DisplayDurationSource,
+		"timing_source":                 timing.TimingSource,
+	}
+	if timing.EffectiveGPUTimeNs != nil {
+		args["effective_gpu_time_ns"] = *timing.EffectiveGPUTimeNs
+	}
+	return args
 }
 
 // exportTimelineJSON exports raw timeline data as JSON.
