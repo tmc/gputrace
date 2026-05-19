@@ -221,13 +221,6 @@ func isProfilingRunning() (bool, string) {
 					verboseLog("isProfilingRunning: window %d has Show Performance - profiling complete, not running", i)
 					continue
 				}
-				// Xcode 26: if Stop button exists but Replay button is gone,
-				// replay has completed (Stop stays enabled for new captures).
-				replayBtn := FindReplayButton(w)
-				if replayBtn == 0 {
-					verboseLog("isProfilingRunning: window %d has Stop but no Replay - replay complete, not running", i)
-					continue
-				}
 				if title == "" {
 					title = "(untitled Xcode window)"
 				}

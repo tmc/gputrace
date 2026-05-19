@@ -107,32 +107,22 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 
 	// Check if trace already has performance data (Show Performance button visible)
 	alreadyHasPerfData := hasShowPerformance(windowAX)
-	// Check if replay is already complete: Stop button exists but Replay button is gone.
-	// In GPU debugger mode, there's no "Show Performance" button after replay.
-	replayAlreadyDone := false
+	// Check if profiling is actually in progress. In Xcode's "Profile after
+	// replay" flow the Replay button can disappear while profiler data is still
+	// being prepared, so Stop alone is enough to mean "keep waiting" here.
+	profilingInProgress := false
 	if !alreadyHasPerfData {
 		stopBtn := FindStopButton(windowAX)
 		replayBtn := FindReplayButton(windowAX)
-		if stopBtn != 0 && IsElementEnabled(stopBtn) && replayBtn == 0 {
-			// Stop exists, Replay gone → replay completed
-			replayAlreadyDone = true
-			verboseLog("runCollectXcodeProfileFull: Stop button present but Replay gone - replay already complete")
-		}
-	}
-	// Check if profiling is actually in progress (Stop enabled AND Replay still visible)
-	profilingInProgress := false
-	if !alreadyHasPerfData && !replayAlreadyDone {
-		stopBtn := FindStopButton(windowAX)
-		replayBtn := FindReplayButton(windowAX)
-		if stopBtn != 0 && IsElementEnabled(stopBtn) && replayBtn != 0 {
+		if stopBtn != 0 && IsElementEnabled(stopBtn) {
+			profilingInProgress = true
+		} else if replayBtn != 0 && !IsElementEnabled(replayBtn) {
 			profilingInProgress = true
 		}
 	}
 
 	if alreadyHasPerfData {
 		fmt.Println("  Trace already has performance data, skipping replay...")
-	} else if replayAlreadyDone {
-		fmt.Println("  Replay already complete, proceeding to export...")
 	} else if profilingInProgress {
 		// Profiling already running (e.g., from a prior attempt or --force) — just wait for it
 		fmt.Println("  Profiling already in progress, waiting for completion...")
@@ -160,21 +150,28 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 	}
 
 	// Verify performance data is actually available after replay.
-	// Skip this check for GPU debugger mode traces (render traces) where
-	// Show Performance never appears. Detect by checking if Replay button is gone.
-	if !alreadyHasPerfData && !replayAlreadyDone {
+	if !alreadyHasPerfData {
 		if freshWindow := getPreferredTraceWindow(appAX, traceFileName); freshWindow != 0 {
 			windowAX = freshWindow
+		} else if freshWindow := findTraceWindowByButtons(appAX); freshWindow != 0 {
+			windowAX = freshWindow
 		}
-		// In GPU debugger mode, Replay disappears after completion and
-		// Show Performance never appears. Only fail if Replay is still visible
-		// (meaning replay didn't actually complete).
-		replayBtn := FindReplayButton(windowAX)
-		if replayBtn == 0 {
-			verboseLog("runCollectXcodeProfileFull: Replay gone after our replay, GPU debugger mode - skipping perf data check")
-		} else if !hasShowPerformance(windowAX) {
+		if !hasShowPerformance(windowAX) {
 			return fmt.Errorf("replay completed but performance data is not available — the trace may not contain enough GPU work to profile")
 		}
+	}
+
+	if freshWindow := getPreferredTraceWindow(appAX, traceFileName); freshWindow != 0 {
+		windowAX = freshWindow
+	} else if freshWindow := findTraceWindowByButtons(appAX); freshWindow != 0 {
+		windowAX = freshWindow
+	}
+	if shown, err := showPerformanceBeforeExport(windowAX); err != nil {
+		return fmt.Errorf("show performance before export: %w", err)
+	} else if shown {
+		// Xcode only enables "Embed performance data" after the Performance view
+		// has been opened. Give the view time to settle before opening Export.
+		time.Sleep(1 * time.Second)
 	}
 
 	// Export step
@@ -188,11 +185,15 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 	axAction(windowAX, "AXRaise")
 	time.Sleep(300 * time.Millisecond)
 
-	// Remove existing destination to avoid "file exists" dialog
-	if _, err := os.Stat(outputPath); err == nil {
-		verboseLog("removing existing output path: %s", outputPath)
-		if err := os.RemoveAll(outputPath); err != nil {
-			return fmt.Errorf("failed to remove existing output: %w", err)
+	candidatePaths := exportCandidatePaths(inputPath, outputPath)
+	// Remove existing destinations to avoid "file exists" dialogs and stale
+	// fallback-path exports being mistaken for the result of this run.
+	for _, p := range candidatePaths {
+		if _, err := os.Stat(p); err == nil {
+			verboseLog("removing existing output path: %s", p)
+			if err := os.RemoveAll(p); err != nil {
+				return fmt.Errorf("failed to remove existing output %s: %w", p, err)
+			}
 		}
 	}
 
@@ -200,53 +201,11 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("export failed: %w", err)
 	}
 
-	// Wait for the export to complete (file should appear)
-	var finalPath string
-	outputName := filepath.Base(outputPath)
-	inputDir := filepath.Dir(inputPath)
-	altPath := filepath.Join(inputDir, outputName)
-	var home string
-	if h, err := os.UserHomeDir(); err == nil {
-		home = h
-	}
-
-	// Resolve symlinks in output path — macOS resolves /tmp → /private/tmp internally,
-	// so the file may appear at the resolved path instead.
-	resolvedOutputPath := outputPath
-	if resolved, err := filepath.EvalSymlinks(filepath.Dir(outputPath)); err == nil {
-		resolvedOutputPath = filepath.Join(resolved, outputName)
-	}
-	resolvedAltPath := altPath
-	if resolved, err := filepath.EvalSymlinks(filepath.Dir(altPath)); err == nil {
-		resolvedAltPath = filepath.Join(resolved, outputName)
-	}
-
-	// Collect all candidate paths (deduplicated)
-	candidatePaths := []string{outputPath}
-	for _, p := range []string{resolvedOutputPath, altPath, resolvedAltPath} {
-		if p != "" && p != outputPath {
-			candidatePaths = append(candidatePaths, p)
-		}
-	}
-	if home != "" {
-		candidatePaths = append(candidatePaths,
-			filepath.Join(home, "Downloads", outputName),
-			filepath.Join(home, "Desktop", outputName),
-		)
-	}
 	verboseLog("exportTrace: searching for output in: %v", candidatePaths)
 
-	for i := 0; i < 30; i++ { // Wait up to 30 seconds
-		for _, p := range candidatePaths {
-			if _, err := os.Stat(p); err == nil {
-				finalPath = p
-				break
-			}
-		}
-		if finalPath != "" {
-			break
-		}
-		time.Sleep(1 * time.Second)
+	finalPath, err := waitForExportedTrace(candidatePaths, exportWaitTimeout())
+	if err != nil {
+		return err
 	}
 
 	// Close the Xcode window after export completes
@@ -261,34 +220,23 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 	}
 
 	// Check if file was saved
-	if finalPath != "" {
-		if finalPath != outputPath {
-			// Copy from alternate location to expected output path
-			if err := copyPath(finalPath, outputPath); err != nil {
-				fmt.Printf(Colorize("\nNote: File saved to %s (copy to %s failed: %v)\n", ColorYellow), finalPath, outputPath, err)
-			} else {
-				fmt.Printf(Colorize("\nDone! Output saved to: %s (copied from %s)\n", ColorGreen), outputPath, finalPath)
-			}
-			return nil
+	if finalPath != outputPath {
+		// Copy from alternate location to expected output path
+		if err := copyPath(finalPath, outputPath); err != nil {
+			fmt.Printf(Colorize("\nNote: File saved to %s (copy to %s failed: %v)\n", ColorYellow), finalPath, outputPath, err)
+		} else {
+			fmt.Printf(Colorize("\nDone! Output saved to: %s (copied from %s)\n", ColorGreen), outputPath, finalPath)
 		}
-		fmt.Printf(Colorize("\nDone! Output saved to: %s\n", ColorGreen), outputPath)
 		return nil
 	}
-
-	fmt.Print(Colorize("\nWarning: Output file not found at expected location.\n", ColorYellow))
-	fmt.Printf("  Expected: %s\n", outputPath)
-	fmt.Printf("  Also checked: %s, ~/Downloads/%s, ~/Desktop/%s\n", altPath, outputName, outputName)
-	return fmt.Errorf("export file not found at expected location: %s", outputPath)
+	fmt.Printf(Colorize("\nDone! Output saved to: %s\n", ColorGreen), outputPath)
+	return nil
 }
 
 // findTraceWindowByButtons finds an Xcode window with trace-related buttons
 // (Export + Show Performance indicates a completed profiling session)
 func findTraceWindowByButtons(appAX uintptr) uintptr {
-	children := axChildren(appAX)
-	for _, child := range children {
-		if axString(child, "AXRole") != "AXWindow" {
-			continue
-		}
+	for _, child := range GetAllWindows(appAX) {
 		// Look for windows with both Export and Show Performance buttons
 		hasExport := findButtonBFS(child, "Export", 200) != 0
 		hasShowPerf := findButtonBFS(child, "Show Performance", 200) != 0
@@ -384,12 +332,9 @@ func waitForWindow(appAX uintptr, traceFileName string, timeout time.Duration) (
 		time.Sleep(1 * time.Second)
 	}
 	// Collect diagnostic info about what windows exist
-	children := axChildren(appAX)
+	children := GetAllWindows(appAX)
 	var windowInfo []string
 	for _, child := range children {
-		if axString(child, "AXRole") != "AXWindow" {
-			continue
-		}
 		title := axString(child, "AXTitle")
 		doc := axString(child, "AXDocument")
 		if title != "" || doc != "" {
@@ -399,6 +344,9 @@ func waitForWindow(appAX uintptr, traceFileName string, timeout time.Duration) (
 	if len(windowInfo) > 0 {
 		return 0, fmt.Errorf("could not find Xcode window for %s; found windows: %s", traceFileName, strings.Join(windowInfo, "; "))
 	}
+	if diagnostic := xcodeWindowVisibilityDiagnostic(appAX); diagnostic != "" {
+		return 0, fmt.Errorf("could not find AX-visible Xcode window for %s (%s)", traceFileName, diagnostic)
+	}
 	return 0, fmt.Errorf("could not find Xcode window for %s (no Xcode windows found - check Accessibility permissions)", traceFileName)
 }
 
@@ -407,15 +355,8 @@ func waitForWindow(appAX uintptr, traceFileName string, timeout time.Duration) (
 // with GPU trace UI elements (Replay button, profiling status).
 func getPreferredTraceWindow(appAX uintptr, traceFileName string) uintptr {
 	titleLower := strings.ToLower(traceFileName)
-	children := axChildren(appAX)
-
-	// Log all visible windows for diagnostics
-	var allWindows []uintptr
-	for _, child := range children {
-		if axString(child, "AXRole") != "AXWindow" {
-			continue
-		}
-		allWindows = append(allWindows, child)
+	allWindows := GetAllWindows(appAX)
+	for _, child := range allWindows {
 		title := axString(child, "AXTitle")
 		doc := axString(child, "AXDocument")
 		verboseLog("getPreferredTraceWindow: visible window: title=%q doc=%q", title, doc)
@@ -581,6 +522,82 @@ func validateTraceBundle(path string) error {
 	return nil
 }
 
+func exportWaitTimeout() time.Duration {
+	if collectProfileTimeout > 30*time.Second {
+		return collectProfileTimeout
+	}
+	return 30 * time.Second
+}
+
+func exportCandidatePaths(inputPath, outputPath string) []string {
+	outputName := filepath.Base(outputPath)
+	inputDir := filepath.Dir(inputPath)
+	altPath := filepath.Join(inputDir, outputName)
+
+	candidates := []string{outputPath}
+	if resolved, err := filepath.EvalSymlinks(filepath.Dir(outputPath)); err == nil {
+		candidates = append(candidates, filepath.Join(resolved, outputName))
+	}
+	if altPath != outputPath {
+		candidates = append(candidates, altPath)
+	}
+	if resolved, err := filepath.EvalSymlinks(filepath.Dir(altPath)); err == nil {
+		candidates = append(candidates, filepath.Join(resolved, outputName))
+	}
+	for _, dir := range []string{os.TempDir(), "/tmp", "/private/tmp"} {
+		candidates = append(candidates, filepath.Join(dir, outputName))
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		candidates = append(candidates,
+			filepath.Join(home, "Downloads", outputName),
+			filepath.Join(home, "Desktop", outputName),
+		)
+	}
+	return uniquePaths(candidates)
+}
+
+func uniquePaths(paths []string) []string {
+	seen := make(map[string]bool)
+	var out []string
+	for _, p := range paths {
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	return out
+}
+
+func waitForExportedTrace(candidatePaths []string, timeout time.Duration) (string, error) {
+	deadline := time.Now().Add(timeout)
+	var foundWithoutProfiler []string
+	for {
+		for _, p := range candidatePaths {
+			info, err := os.Stat(p)
+			if err != nil {
+				continue
+			}
+			if !info.IsDir() {
+				continue
+			}
+			if findProfilerDir(p) != "" {
+				return p, nil
+			}
+			foundWithoutProfiler = append(foundWithoutProfiler, p)
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
+
+	if len(foundWithoutProfiler) > 0 {
+		return "", fmt.Errorf("export wrote a bundle without .gpuprofiler_raw: %s; Xcode did not embed performance data", strings.Join(uniquePaths(foundWithoutProfiler), ", "))
+	}
+	return "", fmt.Errorf("export did not write a perfdata bundle within %s; checked: %s", timeout.Round(time.Second), strings.Join(candidatePaths, ", "))
+}
+
 func windowMatchesTraceFile(window uintptr, traceFileName string) bool {
 	if traceFileName == "" {
 		return true
@@ -703,6 +720,28 @@ func clickReplayButton(windowAX uintptr) error {
 	}
 
 	return fmt.Errorf("Replay/Capture GPU workload button not found or disabled")
+}
+
+func showPerformanceBeforeExport(windowAX uintptr) (bool, error) {
+	showPerfBtn := findShowPerformanceButton(windowAX)
+	if showPerfBtn == 0 {
+		return false, nil
+	}
+	if !IsElementEnabled(showPerfBtn) {
+		return false, fmt.Errorf("Show Performance button is disabled")
+	}
+	fmt.Println("  Showing performance data...")
+	if err := axPressWithFallbackWindow(showPerfBtn, windowAX); err != nil {
+		time.Sleep(500 * time.Millisecond)
+		showPerfBtn = findShowPerformanceButton(windowAX)
+		if showPerfBtn == 0 || !IsElementEnabled(showPerfBtn) {
+			return false, fmt.Errorf("Show Performance button unavailable after retry")
+		}
+		if err := axPressWithFallbackWindow(showPerfBtn, windowAX); err != nil {
+			return false, fmt.Errorf("click Show Performance: %w", err)
+		}
+	}
+	return true, nil
 }
 
 func waitForReplayComplete(appAX uintptr, traceFileName string, initialWindowAX uintptr, timeout time.Duration) error {
@@ -886,15 +925,15 @@ func waitForReplayComplete(appAX uintptr, traceFileName string, initialWindowAX 
 		// visible in the Summary panel even before profiling. Only Show Performance
 		// or Replay button re-enabled indicates profiling is done.
 
-		// 2. Replay button disappeared (GPU debugger mode: Replay vanishes after completion)
+		// 2. Replay button disappeared. This is not completion by itself:
+		// Xcode may hide Replay while it is still preparing profiler data.
 		replayBtn, err := findButtonOrFail("Replay")
 		if err != nil {
 			return err
 		}
 		replayEnabled := replayBtn != 0 && IsElementEnabled(replayBtn)
 		if profilingStarted && replayBtn == 0 {
-			verboseLog("waitForReplayComplete: Replay button gone - replay complete (GPU debugger mode)")
-			return nil
+			verboseLog("waitForReplayComplete: Replay button gone, waiting for Show Performance")
 		}
 		if profilingStarted && replayEnabled {
 			// Replay button re-enabled - wait for Show Performance to appear
@@ -964,8 +1003,8 @@ func waitForReplayComplete(appAX uintptr, traceFileName string, initialWindowAX 
 	return fmt.Errorf("timed out waiting for replay completion")
 }
 
-// findSaveButtonInSheet finds the Save button specifically within a sheet element,
-// not the toolbar Export button. Searches for AXSheet first, then looks for Save inside it.
+// findSaveButtonInSheet finds the save/export action button specifically within
+// a sheet element, not the toolbar Export button.
 func findSaveButtonInSheet() uintptr {
 	appAX, err := FindXcodeApp()
 	if err != nil {
@@ -979,13 +1018,17 @@ func findSaveButtonInSheet() uintptr {
 			return axString(el, "AXRole") == "AXSheet"
 		})
 		if sheet != 0 {
-			btn := findButtonBFS(sheet, "Save", 2000)
-			if btn != 0 {
-				verboseLog("findSaveButtonInSheet: found Save in sheet (enabled=%v)", IsElementEnabled(btn))
-				return btn
+			for _, name := range []string{"Save", "Export"} {
+				btn := findButtonBFS(sheet, name, 2000)
+				if btn != 0 {
+					verboseLog("findSaveButtonInSheet: found %s in sheet (enabled=%v)", name, IsElementEnabled(btn))
+					return btn
+				}
 			}
 		}
-		// Fallback: search for Save button that has a Cancel sibling (sheet pattern)
+		// Fallback for save panels that do not expose a distinct AXSheet
+		// subtree. Do not accept a window-level Export button here: that is
+		// usually the toolbar button that opened the sheet.
 		btn := findButtonBFS(w, "Save", 3000)
 		if btn != 0 {
 			verboseLog("findSaveButtonInSheet: found Save in window (enabled=%v)", IsElementEnabled(btn))
@@ -1135,16 +1178,24 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 				fmt.Println("    Enabling 'Embed performance data'")
 				axPressWithFallback(embedCheckbox)
 				time.Sleep(300 * time.Millisecond)
+				if !IsCheckboxChecked(embedCheckbox) {
+					return fmt.Errorf("failed to enable Embed performance data checkbox")
+				}
 			} else {
 				fmt.Println("    'Embed performance data' already enabled")
 			}
 		} else {
-			fmt.Println("    Note: 'Embed performance data' is disabled (no perf data available)")
+			return fmt.Errorf("Embed performance data checkbox is disabled; profiler data is not available in Xcode")
 		}
 	}
 
 	outputDir := filepath.Dir(outputPath)
 	outputName := filepath.Base(outputPath)
+	if outputDir != "" && outputDir != "." {
+		if err := os.MkdirAll(outputDir, 0755); err != nil {
+			return fmt.Errorf("create output directory: %w", err)
+		}
+	}
 
 	if collectProfileDebug {
 		DebugTextFields(windowAX)
@@ -1216,7 +1267,8 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 		dumpExportSheetState(windowAX)
 	}
 
-	// Find the action button — Xcode uses "Export" (not the standard NSSavePanel "Save")
+	// Find the action button. Depending on Xcode/macOS, the sheet may use
+	// either "Save" or "Export".
 	saveBtn := findSaveButtonInSheet()
 
 	if saveBtn == 0 {
@@ -1244,6 +1296,13 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 	if err := axPressWithFallback(saveBtn); err != nil {
 		return fmt.Errorf("failed to click Save: %w", err)
 	}
+	replaced, err := pressReplaceIfPresent(windowAX, 5*time.Second)
+	if err != nil {
+		return fmt.Errorf("confirm replace: %w", err)
+	}
+	if replaced {
+		fmt.Println("    Confirmed replacement")
+	}
 
 	// Wait for export to complete — GPU trace exports can be large and slow
 	fmt.Println("    Waiting for export to write...")
@@ -1263,6 +1322,27 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 	// Return nil to let caller handle searching alternate locations
 	// Caller is responsible for finding and copying the file
 	return nil
+}
+
+func pressReplaceIfPresent(windowAX uintptr, timeout time.Duration) (bool, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		replaceBtn := findButtonBFS(windowAX, "Replace", 3000)
+		if replaceBtn != 0 {
+			if !IsElementEnabled(replaceBtn) {
+				return false, fmt.Errorf("Replace button disabled")
+			}
+			if err := axPressWithFallback(replaceBtn); err != nil {
+				return false, err
+			}
+			time.Sleep(500 * time.Millisecond)
+			return true, nil
+		}
+		if time.Now().After(deadline) {
+			return false, nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 // navigateViaPathPopup tries to navigate to a folder using the path popup button

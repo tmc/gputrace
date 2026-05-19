@@ -25,6 +25,16 @@ var (
 	imageIOOnce                     sync.Once
 )
 
+var (
+	axUIElementCopyElementAtPosition func(uintptr, float64, float64, *uintptr) int32
+	axExtraOnce                      sync.Once
+)
+
+var (
+	cfDictionaryGetValueRaw func(uintptr, uintptr) uintptr
+	cfExtraOnce             sync.Once
+)
+
 // Global CFBoolean values
 var (
 	kCFBooleanTrue  = uintptr(corefoundation.KCFBooleanTrue)
@@ -38,6 +48,24 @@ func ensureImageIO() {
 			purego.RegisterLibFunc(&cgImageDestinationCreateWithURL, libImageIO, "CGImageDestinationCreateWithURL")
 			purego.RegisterLibFunc(&cgImageDestinationAddImage, libImageIO, "CGImageDestinationAddImage")
 			purego.RegisterLibFunc(&cgImageDestinationFinalize, libImageIO, "CGImageDestinationFinalize")
+		}
+	})
+}
+
+func ensureAXExtras() {
+	axExtraOnce.Do(func() {
+		lib, err := purego.Dlopen("/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices", purego.RTLD_GLOBAL)
+		if err == nil {
+			purego.RegisterLibFunc(&axUIElementCopyElementAtPosition, lib, "AXUIElementCopyElementAtPosition")
+		}
+	})
+}
+
+func ensureCFExtras() {
+	cfExtraOnce.Do(func() {
+		lib, err := purego.Dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", purego.RTLD_GLOBAL)
+		if err == nil {
+			purego.RegisterLibFunc(&cfDictionaryGetValueRaw, lib, "CFDictionaryGetValue")
 		}
 	})
 }
@@ -92,6 +120,18 @@ func axGetWindow(element uintptr, windowID *uint32) int32 {
 	))
 }
 
+func axCopyElementAtPosition(app uintptr, x, y float64) uintptr {
+	ensureAXExtras()
+	if axUIElementCopyElementAtPosition == nil {
+		return 0
+	}
+	var el uintptr
+	if axUIElementCopyElementAtPosition(app, x, y, &el) != kAXErrorSuccess {
+		return 0
+	}
+	return el
+}
+
 func axValueGetValue(value uintptr, valueType int32, valuePtr unsafe.Pointer) bool {
 	return axuiautomation.AXValueGetValue(
 		axuiautomation.AXValueRef(value),
@@ -140,6 +180,52 @@ func cfBooleanGetValue(value uintptr) bool {
 
 func cfRetain(value uintptr) uintptr {
 	return uintptr(corefoundation.CFRetain(corefoundation.CFTypeRef(value)))
+}
+
+func cfDictionaryValue(dict uintptr, key string) uintptr {
+	ensureCFExtras()
+	if cfDictionaryGetValueRaw == nil {
+		return 0
+	}
+	cfKey := mkString(key)
+	defer cfRelease(cfKey)
+	return cfDictionaryGetValueRaw(dict, cfKey)
+}
+
+func cfDictionaryString(dict uintptr, key string) string {
+	val := cfDictionaryValue(dict, key)
+	if val == 0 {
+		return ""
+	}
+	return cfToString(val)
+}
+
+func cfDictionaryInt(dict uintptr, key string) int64 {
+	val := cfDictionaryValue(dict, key)
+	if val == 0 {
+		return 0
+	}
+	var out int64
+	if !corefoundation.CFNumberGetValue(
+		corefoundation.CFNumberRef(val),
+		corefoundation.KCFNumberSInt64Type,
+		unsafe.Pointer(&out),
+	) {
+		return 0
+	}
+	return out
+}
+
+func cfDictionaryRect(dict uintptr, key string) (corefoundation.CGRect, bool) {
+	val := cfDictionaryValue(dict, key)
+	if val == 0 {
+		return corefoundation.CGRect{}, false
+	}
+	var rect corefoundation.CGRect
+	if !coregraphics.CGRectMakeWithDictionaryRepresentation(corefoundation.CFDictionaryRef(val), &rect) {
+		return corefoundation.CGRect{}, false
+	}
+	return rect, true
 }
 
 func cfURLCreateWithFileSystemPath(allocator uintptr, filePath uintptr, pathStyle int32, isDirectory bool) uintptr {
@@ -250,9 +336,10 @@ const (
 	kAXErrorSuccess       = 0
 
 	// CGWindowListOption
-	kCGWindowListOptionOnScreenOnly    = 1 << 0
-	kCGWindowListOptionAll             = 0
-	kCGWindowListOptionIncludingWindow = 1 << 3
+	kCGWindowListOptionOnScreenOnly          = 1 << 0
+	kCGWindowListOptionAll                   = 0
+	kCGWindowListOptionIncludingWindow       = 1 << 3
+	kCGWindowListOptionExcludeDesktopElement = 1 << 4
 
 	// CGWindowImageOption
 	kCGWindowImageDefault             = 0
@@ -636,11 +723,9 @@ func cfToString(ref uintptr) string {
 	return ""
 }
 
-// axChildrenWithError returns children and the AX error code.
-// Error code 0 means success, -25211 means API disabled (no Accessibility permission).
-func axChildrenWithError(ax uintptr) ([]uintptr, int32) {
+func axArrayAttributeWithError(ax uintptr, attr string) ([]uintptr, int32) {
 	var ptr uintptr
-	key := mkString("AXChildren")
+	key := mkString(attr)
 	defer cfRelease(key)
 
 	ret := axCopyAttributeValue(ax, key, &ptr)
@@ -655,6 +740,12 @@ func axChildrenWithError(ax uintptr) ([]uintptr, int32) {
 		res[i] = cfRetain(val)
 	}
 	return res, 0
+}
+
+// axChildrenWithError returns children and the AX error code.
+// Error code 0 means success, -25211 means API disabled (no Accessibility permission).
+func axChildrenWithError(ax uintptr) ([]uintptr, int32) {
+	return axArrayAttributeWithError(ax, "AXChildren")
 }
 
 func axChildren(ax uintptr) []uintptr {
@@ -931,12 +1022,119 @@ func findElement(root uintptr, match func(uintptr) bool) uintptr {
 	return 0
 }
 
-func GetFirstWindow(app uintptr) uintptr {
-	children := axChildren(app)
-	for _, child := range children {
-		if axString(child, "AXRole") == "AXWindow" {
-			return child
+type cgWindowInfo struct {
+	title  string
+	bounds corefoundation.CGRect
+}
+
+func cgOnscreenWindowsForPID(pid int32) []cgWindowInfo {
+	infoArray := cgWindowListCopyWindowInfo(
+		kCGWindowListOptionOnScreenOnly|kCGWindowListOptionExcludeDesktopElement,
+		0,
+	)
+	if infoArray == 0 {
+		return nil
+	}
+	defer cfRelease(infoArray)
+
+	count := cfArrayGetCount(infoArray)
+	var windows []cgWindowInfo
+	for i := 0; i < count; i++ {
+		info := cfArrayGetValueAtIndex(infoArray, i)
+		if info == 0 {
+			continue
 		}
+		if int32(cfDictionaryInt(info, "kCGWindowOwnerPID")) != pid {
+			continue
+		}
+		if cfDictionaryInt(info, "kCGWindowLayer") != 0 {
+			continue
+		}
+		bounds, ok := cfDictionaryRect(info, "kCGWindowBounds")
+		if !ok || bounds.Size.Width <= 0 || bounds.Size.Height <= 0 {
+			continue
+		}
+		windows = append(windows, cgWindowInfo{
+			title:  cfDictionaryString(info, "kCGWindowName"),
+			bounds: bounds,
+		})
+	}
+	return windows
+}
+
+func axWindowsFromCGHitTest(app uintptr) []uintptr {
+	var pid int32
+	if axUIElementGetPid(app, &pid) != kAXErrorSuccess {
+		return nil
+	}
+
+	var windows []uintptr
+	addWindow := func(el uintptr) {
+		if el == 0 {
+			return
+		}
+		w := findParentWindow(el)
+		if w == 0 && axString(el, "AXRole") == "AXWindow" {
+			w = el
+		}
+		if w == 0 {
+			return
+		}
+		for _, existing := range windows {
+			if existing == w {
+				return
+			}
+		}
+		windows = append(windows, w)
+	}
+
+	for _, cgWindow := range cgOnscreenWindowsForPID(pid) {
+		b := cgWindow.bounds
+		points := [][2]float64{
+			{b.Origin.X + b.Size.Width/2, b.Origin.Y + b.Size.Height/2},
+			{b.Origin.X + b.Size.Width/2, b.Origin.Y + 20},
+			{b.Origin.X + 40, b.Origin.Y + 40},
+		}
+		for _, p := range points {
+			el := axCopyElementAtPosition(app, p[0], p[1])
+			if el == 0 {
+				continue
+			}
+			addWindow(el)
+		}
+		if collectProfileDebug && len(windows) == 0 {
+			verboseLog("GetAllWindows: CG window %q did not yield an AX window by hit-test", cgWindow.title)
+		}
+	}
+	return windows
+}
+
+func xcodeWindowVisibilityDiagnostic(app uintptr) string {
+	var pid int32
+	if axUIElementGetPid(app, &pid) != kAXErrorSuccess {
+		return ""
+	}
+	cgWindows := cgOnscreenWindowsForPID(pid)
+	if len(cgWindows) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(cgWindows))
+	for _, w := range cgWindows {
+		if w.title == "" {
+			continue
+		}
+		names = append(names, w.title)
+	}
+	if len(names) == 0 {
+		return fmt.Sprintf("CoreGraphics sees %d on-screen Xcode windows, but Accessibility exposes none", len(cgWindows))
+	}
+	return fmt.Sprintf("CoreGraphics sees %d on-screen Xcode windows (%s), but Accessibility exposes none", len(cgWindows), strings.Join(names, ", "))
+}
+
+func GetFirstWindow(app uintptr) uintptr {
+	windows := GetAllWindows(app)
+	if len(windows) > 0 {
+		return windows[0]
 	}
 	return 0
 }
@@ -944,19 +1142,16 @@ func GetFirstWindow(app uintptr) uintptr {
 // GetWindowByTitle finds a window whose title or document path contains the given substring (case-insensitive).
 func GetWindowByTitle(app uintptr, titleSubstr string) uintptr {
 	titleLower := strings.ToLower(titleSubstr)
-	children := axChildren(app)
-	for _, child := range children {
-		if axString(child, "AXRole") == "AXWindow" {
-			// Check AXTitle
-			windowTitle := strings.ToLower(axString(child, "AXTitle"))
-			if strings.Contains(windowTitle, titleLower) {
-				return child
-			}
-			// Check AXDocument (file path)
-			windowDoc := strings.ToLower(axString(child, "AXDocument"))
-			if strings.Contains(windowDoc, titleLower) {
-				return child
-			}
+	for _, child := range GetAllWindows(app) {
+		// Check AXTitle
+		windowTitle := strings.ToLower(axString(child, "AXTitle"))
+		if strings.Contains(windowTitle, titleLower) {
+			return child
+		}
+		// Check AXDocument (file path)
+		windowDoc := strings.ToLower(axString(child, "AXDocument"))
+		if strings.Contains(windowDoc, titleLower) {
+			return child
 		}
 	}
 	return 0
