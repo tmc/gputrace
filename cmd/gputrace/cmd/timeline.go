@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/spf13/cobra"
 
@@ -269,6 +270,7 @@ type Timeline struct {
 	APICallseq    []APICall       `json:"api_callseq"`
 	CounterTracks []CounterTrack  `json:"counter_tracks,omitempty"`
 	Timing        *TimelineTiming `json:"timing,omitempty"`
+	XcodeMetrics  map[string]any  `json:"xcode_metrics,omitempty"`
 	AbsoluteTime  uint64          `json:"absolute_time"`
 	TimebaseNumer uint64          `json:"timebase_numer"`
 	TimebaseDenom uint64          `json:"timebase_denom"`
@@ -748,6 +750,7 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 		}
 	}
 
+	timeline.XcodeMetrics = timelineXcodeMetricsArgs(timeline)
 	return timeline, nil
 }
 
@@ -1842,18 +1845,29 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 		},
 	}
 
+	metadataEvents = append(metadataEvents,
+		TimelineEvent{
+			Name:      "thread_name",
+			Category:  "__metadata",
+			Phase:     "M",
+			ProcessID: 1,
+			ThreadID:  15,
+			Args: map[string]interface{}{
+				"name": "Xcode Parity / Provenance",
+			},
+		},
+		TimelineEvent{
+			Name:      "Xcode Metrics Coverage",
+			Category:  "xcode_metrics",
+			Phase:     "i",
+			ProcessID: 1,
+			ThreadID:  15,
+			Args:      timelineXcodeMetricsArgs(timeline),
+		},
+	)
+
 	if timeline.Timing != nil {
 		metadataEvents = append(metadataEvents,
-			TimelineEvent{
-				Name:      "thread_name",
-				Category:  "__metadata",
-				Phase:     "M",
-				ProcessID: 1,
-				ThreadID:  15,
-				Args: map[string]interface{}{
-					"name": "Timing / Provenance",
-				},
-			},
 			TimelineEvent{
 				Name:      "Xcode Timing Summary",
 				Category:  "xcode_timing",
@@ -1878,10 +1892,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 	}
 
 	// Add counter track metadata and events
-	threadID := 15 // Start after GPRWCNTR lanes (7-14).
-	if timeline.Timing != nil {
-		threadID = 16
-	}
+	threadID := 16 // Start after GPRWCNTR lanes (7-14) and provenance lane (15).
 	for _, track := range timeline.CounterTracks {
 		// Add thread name for this counter track
 		metadataEvents = append(metadataEvents, TimelineEvent{
@@ -1927,10 +1938,95 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 	if timeline.Timing != nil {
 		tracing["gputrace_timing"] = timelineTimingArgs(timeline.Timing)
 	}
+	tracing["gputrace_xcode_metrics"] = timelineXcodeMetricsArgs(timeline)
 
 	encoder := json.NewEncoder(f)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(tracing)
+}
+
+func timelineXcodeMetricsArgs(timeline *Timeline) map[string]interface{} {
+	args := map[string]interface{}{
+		"kernel_events": 0,
+	}
+	if timeline == nil {
+		return args
+	}
+
+	presentFields := make(map[string]bool)
+	for _, ev := range timeline.Events {
+		if ev.Category != "kernel" || ev.Args == nil {
+			continue
+		}
+		args["kernel_events"] = args["kernel_events"].(int) + 1
+		for _, field := range []string{
+			"xcode_cost_pct",
+			"profiling_cost_pct",
+			"simd_groups",
+			"allocated_registers",
+			"uniform_registers",
+			"high_register",
+			"spilled_bytes",
+			"threadgroup_memory",
+			"instruction_count",
+			"occupancy_pct",
+			"alu_utilization_pct",
+			"pipeline_id",
+			"pipeline_state",
+		} {
+			if _, ok := ev.Args[field]; ok {
+				presentFields[field] = true
+			}
+		}
+	}
+
+	var present, absent []string
+	for _, field := range []string{
+		"xcode_cost_pct",
+		"profiling_cost_pct",
+		"simd_groups",
+		"allocated_registers",
+		"uniform_registers",
+		"high_register",
+		"spilled_bytes",
+		"threadgroup_memory",
+		"instruction_count",
+		"occupancy_pct",
+		"alu_utilization_pct",
+		"pipeline_id",
+		"pipeline_state",
+	} {
+		if presentFields[field] {
+			present = append(present, field)
+		} else {
+			absent = append(absent, field)
+		}
+	}
+
+	var tracks, emptyTracks []string
+	for _, track := range timeline.CounterTracks {
+		name := fmt.Sprintf("%s (%s)", track.Name, track.Unit)
+		if len(track.Samples) == 0 {
+			emptyTracks = append(emptyTracks, name)
+		} else {
+			tracks = append(tracks, name)
+		}
+	}
+	sort.Strings(tracks)
+	sort.Strings(emptyTracks)
+
+	args["kernel_arg_fields"] = present
+	args["absent_kernel_arg_fields"] = absent
+	args["counter_tracks"] = tracks
+	args["empty_counter_tracks"] = emptyTracks
+	if timeline.Timing != nil {
+		args["display_duration_source"] = timeline.Timing.DisplayDurationSource
+		args["timing_source"] = timeline.Timing.TimingSource
+		args["has_effective_gpu_time"] = timeline.Timing.EffectiveGPUTimeNs != nil
+	} else {
+		args["has_effective_gpu_time"] = false
+	}
+	return args
 }
 
 func timelineTimingArgs(timing *TimelineTiming) map[string]interface{} {
@@ -2278,6 +2374,7 @@ func buildTimelineFromProfilerData(tracePath string, stats *counter.StreamDataSt
 		}
 	}
 
+	timeline.XcodeMetrics = timelineXcodeMetricsArgs(timeline)
 	return timeline
 }
 
@@ -2706,6 +2803,11 @@ func generateInteractiveHTML(timelineJSON string) string {
 
         function updateDetails() {
             const timing = state.timeline.timing || {};
+            const metrics = state.timeline.xcode_metrics || {};
+            const present = (metrics.kernel_arg_fields || []).join(', ') || 'none';
+            const absent = (metrics.absent_kernel_arg_fields || []).join(', ') || 'none';
+            const counters = (metrics.counter_tracks || []).join(', ') || 'none';
+            const emptyCounters = (metrics.empty_counter_tracks || []).join(', ') || 'none';
             if (state.selectedEncoder !== null) {
                 const encoder = state.timeline.encoders[state.selectedEncoder];
                 detailPanel.innerHTML = ` + "`" + `
@@ -2722,6 +2824,11 @@ func generateInteractiveHTML(timelineJSON string) string {
                 <div class="detail-row"><span class="detail-label">CB active</span><span class="detail-value">${formatNs(timing.command_buffer_active_time_ns || 0)}</span></div>
                 <div class="detail-row"><span class="detail-label">CB wall</span><span class="detail-value">${formatNs(timing.command_buffer_wall_time_ns || 0)}</span></div>
                 <div class="detail-row"><span class="detail-label">Dispatch span</span><span class="detail-value">${formatNs(timing.dispatch_span_ns || 0)}</span></div>
+                <div class="detail-row"><span class="detail-label">Effective GPU time</span><span class="detail-value">${metrics.has_effective_gpu_time ? 'available' : 'not available'}</span></div>
+                <div class="detail-row"><span class="detail-label">Kernel fields</span><span class="detail-value">${present}</span></div>
+                <div class="detail-row"><span class="detail-label">Absent fields</span><span class="detail-value">${absent}</span></div>
+                <div class="detail-row"><span class="detail-label">Counter tracks</span><span class="detail-value">${counters}</span></div>
+                <div class="detail-row"><span class="detail-label">Empty tracks</span><span class="detail-value">${emptyCounters}</span></div>
             ` + "`" + `;
         }
 

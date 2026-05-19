@@ -38,8 +38,9 @@ func TestExportChromeTracingIncludesTimingMetadata(t *testing.T) {
 	}
 
 	var doc struct {
-		TraceEvents    []TimelineEvent        `json:"traceEvents"`
-		GputraceTiming map[string]interface{} `json:"gputrace_timing"`
+		TraceEvents          []TimelineEvent        `json:"traceEvents"`
+		GputraceTiming       map[string]interface{} `json:"gputrace_timing"`
+		GputraceXcodeMetrics map[string]interface{} `json:"gputrace_xcode_metrics"`
 	}
 	if err := json.Unmarshal(data, &doc); err != nil {
 		t.Fatalf("unmarshal output: %v", err)
@@ -47,8 +48,11 @@ func TestExportChromeTracingIncludesTimingMetadata(t *testing.T) {
 	if got := uint64(doc.GputraceTiming["display_duration_ns"].(float64)); got != effective {
 		t.Fatalf("gputrace_timing display_duration_ns = %d, want %d", got, effective)
 	}
+	if got := doc.GputraceXcodeMetrics["has_effective_gpu_time"]; got != true {
+		t.Fatalf("has_effective_gpu_time = %v, want true", got)
+	}
 
-	var foundSummary, foundDuration bool
+	var foundSummary, foundDuration, foundCoverage bool
 	for _, ev := range doc.TraceEvents {
 		if ev.Name == "Xcode Timing Summary" && ev.Category == "xcode_timing" {
 			foundSummary = true
@@ -62,12 +66,21 @@ func TestExportChromeTracingIncludesTimingMetadata(t *testing.T) {
 				t.Fatalf("display duration event = %d, want %d", got, want)
 			}
 		}
+		if ev.Name == "Xcode Metrics Coverage" && ev.Category == "xcode_metrics" {
+			foundCoverage = true
+			if got := ev.Args["has_effective_gpu_time"]; got != true {
+				t.Fatalf("coverage has_effective_gpu_time = %v, want true", got)
+			}
+		}
 	}
 	if !foundSummary {
 		t.Fatal("missing Xcode Timing Summary event")
 	}
 	if !foundDuration {
 		t.Fatal("missing Xcode Display Duration event")
+	}
+	if !foundCoverage {
+		t.Fatal("missing Xcode Metrics Coverage event")
 	}
 }
 

@@ -264,6 +264,44 @@ func dispatchExecutionCostValues(stats *counter.StreamDataStats, costs *counter.
 	return values
 }
 
+func appendXcodeMetricCoverageComments(prof *profile.Profile) {
+	totals := pprofSampleTotals(prof)
+	if len(totals) == 0 {
+		return
+	}
+	for _, name := range []string{
+		"simd_groups",
+		"execution_cost",
+		"occupancy",
+		"alu_util",
+		"alloc_regs",
+		"uniform_regs",
+		"high_reg",
+		"spilled_bytes",
+		"instructions",
+		"profiler_samples",
+	} {
+		prof.Comments = append(prof.Comments, fmt.Sprintf("gputrace xcode_metric_total %s: %d", name, totals[name]))
+	}
+}
+
+func pprofSampleTotals(prof *profile.Profile) map[string]int64 {
+	totals := make(map[string]int64)
+	if prof == nil {
+		return totals
+	}
+	for i, sampleType := range prof.SampleType {
+		var total int64
+		for _, sample := range prof.Sample {
+			if i < len(sample.Value) {
+				total += sample.Value[i]
+			}
+		}
+		totals[sampleType.Type] = total
+	}
+	return totals
+}
+
 // ToPprofWithMetrics converts GPU trace timing metrics to pprof format with improved accuracy.
 // This version constructs a full hierarchy (GPU -> Queue -> CommandBuffer -> Encoder)
 // and includes dependency information.
@@ -1100,5 +1138,6 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 		}
 	}
 
+	appendXcodeMetricCoverageComments(prof)
 	return prof, nil
 }

@@ -147,3 +147,31 @@ func TestPprofValueIndexes(t *testing.T) {
 		t.Fatalf("pprof indexes changed: execution=%d profiler=%d uniform=%d", pprofExecutionCostIdx, pprofProfilerCountIdx, pprofUniformRegsIdx)
 	}
 }
+
+func TestPprofSampleTotals(t *testing.T) {
+	prof := &profile.Profile{
+		SampleType: []*profile.ValueType{
+			{Type: "simd_groups", Unit: "count"},
+			{Type: "high_reg", Unit: "count"},
+		},
+		Sample: []*profile.Sample{
+			{Value: []int64{32, 0}},
+			{Value: []int64{16, 0}},
+		},
+	}
+	totals := pprofSampleTotals(prof)
+	if got, want := totals["simd_groups"], int64(48); got != want {
+		t.Fatalf("simd_groups total = %d, want %d", got, want)
+	}
+	if got := totals["high_reg"]; got != 0 {
+		t.Fatalf("high_reg total = %d, want 0", got)
+	}
+	appendXcodeMetricCoverageComments(prof)
+	comments := strings.Join(prof.Comments, "\n")
+	if !strings.Contains(comments, "gputrace xcode_metric_total simd_groups: 48") {
+		t.Fatalf("comments missing simd total: %s", comments)
+	}
+	if !strings.Contains(comments, "gputrace xcode_metric_total high_reg: 0") {
+		t.Fatalf("comments missing high_reg total: %s", comments)
+	}
+}
