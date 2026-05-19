@@ -52,9 +52,9 @@ func init() {
 		Use:    "list-windows [trace_file]",
 		Short:  "List Xcode windows",
 		Hidden: true,
-		Long:  `Lists Xcode windows with their titles, checkboxes, and buttons. Optionally filter by trace filename.`,
-		Args:  cobra.MaximumNArgs(1),
-		RunE:  runListWindows,
+		Long:   `Lists Xcode windows with their titles, checkboxes, and buttons. Optionally filter by trace filename.`,
+		Args:   cobra.MaximumNArgs(1),
+		RunE:   runListWindows,
 	}
 	collectXcodeProfileCmd.AddCommand(listCmd)
 }
@@ -345,10 +345,43 @@ func findCheckboxesButtonsAndTextFields(root uintptr) (checkboxes, buttons, text
 // GetAllWindows returns all windows for an application.
 func GetAllWindows(app uintptr) []uintptr {
 	var windows []uintptr
-	children := axChildren(app)
-	for _, child := range children {
-		if axString(child, "AXRole") == "AXWindow" {
-			windows = append(windows, child)
+
+	addWindow := func(el uintptr) {
+		if el == 0 || axString(el, "AXRole") != "AXWindow" {
+			return
+		}
+		for _, w := range windows {
+			if w == el {
+				return
+			}
+		}
+		windows = append(windows, el)
+	}
+
+	for _, attr := range []string{"AXWindows", "AXVisibleChildren", "AXChildren"} {
+		els, ret := axArrayAttributeWithError(app, attr)
+		if ret != kAXErrorSuccess && collectProfileDebug {
+			verboseLog("GetAllWindows: %s failed: AXError %d", attr, ret)
+		}
+		for _, el := range els {
+			addWindow(el)
+		}
+	}
+
+	for _, attr := range []string{"AXFocusedWindow", "AXMainWindow"} {
+		var el uintptr
+		key := mkString(attr)
+		ret := axCopyAttributeValue(app, key, &el)
+		cfRelease(key)
+		if ret == kAXErrorSuccess {
+			addWindow(el)
+		} else if collectProfileDebug {
+			verboseLog("GetAllWindows: %s failed: AXError %d", attr, ret)
+		}
+	}
+	if len(windows) == 0 {
+		for _, w := range axWindowsFromCGHitTest(app) {
+			addWindow(w)
 		}
 	}
 	return windows

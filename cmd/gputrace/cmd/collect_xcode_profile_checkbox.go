@@ -31,8 +31,8 @@ Example:
 		Use:    "toggle-checkbox <checkbox_title>",
 		Short:  "Toggle a checkbox",
 		Hidden: true,
-		Args:  cobra.ExactArgs(1),
-		RunE:  runToggleCheckbox,
+		Args:   cobra.ExactArgs(1),
+		RunE:   runToggleCheckbox,
 	}
 	toggleCheckboxCmd.Flags().StringVar(&ensureCheckedTrace, "trace", "", "Target window by trace filename")
 	collectXcodeProfileCmd.AddCommand(toggleCheckboxCmd)
@@ -128,6 +128,9 @@ func findTargetWindow(appAX uintptr, traceFile string) (uintptr, error) {
 		baseName := filepath.Base(traceFile)
 		windowAX := GetWindowByTitle(appAX, baseName)
 		if windowAX == 0 {
+			if diagnostic := xcodeWindowVisibilityDiagnostic(appAX); diagnostic != "" {
+				return 0, fmt.Errorf("no AX-visible Xcode window found for trace %q (%s)", baseName, diagnostic)
+			}
 			return 0, fmt.Errorf("no Xcode window found for trace %q", baseName)
 		}
 		return windowAX, nil
