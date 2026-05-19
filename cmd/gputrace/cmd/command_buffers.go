@@ -68,11 +68,13 @@ func runCommandBuffers(cmd *cobra.Command, args []string) error {
 			Label string `json:"label,omitempty"`
 		}
 		type cbJSON struct {
-			Index    int             `json:"index"`
-			Label    string          `json:"label,omitempty"`
-			Offset   string          `json:"offset"`
-			Encoders []cbEncoderJSON `json:"encoders,omitempty"`
-			Calls    int             `json:"calls,omitempty"`
+			Index           int             `json:"index"`
+			Label           string          `json:"label,omitempty"`
+			Offset          string          `json:"offset"`
+			Encoders        []cbEncoderJSON `json:"encoders,omitempty"`
+			Calls           int             `json:"calls"`
+			PipelineRecords int             `json:"pipeline_records"`
+			Dispatches      int             `json:"dispatches"`
 		}
 		out := make([]cbJSON, len(commandBuffers))
 		for i, cb := range commandBuffers {
@@ -84,6 +86,8 @@ func runCommandBuffers(cmd *cobra.Command, args []string) error {
 			dcb, err := gputrace.ParseDetailedCommandBuffer(trace, cb.Index)
 			if err == nil {
 				entry.Calls = len(dcb.Calls)
+				entry.PipelineRecords = len(dcb.Calls)
+				entry.Dispatches = len(dcb.Dispatches)
 				for _, enc := range dcb.Encoders {
 					entry.Encoders = append(entry.Encoders, cbEncoderJSON{
 						Index: enc.Index,
@@ -113,7 +117,8 @@ func runCommandBuffers(cmd *cobra.Command, args []string) error {
 			if err != nil {
 				fmt.Printf("  %3d: offset=0x%08x%s (error: %v)\n", cb.Index, cb.Offset, label, err)
 			} else {
-				fmt.Printf("  %3d: %d encoders, %d calls%s\n", cb.Index, len(dcb.Encoders), len(dcb.Calls), label)
+				fmt.Printf("  %3d: %d explicit encoders, %d pipeline records, %d dispatches%s\n",
+					cb.Index, len(dcb.Encoders), len(dcb.Calls), len(dcb.Dispatches), label)
 			}
 		} else {
 			fmt.Printf("  %3d: offset=0x%08x%s\n", cb.Index, cb.Offset, label)
@@ -134,18 +139,21 @@ func runCommandBuffers(cmd *cobra.Command, args []string) error {
 	if cmdBuffersVerbose && !cmdBuffersDetailed {
 		totalEncoders := 0
 		totalAPICalls := 0
+		totalDispatches := 0
 		for _, cb := range commandBuffers {
 			dcb, err := gputrace.ParseDetailedCommandBuffer(trace, cb.Index)
 			if err == nil {
 				totalEncoders += len(dcb.Encoders)
 				totalAPICalls += len(dcb.Calls)
+				totalDispatches += len(dcb.Dispatches)
 			}
 		}
 		if len(commandBuffers) > 0 {
-			fmt.Printf("\nTotal: %d encoders, %d calls (%.1f enc/buf, %.1f calls/buf)\n",
-				totalEncoders, totalAPICalls,
+			fmt.Printf("\nTotal: %d explicit encoders, %d pipeline records, %d dispatches (%.1f enc/buf, %.1f records/buf, %.1f dispatches/buf)\n",
+				totalEncoders, totalAPICalls, totalDispatches,
 				float64(totalEncoders)/float64(len(commandBuffers)),
-				float64(totalAPICalls)/float64(len(commandBuffers)))
+				float64(totalAPICalls)/float64(len(commandBuffers)),
+				float64(totalDispatches)/float64(len(commandBuffers)))
 		}
 	}
 
