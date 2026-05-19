@@ -376,8 +376,8 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 	if useDispatchTiming {
 		applyStreamTimingMetadata(prof, streamStats)
 	}
-	dispatchSIMDGroups := dispatchSIMDGroupsByIndex(t, streamStats)
-	if len(dispatchSIMDGroups) > 0 {
+	dispatchSIMDGroupsByDispatch := dispatchSIMDGroupsByIndex(t, streamStats)
+	if len(dispatchSIMDGroupsByDispatch) > 0 {
 		prof.Comments = append(prof.Comments, "gputrace simd_groups_source: capture dispatch geometry")
 	}
 	if executionCosts != nil {
@@ -848,9 +848,13 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 				numGroups = totalThreads / threadsPerGroup
 			}
 
-			// Dispatch sample values - only count and thread metrics
+			// Dispatch sample values available directly from capture data.
 			dispValues := make([]int64, pprofValueCount)
 			dispValues[1] = 1 // count
+			simdGroups := dispatchSIMDGroups(d)
+			if simdGroups > 0 {
+				dispValues[3] = simdGroups
+			}
 
 			dispLabels := map[string][]string{
 				"dispatch_idx": {fmt.Sprintf("%d", dispatchIdx)},
@@ -861,6 +865,9 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 			dispNumLabels := map[string][]int64{
 				"threads":       {totalThreads},
 				"thread_groups": {numGroups},
+			}
+			if simdGroups > 0 {
+				dispNumLabels["simd_groups"] = []int64{simdGroups}
 			}
 
 			prof.Sample = append(prof.Sample, &profile.Sample{
@@ -934,8 +941,8 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 			dispValues := make([]int64, pprofValueCount)
 			dispValues[0] = int64(d.DurationUs) * 1000 // Convert µs to ns
 			dispValues[1] = 1                          // count
-			if d.Index >= 0 && d.Index < len(dispatchSIMDGroups) {
-				dispValues[3] = dispatchSIMDGroups[d.Index]
+			if d.Index >= 0 && d.Index < len(dispatchSIMDGroupsByDispatch) {
+				dispValues[3] = dispatchSIMDGroupsByDispatch[d.Index]
 			}
 			if i < len(dispatchExecutionCosts) {
 				dispValues[pprofExecutionCostIdx] = dispatchExecutionCosts[i]
@@ -977,8 +984,8 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 			if d.ExecutionCostPct > 0 {
 				dispNumLabels["profiling_cost_bp"] = []int64{int64(math.Round(d.ExecutionCostPct * 100))}
 			}
-			if d.Index >= 0 && d.Index < len(dispatchSIMDGroups) {
-				dispNumLabels["simd_groups"] = []int64{dispatchSIMDGroups[d.Index]}
+			if d.Index >= 0 && d.Index < len(dispatchSIMDGroupsByDispatch) {
+				dispNumLabels["simd_groups"] = []int64{dispatchSIMDGroupsByDispatch[d.Index]}
 			}
 
 			prof.Sample = append(prof.Sample, &profile.Sample{
