@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 
 	"github.com/spf13/cobra"
@@ -30,16 +31,17 @@ missing Xcode-style fields.`,
 }
 
 type xcodeParityReport struct {
-	Trace          string                 `json:"trace"`
-	KernelEvents   int                    `json:"kernel_events"`
-	PresentFields  []string               `json:"present_fields"`
-	AbsentFields   []string               `json:"absent_fields"`
-	CounterTracks  []string               `json:"counter_tracks"`
-	EmptyTracks    []string               `json:"empty_tracks"`
-	Timing         map[string]interface{} `json:"timing"`
-	Bindings       map[string]int         `json:"bindings"`
-	RemainingGaps  []xcodeParityGap       `json:"remaining_gaps"`
-	ClosedExamples []string               `json:"closed_examples,omitempty"`
+	Trace          string                           `json:"trace"`
+	KernelEvents   int                              `json:"kernel_events"`
+	PresentFields  []string                         `json:"present_fields"`
+	AbsentFields   []string                         `json:"absent_fields"`
+	CounterTracks  []string                         `json:"counter_tracks"`
+	EmptyTracks    []string                         `json:"empty_tracks"`
+	Timing         map[string]interface{}           `json:"timing"`
+	Bindings       map[string]int                   `json:"bindings"`
+	StreamData     *xcodebindings.StreamDataSummary `json:"stream_data,omitempty"`
+	RemainingGaps  []xcodeParityGap                 `json:"remaining_gaps"`
+	ClosedExamples []string                         `json:"closed_examples,omitempty"`
 }
 
 type xcodeParityGap struct {
@@ -60,6 +62,11 @@ func runXcodeParity(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	report := buildXcodeParityReport(args[0], timeline, xcodebindings.Probe())
+	if streamPath := streamDataPathForTrace(args[0]); streamPath != "" {
+		if summary, err := xcodebindings.ProbeStreamData(streamPath); err == nil {
+			report.StreamData = &summary
+		}
+	}
 	if xcodeParityJSON {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
@@ -81,6 +88,16 @@ func runXcodeParity(cmd *cobra.Command, args []string) error {
 	if has, _ := report.Timing["has_effective_gpu_time"].(bool); !has {
 		fmt.Println("Effective GPU time: not archived; using reported display-duration fallback")
 	}
+	if report.StreamData != nil {
+		fmt.Printf("StreamData: %d encoders, %d GPU commands, %d pipeline states, %d functions\n",
+			report.StreamData.EncoderInfoCount,
+			report.StreamData.GPUCommandInfoCount,
+			report.StreamData.PipelineStateInfoCount,
+			report.StreamData.FunctionInfoCount)
+		if report.StreamData.MetalDeviceName != "" {
+			fmt.Printf("Device: %s (%s)\n", report.StreamData.MetalDeviceName, report.StreamData.MetalPluginName)
+		}
+	}
 	if len(report.ClosedExamples) > 0 {
 		fmt.Println("\nClosed in current trace")
 		for _, item := range report.ClosedExamples {
@@ -96,6 +113,23 @@ func runXcodeParity(cmd *cobra.Command, args []string) error {
 		}
 	}
 	return nil
+}
+
+func streamDataPathForTrace(tracePath string) string {
+	profilerDir := ""
+	if filepath.Ext(tracePath) == ".gpuprofiler_raw" {
+		profilerDir = tracePath
+	} else {
+		profilerDir = findProfilerDir(tracePath)
+	}
+	if profilerDir == "" {
+		return ""
+	}
+	streamPath := filepath.Join(profilerDir, "streamData")
+	if _, err := os.Stat(streamPath); err != nil {
+		return ""
+	}
+	return streamPath
 }
 
 func timelineForParity(tracePath string) (*Timeline, error) {
