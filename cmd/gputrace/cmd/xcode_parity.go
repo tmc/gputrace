@@ -223,11 +223,11 @@ func (r *xcodeParityReport) applyStreamDataEvidence() {
 	if r.streamValueCount("Binaries") > 0 {
 		r.updateGap("high_register",
 			"binary blobs present in Xcode streamData; adapter missing",
-			"instantiate or decode GTMioShaderBinaryData from Binaries entries and compute max live register per kernel")
+			"build a safe parent-aware GTMioShaderBinaryData adapter or offline binary decoder; the nil-parent constructor path is unsafe")
 	}
 	if r.streamValueCount("Derived Counter Sample Data") > 0 {
 		next := "decode Derived Counter Sample Data and map ALU utilization into dispatch timeline and pprof samples"
-		if r.streamValueCount("Derived Counters Info Data") == 0 {
+		if r.streamValueEntryCount("Derived Counters Info Data") == 0 {
 			next = "decode Derived Counter Sample Data; counter info dictionary is empty in this trace, so names may need XRGPUAPSDataProcessor resolution"
 		}
 		r.updateGap("alu_utilization_pct",
@@ -272,6 +272,19 @@ func (r *xcodeParityReport) streamValueCount(key string) uint64 {
 			total += value.Count
 		} else {
 			total++
+		}
+	}
+	return total
+}
+
+func (r *xcodeParityReport) streamValueEntryCount(key string) uint64 {
+	if r == nil || r.StreamData == nil {
+		return 0
+	}
+	var total uint64
+	for _, value := range r.StreamData.SelectedValues {
+		if value.Key == key {
+			total += value.Count
 		}
 	}
 	return total

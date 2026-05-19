@@ -267,6 +267,41 @@ func TestBuildXcodeParityReport(t *testing.T) {
 	}
 }
 
+func TestXcodeParityStreamDataEvidenceReportsSafeNextSteps(t *testing.T) {
+	report := xcodeParityReport{
+		Timing: map[string]interface{}{},
+		RemainingGaps: []xcodeParityGap{
+			{Metric: "high_register", Next: "old"},
+			{Metric: "alu_utilization_pct", Next: "old"},
+			{Metric: "effective_gpu_time", Next: "old"},
+		},
+		StreamData: &xcodebindings.StreamDataSummary{
+			SelectedValues: []xcodebindings.ValueSummary{
+				{Key: "Binaries", Count: 734},
+				{Key: "Derived Counter Sample Data", Count: 16},
+				{Key: "Derived Counters Info Data"},
+				{Key: "ReplayerGPUTime", Count: 1},
+			},
+		},
+	}
+
+	report.applyStreamDataEvidence()
+
+	gaps := make(map[string]xcodeParityGap)
+	for _, gap := range report.RemainingGaps {
+		gaps[gap.Metric] = gap
+	}
+	if got := gaps["high_register"].Next; !strings.Contains(got, "nil-parent constructor path is unsafe") {
+		t.Fatalf("high_register next = %q, want unsafe constructor warning", got)
+	}
+	if got := gaps["alu_utilization_pct"].Next; !strings.Contains(got, "counter info dictionary is empty") {
+		t.Fatalf("alu_utilization_pct next = %q, want empty counter info warning", got)
+	}
+	if got := gaps["effective_gpu_time"].Status; got != "archived as zero in Xcode streamData" {
+		t.Fatalf("effective_gpu_time status = %q, want archived zero", got)
+	}
+}
+
 func xcodebindingsReportForTest() xcodebindings.Report {
 	return xcodebindings.Report{
 		Summary: map[string]int{
