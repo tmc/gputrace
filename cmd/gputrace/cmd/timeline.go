@@ -369,6 +369,10 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 	if stats, err := gputrace.ParsePerfCounters(trace); err == nil {
 		perfStats = stats
 	}
+	var encoderMetrics []counter.EncoderCounterMetrics
+	if perfStats != nil {
+		encoderMetrics, _ = counter.PopulateEncoderMetricsFromPerfCounterStats(trace, perfStats)
+	}
 	var shaderReport *gputrace.ShaderMetricsReport
 	if profilerDir != "" {
 		if report, err := extractSIMDBasedMetrics(trace, profilerDir); err == nil {
@@ -560,7 +564,7 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 
 	// Add shader/kernel events. Prefer streamData dispatches so the Shaders lane
 	// matches Xcode's pipeline table instead of duplicating whole encoder spans.
-	if !addDispatchKernelEvents(timeline, streamStats, dispatchSIMD, shaderReport, perfStats) {
+	if !addDispatchKernelEvents(timeline, streamStats, dispatchSIMD, shaderReport, perfStats, encoderMetrics) {
 		addEncoderKernelEvents(timeline, trace)
 	}
 
@@ -1405,7 +1409,7 @@ func parseEncoderDispatches(trace *gputrace.Trace, encoders []*tracepkg.ComputeE
 	return dispatches
 }
 
-func addDispatchKernelEvents(timeline *Timeline, stats *counter.StreamDataStats, simd timelineDispatchSIMDStats, shaderReport *gputrace.ShaderMetricsReport, perfStats *gputrace.PerfCounterStats) bool {
+func addDispatchKernelEvents(timeline *Timeline, stats *counter.StreamDataStats, simd timelineDispatchSIMDStats, shaderReport *gputrace.ShaderMetricsReport, perfStats *gputrace.PerfCounterStats, encoderMetrics []counter.EncoderCounterMetrics) bool {
 	if timeline == nil || stats == nil || len(stats.Dispatches) == 0 {
 		return false
 	}
@@ -1415,6 +1419,10 @@ func addDispatchKernelEvents(timeline *Timeline, stats *counter.StreamDataStats,
 	}
 	metrics := shaderMetricLookup(perfStats)
 	shaderMetrics := timelineShaderReportLookup(shaderReport)
+	encoderMetricByIndex := make(map[int]*counter.EncoderCounterMetrics)
+	for i := range encoderMetrics {
+		encoderMetricByIndex[encoderMetrics[i].EncoderIndex] = &encoderMetrics[i]
+	}
 	encoderOffsets := make(map[int]uint64)
 	var fallbackStartNs uint64
 
@@ -1438,8 +1446,9 @@ func addDispatchKernelEvents(timeline *Timeline, stats *counter.StreamDataStats,
 		pipeline := pipelineByIndex[d.PipelineIndex]
 		metric := metrics.find(name, pipeline)
 		shaderMetric := shaderMetrics.find(name, pipeline)
+		encoderMetric := encoderMetricByIndex[d.EncoderIndex]
 		simdGroups, simdCostPct := simd.cost(name, d.Index)
-		args := dispatchKernelArgs(d, pipeline, simdGroups, simdCostPct, shaderMetric, metric)
+		args := dispatchKernelArgs(d, pipeline, simdGroups, simdCostPct, shaderMetric, metric, encoderMetric)
 
 		info := KernelInfo{
 			Name:      name,
@@ -1468,7 +1477,7 @@ func addDispatchKernelEvents(timeline *Timeline, stats *counter.StreamDataStats,
 	return true
 }
 
-func dispatchKernelArgs(d counter.DispatchInfo, p *counter.PipelineStats, simdGroups uint64, simdCostPct float64, shader *gputrace.ShaderMetrics, hardware *counter.ShaderHardwareMetrics) map[string]interface{} {
+func dispatchKernelArgs(d counter.DispatchInfo, p *counter.PipelineStats, simdGroups uint64, simdCostPct float64, shader *gputrace.ShaderMetrics, hardware *counter.ShaderHardwareMetrics, encoderMetric *counter.EncoderCounterMetrics) map[string]interface{} {
 	args := map[string]interface{}{
 		"dispatch_index": d.Index,
 		"duration_us":    float64(d.DurationUs),
@@ -1544,6 +1553,16 @@ func dispatchKernelArgs(d counter.DispatchInfo, p *counter.PipelineStats, simdGr
 		}
 		if hardware.ALUUtilization > 0 {
 			args["alu_utilization_pct"] = hardware.ALUUtilization
+		}
+	}
+	if encoderMetric != nil {
+		if encoderMetric.KernelOccupancy > 0 && args["occupancy_pct"] == nil {
+			args["occupancy_pct"] = encoderMetric.KernelOccupancy
+			args["occupancy_source"] = "encoder counter fallback"
+		}
+		if encoderMetric.ALUUtilization > 0 && args["alu_utilization_pct"] == nil {
+			args["alu_utilization_pct"] = encoderMetric.ALUUtilization
+			args["alu_utilization_source"] = "encoder counter fallback"
 		}
 	}
 	return args
@@ -2348,7 +2367,7 @@ func buildTimelineFromProfilerData(tracePath string, stats *counter.StreamDataSt
 	}
 
 	// Add kernel events from streamData dispatches.
-	if !addDispatchKernelEvents(timeline, stats, timelineDispatchSIMDStats{}, nil, nil) {
+	if !addDispatchKernelEvents(timeline, stats, timelineDispatchSIMDStats{}, nil, nil, nil) {
 		addEncoderKernelEvents(timeline, nil)
 	}
 
