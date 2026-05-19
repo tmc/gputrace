@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/spf13/cobra"
 
@@ -269,6 +270,7 @@ type Timeline struct {
 	APICallseq    []APICall       `json:"api_callseq"`
 	CounterTracks []CounterTrack  `json:"counter_tracks,omitempty"`
 	Timing        *TimelineTiming `json:"timing,omitempty"`
+	XcodeMetrics  map[string]any  `json:"xcode_metrics,omitempty"`
 	AbsoluteTime  uint64          `json:"absolute_time"`
 	TimebaseNumer uint64          `json:"timebase_numer"`
 	TimebaseDenom uint64          `json:"timebase_denom"`
@@ -748,6 +750,7 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 		}
 	}
 
+	timeline.XcodeMetrics = timelineXcodeMetricsArgs(timeline)
 	return timeline, nil
 }
 
@@ -966,14 +969,16 @@ func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, str
 			continue
 		}
 
-		// Add samples at start and end of encoder execution
+		// Add samples at start and end of encoder execution. For source-backed
+		// Xcode counters, zero is a meaningful value and should appear as a
+		// flat track instead of being reported as unavailable.
 		appendCounterTrackSample(&activeCoresTrack, encoder, activeCores)
-		appendCounterTrackSample(&occupancyTrack, encoder, occupancy)
-		appendCounterTrackSample(&aluTrack, encoder, aluUtil)
-		appendCounterTrackSample(&bandwidthTrack, encoder, bandwidth)
-		appendCounterTrackSample(&throughputTrack, encoder, throughput)
-		appendCounterTrackSample(&occupancyManagerTrack, encoder, occupancyManager)
-		appendCounterTrackSample(&shaderLaunchLimiterTrack, encoder, shaderLaunchLimiter)
+		appendCounterTrackSampleValue(&occupancyTrack, encoder, occupancy)
+		appendCounterTrackSampleValue(&aluTrack, encoder, aluUtil)
+		appendCounterTrackSampleValue(&bandwidthTrack, encoder, bandwidth)
+		appendCounterTrackSampleValue(&throughputTrack, encoder, throughput)
+		appendCounterTrackSampleValue(&occupancyManagerTrack, encoder, occupancyManager)
+		appendCounterTrackSampleValue(&shaderLaunchLimiterTrack, encoder, shaderLaunchLimiter)
 	}
 
 	// Calculate statistics for each track
@@ -1020,42 +1025,65 @@ func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, str
 
 	// Generate samples for new tracks - only for encoders with real data
 	for _, encoder := range timeline.Encoders {
-		metrics, exists := shaderMetricsMap[encoder.Label]
-		if !exists {
+		metrics := shaderMetricsMap[encoder.Label]
+		var encoderMetric *counter.EncoderCounterMetrics
+		if m, exists := encoderMetricsByLabel[encoder.Label]; exists {
+			encoderMetric = m
+		} else if m, exists := encoderMetricsByIndex[encoder.Index]; exists {
+			encoderMetric = m
+		}
+		if metrics == nil && encoderMetric == nil {
 			// No real data for this encoder - skip it (no synthetic data)
 			continue
 		}
 
-		l1Miss := metrics.BufferL1MissRate
-		// Convert bytes to GB/s
+		var l1Miss float64
 		var memRead, memWrite float64
-		durationSec := float64(encoder.Duration) / 1e9
-		if durationSec > 0 {
-			memRead = float64(metrics.BytesReadFromDeviceMemory) / 1e9 / durationSec
-			memWrite = float64(metrics.BytesWrittenToDeviceMemory) / 1e9 / durationSec
+		var compLimit, memLimit float64
+
+		if metrics != nil {
+			l1Miss = metrics.BufferL1MissRate
+			durationSec := float64(encoder.Duration) / 1e9
+			if durationSec > 0 {
+				memRead = float64(metrics.BytesReadFromDeviceMemory) / 1e9 / durationSec
+				memWrite = float64(metrics.BytesWrittenToDeviceMemory) / 1e9 / durationSec
+			}
+			compLimit = metrics.ComputeShaderLaunchLimiter + metrics.ALUUtilization
+			memLimit = metrics.L1CacheLimiter + metrics.LastLevelCacheLimiter + metrics.TextureReadLimiter
 		}
-		compLimit := metrics.ComputeShaderLaunchLimiter + metrics.ALUUtilization                        // Proxy
-		memLimit := metrics.L1CacheLimiter + metrics.LastLevelCacheLimiter + metrics.TextureReadLimiter // Proxy
+		if encoderMetric != nil {
+			if l1Miss == 0 {
+				l1Miss = encoderMetric.BufferL1MissRate
+			}
+			if memRead == 0 {
+				if encoderMetric.GPUReadBandwidthGBps > 0 {
+					memRead = encoderMetric.GPUReadBandwidthGBps
+				} else if encoderMetric.BytesReadFromDeviceMemory > 0 && encoder.Duration > 0 {
+					durationSec := float64(encoder.Duration) / 1e9
+					memRead = float64(encoderMetric.BytesReadFromDeviceMemory) / 1e9 / durationSec
+				}
+			}
+			if memWrite == 0 {
+				if encoderMetric.GPUWriteBandwidthGBps > 0 {
+					memWrite = encoderMetric.GPUWriteBandwidthGBps
+				} else if encoderMetric.BytesWrittenToDeviceMemory > 0 && encoder.Duration > 0 {
+					durationSec := float64(encoder.Duration) / 1e9
+					memWrite = float64(encoderMetric.BytesWrittenToDeviceMemory) / 1e9 / durationSec
+				}
+			}
+			if compLimit == 0 {
+				compLimit = encoderMetric.ComputeShaderLaunchLimiter
+			}
+			if memLimit == 0 {
+				memLimit = encoderMetric.L1CacheLimiter + encoderMetric.LastLevelCacheLimiter + encoderMetric.TextureReadLimiter
+			}
+		}
 
-		l1MissTrack.Samples = append(l1MissTrack.Samples,
-			CounterSample{Timestamp: encoder.StartTime, Value: l1Miss},
-			CounterSample{Timestamp: encoder.EndTime, Value: l1Miss})
-
-		memReadTrack.Samples = append(memReadTrack.Samples,
-			CounterSample{Timestamp: encoder.StartTime, Value: memRead},
-			CounterSample{Timestamp: encoder.EndTime, Value: memRead})
-
-		memWriteTrack.Samples = append(memWriteTrack.Samples,
-			CounterSample{Timestamp: encoder.StartTime, Value: memWrite},
-			CounterSample{Timestamp: encoder.EndTime, Value: memWrite})
-
-		computeLimiterTrack.Samples = append(computeLimiterTrack.Samples,
-			CounterSample{Timestamp: encoder.StartTime, Value: compLimit},
-			CounterSample{Timestamp: encoder.EndTime, Value: compLimit})
-
-		memoryLimiterTrack.Samples = append(memoryLimiterTrack.Samples,
-			CounterSample{Timestamp: encoder.StartTime, Value: memLimit},
-			CounterSample{Timestamp: encoder.EndTime, Value: memLimit})
+		appendCounterTrackSampleValue(&l1MissTrack, encoder, l1Miss)
+		appendCounterTrackSampleValue(&memReadTrack, encoder, memRead)
+		appendCounterTrackSampleValue(&memWriteTrack, encoder, memWrite)
+		appendCounterTrackSampleValue(&computeLimiterTrack, encoder, compLimit)
+		appendCounterTrackSampleValue(&memoryLimiterTrack, encoder, memLimit)
 	}
 
 	calculateTrackStats(&l1MissTrack)
@@ -1266,6 +1294,13 @@ func calculateTrackStats(track *CounterTrack) {
 
 func appendCounterTrackSample(track *CounterTrack, encoder EncoderInfo, value float64) {
 	if track == nil || value <= 0 {
+		return
+	}
+	appendCounterTrackSampleValue(track, encoder, value)
+}
+
+func appendCounterTrackSampleValue(track *CounterTrack, encoder EncoderInfo, value float64) {
+	if track == nil {
 		return
 	}
 	track.Samples = append(track.Samples,
@@ -1842,18 +1877,29 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 		},
 	}
 
+	metadataEvents = append(metadataEvents,
+		TimelineEvent{
+			Name:      "thread_name",
+			Category:  "__metadata",
+			Phase:     "M",
+			ProcessID: 1,
+			ThreadID:  15,
+			Args: map[string]interface{}{
+				"name": "Xcode Parity / Provenance",
+			},
+		},
+		TimelineEvent{
+			Name:      "Xcode Metrics Coverage",
+			Category:  "xcode_metrics",
+			Phase:     "i",
+			ProcessID: 1,
+			ThreadID:  15,
+			Args:      timelineXcodeMetricsArgs(timeline),
+		},
+	)
+
 	if timeline.Timing != nil {
 		metadataEvents = append(metadataEvents,
-			TimelineEvent{
-				Name:      "thread_name",
-				Category:  "__metadata",
-				Phase:     "M",
-				ProcessID: 1,
-				ThreadID:  15,
-				Args: map[string]interface{}{
-					"name": "Timing / Provenance",
-				},
-			},
 			TimelineEvent{
 				Name:      "Xcode Timing Summary",
 				Category:  "xcode_timing",
@@ -1878,10 +1924,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 	}
 
 	// Add counter track metadata and events
-	threadID := 15 // Start after GPRWCNTR lanes (7-14).
-	if timeline.Timing != nil {
-		threadID = 16
-	}
+	threadID := 16 // Start after GPRWCNTR lanes (7-14) and provenance lane (15).
 	for _, track := range timeline.CounterTracks {
 		// Add thread name for this counter track
 		metadataEvents = append(metadataEvents, TimelineEvent{
@@ -1927,10 +1970,95 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 	if timeline.Timing != nil {
 		tracing["gputrace_timing"] = timelineTimingArgs(timeline.Timing)
 	}
+	tracing["gputrace_xcode_metrics"] = timelineXcodeMetricsArgs(timeline)
 
 	encoder := json.NewEncoder(f)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(tracing)
+}
+
+func timelineXcodeMetricsArgs(timeline *Timeline) map[string]interface{} {
+	args := map[string]interface{}{
+		"kernel_events": 0,
+	}
+	if timeline == nil {
+		return args
+	}
+
+	presentFields := make(map[string]bool)
+	for _, ev := range timeline.Events {
+		if ev.Category != "kernel" || ev.Args == nil {
+			continue
+		}
+		args["kernel_events"] = args["kernel_events"].(int) + 1
+		for _, field := range []string{
+			"xcode_cost_pct",
+			"profiling_cost_pct",
+			"simd_groups",
+			"allocated_registers",
+			"uniform_registers",
+			"high_register",
+			"spilled_bytes",
+			"threadgroup_memory",
+			"instruction_count",
+			"occupancy_pct",
+			"alu_utilization_pct",
+			"pipeline_id",
+			"pipeline_state",
+		} {
+			if _, ok := ev.Args[field]; ok {
+				presentFields[field] = true
+			}
+		}
+	}
+
+	var present, absent []string
+	for _, field := range []string{
+		"xcode_cost_pct",
+		"profiling_cost_pct",
+		"simd_groups",
+		"allocated_registers",
+		"uniform_registers",
+		"high_register",
+		"spilled_bytes",
+		"threadgroup_memory",
+		"instruction_count",
+		"occupancy_pct",
+		"alu_utilization_pct",
+		"pipeline_id",
+		"pipeline_state",
+	} {
+		if presentFields[field] {
+			present = append(present, field)
+		} else {
+			absent = append(absent, field)
+		}
+	}
+
+	var tracks, emptyTracks []string
+	for _, track := range timeline.CounterTracks {
+		name := fmt.Sprintf("%s (%s)", track.Name, track.Unit)
+		if len(track.Samples) == 0 {
+			emptyTracks = append(emptyTracks, name)
+		} else {
+			tracks = append(tracks, name)
+		}
+	}
+	sort.Strings(tracks)
+	sort.Strings(emptyTracks)
+
+	args["kernel_arg_fields"] = present
+	args["absent_kernel_arg_fields"] = absent
+	args["counter_tracks"] = tracks
+	args["empty_counter_tracks"] = emptyTracks
+	if timeline.Timing != nil {
+		args["display_duration_source"] = timeline.Timing.DisplayDurationSource
+		args["timing_source"] = timeline.Timing.TimingSource
+		args["has_effective_gpu_time"] = timeline.Timing.EffectiveGPUTimeNs != nil
+	} else {
+		args["has_effective_gpu_time"] = false
+	}
+	return args
 }
 
 func timelineTimingArgs(timing *TimelineTiming) map[string]interface{} {
@@ -2278,6 +2406,7 @@ func buildTimelineFromProfilerData(tracePath string, stats *counter.StreamDataSt
 		}
 	}
 
+	timeline.XcodeMetrics = timelineXcodeMetricsArgs(timeline)
 	return timeline
 }
 
@@ -2706,6 +2835,11 @@ func generateInteractiveHTML(timelineJSON string) string {
 
         function updateDetails() {
             const timing = state.timeline.timing || {};
+            const metrics = state.timeline.xcode_metrics || {};
+            const present = (metrics.kernel_arg_fields || []).join(', ') || 'none';
+            const absent = (metrics.absent_kernel_arg_fields || []).join(', ') || 'none';
+            const counters = (metrics.counter_tracks || []).join(', ') || 'none';
+            const emptyCounters = (metrics.empty_counter_tracks || []).join(', ') || 'none';
             if (state.selectedEncoder !== null) {
                 const encoder = state.timeline.encoders[state.selectedEncoder];
                 detailPanel.innerHTML = ` + "`" + `
@@ -2722,6 +2856,11 @@ func generateInteractiveHTML(timelineJSON string) string {
                 <div class="detail-row"><span class="detail-label">CB active</span><span class="detail-value">${formatNs(timing.command_buffer_active_time_ns || 0)}</span></div>
                 <div class="detail-row"><span class="detail-label">CB wall</span><span class="detail-value">${formatNs(timing.command_buffer_wall_time_ns || 0)}</span></div>
                 <div class="detail-row"><span class="detail-label">Dispatch span</span><span class="detail-value">${formatNs(timing.dispatch_span_ns || 0)}</span></div>
+                <div class="detail-row"><span class="detail-label">Effective GPU time</span><span class="detail-value">${metrics.has_effective_gpu_time ? 'available' : 'not available'}</span></div>
+                <div class="detail-row"><span class="detail-label">Kernel fields</span><span class="detail-value">${present}</span></div>
+                <div class="detail-row"><span class="detail-label">Absent fields</span><span class="detail-value">${absent}</span></div>
+                <div class="detail-row"><span class="detail-label">Counter tracks</span><span class="detail-value">${counters}</span></div>
+                <div class="detail-row"><span class="detail-label">Empty tracks</span><span class="detail-value">${emptyCounters}</span></div>
             ` + "`" + `;
         }
 

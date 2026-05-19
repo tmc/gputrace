@@ -102,6 +102,73 @@ const (
 	pprofUniformRegsIdx   = 36
 )
 
+func applyEncoderCounterMetrics(values []int64, m *counter.EncoderCounterMetrics) {
+	if len(values) < pprofValueCount || m == nil {
+		return
+	}
+	if values[7] == 0 {
+		values[7] = profileBasisPoints(m.ALUUtilization)
+	}
+	if values[8] == 0 {
+		values[8] = profileBasisPoints(m.KernelOccupancy)
+	}
+	if values[9] == 0 {
+		if m.ComputeShaderUtilization > 0 {
+			values[9] = profileBasisPoints(m.ComputeShaderUtilization)
+		} else {
+			values[9] = profileBasisPoints(m.ComputeUtilization)
+		}
+	}
+	if values[10] == 0 {
+		values[10] = profileBasisPoints(m.FragmentShaderUtilization)
+	}
+	if values[11] == 0 {
+		values[11] = profileBasisPoints(m.VertexShaderUtilization)
+	}
+	if values[12] == 0 {
+		values[12] = profileBasisPoints(m.F32Utilization)
+	}
+	if values[13] == 0 {
+		values[13] = profileBasisPoints(m.F32Limiter)
+	}
+	if values[14] == 0 {
+		values[14] = profileBasisPoints(m.L1CacheLimiter)
+	}
+	if values[15] == 0 {
+		values[15] = profileBasisPoints(m.LastLevelCacheLimiter)
+	}
+	if values[16] == 0 {
+		values[16] = profileBasisPoints(m.ControlFlowLimiter)
+	}
+	if values[17] == 0 {
+		values[17] = profileBasisPoints(m.BufferL1MissRate)
+	}
+	if values[18] == 0 {
+		values[18] = profileBasisPoints(m.InstructionThroughputLimiter)
+	}
+	if values[19] == 0 {
+		values[19] = int64(m.BytesReadFromDeviceMemory)
+	}
+	if values[20] == 0 {
+		values[20] = int64(m.BytesWrittenToDeviceMemory)
+	}
+	if values[21] == 0 {
+		values[21] = int64(m.BufferDeviceMemoryBytesRead)
+	}
+	if values[22] == 0 {
+		values[22] = int64(m.BufferDeviceMemoryBytesWritten)
+	}
+	if values[23] == 0 {
+		values[23] = int64(m.DeviceMemoryBandwidthGBps * 1000)
+	}
+	if values[24] == 0 {
+		values[24] = int64(m.BufferL1ReadBandwidth * 1000)
+	}
+	if values[25] == 0 {
+		values[25] = int64(m.BufferL1WriteBandwidth * 1000)
+	}
+}
+
 func dispatchSIMDGroupsByIndex(t *trace.Trace, stats *counter.StreamDataStats) []int64 {
 	if t == nil || stats == nil || len(stats.Dispatches) == 0 || len(t.CaptureData) == 0 {
 		return nil
@@ -262,6 +329,49 @@ func dispatchExecutionCostValues(stats *counter.StreamDataStats, costs *counter.
 		seen[d.PipelineID] = n + 1
 	}
 	return values
+}
+
+func appendXcodeMetricCoverageComments(prof *profile.Profile) {
+	totals := pprofSampleTotals(prof)
+	if len(totals) == 0 {
+		return
+	}
+	for _, name := range []string{
+		"simd_groups",
+		"execution_cost",
+		"occupancy",
+		"alu_util",
+		"alloc_regs",
+		"uniform_regs",
+		"high_reg",
+		"spilled_bytes",
+		"read_bytes",
+		"write_bytes",
+		"buffer_read_bytes",
+		"buffer_write_bytes",
+		"device_bandwidth",
+		"instructions",
+		"profiler_samples",
+	} {
+		prof.Comments = append(prof.Comments, fmt.Sprintf("gputrace xcode_metric_total %s: %d", name, totals[name]))
+	}
+}
+
+func pprofSampleTotals(prof *profile.Profile) map[string]int64 {
+	totals := make(map[string]int64)
+	if prof == nil {
+		return totals
+	}
+	for i, sampleType := range prof.SampleType {
+		var total int64
+		for _, sample := range prof.Sample {
+			if i < len(sample.Value) {
+				total += sample.Value[i]
+			}
+		}
+		totals[sampleType.Type] = total
+	}
+	return totals
 }
 
 // ToPprofWithMetrics converts GPU trace timing metrics to pprof format with improved accuracy.
@@ -748,46 +858,7 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 			matches++
 		}
 		if m := encoderCounterByIndex[i]; m != nil {
-			if values[7] == 0 {
-				values[7] = profileBasisPoints(m.ALUUtilization)
-			}
-			if values[8] == 0 {
-				values[8] = profileBasisPoints(m.KernelOccupancy)
-			}
-			if values[9] == 0 {
-				if m.ComputeShaderUtilization > 0 {
-					values[9] = profileBasisPoints(m.ComputeShaderUtilization)
-				} else {
-					values[9] = profileBasisPoints(m.ComputeUtilization)
-				}
-			}
-			if values[10] == 0 {
-				values[10] = profileBasisPoints(m.FragmentShaderUtilization)
-			}
-			if values[11] == 0 {
-				values[11] = profileBasisPoints(m.VertexShaderUtilization)
-			}
-			if values[12] == 0 {
-				values[12] = profileBasisPoints(m.F32Utilization)
-			}
-			if values[13] == 0 {
-				values[13] = profileBasisPoints(m.F32Limiter)
-			}
-			if values[14] == 0 {
-				values[14] = profileBasisPoints(m.L1CacheLimiter)
-			}
-			if values[15] == 0 {
-				values[15] = profileBasisPoints(m.LastLevelCacheLimiter)
-			}
-			if values[16] == 0 {
-				values[16] = profileBasisPoints(m.ControlFlowLimiter)
-			}
-			if values[17] == 0 {
-				values[17] = profileBasisPoints(m.BufferL1MissRate)
-			}
-			if values[18] == 0 {
-				values[18] = profileBasisPoints(m.InstructionThroughputLimiter)
-			}
+			applyEncoderCounterMetrics(values, m)
 			counterSource = true
 		}
 
@@ -1100,5 +1171,6 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 		}
 	}
 
+	appendXcodeMetricCoverageComments(prof)
 	return prof, nil
 }

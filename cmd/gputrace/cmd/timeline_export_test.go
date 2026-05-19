@@ -38,8 +38,9 @@ func TestExportChromeTracingIncludesTimingMetadata(t *testing.T) {
 	}
 
 	var doc struct {
-		TraceEvents    []TimelineEvent        `json:"traceEvents"`
-		GputraceTiming map[string]interface{} `json:"gputrace_timing"`
+		TraceEvents          []TimelineEvent        `json:"traceEvents"`
+		GputraceTiming       map[string]interface{} `json:"gputrace_timing"`
+		GputraceXcodeMetrics map[string]interface{} `json:"gputrace_xcode_metrics"`
 	}
 	if err := json.Unmarshal(data, &doc); err != nil {
 		t.Fatalf("unmarshal output: %v", err)
@@ -47,8 +48,11 @@ func TestExportChromeTracingIncludesTimingMetadata(t *testing.T) {
 	if got := uint64(doc.GputraceTiming["display_duration_ns"].(float64)); got != effective {
 		t.Fatalf("gputrace_timing display_duration_ns = %d, want %d", got, effective)
 	}
+	if got := doc.GputraceXcodeMetrics["has_effective_gpu_time"]; got != true {
+		t.Fatalf("has_effective_gpu_time = %v, want true", got)
+	}
 
-	var foundSummary, foundDuration bool
+	var foundSummary, foundDuration, foundCoverage bool
 	for _, ev := range doc.TraceEvents {
 		if ev.Name == "Xcode Timing Summary" && ev.Category == "xcode_timing" {
 			foundSummary = true
@@ -62,12 +66,21 @@ func TestExportChromeTracingIncludesTimingMetadata(t *testing.T) {
 				t.Fatalf("display duration event = %d, want %d", got, want)
 			}
 		}
+		if ev.Name == "Xcode Metrics Coverage" && ev.Category == "xcode_metrics" {
+			foundCoverage = true
+			if got := ev.Args["has_effective_gpu_time"]; got != true {
+				t.Fatalf("coverage has_effective_gpu_time = %v, want true", got)
+			}
+		}
 	}
 	if !foundSummary {
 		t.Fatal("missing Xcode Timing Summary event")
 	}
 	if !foundDuration {
 		t.Fatal("missing Xcode Display Duration event")
+	}
+	if !foundCoverage {
+		t.Fatal("missing Xcode Metrics Coverage event")
 	}
 }
 
@@ -249,9 +262,14 @@ func TestGenerateCounterTracksFromPerfDataUsesEncoderCounters(t *testing.T) {
 		KernelOccupancy:            0.81,
 		ALUUtilization:             3.25,
 		DeviceMemoryBandwidthGBps:  12.5,
+		BytesReadFromDeviceMemory:  500,
+		GPUWriteBandwidthGBps:      4.5,
 		InstructionThroughputUtil:  2.5,
 		ComputeUtilization:         3.25,
 		ComputeShaderLaunchLimiter: 0.17,
+		L1CacheLimiter:             0.25,
+		TextureReadLimiter:         0.5,
+		BufferL1MissRate:           1.25,
 	}}
 
 	streamStats := &gputrace.StreamDataStats{
@@ -288,6 +306,26 @@ func TestGenerateCounterTracksFromPerfDataUsesEncoderCounters(t *testing.T) {
 	if len(bandwidth.Samples) != 2 || bandwidth.Samples[0].Value != 12.5 {
 		t.Fatalf("bandwidth samples = %+v, want two samples at 12.5", bandwidth.Samples)
 	}
+	readBW := findCounterTrackForTest(t, tracks, "Memory Read BW")
+	if len(readBW.Samples) != 2 || readBW.Samples[0].Value != 5.0 {
+		t.Fatalf("memory read samples = %+v, want two samples at 5.0", readBW.Samples)
+	}
+	writeBW := findCounterTrackForTest(t, tracks, "Memory Write BW")
+	if len(writeBW.Samples) != 2 || writeBW.Samples[0].Value != 4.5 {
+		t.Fatalf("memory write samples = %+v, want two samples at 4.5", writeBW.Samples)
+	}
+	l1Miss := findCounterTrackForTest(t, tracks, "L1 Cache Miss Rate")
+	if len(l1Miss.Samples) != 2 || l1Miss.Samples[0].Value != 1.25 {
+		t.Fatalf("L1 miss samples = %+v, want two samples at 1.25", l1Miss.Samples)
+	}
+	computeLimiter := findCounterTrackForTest(t, tracks, "Limiter: Compute")
+	if len(computeLimiter.Samples) != 2 || computeLimiter.Samples[0].Value != 0.17 {
+		t.Fatalf("compute limiter samples = %+v, want two samples at 0.17", computeLimiter.Samples)
+	}
+	memoryLimiter := findCounterTrackForTest(t, tracks, "Limiter: Memory")
+	if len(memoryLimiter.Samples) != 2 || memoryLimiter.Samples[0].Value != 0.75 {
+		t.Fatalf("memory limiter samples = %+v, want two samples at 0.75", memoryLimiter.Samples)
+	}
 
 	activeCores := findCounterTrackForTest(t, tracks, "Active Cores")
 	if len(activeCores.Samples) != 0 {
@@ -309,6 +347,32 @@ func TestGenerateCounterTracksFromPerfDataUsesEncoderCounters(t *testing.T) {
 	tgmem := findCounterTrackForTest(t, tracks, "Threadgroup Memory")
 	if len(tgmem.Samples) != 2 || tgmem.Samples[0].Value != 1024 {
 		t.Fatalf("threadgroup memory samples = %+v, want two samples at 1024", tgmem.Samples)
+	}
+}
+
+func TestGenerateCounterTracksFromPerfDataKeepsSourceBackedZeroValues(t *testing.T) {
+	timeline := &Timeline{
+		Encoders: []EncoderInfo{{
+			Index:     0,
+			Label:     "kernel0",
+			Type:      "compute",
+			StartTime: 10,
+			EndTime:   20,
+			Duration:  10,
+		}},
+	}
+	encoderMetrics := []counter.EncoderCounterMetrics{{
+		EncoderIndex: 0,
+		EncoderLabel: "kernel0",
+	}}
+
+	tracks := generateCounterTracksFromPerfData(&gputrace.PerfCounterStats{}, nil, encoderMetrics, timeline)
+	alu := findCounterTrackForTest(t, tracks, "ALU Utilization")
+	if len(alu.Samples) != 2 {
+		t.Fatalf("ALU samples = %d, want 2", len(alu.Samples))
+	}
+	if got := alu.Samples[0].Value; got != 0 {
+		t.Fatalf("ALU value = %v, want 0", got)
 	}
 }
 
