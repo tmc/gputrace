@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -183,6 +184,36 @@ func TestTimelineDispatchSIMDGroup(t *testing.T) {
 	if got, want := timelineDispatchSIMDGroup(dispatch), uint64(32); got != want {
 		t.Fatalf("timelineDispatchSIMDGroup = %d, want %d", got, want)
 	}
+}
+
+func TestGenerateTimelineWithoutPerfDataIncludesDispatchSIMDGroups(t *testing.T) {
+	tracePath := "../../../testdata/traces/01-single-encoder/01-single-encoder-run1.gputrace"
+	if _, err := os.Stat(tracePath); os.IsNotExist(err) {
+		t.Skipf("trace fixture not available: %s", tracePath)
+	}
+
+	tr, err := tracepkg.Open(tracePath)
+	if err != nil {
+		t.Fatalf("open trace: %v", err)
+	}
+	defer tr.Close()
+
+	timeline, err := generateTimeline(tr)
+	if err != nil {
+		t.Fatalf("generateTimeline: %v", err)
+	}
+	for _, event := range timeline.Events {
+		if event.Category != "kernel" || event.Args == nil {
+			continue
+		}
+		if got, ok := event.Args["simd_groups"].(uint64); ok && got == 32 {
+			if source := fmt.Sprint(event.Args["source"]); !strings.Contains(source, "dispatch geometry") {
+				t.Fatalf("source = %q, want dispatch geometry", source)
+			}
+			return
+		}
+	}
+	t.Fatalf("no kernel event with simd_groups=32 in %#v", timeline.Events)
 }
 
 func TestGenerateInteractiveHTMLIncludesShaderTooltipFields(t *testing.T) {
