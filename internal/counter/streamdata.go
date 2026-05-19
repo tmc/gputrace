@@ -125,16 +125,20 @@ const (
 
 // StreamDataStats contains all parsed statistics from streamData.
 type StreamDataStats struct {
-	Pipelines       []PipelineStats     `json:"pipelines"`
-	Dispatches      []DispatchInfo      `json:"dispatches"`     // Per-dispatch timing and metadata
-	FunctionNames   []string            `json:"function_names"` // Unique function names from strings array
-	EncoderTimings  []EncoderTimingInfo `json:"encoder_timings"`
-	Timeline        *TimelineInfo       `json:"timeline,omitempty"` // CB timestamps from APSTimelineData
-	APSTimelineData [][]byte            `json:"-"`                  // Raw APSTimelineData blobs (nested plists)
-	NumEncoders     int                 `json:"num_encoders"`
-	NumGPUCommands  int                 `json:"num_gpu_commands"`
-	NumPipelines    int                 `json:"num_pipelines"`
-	TotalTimeUs     int                 `json:"total_time_us"` // Total GPU time in microseconds
+	Pipelines           []PipelineStats     `json:"pipelines"`
+	Dispatches          []DispatchInfo      `json:"dispatches"`     // Per-dispatch timing and metadata
+	FunctionNames       []string            `json:"function_names"` // Unique function names from strings array
+	EncoderTimings      []EncoderTimingInfo `json:"encoder_timings"`
+	Timeline            *TimelineInfo       `json:"timeline,omitempty"` // CB timestamps from APSTimelineData
+	APSTimelineData     [][]byte            `json:"-"`                  // Raw APSTimelineData blobs (nested plists)
+	NumEncoders         int                 `json:"num_encoders"`
+	NumGPUCommands      int                 `json:"num_gpu_commands"`
+	NumPipelines        int                 `json:"num_pipelines"`
+	TotalTimeUs         int                 `json:"total_time_us"` // Backward-compatible alias for TotalEncoderTimeUs.
+	TotalEncoderTimeUs  int                 `json:"total_encoder_time_us"`
+	TotalDispatchTimeUs int                 `json:"total_dispatch_time_us"`
+	EffectiveGPUTimeUs  *int                `json:"effective_gpu_time_us"` // Not yet parsed from Xcode's effective-time metric.
+	TimingSource        string              `json:"timing_source"`
 }
 
 // ParseStreamData parses the streamData plist from a .gpuprofiler_raw directory.
@@ -213,6 +217,7 @@ func ParseStreamData(gpuprofilerDir string, addressToName ...map[uint64]string) 
 				for _, et := range stats.EncoderTimings {
 					stats.TotalTimeUs += et.DurationMicros
 				}
+				stats.TotalEncoderTimeUs = stats.TotalTimeUs
 			}
 
 			// Extract per-dispatch timing from gpuCommandInfoData
@@ -230,6 +235,9 @@ func ParseStreamData(gpuprofilerDir string, addressToName ...map[uint64]string) 
 				}
 				stats.Dispatches = extractDispatchInfoWithMap(objects, int(gpuCmdUID), gpuCmdSize, pipelineToName, pipelineToID)
 				stats.NumGPUCommands = len(stats.Dispatches)
+				for _, d := range stats.Dispatches {
+					stats.TotalDispatchTimeUs += d.DurationUs
+				}
 			}
 
 			// Extract APSTimelineData blobs (nested plists with CB timestamps)
@@ -240,6 +248,7 @@ func ParseStreamData(gpuprofilerDir string, addressToName ...map[uint64]string) 
 		}
 	}
 
+	stats.TimingSource = "streamData encoderInfoData/gpuCommandInfoData cumulative offsets; not Xcode Effective GPU Time"
 	return stats, nil
 }
 

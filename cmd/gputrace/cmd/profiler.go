@@ -58,46 +58,15 @@ func init() {
 func runProfiler(cmd *cobra.Command, args []string) error {
 	tracePath := args[0]
 
-	// Find .gpuprofiler_raw directory
-	profilerDir := ""
-
-	// Check if it's directly a .gpuprofiler_raw directory
-	if filepath.Ext(tracePath) == ".gpuprofiler_raw" {
-		profilerDir = tracePath
-	} else {
-		// Look inside for .gpuprofiler_raw
-		entries, err := os.ReadDir(tracePath)
-		if err != nil {
-			return fmt.Errorf("read directory: %w", err)
-		}
-		for _, e := range entries {
-			if e.IsDir() && filepath.Ext(e.Name()) == ".gpuprofiler_raw" {
-				profilerDir = filepath.Join(tracePath, e.Name())
-				break
-			}
-		}
-	}
-
-	if profilerDir == "" {
+	profilerDir, stats, err := loadProfilerStats(tracePath)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "Hint: To generate performance data, run:\n")
 		fmt.Fprintf(os.Stderr, "  gputrace xcode-profile run %s\n\n", tracePath)
-		return fmt.Errorf("no .gpuprofiler_raw directory found in %s", tracePath)
+		return err
 	}
-
-	// Parse streamData
-	stats, err := counter.ParseStreamData(profilerDir)
-	if err != nil {
-		return fmt.Errorf("parse streamData: %w", err)
-	}
-
-	// Correlate GPRWCNTR samples with dispatches for per-dispatch GPU utilization
-	counter.CorrelateDispatchSamples(stats)
 
 	// Parse execution cost from Profiling_f_*.raw files
-	var execCost []counter.ExecutionCostByFunction
-	if costMetrics, err := counter.ExtractExecutionCostFromDir(profilerDir); err == nil {
-		execCost = counter.AggregateExecutionCostByFunction(costMetrics, stats.Pipelines)
-	}
+	execCost := aggregateExecutionCost(profilerDir, stats)
 
 	if profilerJSON {
 		output := ProfilerOutputStats{
@@ -162,7 +131,7 @@ func runProfiler(cmd *cobra.Command, args []string) error {
 		fmt.Sprintf("%d %s", stats.NumEncoders, Pluralize(stats.NumEncoders, "encoder", "encoders")),
 		fmt.Sprintf("%d %s", stats.NumGPUCommands, Pluralize(stats.NumGPUCommands, "dispatch", "dispatches")),
 	}
-	fmt.Printf("%s (%s)\n\n", strings.Join(parts, ", "), FormatDuration(totalDispatchTime))
+	fmt.Printf("%s (%s dispatch span)\n\n", strings.Join(parts, ", "), FormatDuration(totalDispatchTime))
 
 	fmt.Println(Colorize("Summary", ColorBold))
 	fmt.Println(TableSeparator(40))
@@ -170,7 +139,9 @@ func runProfiler(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Compute Encoders:  %s\n", FormatCount(stats.NumEncoders))
 	fmt.Printf("  Dispatch Calls:    %s\n", FormatCount(stats.NumGPUCommands))
 	fmt.Printf("  Unique Pipelines:  %s\n", FormatCount(stats.NumPipelines))
-	fmt.Printf("  Total GPU Time:    %s\n", FormatDuration(totalDispatchTime))
+	fmt.Printf("  Encoder Span Time: %s\n", FormatDuration(stats.TotalEncoderTimeUs))
+	fmt.Printf("  Dispatch Span Time:%s\n", FormatDuration(totalDispatchTime))
+	fmt.Println("  Effective GPU Time: (not parsed from Xcode)")
 	if totalThreadgroupMem > 0 {
 		fmt.Printf("  Threadgroup Mem:   %s (max per pipeline)\n", FormatBytes(uint64(totalThreadgroupMem)))
 	}
@@ -183,7 +154,7 @@ func runProfiler(cmd *cobra.Command, args []string) error {
 		fmt.Println()
 		fmt.Println(Colorize("Function Calls", ColorBold))
 		fmt.Println(TableSeparator(80))
-		fmt.Printf("%-50s %8s %10s %8s\n", "Function", "Calls", "Time(us)", "Cost")
+		fmt.Printf("%-50s %8s %10s %8s\n", "Function", "Calls", "Span(us)", "Cost")
 		fmt.Println(TableSeparator(80))
 		for _, fs := range sortedFuncs {
 			pct := 0.0
@@ -238,11 +209,11 @@ func runProfiler(cmd *cobra.Command, args []string) error {
 			fmt.Printf("\n%d %s (%s total):\n",
 				len(stats.EncoderTimings),
 				Pluralize(len(stats.EncoderTimings), "encoder", "encoders"),
-				FormatDuration(stats.TotalTimeUs))
+				FormatDuration(stats.TotalEncoderTimeUs))
 			for _, e := range stats.EncoderTimings {
 				pct := 0.0
-				if stats.TotalTimeUs > 0 {
-					pct = float64(e.DurationMicros) / float64(stats.TotalTimeUs) * 100
+				if stats.TotalEncoderTimeUs > 0 {
+					pct = float64(e.DurationMicros) / float64(stats.TotalEncoderTimeUs) * 100
 				}
 				label := e.Label
 				if label == "" {

@@ -55,6 +55,9 @@ func runStats(cmd *cobra.Command, args []string) error {
 	// Open trace
 	trace, err := gputrace.Open(tracePath)
 	if err != nil {
+		if findProfilerDir(tracePath) != "" {
+			return runStatsFromProfiler(tracePath)
+		}
 		return fmt.Errorf("failed to open trace: %w", err)
 	}
 
@@ -291,6 +294,94 @@ func runStats(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	return nil
+}
+
+type profilerStatsJSONOutput struct {
+	ProfilerOnly bool              `json:"profiler_only"`
+	ProfilerDir  string            `json:"profiler_dir"`
+	Statistics   profilerStatsJSON `json:"statistics"`
+}
+
+type profilerStatsJSON struct {
+	CommandBuffers      int    `json:"command_buffers"`
+	ComputeEncoders     int    `json:"compute_encoders"`
+	DispatchCalls       int    `json:"dispatch_calls"`
+	UniquePipelines     int    `json:"unique_pipelines"`
+	TotalGPUTimeUs      int    `json:"total_gpu_time_us"` // Backward-compatible alias for TotalEncoderTimeUs.
+	TotalEncoderTimeUs  int    `json:"total_encoder_time_us"`
+	TotalDispatchTimeUs int    `json:"total_dispatch_time_us"`
+	TimingSource        string `json:"timing_source"`
+}
+
+func runStatsFromProfiler(tracePath string) error {
+	profilerDir, streamStats, err := loadProfilerStats(tracePath)
+	if err != nil {
+		return err
+	}
+
+	commandBuffers := 0
+	if streamStats.Timeline != nil {
+		commandBuffers = len(streamStats.Timeline.CommandBufferTimestamps)
+	}
+	stats := profilerStatsJSON{
+		CommandBuffers:      commandBuffers,
+		ComputeEncoders:     streamStats.NumEncoders,
+		DispatchCalls:       streamStats.NumGPUCommands,
+		UniquePipelines:     streamStats.NumPipelines,
+		TotalGPUTimeUs:      streamStats.TotalEncoderTimeUs,
+		TotalEncoderTimeUs:  streamStats.TotalEncoderTimeUs,
+		TotalDispatchTimeUs: streamStats.TotalDispatchTimeUs,
+		TimingSource:        streamStats.TimingSource,
+	}
+
+	if statsJSON {
+		output := profilerStatsJSONOutput{
+			ProfilerOnly: true,
+			ProfilerDir:  profilerDir,
+			Statistics:   stats,
+		}
+		jsonData, err := json.MarshalIndent(output, "", "  ")
+		if err != nil {
+			return fmt.Errorf("failed to marshal JSON: %w", err)
+		}
+		fmt.Println(string(jsonData))
+		return nil
+	}
+
+	parts := []string{
+		fmt.Sprintf("%d %s", stats.ComputeEncoders, Pluralize(stats.ComputeEncoders, "encoder", "encoders")),
+		fmt.Sprintf("%d %s", stats.DispatchCalls, Pluralize(stats.DispatchCalls, "dispatch", "dispatches")),
+		fmt.Sprintf("%d %s", stats.UniquePipelines, Pluralize(stats.UniquePipelines, "pipeline", "pipelines")),
+	}
+	fmt.Println(strings.Join(parts, ", "))
+	fmt.Println()
+
+	fmt.Println(Colorize("Profiler-Only Trace", ColorBold))
+	fmt.Println(TableSeparator(40))
+	fmt.Printf("  Path:          %s\n", tracePath)
+	fmt.Printf("  Profiler Data: %s\n", profilerDir)
+	fmt.Printf("  Note:          no MTSP capture data; use profiler for kernel timing details\n")
+	fmt.Println()
+
+	fmt.Println(Colorize("Workload", ColorBold))
+	fmt.Println(TableSeparator(40))
+	fmt.Printf("  Command Buffers:  %s\n", FormatCount(stats.CommandBuffers))
+	fmt.Printf("  Compute Encoders: %s\n", FormatCount(stats.ComputeEncoders))
+	fmt.Printf("  Dispatch Calls:   %s\n", FormatCount(stats.DispatchCalls))
+	fmt.Printf("  Unique Pipelines: %s\n", FormatCount(stats.UniquePipelines))
+	fmt.Println()
+
+	fmt.Println(Colorize("Timing", ColorBold))
+	fmt.Println(TableSeparator(40))
+	if stats.TotalEncoderTimeUs > 0 {
+		fmt.Printf("  Encoder Span:     %s\n", FormatDuration(stats.TotalEncoderTimeUs))
+		fmt.Printf("  Dispatch Span:    %s\n", FormatDuration(stats.TotalDispatchTimeUs))
+		fmt.Printf("  Effective GPU:    (not parsed from Xcode)\n")
+	} else {
+		fmt.Printf("  Timing:           (not available)\n")
+	}
+	fmt.Println()
 	return nil
 }
 
