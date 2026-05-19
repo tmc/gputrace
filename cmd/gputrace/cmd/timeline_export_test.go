@@ -11,6 +11,7 @@ import (
 	"github.com/tmc/gputrace"
 	"github.com/tmc/gputrace/internal/counter"
 	tracepkg "github.com/tmc/gputrace/internal/trace"
+	"github.com/tmc/gputrace/internal/xcodebindings"
 )
 
 func TestExportChromeTracingIncludesTimingMetadata(t *testing.T) {
@@ -235,6 +236,100 @@ func TestAddDispatchKernelEventsUsesEncoderCounterFallback(t *testing.T) {
 	}
 	if got, want := args["alu_utilization_source"], "encoder counter fallback"; got != want {
 		t.Fatalf("alu_utilization_source = %#v, want %#v", got, want)
+	}
+}
+
+func TestBuildXcodeParityReport(t *testing.T) {
+	timeline := &Timeline{
+		Timing: &TimelineTiming{
+			TimingSource:          "command buffer active time",
+			DisplayDurationSource: "command buffer active time",
+		},
+		Events: []TimelineEvent{{
+			Category: "kernel",
+			Args: map[string]interface{}{
+				"occupancy_pct":       62.5,
+				"allocated_registers": 13,
+			},
+		}},
+	}
+	report := buildXcodeParityReport("trace.gputrace", timeline, xcodebindingsReportForTest())
+	if report.KernelEvents != 1 {
+		t.Fatalf("KernelEvents = %d, want 1", report.KernelEvents)
+	}
+	if len(report.RemainingGaps) == 0 {
+		t.Fatal("missing remaining gaps")
+	}
+	for _, gap := range report.RemainingGaps {
+		if gap.Metric == "occupancy_pct" {
+			t.Fatalf("occupancy_pct should be closed: %+v", report.RemainingGaps)
+		}
+	}
+}
+
+func TestXcodeParityStreamDataEvidenceReportsSafeNextSteps(t *testing.T) {
+	report := xcodeParityReport{
+		Timing: map[string]interface{}{},
+		RemainingGaps: []xcodeParityGap{
+			{Metric: "high_register", Next: "old"},
+			{Metric: "alu_utilization_pct", Next: "old"},
+			{Metric: "effective_gpu_time", Next: "old"},
+		},
+		StreamData: &xcodebindings.StreamDataSummary{
+			SelectedValues: []xcodebindings.ValueSummary{
+				{Key: "Binaries", Count: 734},
+				{Key: "Derived Counter Sample Data", Count: 16},
+				{Key: "Derived Counters Info Data"},
+				{Key: "ReplayerGPUTime", Count: 1},
+			},
+		},
+	}
+
+	report.applyStreamDataEvidence()
+
+	gaps := make(map[string]xcodeParityGap)
+	for _, gap := range report.RemainingGaps {
+		gaps[gap.Metric] = gap
+	}
+	if got := gaps["high_register"].Next; !strings.Contains(got, "nil-parent constructor path is unsafe") {
+		t.Fatalf("high_register next = %q, want unsafe constructor warning", got)
+	}
+	if got := gaps["alu_utilization_pct"].Next; !strings.Contains(got, "counter info dictionary is empty") {
+		t.Fatalf("alu_utilization_pct next = %q, want empty counter info warning", got)
+	}
+	if got := gaps["effective_gpu_time"].Status; got != "archived as zero in Xcode streamData" {
+		t.Fatalf("effective_gpu_time status = %q, want archived zero", got)
+	}
+}
+
+func xcodebindingsReportForTest() xcodebindings.Report {
+	return xcodebindings.Report{
+		Summary: map[string]int{
+			"classes_present":   4,
+			"classes_missing":   0,
+			"selectors_present": 42,
+			"selectors_missing": 0,
+		},
+		Gaps: []xcodebindings.Gap{
+			{
+				Metric:  "high_register",
+				Binding: "GTMioShaderBinaryData.liveRegisterForInstructionAtIndex:",
+				Status:  "binding present; adapter missing",
+				Next:    "map shader binary data",
+			},
+			{
+				Metric:  "alu_utilization_pct",
+				Binding: "XRGPUAPSDataProcessor derived counters",
+				Status:  "binding present; adapter missing",
+				Next:    "resolve ALU counter",
+			},
+			{
+				Metric:  "occupancy_pct",
+				Binding: "XRGPUAPSDataProcessor derived counters",
+				Status:  "binding present; adapter missing",
+				Next:    "resolve occupancy counter",
+			},
+		},
 	}
 }
 

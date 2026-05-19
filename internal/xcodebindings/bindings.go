@@ -64,7 +64,7 @@ func Probe() Report {
 		},
 	}
 	if report.Framework {
-		if _, err := purego.Dlopen(frameworkPath, purego.RTLD_LAZY|purego.RTLD_GLOBAL); err != nil {
+		if err := loadFramework(); err != nil {
 			report.Framework = false
 			report.Notes = append(report.Notes, "failed to load GTShaderProfiler.framework: "+err.Error())
 		}
@@ -189,6 +189,14 @@ func Probe() Report {
 		report.Notes = append(report.Notes, "GTShaderProfiler.framework was not found at the expected Xcode path")
 	}
 	return report
+}
+
+func loadFramework() error {
+	if _, err := os.Stat(frameworkPath); err != nil {
+		return err
+	}
+	_, err := purego.Dlopen(frameworkPath, purego.RTLD_LAZY|purego.RTLD_GLOBAL)
+	return err
 }
 
 func fileExists(path string) bool {
