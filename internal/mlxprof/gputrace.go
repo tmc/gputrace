@@ -3,12 +3,14 @@ package mlxprof
 import (
 	"compress/gzip"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/google/pprof/profile"
 	"github.com/tmc/gputrace"
+	"github.com/tmc/gputrace/internal/counter"
 )
 
 // GPUTraceProfiler provides comprehensive profiling from .gputrace files.
@@ -18,6 +20,7 @@ type GPUTraceProfiler struct {
 	basename     string
 	sourceMapper *gputrace.ShaderSourceMapper
 	stats        *gputrace.PerfCounterStats
+	streamStats  *counter.StreamDataStats
 }
 
 // FromGPUTrace creates a comprehensive profiler from a .gputrace file.
@@ -47,19 +50,28 @@ func FromGPUTrace(tracePath string, shaderSearchPaths ...string) (*GPUTraceProfi
 		return nil, fmt.Errorf("open gputrace: %w", err)
 	}
 
-	// Extract timing data - try multiple strategies
+	streamStats, _ := counter.ExtractPipelineStatsFromTraceStreamData(trace)
+
+	// Extract timing data - try multiple strategies.
 	var timings []*gputrace.EncoderTiming
 
-	// Strategy 1: Try standard timing extraction
-	timings, err = gputrace.ExtractTimingData(trace)
-	if err != nil || len(timings) == 0 {
-		// Strategy 2: Try store0 timing extraction (for performance traces)
+	// Strategy 1: Use profiler streamData when present. This is what the
+	// Xcode Performance view uses for encoder spans.
+	profilerTimings, totalTimeUs, profilerErr := counter.ExtractEncoderTimingsFromProfiler(trace)
+	if profilerErr == nil && len(profilerTimings) > 0 {
+		timings = encoderTimingsFromProfiler(profilerTimings, totalTimeUs)
+	} else {
+		// Strategy 2: Try standard timing extraction.
+		timings, err = gputrace.ExtractTimingData(trace)
+	}
+	if len(timings) == 0 {
+		// Strategy 3: Try store0 timing extraction (for performance traces).
 		store0Data, store0Err := gputrace.ExtractStore0Timing(trace)
 		if store0Err == nil && len(store0Data.Encoders) > 0 {
 			timings = gputrace.ConvertStore0ToEncoderTimings(trace, store0Data)
 		} else {
-			// Strategy 3: Generate synthetic timing from kernel names
-			// This provides qualitative analysis even without real timing data
+			// Strategy 4: Generate synthetic timing from kernel names.
+			// This provides qualitative analysis even without real timing data.
 			timings = gputrace.GenerateSyntheticTiming(trace)
 			if len(timings) == 0 {
 				return nil, fmt.Errorf("no timing data available (tried standard, store0, and synthetic): %w (store0: %v)", err, store0Err)
@@ -96,7 +108,34 @@ func FromGPUTrace(tracePath string, shaderSearchPaths ...string) (*GPUTraceProfi
 		basename:     basename,
 		sourceMapper: mapper,
 		stats:        stats,
+		streamStats:  streamStats,
 	}, nil
+}
+
+func encoderTimingsFromProfiler(in []counter.EncoderTimingInfo, totalTimeUs int) []*gputrace.EncoderTiming {
+	out := make([]*gputrace.EncoderTiming, 0, len(in))
+	var currentNs uint64
+	totalNs := uint64(totalTimeUs) * 1000
+	for _, pt := range in {
+		label := pt.Label
+		if label == "" {
+			label = fmt.Sprintf("encoder_%d", pt.Index)
+		}
+		durationNs := uint64(pt.DurationMicros) * 1000
+		percentage := float32(0)
+		if totalNs > 0 {
+			percentage = float32(float64(durationNs) / float64(totalNs) * 100)
+		}
+		out = append(out, &gputrace.EncoderTiming{
+			Label:          label,
+			StartTimestamp: currentNs,
+			DurationNs:     durationNs,
+			DurationMs:     float64(durationNs) / 1e6,
+			Percentage:     percentage,
+		})
+		currentNs += durationNs
+	}
+	return out
 }
 
 // WriteGPUProfile writes a GPU-only pprof profile.
@@ -118,6 +157,7 @@ func (p *GPUTraceProfiler) WriteGPUProfileSimple(path string) error {
 	if err != nil {
 		return fmt.Errorf("generate simple pprof: %w", err)
 	}
+	p.addProfileTimingComments(prof)
 
 	return p.writeProfile(prof, path)
 }
@@ -150,16 +190,12 @@ func (p *GPUTraceProfiler) WriteTextReport(path string) error {
 	fmt.Fprintf(f, "Encoders: %d\n", len(p.timings))
 	fmt.Fprintf(f, "Kernel Names: %d\n\n", len(p.trace.KernelNames))
 
-	var totalMs float64
-	for _, t := range p.timings {
-		totalMs += t.DurationMs
-	}
-
-	fmt.Fprintf(f, "Total GPU Time: %.2f ms\n\n", totalMs)
+	p.writeTimingSummary(f)
+	fmt.Fprintln(f)
 
 	fmt.Fprintf(f, "Encoder Breakdown:\n")
 	fmt.Fprintf(f, "%-30s %12s %12s %8s\n", "Label", "Duration (ms)", "Duration (ns)", "Percent")
-	fmt.Fprintf(f, "%s\n", string(make([]byte, 80)))
+	fmt.Fprintf(f, "%s\n", strings.Repeat("-", 80))
 	for _, t := range p.timings {
 		fmt.Fprintf(f, "%-30s %12.2f %12d %7.1f%%\n",
 			t.Label, t.DurationMs, t.DurationNs, t.Percentage)
@@ -211,12 +247,8 @@ func (p *GPUTraceProfiler) PrintSummary() {
 	fmt.Printf("Encoders: %d\n", len(p.timings))
 	fmt.Printf("Kernels: %d\n\n", len(p.trace.KernelNames))
 
-	var totalMs float64
-	for _, t := range p.timings {
-		totalMs += t.DurationMs
-	}
-
-	fmt.Printf("Total GPU Time: %.2f ms\n\n", totalMs)
+	p.writeTimingSummary(os.Stdout)
+	fmt.Println()
 
 	fmt.Printf("Top Encoders:\n")
 	for i, t := range p.timings {
@@ -225,6 +257,31 @@ func (p *GPUTraceProfiler) PrintSummary() {
 		}
 		fmt.Printf("  %2d. %-30s %8.2f ms (%5.1f%%)\n",
 			i+1, t.Label, t.DurationMs, t.Percentage)
+	}
+}
+
+func (p *GPUTraceProfiler) writeTimingSummary(w io.Writer) {
+	var totalMs float64
+	for _, t := range p.timings {
+		totalMs += t.DurationMs
+	}
+
+	fmt.Fprintf(w, "Total GPU Time: %.2f ms\n", totalMs)
+	if p.streamStats != nil {
+		if p.streamStats.EffectiveGPUTimeNs != nil {
+			fmt.Fprintf(w, "Effective GPU Time: %.2f ms\n", float64(*p.streamStats.EffectiveGPUTimeNs)/1e6)
+		} else {
+			fmt.Fprintln(w, "Effective GPU Time: (not present in streamData)")
+		}
+		if p.streamStats.CommandBufferActiveNs > 0 {
+			fmt.Fprintf(w, "CB Active Time: %.2f ms\n", float64(p.streamStats.CommandBufferActiveNs)/1e6)
+		}
+		if p.streamStats.CommandBufferWallNs > 0 {
+			fmt.Fprintf(w, "CB Wall Time: %.2f ms\n", float64(p.streamStats.CommandBufferWallNs)/1e6)
+		}
+		if p.streamStats.TimingSource != "" {
+			fmt.Fprintf(w, "Timing Source: %s\n", p.streamStats.TimingSource)
+		}
 	}
 }
 
@@ -241,6 +298,7 @@ func (p *GPUTraceProfiler) buildCombinedProfile() (*profile.Profile, error) {
 			{Type: "gpu_time", Unit: "nanoseconds"},
 			{Type: "gpu_utilization", Unit: "percentage"},
 		},
+		DefaultSampleType: "gpu_time",
 	}
 
 	if len(p.timings) > 0 {
@@ -329,8 +387,30 @@ func (p *GPUTraceProfiler) buildCombinedProfile() (*profile.Profile, error) {
 
 		prof.Sample = append(prof.Sample, sample)
 	}
+	p.addProfileTimingComments(prof)
 
 	return prof, nil
+}
+
+func (p *GPUTraceProfiler) addProfileTimingComments(prof *profile.Profile) {
+	if prof == nil || p.streamStats == nil {
+		return
+	}
+	stats := p.streamStats
+	if stats.TimingSource != "" {
+		prof.Comments = append(prof.Comments, "gputrace timing_source: "+stats.TimingSource)
+	}
+	if stats.EffectiveGPUTimeNs != nil {
+		prof.Comments = append(prof.Comments, fmt.Sprintf("gputrace effective_gpu_time_ns: %d", *stats.EffectiveGPUTimeNs))
+	} else {
+		prof.Comments = append(prof.Comments, "gputrace effective_gpu_time_ns: not present in streamData")
+	}
+	if stats.CommandBufferActiveNs > 0 {
+		prof.Comments = append(prof.Comments, fmt.Sprintf("gputrace command_buffer_active_time_ns: %d", stats.CommandBufferActiveNs))
+	}
+	if stats.CommandBufferWallNs > 0 {
+		prof.Comments = append(prof.Comments, fmt.Sprintf("gputrace command_buffer_wall_time_ns: %d", stats.CommandBufferWallNs))
+	}
 }
 
 // writeProfile writes a profile to disk with gzip compression.

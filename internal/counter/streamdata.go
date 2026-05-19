@@ -715,6 +715,17 @@ func ExtractEncoderTimingsFromProfiler(t *trace.Trace) ([]EncoderTimingInfo, int
 // .gpuprofiler_raw directory. This provides instruction counts, register allocation,
 // and other compilation metrics.
 func ExtractPipelineStatsFromTrace(t *trace.Trace) (*StreamDataStats, error) {
+	return extractPipelineStatsFromTrace(t, t.FunctionToName)
+}
+
+// ExtractPipelineStatsFromTraceStreamData extracts pipeline stats using the
+// function names embedded in streamData. This matches Xcode's profiler tables
+// for perfdata bundles when capture-side function-address mappings disagree.
+func ExtractPipelineStatsFromTraceStreamData(t *trace.Trace) (*StreamDataStats, error) {
+	return extractPipelineStatsFromTrace(t, nil)
+}
+
+func extractPipelineStatsFromTrace(t *trace.Trace, addressToName map[uint64]string) (*StreamDataStats, error) {
 	// Find .gpuprofiler_raw directory
 	perfDir := t.Path + ".gpuprofiler_raw"
 	if _, err := os.Stat(perfDir); os.IsNotExist(err) {
@@ -738,8 +749,13 @@ func ExtractPipelineStatsFromTrace(t *trace.Trace) (*StreamDataStats, error) {
 		}
 	}
 
-	// Parse streamData with FunctionToName mapping for accurate function resolution
-	stats, err := ParseStreamData(perfDir, t.FunctionToName)
+	var stats *StreamDataStats
+	var err error
+	if addressToName != nil {
+		stats, err = ParseStreamData(perfDir, addressToName)
+	} else {
+		stats, err = ParseStreamData(perfDir)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("parse streamData: %w", err)
 	}
