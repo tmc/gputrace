@@ -195,12 +195,13 @@ func TestPprofSampleTotals(t *testing.T) {
 	prof := &profile.Profile{
 		SampleType: []*profile.ValueType{
 			{Type: "simd_groups", Unit: "count"},
+			{Type: "alu_util", Unit: "basis_points"},
 			{Type: "high_reg", Unit: "count"},
 			{Type: "read_bytes", Unit: "bytes"},
 		},
 		Sample: []*profile.Sample{
-			{Value: []int64{32, 0, 100}},
-			{Value: []int64{16, 0, 200}},
+			{Value: []int64{32, 0, 0, 100}, Label: map[string][]string{"counter_source": {"Counters_f_*.raw/Profiling_f_*.raw"}}},
+			{Value: []int64{16, 0, 0, 200}},
 		},
 	}
 	totals := pprofSampleTotals(prof)
@@ -223,5 +224,11 @@ func TestPprofSampleTotals(t *testing.T) {
 	}
 	if !strings.Contains(comments, "gputrace xcode_metric_total read_bytes: 300") {
 		t.Fatalf("comments missing read_bytes total: %s", comments)
+	}
+	if !strings.Contains(comments, "gputrace xcode_metric_source alu_util: Counters_f_*.raw/Profiling_f_*.raw") {
+		t.Fatalf("comments missing alu source: %s", comments)
+	}
+	if strings.Contains(comments, "gputrace xcode_metric_binding_candidate alu_util") {
+		t.Fatalf("comments should not report source-backed zero ALU as missing: %s", comments)
 	}
 }

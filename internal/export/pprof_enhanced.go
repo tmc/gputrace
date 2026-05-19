@@ -336,6 +336,7 @@ func appendXcodeMetricCoverageComments(prof *profile.Profile) {
 	if len(totals) == 0 {
 		return
 	}
+	counterSource := pprofHasLabel(prof, "counter_source")
 	for _, name := range []string{
 		"simd_groups",
 		"execution_cost",
@@ -355,6 +356,10 @@ func appendXcodeMetricCoverageComments(prof *profile.Profile) {
 	} {
 		prof.Comments = append(prof.Comments, fmt.Sprintf("gputrace xcode_metric_total %s: %d", name, totals[name]))
 	}
+	if counterSource {
+		prof.Comments = append(prof.Comments, "gputrace xcode_metric_source alu_util: Counters_f_*.raw/Profiling_f_*.raw")
+		prof.Comments = append(prof.Comments, "gputrace xcode_metric_source occupancy: Counters_f_*.raw/Profiling_f_*.raw")
+	}
 	for _, gap := range []struct {
 		name    string
 		binding string
@@ -363,11 +368,26 @@ func appendXcodeMetricCoverageComments(prof *profile.Profile) {
 		{"occupancy", "XRGPUAPSDataProcessor derived counters"},
 		{"alu_util", "XRGPUAPSDataProcessor derived counters"},
 	} {
+		if counterSource && (gap.name == "alu_util" || gap.name == "occupancy") {
+			continue
+		}
 		if totals[gap.name] == 0 {
 			prof.Comments = append(prof.Comments,
 				fmt.Sprintf("gputrace xcode_metric_binding_candidate %s: %s", gap.name, gap.binding))
 		}
 	}
+}
+
+func pprofHasLabel(prof *profile.Profile, key string) bool {
+	if prof == nil {
+		return false
+	}
+	for _, sample := range prof.Sample {
+		if len(sample.Label[key]) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func pprofSampleTotals(prof *profile.Profile) map[string]int64 {

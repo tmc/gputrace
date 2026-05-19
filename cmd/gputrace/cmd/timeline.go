@@ -1556,11 +1556,11 @@ func dispatchKernelArgs(d counter.DispatchInfo, p *counter.PipelineStats, simdGr
 		}
 	}
 	if encoderMetric != nil {
-		if encoderMetric.KernelOccupancy > 0 && args["occupancy_pct"] == nil {
+		if args["occupancy_pct"] == nil {
 			args["occupancy_pct"] = encoderMetric.KernelOccupancy
 			args["occupancy_source"] = "encoder counter fallback"
 		}
-		if encoderMetric.ALUUtilization > 0 && args["alu_utilization_pct"] == nil {
+		if args["alu_utilization_pct"] == nil {
 			args["alu_utilization_pct"] = encoderMetric.ALUUtilization
 			args["alu_utilization_source"] = "encoder counter fallback"
 		}

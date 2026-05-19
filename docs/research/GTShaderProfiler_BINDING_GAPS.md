@@ -43,13 +43,14 @@ through `GTShaderProfilerStreamData.dataFromArchivedDataURL:` and reports:
   bytes across the sampled children.
 
 The dispatch occupancy gap is closed for this trace through the encoder counter
-fallback. The remaining exporter gaps are:
+fallback. The dispatch ALU utilization gap is also closed for this trace:
+`Counters_f_12.raw` is source-backed, exports zero for all encoder rows, and
+gputrace now carries that zero into all kernel events and pprof samples with
+counter-source provenance. The remaining exporter gaps are:
 
 - `high_register`: binary blobs are present in stream data, but gputrace does
   not yet have a safe adapter from those blobs to per-kernel live register
   values.
-- `alu_utilization_pct`: derived counter samples are present, but gputrace does
-  not yet decode them into the Xcode display value.
 - effective GPU time: `ReplayerGPUTime` is archived as zero for this trace, so
   gputrace keeps reporting the command-buffer active-time fallback.
 
