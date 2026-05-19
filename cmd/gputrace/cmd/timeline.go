@@ -1107,6 +1107,21 @@ func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, str
 		Unit:    "bytes",
 		Samples: make([]CounterSample, 0),
 	}
+	allocatedRegsTrack := CounterTrack{
+		Name:    "Allocated Registers",
+		Unit:    "count",
+		Samples: make([]CounterSample, 0),
+	}
+	uniformRegsTrack := CounterTrack{
+		Name:    "Uniform Registers",
+		Unit:    "count",
+		Samples: make([]CounterSample, 0),
+	}
+	spilledBytesTrack := CounterTrack{
+		Name:    "Spilled Bytes",
+		Unit:    "bytes",
+		Samples: make([]CounterSample, 0),
+	}
 
 	// Generate samples for instruction tracks - use PipelineStats from streamData
 	// Match by encoder label (which is the kernel/function name)
@@ -1170,6 +1185,9 @@ func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, str
 				CounterSample{Timestamp: encoder.StartTime, Value: float64(pipeline.ThreadgroupMemory)},
 				CounterSample{Timestamp: encoder.EndTime, Value: float64(pipeline.ThreadgroupMemory)})
 		}
+		appendCounterTrackSample(&allocatedRegsTrack, encoder, float64(pipeline.TemporaryRegisterCount))
+		appendCounterTrackSample(&uniformRegsTrack, encoder, float64(pipeline.UniformRegisterCount))
+		appendCounterTrackSample(&spilledBytesTrack, encoder, float64(pipeline.SpilledBytes))
 	}
 
 	// Calculate stats and append tracks that have data
@@ -1181,6 +1199,9 @@ func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, str
 	calculateTrackStats(&int16InstrTrack)
 	calculateTrackStats(&branchInstrTrack)
 	calculateTrackStats(&threadgroupMemTrack)
+	calculateTrackStats(&allocatedRegsTrack)
+	calculateTrackStats(&uniformRegsTrack)
+	calculateTrackStats(&spilledBytesTrack)
 
 	// Only add tracks that have samples
 	if len(instructionTrack.Samples) > 0 {
@@ -1206,6 +1227,15 @@ func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, str
 	}
 	if len(threadgroupMemTrack.Samples) > 0 {
 		tracks = append(tracks, threadgroupMemTrack)
+	}
+	if len(allocatedRegsTrack.Samples) > 0 {
+		tracks = append(tracks, allocatedRegsTrack)
+	}
+	if len(uniformRegsTrack.Samples) > 0 {
+		tracks = append(tracks, uniformRegsTrack)
+	}
+	if len(spilledBytesTrack.Samples) > 0 {
+		tracks = append(tracks, spilledBytesTrack)
 	}
 
 	return tracks

@@ -223,7 +223,18 @@ func TestGenerateCounterTracksFromPerfDataUsesEncoderCounters(t *testing.T) {
 		ComputeShaderLaunchLimiter: 0.17,
 	}}
 
-	tracks := generateCounterTracksFromPerfData(&gputrace.PerfCounterStats{}, nil, encoderMetrics, timeline)
+	streamStats := &gputrace.StreamDataStats{
+		FunctionNames: []string{"kernel0"},
+		Pipelines: []gputrace.PipelineStats{{
+			FunctionName:           "kernel0",
+			TemporaryRegisterCount: 46,
+			UniformRegisterCount:   8,
+			SpilledBytes:           16,
+			ThreadgroupMemory:      1024,
+		}},
+	}
+
+	tracks := generateCounterTracksFromPerfData(&gputrace.PerfCounterStats{}, streamStats, encoderMetrics, timeline)
 	occupancy := findCounterTrackForTest(t, tracks, "Occupancy")
 	if len(occupancy.Samples) != 2 {
 		t.Fatalf("occupancy samples = %d, want 2", len(occupancy.Samples))
@@ -250,6 +261,23 @@ func TestGenerateCounterTracksFromPerfDataUsesEncoderCounters(t *testing.T) {
 	activeCores := findCounterTrackForTest(t, tracks, "Active Cores")
 	if len(activeCores.Samples) != 0 {
 		t.Fatalf("active cores samples = %+v, want none", activeCores.Samples)
+	}
+
+	allocated := findCounterTrackForTest(t, tracks, "Allocated Registers")
+	if len(allocated.Samples) != 2 || allocated.Samples[0].Value != 46 {
+		t.Fatalf("allocated register samples = %+v, want two samples at 46", allocated.Samples)
+	}
+	uniform := findCounterTrackForTest(t, tracks, "Uniform Registers")
+	if len(uniform.Samples) != 2 || uniform.Samples[0].Value != 8 {
+		t.Fatalf("uniform register samples = %+v, want two samples at 8", uniform.Samples)
+	}
+	spills := findCounterTrackForTest(t, tracks, "Spilled Bytes")
+	if len(spills.Samples) != 2 || spills.Samples[0].Value != 16 {
+		t.Fatalf("spilled byte samples = %+v, want two samples at 16", spills.Samples)
+	}
+	tgmem := findCounterTrackForTest(t, tracks, "Threadgroup Memory")
+	if len(tgmem.Samples) != 2 || tgmem.Samples[0].Value != 1024 {
+		t.Fatalf("threadgroup memory samples = %+v, want two samples at 1024", tgmem.Samples)
 	}
 }
 

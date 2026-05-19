@@ -95,6 +95,13 @@ func profileBasisPoints(v float64) int64 {
 	return int64(math.Round(v * 100))
 }
 
+const (
+	pprofValueCount       = 37
+	pprofExecutionCostIdx = 34
+	pprofProfilerCountIdx = 35
+	pprofUniformRegsIdx   = 36
+)
+
 func dispatchSIMDGroupsByIndex(t *trace.Trace, stats *counter.StreamDataStats) []int64 {
 	if t == nil || stats == nil || len(stats.Dispatches) == 0 || len(t.CaptureData) == 0 {
 		return nil
@@ -345,6 +352,9 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 
 			// GPRWCNTR encoder profile data (index 35)
 			{Type: "profiler_samples", Unit: "count"}, // GPRWCNTR sample count from ShaderProfilerData
+
+			// Register footprint from streamData pipeline stats (index 36)
+			{Type: "uniform_regs", Unit: "count"}, // Uniform registers
 		},
 		PeriodType: &profile.ValueType{
 			Type: "gpu",
@@ -671,9 +681,10 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 			matches++
 		}
 
-		// Prepare sample values - 34 value types matching SampleType array
-		// Indices: 0-2 core, 3-6 hardware, 7-12 utilization %, 13-18 limiter %, 19-22 bytes, 23-25 bandwidth, 26-33 instructions
-		values := make([]int64, 36)
+		// Prepare sample values matching SampleType.
+		// Indices: 0-2 core, 3-6 hardware, 7-18 percentages,
+		// 19-25 bytes and bandwidth, 26-33 instructions.
+		values := make([]int64, pprofValueCount)
 		values[0] = duration // time
 		values[1] = 1        // count
 		// values[2] = edges (set later for dependency samples)
@@ -838,7 +849,7 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 			}
 
 			// Dispatch sample values - only count and thread metrics
-			dispValues := make([]int64, 36)
+			dispValues := make([]int64, pprofValueCount)
 			dispValues[1] = 1 // count
 
 			dispLabels := map[string][]string{
@@ -920,14 +931,14 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 			dispLocStack := []*profile.Location{funcLoc, queueLoc, gpuTraceLoc}
 
 			// Create sample with real timing
-			dispValues := make([]int64, 36)
+			dispValues := make([]int64, pprofValueCount)
 			dispValues[0] = int64(d.DurationUs) * 1000 // Convert µs to ns
 			dispValues[1] = 1                          // count
 			if d.Index >= 0 && d.Index < len(dispatchSIMDGroups) {
 				dispValues[3] = dispatchSIMDGroups[d.Index]
 			}
 			if i < len(dispatchExecutionCosts) {
-				dispValues[34] = dispatchExecutionCosts[i]
+				dispValues[pprofExecutionCostIdx] = dispatchExecutionCosts[i]
 			}
 
 			// Add instruction count from pipeline if available
@@ -935,6 +946,7 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 				p := streamStats.Pipelines[d.PipelineIndex]
 				dispValues[4] = int64(p.TemporaryRegisterCount)
 				dispValues[6] = int64(p.SpilledBytes)
+				dispValues[pprofUniformRegsIdx] = int64(p.UniformRegisterCount)
 				dispValues[26] = int64(p.InstructionCount)
 				dispValues[27] = int64(p.ALUInstructionCount)
 				dispValues[28] = int64(p.FP32InstructionCount)
@@ -1009,9 +1021,9 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 				epLocStack := []*profile.Location{funcLoc, queueLoc, gpuTraceLoc}
 
 				// Create sample with encoder profile data
-				epValues := make([]int64, 36)
-				epValues[1] = 1                      // count
-				epValues[35] = int64(ep.SampleCount) // profiler_samples
+				epValues := make([]int64, pprofValueCount)
+				epValues[1] = 1                                         // count
+				epValues[pprofProfilerCountIdx] = int64(ep.SampleCount) // profiler_samples
 
 				epLabels := map[string][]string{
 					"source":      {ep.Source},
@@ -1066,8 +1078,8 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 				producerLoc := encLocs[encoders[edge.From].Address]
 
 				if consumerLoc != nil && producerLoc != nil {
-					// Add dependency sample - 22 values with edge count at index 2
-					edgeValues := make([]int64, 36)
+					// Add dependency sample with edge count at index 2.
+					edgeValues := make([]int64, pprofValueCount)
 					edgeValues[2] = 1 // edges count
 					prof.Sample = append(prof.Sample, &profile.Sample{
 						Location: []*profile.Location{producerLoc, consumerLoc},

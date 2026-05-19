@@ -138,3 +138,12 @@ func TestProfileBasisPoints(t *testing.T) {
 		})
 	}
 }
+
+func TestPprofValueIndexes(t *testing.T) {
+	if pprofValueCount <= pprofUniformRegsIdx {
+		t.Fatalf("pprofValueCount = %d, uniform index = %d", pprofValueCount, pprofUniformRegsIdx)
+	}
+	if pprofExecutionCostIdx != 34 || pprofProfilerCountIdx != 35 || pprofUniformRegsIdx != 36 {
+		t.Fatalf("pprof indexes changed: execution=%d profiler=%d uniform=%d", pprofExecutionCostIdx, pprofProfilerCountIdx, pprofUniformRegsIdx)
+	}
+}
