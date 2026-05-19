@@ -2952,11 +2952,17 @@ func generateInteractiveHTML(timelineJSON string) string {
 
             const fields = [
                 ['Cost', args.xcode_cost_pct !== undefined ? args.xcode_cost_pct.toFixed(2) + '%' : undefined],
+                ['Profiling Cost', args.profiling_cost_pct !== undefined ? args.profiling_cost_pct.toFixed(2) + '%' : undefined],
                 ['Pipeline', args.pipeline_state],
+                ['Pipeline ID', args.pipeline_id],
                 ['SIMD Groups', args.simd_groups],
                 ['Registers', args.allocated_registers],
                 ['High Register', args.high_register],
                 ['Spilled Bytes', args.spilled_bytes],
+                ['Instructions', args.instruction_count],
+                ['ALU Instructions', args.alu_instruction_count],
+                ['FP32 Instructions', args.fp32_instruction_count],
+                ['FP16 Instructions', args.fp16_instruction_count],
                 ['Samples', args.gprwcntr_sample_count],
                 ['Source', args.timing_source],
             ];

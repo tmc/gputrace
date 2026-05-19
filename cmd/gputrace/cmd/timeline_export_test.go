@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tmc/gputrace"
@@ -181,5 +182,21 @@ func TestTimelineDispatchSIMDGroup(t *testing.T) {
 	}
 	if got, want := timelineDispatchSIMDGroup(dispatch), uint64(32); got != want {
 		t.Fatalf("timelineDispatchSIMDGroup = %d, want %d", got, want)
+	}
+}
+
+func TestGenerateInteractiveHTMLIncludesShaderTooltipFields(t *testing.T) {
+	html := generateInteractiveHTML(`{"events":[]}`)
+	for _, want := range []string{
+		"Profiling Cost",
+		"Pipeline ID",
+		"Instructions",
+		"ALU Instructions",
+		"FP32 Instructions",
+		"FP16 Instructions",
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("generated HTML missing %q", want)
+		}
 	}
 }
