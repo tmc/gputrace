@@ -2049,6 +2049,7 @@ func timelineXcodeMetricsArgs(timeline *Timeline) map[string]interface{} {
 
 	args["kernel_arg_fields"] = present
 	args["absent_kernel_arg_fields"] = absent
+	args["binding_candidates"] = xcodeMetricBindingCandidates(absent)
 	args["counter_tracks"] = tracks
 	args["empty_counter_tracks"] = emptyTracks
 	if timeline.Timing != nil {
@@ -2059,6 +2060,21 @@ func timelineXcodeMetricsArgs(timeline *Timeline) map[string]interface{} {
 		args["has_effective_gpu_time"] = false
 	}
 	return args
+}
+
+func xcodeMetricBindingCandidates(fields []string) map[string]string {
+	candidates := map[string]string{
+		"high_register":       "GTMioShaderBinaryData.LiveRegisterForInstructionAtIndex",
+		"occupancy_pct":       "XRGPUAPSDataProcessor derived counters",
+		"alu_utilization_pct": "XRGPUAPSDataProcessor derived counters",
+	}
+	result := make(map[string]string)
+	for _, field := range fields {
+		if candidate := candidates[field]; candidate != "" {
+			result[field] = candidate
+		}
+	}
+	return result
 }
 
 func timelineTimingArgs(timing *TimelineTiming) map[string]interface{} {
@@ -2840,6 +2856,7 @@ func generateInteractiveHTML(timelineJSON string) string {
             const absent = (metrics.absent_kernel_arg_fields || []).join(', ') || 'none';
             const counters = (metrics.counter_tracks || []).join(', ') || 'none';
             const emptyCounters = (metrics.empty_counter_tracks || []).join(', ') || 'none';
+            const bindings = Object.entries(metrics.binding_candidates || {}).map(([field, binding]) => field + ': ' + binding).join('<br>') || 'none';
             if (state.selectedEncoder !== null) {
                 const encoder = state.timeline.encoders[state.selectedEncoder];
                 detailPanel.innerHTML = ` + "`" + `
@@ -2859,6 +2876,7 @@ func generateInteractiveHTML(timelineJSON string) string {
                 <div class="detail-row"><span class="detail-label">Effective GPU time</span><span class="detail-value">${metrics.has_effective_gpu_time ? 'available' : 'not available'}</span></div>
                 <div class="detail-row"><span class="detail-label">Kernel fields</span><span class="detail-value">${present}</span></div>
                 <div class="detail-row"><span class="detail-label">Absent fields</span><span class="detail-value">${absent}</span></div>
+                <div class="detail-row"><span class="detail-label">Binding candidates</span><span class="detail-value">${bindings}</span></div>
                 <div class="detail-row"><span class="detail-label">Counter tracks</span><span class="detail-value">${counters}</span></div>
                 <div class="detail-row"><span class="detail-label">Empty tracks</span><span class="detail-value">${emptyCounters}</span></div>
             ` + "`" + `;

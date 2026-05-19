@@ -355,6 +355,19 @@ func appendXcodeMetricCoverageComments(prof *profile.Profile) {
 	} {
 		prof.Comments = append(prof.Comments, fmt.Sprintf("gputrace xcode_metric_total %s: %d", name, totals[name]))
 	}
+	for _, gap := range []struct {
+		name    string
+		binding string
+	}{
+		{"high_reg", "GTMioShaderBinaryData.LiveRegisterForInstructionAtIndex"},
+		{"occupancy", "XRGPUAPSDataProcessor derived counters"},
+		{"alu_util", "XRGPUAPSDataProcessor derived counters"},
+	} {
+		if totals[gap.name] == 0 {
+			prof.Comments = append(prof.Comments,
+				fmt.Sprintf("gputrace xcode_metric_binding_candidate %s: %s", gap.name, gap.binding))
+		}
+	}
 }
 
 func pprofSampleTotals(prof *profile.Profile) map[string]int64 {

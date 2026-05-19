@@ -51,6 +51,10 @@ func TestExportChromeTracingIncludesTimingMetadata(t *testing.T) {
 	if got := doc.GputraceXcodeMetrics["has_effective_gpu_time"]; got != true {
 		t.Fatalf("has_effective_gpu_time = %v, want true", got)
 	}
+	bindings := doc.GputraceXcodeMetrics["binding_candidates"].(map[string]interface{})
+	if got, want := bindings["high_register"], "GTMioShaderBinaryData.LiveRegisterForInstructionAtIndex"; got != want {
+		t.Fatalf("binding candidate high_register = %v, want %q", got, want)
+	}
 
 	var foundSummary, foundDuration, foundCoverage bool
 	for _, ev := range doc.TraceEvents {
