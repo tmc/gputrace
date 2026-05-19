@@ -59,6 +59,20 @@ func FormatDuration(us int) string {
 	}
 }
 
+// FormatDurationNs formats a duration in nanoseconds with appropriate units.
+func FormatDurationNs(ns uint64) string {
+	switch {
+	case ns >= 1_000_000_000:
+		return fmt.Sprintf("%.2f s", float64(ns)/1_000_000_000)
+	case ns >= 1_000_000:
+		return fmt.Sprintf("%.2f ms", float64(ns)/1_000_000)
+	case ns >= 1_000:
+		return fmt.Sprintf("%.2f us", float64(ns)/1_000)
+	default:
+		return fmt.Sprintf("%d ns", ns)
+	}
+}
+
 // FormatPercent formats a percentage with one decimal place.
 // Example: 24.567 -> "24.5%"
 func FormatPercent(pct float64) string {

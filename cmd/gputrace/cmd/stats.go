@@ -140,6 +140,24 @@ func runStats(cmd *cobra.Command, args []string) error {
 	} else {
 		fmt.Printf("  GPU Time:         (no profiler data)\n")
 	}
+	if hasProfilerData && profilerDir != "" {
+		if streamStats, err := counter.ParseStreamData(profilerDir); err == nil {
+			if streamStats.EffectiveGPUTimeNs != nil {
+				fmt.Printf("  Effective GPU:    %s\n", FormatDurationNs(*streamStats.EffectiveGPUTimeNs))
+			} else {
+				fmt.Printf("  Effective GPU:    (not present in streamData)\n")
+			}
+			if streamStats.CommandBufferActiveNs > 0 {
+				fmt.Printf("  CB Active Time:   %s\n", FormatDurationNs(streamStats.CommandBufferActiveNs))
+			}
+			if streamStats.CommandBufferWallNs > 0 {
+				fmt.Printf("  CB Wall Time:     %s\n", FormatDurationNs(streamStats.CommandBufferWallNs))
+			}
+			if streamStats.TimingSource != "" {
+				fmt.Printf("  Timing Source:    %s\n", streamStats.TimingSource)
+			}
+		}
+	}
 	fmt.Printf("  Profiler Data:    %s\n", formatBool(hasProfilerData))
 	fmt.Println()
 
@@ -304,14 +322,17 @@ type profilerStatsJSONOutput struct {
 }
 
 type profilerStatsJSON struct {
-	CommandBuffers      int    `json:"command_buffers"`
-	ComputeEncoders     int    `json:"compute_encoders"`
-	DispatchCalls       int    `json:"dispatch_calls"`
-	UniquePipelines     int    `json:"unique_pipelines"`
-	TotalGPUTimeUs      int    `json:"total_gpu_time_us"` // Backward-compatible alias for TotalEncoderTimeUs.
-	TotalEncoderTimeUs  int    `json:"total_encoder_time_us"`
-	TotalDispatchTimeUs int    `json:"total_dispatch_time_us"`
-	TimingSource        string `json:"timing_source"`
+	CommandBuffers        int     `json:"command_buffers"`
+	ComputeEncoders       int     `json:"compute_encoders"`
+	DispatchCalls         int     `json:"dispatch_calls"`
+	UniquePipelines       int     `json:"unique_pipelines"`
+	TotalGPUTimeUs        int     `json:"total_gpu_time_us"` // Backward-compatible alias for TotalEncoderTimeUs.
+	TotalEncoderTimeUs    int     `json:"total_encoder_time_us"`
+	TotalDispatchTimeUs   int     `json:"total_dispatch_time_us"`
+	EffectiveGPUTimeNs    *uint64 `json:"effective_gpu_time_ns,omitempty"`
+	CommandBufferActiveNs uint64  `json:"command_buffer_active_time_ns,omitempty"`
+	CommandBufferWallNs   uint64  `json:"command_buffer_wall_time_ns,omitempty"`
+	TimingSource          string  `json:"timing_source"`
 }
 
 func runStatsFromProfiler(tracePath string) error {
@@ -325,14 +346,17 @@ func runStatsFromProfiler(tracePath string) error {
 		commandBuffers = len(streamStats.Timeline.CommandBufferTimestamps)
 	}
 	stats := profilerStatsJSON{
-		CommandBuffers:      commandBuffers,
-		ComputeEncoders:     streamStats.NumEncoders,
-		DispatchCalls:       streamStats.NumGPUCommands,
-		UniquePipelines:     streamStats.NumPipelines,
-		TotalGPUTimeUs:      streamStats.TotalEncoderTimeUs,
-		TotalEncoderTimeUs:  streamStats.TotalEncoderTimeUs,
-		TotalDispatchTimeUs: streamStats.TotalDispatchTimeUs,
-		TimingSource:        streamStats.TimingSource,
+		CommandBuffers:        commandBuffers,
+		ComputeEncoders:       streamStats.NumEncoders,
+		DispatchCalls:         streamStats.NumGPUCommands,
+		UniquePipelines:       streamStats.NumPipelines,
+		TotalGPUTimeUs:        streamStats.TotalEncoderTimeUs,
+		TotalEncoderTimeUs:    streamStats.TotalEncoderTimeUs,
+		TotalDispatchTimeUs:   streamStats.TotalDispatchTimeUs,
+		EffectiveGPUTimeNs:    streamStats.EffectiveGPUTimeNs,
+		CommandBufferActiveNs: streamStats.CommandBufferActiveNs,
+		CommandBufferWallNs:   streamStats.CommandBufferWallNs,
+		TimingSource:          streamStats.TimingSource,
 	}
 
 	if statsJSON {
@@ -377,7 +401,20 @@ func runStatsFromProfiler(tracePath string) error {
 	if stats.TotalEncoderTimeUs > 0 {
 		fmt.Printf("  Encoder Span:     %s\n", FormatDuration(stats.TotalEncoderTimeUs))
 		fmt.Printf("  Dispatch Span:    %s\n", FormatDuration(stats.TotalDispatchTimeUs))
-		fmt.Printf("  Effective GPU:    (not parsed from Xcode)\n")
+		if stats.EffectiveGPUTimeNs != nil {
+			fmt.Printf("  Effective GPU:    %s\n", FormatDurationNs(*stats.EffectiveGPUTimeNs))
+		} else {
+			fmt.Printf("  Effective GPU:    (not present in streamData)\n")
+		}
+		if stats.CommandBufferActiveNs > 0 {
+			fmt.Printf("  CB Active Time:   %s\n", FormatDurationNs(stats.CommandBufferActiveNs))
+		}
+		if stats.CommandBufferWallNs > 0 {
+			fmt.Printf("  CB Wall Time:     %s\n", FormatDurationNs(stats.CommandBufferWallNs))
+		}
+		if stats.TimingSource != "" {
+			fmt.Printf("  Timing Source:    %s\n", stats.TimingSource)
+		}
 	} else {
 		fmt.Printf("  Timing:           (not available)\n")
 	}
