@@ -102,10 +102,7 @@ func runProfiler(cmd *cobra.Command, args []string) error {
 	funcCounts := make(map[string]int)
 	funcTime := make(map[string]int)
 	for _, d := range stats.Dispatches {
-		name := d.FunctionName
-		if name == "" {
-			name = fmt.Sprintf("(pipeline_%d)", d.PipelineIndex)
-		}
+		name := d.DisplayName()
 		funcCounts[name]++
 		funcTime[name] += d.DurationUs
 	}
@@ -256,10 +253,10 @@ func runProfiler(cmd *cobra.Command, args []string) error {
 				}
 				if d.SampleCount > 0 {
 					fmt.Printf("  [%2d] %5d µs (%5.2f%%) %3d samp (%.2f/µs) %s\n",
-						d.Index, d.DurationUs, pct, d.SampleCount, d.SamplingDensity, d.FunctionName)
+						d.Index, d.DurationUs, pct, d.SampleCount, d.SamplingDensity, d.DisplayName())
 				} else {
 					fmt.Printf("  [%2d] %5d µs (%5.2f%%) %s\n",
-						d.Index, d.DurationUs, pct, d.FunctionName)
+						d.Index, d.DurationUs, pct, d.DisplayName())
 				}
 			}
 		}
