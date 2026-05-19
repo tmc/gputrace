@@ -49,15 +49,16 @@ type KeyCount struct {
 // ValueSummary reports the class and shallow metadata for a selected dictionary
 // value.
 type ValueSummary struct {
-	Array       string   `json:"array"`
-	Index       uint64   `json:"index"`
-	Key         string   `json:"key"`
-	Class       string   `json:"class,omitempty"`
-	Description string   `json:"description,omitempty"`
-	Keys        []string `json:"keys,omitempty"`
-	Bytes       uint64   `json:"bytes,omitempty"`
-	Count       uint64   `json:"count,omitempty"`
-	Number      uint64   `json:"number,omitempty"`
+	Array       string          `json:"array"`
+	Index       uint64          `json:"index"`
+	Key         string          `json:"key"`
+	Class       string          `json:"class,omitempty"`
+	Description string          `json:"description,omitempty"`
+	Keys        []string        `json:"keys,omitempty"`
+	Bytes       uint64          `json:"bytes,omitempty"`
+	Count       uint64          `json:"count,omitempty"`
+	Number      uint64          `json:"number,omitempty"`
+	Children    []ObjectSummary `json:"children,omitempty"`
 }
 
 // ObjectSummary describes a private Objective-C object without traversing its
@@ -65,8 +66,11 @@ type ValueSummary struct {
 type ObjectSummary struct {
 	Index      uint64            `json:"index"`
 	ClassName  string            `json:"class_name,omitempty"`
+	Bytes      uint64            `json:"bytes,omitempty"`
+	Count      uint64            `json:"count,omitempty"`
 	Keys       []string          `json:"keys,omitempty"`
 	Properties map[string]uint64 `json:"properties,omitempty"`
+	Children   []ObjectSummary   `json:"children,omitempty"`
 }
 
 // ProbeStreamData loads a streamData archive through GTShaderProfilerStreamData
@@ -164,14 +168,48 @@ func objectSamples(array objc.ID, limit uint64) []ObjectSummary {
 		if id == 0 {
 			continue
 		}
-		samples = append(samples, ObjectSummary{
-			Index:      i,
-			ClassName:  className(id),
-			Keys:       dictionaryKeys(id, 24),
-			Properties: safeNumericProperties(id),
-		})
+		samples = append(samples, summarizeObject(id, i, 1))
 	}
 	return samples
+}
+
+func summarizeObject(id objc.ID, index uint64, depth int) ObjectSummary {
+	summary := ObjectSummary{
+		Index:      index,
+		ClassName:  className(id),
+		Bytes:      dataLength(id),
+		Count:      arrayCount(id),
+		Keys:       dictionaryKeys(id, 24),
+		Properties: safeNumericProperties(id),
+	}
+	if summary.Count == 0 {
+		summary.Count = dictionaryCount(id)
+	}
+	if depth > 0 {
+		summary.Children = childSamples(id, 4, depth-1)
+	}
+	return summary
+}
+
+func childSamples(id objc.ID, limit uint64, depth int) []ObjectSummary {
+	if id == 0 || !objc.RespondsToSelector(id, objc.Sel("objectAtIndex:")) {
+		return nil
+	}
+	count := arrayCount(id)
+	if count == 0 {
+		return nil
+	}
+	if count < limit {
+		limit = count
+	}
+	children := make([]ObjectSummary, 0, limit)
+	for i := uint64(0); i < limit; i++ {
+		child := objc.Send[objc.ID](id, objc.Sel("objectAtIndex:"), uint(i))
+		if child != 0 {
+			children = append(children, summarizeObject(child, i, depth))
+		}
+	}
+	return children
 }
 
 func className(id objc.ID) string {
@@ -394,6 +432,7 @@ func selectedValues(array objc.ID, arrayName, key string) []ValueSummary {
 			Keys:        dictionaryKeys(value, 24),
 			Bytes:       dataLength(value),
 			Count:       arrayCount(value),
+			Children:    childSamples(value, 4, 2),
 		}
 		if number, ok := dictionaryNumber(id, key); ok {
 			summary.Number = number

@@ -37,6 +37,10 @@ through `GTShaderProfilerStreamData.dataFromArchivedDataURL:` and reports:
 - APS timeline and counter dictionaries contain `Binaries` with 734 entries.
 - The APS counter dictionary contains `Derived Counter Sample Data` with 16
   groups and an empty `Derived Counters Info Data` dictionary.
+- Nested sampling shows each sampled derived-counter group is an array of 5
+  arrays. The first sampled group contains NSData payloads sized 40448,
+  443520, 230208, 192192, 193600, 80640, 41856, 34944, 35200, and 80896
+  bytes across the sampled children.
 
 The dispatch occupancy gap is closed for this trace through the encoder counter
 fallback. The remaining exporter gaps are:
