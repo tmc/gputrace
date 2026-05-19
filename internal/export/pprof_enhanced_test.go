@@ -76,3 +76,58 @@ func TestDispatchSIMDGroups(t *testing.T) {
 		t.Fatalf("dispatchSIMDGroups with missing group size = %d, want 0", got)
 	}
 }
+
+func TestDispatchExecutionCostValuesDistributesPipelineCost(t *testing.T) {
+	stats := &counter.StreamDataStats{
+		Dispatches: []counter.DispatchInfo{
+			{PipelineID: 7, ExecutionCostPct: 66.42},
+			{PipelineID: 7, ExecutionCostPct: 66.42},
+			{PipelineID: 7, ExecutionCostPct: 66.42},
+			{PipelineID: 8, ExecutionCostPct: 7.38},
+		},
+	}
+
+	costs := &counter.ExecutionCostMetrics{
+		TotalSamples:       271,
+		SamplesPerPipeline: map[int]int{7: 180, 8: 20, 9: 71},
+	}
+	values := dispatchExecutionCostValues(stats, costs)
+	if got, want := len(values), 4; got != want {
+		t.Fatalf("len(values) = %d, want %d", got, want)
+	}
+	sum7 := values[0] + values[1] + values[2]
+	if got, want := sum7, int64(6642); got != want {
+		t.Fatalf("pipeline 7 total = %d, want %d", got, want)
+	}
+	if got, want := values[3], int64(738); got != want {
+		t.Fatalf("pipeline 8 value = %d, want %d", got, want)
+	}
+}
+
+func TestExecutionCostBasisPointsSumsTo10000(t *testing.T) {
+	costs := &counter.ExecutionCostMetrics{
+		TotalSamples:       271,
+		SamplesPerPipeline: map[int]int{1: 180, 2: 41, 3: 20, 4: 15, 5: 10, 6: 3, 7: 2},
+	}
+
+	values := executionCostBasisPoints(costs)
+	var sum int64
+	for _, v := range values {
+		sum += v
+	}
+	if got, want := sum, int64(10000); got != want {
+		t.Fatalf("basis point sum = %d, want %d", got, want)
+	}
+}
+
+func TestStreamDispatchNameUsesPipelineID(t *testing.T) {
+	d := counter.DispatchInfo{PipelineIndex: 0, PipelineID: 2288}
+	if got, want := streamDispatchName(d), "(pipeline_2288)"; got != want {
+		t.Fatalf("streamDispatchName = %q, want %q", got, want)
+	}
+
+	d.FunctionName = "kernel0"
+	if got, want := streamDispatchName(d), "kernel0"; got != want {
+		t.Fatalf("streamDispatchName = %q, want %q", got, want)
+	}
+}

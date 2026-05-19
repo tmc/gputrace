@@ -2,6 +2,9 @@ package export
 
 import (
 	"fmt"
+	"math"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -120,6 +123,140 @@ func dispatchSIMDGroups(d trace.DispatchThreads) int64 {
 	return int64((totalThreads + simdWidth - 1) / simdWidth)
 }
 
+func findTraceProfilerDir(tracePath string) string {
+	if tracePath == "" {
+		return ""
+	}
+	if filepath.Ext(tracePath) == ".gpuprofiler_raw" {
+		if info, err := os.Stat(tracePath); err == nil && info.IsDir() {
+			return tracePath
+		}
+		return ""
+	}
+	profilerDir := tracePath + ".gpuprofiler_raw"
+	if info, err := os.Stat(profilerDir); err == nil && info.IsDir() {
+		return profilerDir
+	}
+	entries, err := os.ReadDir(tracePath)
+	if err != nil {
+		return ""
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && filepath.Ext(entry.Name()) == ".gpuprofiler_raw" {
+			return filepath.Join(tracePath, entry.Name())
+		}
+	}
+	return ""
+}
+
+func applyProfilingExecutionCosts(stats *counter.StreamDataStats, tracePath string) *counter.ExecutionCostMetrics {
+	if stats == nil || len(stats.Pipelines) == 0 {
+		return nil
+	}
+	profilerDir := findTraceProfilerDir(tracePath)
+	if profilerDir == "" {
+		return nil
+	}
+	pipelineIDs := make([]int, 0, len(stats.Pipelines))
+	for _, p := range stats.Pipelines {
+		pipelineIDs = append(pipelineIDs, p.PipelineID)
+	}
+	costs, err := counter.ParseExecutionCost(profilerDir, pipelineIDs)
+	if err != nil {
+		return nil
+	}
+	for i := range stats.Dispatches {
+		if cost, ok := costs.PipelineCosts[stats.Dispatches[i].PipelineID]; ok {
+			stats.Dispatches[i].ExecutionCostPct = cost
+		}
+	}
+	return costs
+}
+
+func executionCostBasisPoints(costs *counter.ExecutionCostMetrics) map[int]int64 {
+	if costs == nil || costs.TotalSamples == 0 {
+		return nil
+	}
+	type pipelineCost struct {
+		pipelineID int
+		value      int64
+		remainder  int64
+	}
+	pipelines := make([]pipelineCost, 0, len(costs.SamplesPerPipeline))
+	var sum int64
+	for pipelineID, samples := range costs.SamplesPerPipeline {
+		numer := int64(samples) * 10000
+		value := numer / int64(costs.TotalSamples)
+		pipelines = append(pipelines, pipelineCost{
+			pipelineID: pipelineID,
+			value:      value,
+			remainder:  numer % int64(costs.TotalSamples),
+		})
+		sum += value
+	}
+	sort.Slice(pipelines, func(i, j int) bool {
+		if pipelines[i].remainder != pipelines[j].remainder {
+			return pipelines[i].remainder > pipelines[j].remainder
+		}
+		return pipelines[i].pipelineID < pipelines[j].pipelineID
+	})
+	for i := int64(0); i < 10000-sum && int(i) < len(pipelines); i++ {
+		pipelines[i].value++
+	}
+	out := make(map[int]int64, len(pipelines))
+	for _, p := range pipelines {
+		out[p.pipelineID] = p.value
+	}
+	return out
+}
+
+func dispatchExecutionCostValues(stats *counter.StreamDataStats, costs *counter.ExecutionCostMetrics) []int64 {
+	if stats == nil || len(stats.Dispatches) == 0 {
+		return nil
+	}
+	values := make([]int64, len(stats.Dispatches))
+	counts := make(map[int]int)
+	totals := executionCostBasisPoints(costs)
+	if totals == nil {
+		totals = make(map[int]int64)
+		for _, d := range stats.Dispatches {
+			if d.ExecutionCostPct <= 0 {
+				continue
+			}
+			totals[d.PipelineID] = int64(math.Round(d.ExecutionCostPct * 100))
+		}
+	}
+	for _, d := range stats.Dispatches {
+		if totals[d.PipelineID] > 0 {
+			counts[d.PipelineID]++
+		}
+	}
+	seen := make(map[int]int64)
+	for i, d := range stats.Dispatches {
+		count := counts[d.PipelineID]
+		total := totals[d.PipelineID]
+		if count == 0 || total == 0 {
+			continue
+		}
+		base := total / int64(count)
+		rem := total % int64(count)
+		n := seen[d.PipelineID]
+		values[i] = base
+		if n < rem {
+			values[i]++
+		}
+		seen[d.PipelineID] = n + 1
+	}
+	return values
+}
+
+func streamDispatchName(d counter.DispatchInfo) string {
+	if d.FunctionName != "" {
+		return d.FunctionName
+	}
+	return fmt.Sprintf("(pipeline_%d)", d.PipelineID)
+}
+
 // ToPprofWithMetrics converts GPU trace timing metrics to pprof format with improved accuracy.
 // This version constructs a full hierarchy (GPU -> Queue -> CommandBuffer -> Encoder)
 // and includes dependency information.
@@ -142,8 +279,10 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 	// Try to get per-dispatch timing with function names from streamData
 	streamStats, streamStatsErr := counter.ExtractPipelineStatsFromTraceStreamData(t)
 	useDispatchTiming := streamStatsErr == nil && len(streamStats.Dispatches) > 0
+	var executionCosts *counter.ExecutionCostMetrics
 	if useDispatchTiming {
 		counter.CorrelateDispatchSamples(streamStats)
+		executionCosts = applyProfilingExecutionCosts(streamStats, t.Path)
 		fmt.Printf("Using dispatch timing: %d dispatches, %d pipelines\n",
 			len(streamStats.Dispatches), len(streamStats.Pipelines))
 	}
@@ -202,7 +341,7 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 			{Type: "threadgroup_mem", Unit: "bytes"},     // Threadgroup memory
 
 			// Execution cost from Profiling_f_*.raw (index 34)
-			{Type: "execution_cost", Unit: "percent"}, // Statistical GPU profiling cost
+			{Type: "execution_cost", Unit: "basis_points"}, // Statistical GPU profiling cost
 
 			// GPRWCNTR encoder profile data (index 35)
 			{Type: "profiler_samples", Unit: "count"}, // GPRWCNTR sample count from ShaderProfilerData
@@ -231,6 +370,14 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 	if len(dispatchSIMDGroups) > 0 {
 		prof.Comments = append(prof.Comments, "gputrace simd_groups_source: capture dispatch geometry")
 	}
+	if executionCosts != nil {
+		prof.Comments = append(prof.Comments,
+			"gputrace execution_cost_source: Profiling_f_*.raw",
+			"gputrace execution_cost_unit: basis points",
+			fmt.Sprintf("gputrace execution_cost_samples: %d", executionCosts.TotalSamples),
+		)
+	}
+	dispatchExecutionCosts := dispatchExecutionCostValues(streamStats, executionCosts)
 
 	// Create root node
 	gpuTraceFunc := &profile.Function{
@@ -673,11 +820,8 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 			totalDispatchTimeUs += d.DurationUs
 		}
 
-		for _, d := range streamStats.Dispatches {
-			funcName := d.FunctionName
-			if funcName == "" {
-				funcName = fmt.Sprintf("pipeline_%d", d.PipelineIndex)
-			}
+		for i, d := range streamStats.Dispatches {
+			funcName := streamDispatchName(d)
 
 			// Get or create location for this function
 			var funcLoc *profile.Location
@@ -727,10 +871,8 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 			if d.Index >= 0 && d.Index < len(dispatchSIMDGroups) {
 				dispValues[3] = dispatchSIMDGroups[d.Index]
 			}
-
-			// Add execution cost if available
-			if d.ExecutionCostPct > 0 {
-				dispValues[34] = int64(d.ExecutionCostPct * 100) // Scale to preserve 2 decimal places
+			if i < len(dispatchExecutionCosts) {
+				dispValues[34] = dispatchExecutionCosts[i]
 			}
 
 			// Add instruction count from pipeline if available
@@ -764,6 +906,9 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 				"encoder_idx":  {int64(d.EncoderIndex)},
 				"duration_us":  {int64(d.DurationUs)},
 				"cost_pct":     {int64(costPct * 100)}, // Scale for precision
+			}
+			if d.ExecutionCostPct > 0 {
+				dispNumLabels["profiling_cost_bp"] = []int64{int64(math.Round(d.ExecutionCostPct * 100))}
 			}
 			if d.Index >= 0 && d.Index < len(dispatchSIMDGroups) {
 				dispNumLabels["simd_groups"] = []int64{dispatchSIMDGroups[d.Index]}
