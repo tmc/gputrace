@@ -218,6 +218,9 @@ func TestPprofSampleTotals(t *testing.T) {
 	if !strings.Contains(comments, "gputrace xcode_metric_total high_reg: 0") {
 		t.Fatalf("comments missing high_reg total: %s", comments)
 	}
+	if !strings.Contains(comments, "gputrace xcode_metric_binding_candidate high_reg: GTMioShaderBinaryData.LiveRegisterForInstructionAtIndex") {
+		t.Fatalf("comments missing high_reg binding candidate: %s", comments)
+	}
 	if !strings.Contains(comments, "gputrace xcode_metric_total read_bytes: 300") {
 		t.Fatalf("comments missing read_bytes total: %s", comments)
 	}
