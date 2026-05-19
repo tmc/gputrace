@@ -267,9 +267,24 @@ type Timeline struct {
 	Kernels       []KernelInfo    `json:"kernels"`
 	APICallseq    []APICall       `json:"api_callseq"`
 	CounterTracks []CounterTrack  `json:"counter_tracks,omitempty"`
+	Timing        *TimelineTiming `json:"timing,omitempty"`
 	AbsoluteTime  uint64          `json:"absolute_time"`
 	TimebaseNumer uint64          `json:"timebase_numer"`
 	TimebaseDenom uint64          `json:"timebase_denom"`
+}
+
+// TimelineTiming summarizes the timing sources that Xcode and gputrace expose.
+type TimelineTiming struct {
+	EncoderSpanNs         uint64  `json:"encoder_span_ns,omitempty"`
+	DispatchSpanNs        uint64  `json:"dispatch_span_ns,omitempty"`
+	EffectiveGPUTimeNs    *uint64 `json:"effective_gpu_time_ns,omitempty"`
+	CommandBufferActiveNs uint64  `json:"command_buffer_active_time_ns,omitempty"`
+	CommandBufferWallNs   uint64  `json:"command_buffer_wall_time_ns,omitempty"`
+	RestoreActiveNs       uint64  `json:"restore_active_time_ns,omitempty"`
+	RestoreWallNs         uint64  `json:"restore_wall_time_ns,omitempty"`
+	DisplayDurationNs     uint64  `json:"display_duration_ns,omitempty"`
+	DisplayDurationSource string  `json:"display_duration_source,omitempty"`
+	TimingSource          string  `json:"timing_source,omitempty"`
 }
 
 // TimelineEvent represents a single event in the timeline.
@@ -356,59 +371,21 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 		timeline.StartTime = 0
 		timeline.EndTime = timeline.Duration
 
-        // Try to fetch hardware start time to align profiler events (which are duration-only)
-        // Try to fetch hardware start time to align profiler events (which are duration-only)
-        // with hardware events (Command Buffers, GPRWCNTR).
-        streamStats, statsErr := gputrace.ExtractPipelineStats(trace)
-        var hardwareStartOffsetNs uint64 = 0
-		// Map of Encoder Index to Hardware Start Time (ns) and Duration (ns)
-		encoderStartTimes := make(map[int]uint64)
-        encoderDurations := make(map[int]uint64)
-
-		var ti *gputrace.TimelineInfo
-		if statsErr == nil && streamStats != nil && streamStats.Timeline != nil {
-			ti = streamStats.Timeline
-            // Store stats for later use
-            // We can't easily pass it down without refactoring, but we can extract the start time.
-            if len(ti.CommandBufferTimestamps) > 0 {
-                cb0 := ti.CommandBufferTimestamps[0]
-                if cb0.StartTicks > ti.AbsoluteTime {
-                    hardwareStartOffsetNs = (cb0.StartTicks - ti.AbsoluteTime) * ti.TimebaseNumer / ti.TimebaseDenom
-                    timeline.StartTime = hardwareStartOffsetNs
-                    timeline.EndTime = timeline.StartTime + timeline.Duration
-                }
-            }
-            
-            // Build map of Encoder Index -> Start Time (ns)
-            for _, ep := range ti.EncoderProfiles {
-                if ep.StartTicks > ti.AbsoluteTime {
-                    startNs := (ep.StartTicks - ti.AbsoluteTime) * ti.TimebaseNumer / ti.TimebaseDenom
-                    encoderStartTimes[ep.Index] = startNs
-                    if ep.EndTicks > ep.StartTicks {
-                        encoderDurations[ep.Index] = (ep.EndTicks - ep.StartTicks) * ti.TimebaseNumer / ti.TimebaseDenom
-                    }
-                }
-            }
-        }
+		streamStats, statsErr := gputrace.ExtractPipelineStats(trace)
+		if statsErr == nil {
+			timeline.Timing = timelineTimingFromStats(streamStats)
+			if streamStats != nil && streamStats.Timeline != nil {
+				timeline.AbsoluteTime = streamStats.Timeline.AbsoluteTime
+				timeline.TimebaseNumer = streamStats.Timeline.TimebaseNumer
+				timeline.TimebaseDenom = streamStats.Timeline.TimebaseDenom
+			}
+		}
 
 		// Build timeline from profiler timing
-		var currentTimeNs uint64 = hardwareStartOffsetNs
+		var currentTimeNs uint64
 		for i, pt := range profilerTimings {
 			durationNs := uint64(pt.DurationMicros) * 1000 // Convert µs to ns
-			
-			// Default to sequential flow
 			startTimeNs := currentTimeNs
-			
-			// If we have a precise hardware match, use it
-			// Note: 'i' here is the index in profilerTimings. ideally this matches the encoder index.
-            // We assume 1:1 mapping for now.
-			if preciseStart, ok := encoderStartTimes[i]; ok {
-				startTimeNs = preciseStart
-			} else {
-            }
-            if preciseDur, ok := encoderDurations[i]; ok {
-                durationNs = preciseDur
-            }
 			endTimeNs := startTimeNs + durationNs
 
 			label := pt.Label
@@ -610,29 +587,35 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 		timeline.TimebaseNumer = ti.TimebaseNumer
 		timeline.TimebaseDenom = ti.TimebaseDenom
 
+		var displayStartNs uint64
 		for _, cb := range ti.CommandBufferTimestamps {
 			durationNs := cb.DurationNs(ti.TimebaseNumer, ti.TimebaseDenom)
-			// Convert start ticks to nanoseconds relative to capture start
-			startNs := (cb.StartTicks - ti.AbsoluteTime) * ti.TimebaseNumer / ti.TimebaseDenom
+			var rawStartOffsetNs uint64
+			if cb.StartTicks > ti.AbsoluteTime {
+				rawStartOffsetNs = (cb.StartTicks - ti.AbsoluteTime) * ti.TimebaseNumer / ti.TimebaseDenom
+			}
 
 			event := TimelineEvent{
 				Name:      fmt.Sprintf("CB#%d", cb.Index),
 				Category:  "command_buffer",
-				Phase:     "X",            // Duration event
-				Timestamp: startNs / 1000, // Convert to microseconds for Chrome format
+				Phase:     "X",                   // Duration event
+				Timestamp: displayStartNs / 1000, // Convert to microseconds for Chrome format
 				Duration:  durationNs / 1000,
 				ProcessID: 1,
 				ThreadID:  0,
 				Args: map[string]interface{}{
-					"index":       cb.Index,
-					"start_ticks": cb.StartTicks,
-					"end_ticks":   cb.EndTicks,
-					"duration_us": float64(durationNs) / 1000,
-					"duration_ms": float64(durationNs) / 1e6,
-					"real_timing": true,
+					"index":               cb.Index,
+					"start_ticks":         cb.StartTicks,
+					"end_ticks":           cb.EndTicks,
+					"raw_start_offset_ns": rawStartOffsetNs,
+					"duration_us":         float64(durationNs) / 1000,
+					"duration_ms":         float64(durationNs) / 1e6,
+					"timing_source":       "APSTimelineData Command Buffer Timestamps",
+					"real_timing":         true,
 				},
 			}
 			timeline.Events = append(timeline.Events, event)
+			displayStartNs += durationNs
 		}
 
 		// Add encoder profile events from GPRWCNTR ShaderProfilerData
@@ -749,20 +732,36 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 			}
 		}
 
-		// Also shift the bounds
-		if timeline.StartTime >= globalMinTsNs { // StartTime is in ns (or mixed?)
-			// Wait, timeline.StartTime is usually in ns?
-			// Let's check usage. In generateTimeline: timeline.StartTime = TotalTimeUs*1000 -> ns.
-			// Yes, StartTime is in ns.
-			// But globalMinTs calculation used ev.Timestamp (us).
-			// So globalMinTs is in us.
-			// So we shift StartTime by globalMinTsNs.
+		// Also shift the nanosecond bounds.
+		if timeline.StartTime >= globalMinTsNs {
 			timeline.StartTime -= globalMinTsNs
 		} else {
 			timeline.StartTime = 0
 		}
 		if timeline.EndTime >= globalMinTsNs {
 			timeline.EndTime -= globalMinTsNs
+		}
+		for i := range timeline.Encoders {
+			enc := &timeline.Encoders[i]
+			if enc.StartTime >= globalMinTsNs {
+				enc.StartTime -= globalMinTsNs
+			} else {
+				enc.StartTime = 0
+			}
+			if enc.EndTime >= globalMinTsNs {
+				enc.EndTime -= globalMinTsNs
+			}
+		}
+		for i := range timeline.Kernels {
+			k := &timeline.Kernels[i]
+			if k.StartTime >= globalMinTsNs {
+				k.StartTime -= globalMinTsNs
+			} else {
+				k.StartTime = 0
+			}
+			if k.EndTime >= globalMinTsNs {
+				k.EndTime -= globalMinTsNs
+			}
 		}
 	}
 
@@ -1232,6 +1231,36 @@ func calculateTrackStats(track *CounterTrack) {
 	track.AvgValue = sum / float64(len(track.Samples))
 }
 
+func timelineTimingFromStats(stats *counter.StreamDataStats) *TimelineTiming {
+	if stats == nil {
+		return nil
+	}
+	timing := &TimelineTiming{
+		EncoderSpanNs:         uint64(stats.TotalEncoderTimeUs) * 1000,
+		DispatchSpanNs:        uint64(stats.TotalDispatchTimeUs) * 1000,
+		EffectiveGPUTimeNs:    stats.EffectiveGPUTimeNs,
+		CommandBufferActiveNs: stats.CommandBufferActiveNs,
+		CommandBufferWallNs:   stats.CommandBufferWallNs,
+		TimingSource:          stats.TimingSource,
+	}
+	if stats.Timeline != nil {
+		timing.RestoreActiveNs = stats.Timeline.RestoreActiveNs
+		timing.RestoreWallNs = stats.Timeline.RestoreWallNs
+	}
+	switch {
+	case stats.EffectiveGPUTimeNs != nil:
+		timing.DisplayDurationNs = *stats.EffectiveGPUTimeNs
+		timing.DisplayDurationSource = "APSTimelineData ReplayerGPUTime"
+	case stats.CommandBufferActiveNs > 0:
+		timing.DisplayDurationNs = stats.CommandBufferActiveNs
+		timing.DisplayDurationSource = "APSTimelineData command buffer active time"
+	case stats.TotalEncoderTimeUs > 0:
+		timing.DisplayDurationNs = uint64(stats.TotalEncoderTimeUs) * 1000
+		timing.DisplayDurationSource = "encoderInfoData cumulative encoder span"
+	}
+	return timing
+}
+
 // exportChromeTracing exports timeline in Chrome tracing format.
 func exportChromeTracing(timeline *Timeline, outputPath string) error {
 	f, err := os.Create(outputPath)
@@ -1570,6 +1599,7 @@ func buildTimelineFromProfilerData(tracePath string, stats *counter.StreamDataSt
 		Encoders:   make([]EncoderInfo, 0),
 		Kernels:    make([]KernelInfo, 0),
 		APICallseq: make([]APICall, 0),
+		Timing:     timelineTimingFromStats(stats),
 	}
 
 	// Get timebase from timeline info
@@ -1583,78 +1613,51 @@ func buildTimelineFromProfilerData(tracePath string, stats *counter.StreamDataSt
 
 	timeline.TimebaseNumer = timebaseNumer
 	timeline.TimebaseDenom = timebaseDenom
+	timeline.AbsoluteTime = absoluteTime
 
 	// Add command buffer events with real timing from APSTimelineData
 	if stats.Timeline != nil && len(stats.Timeline.CommandBufferTimestamps) > 0 {
+		var displayStartNs uint64
 		for _, cb := range stats.Timeline.CommandBufferTimestamps {
 			durationNs := cb.DurationNs(timebaseNumer, timebaseDenom)
-			// Convert start ticks to nanoseconds relative to capture start
-			var startNs uint64
+			var rawStartOffsetNs uint64
 			if cb.StartTicks > absoluteTime {
-				startNs = (cb.StartTicks - absoluteTime) * timebaseNumer / timebaseDenom
+				rawStartOffsetNs = (cb.StartTicks - absoluteTime) * timebaseNumer / timebaseDenom
 			}
 
 			event := TimelineEvent{
 				Name:      fmt.Sprintf("CB#%d", cb.Index),
 				Category:  "command_buffer",
 				Phase:     "X",
-				Timestamp: startNs / 1000, // Convert to µs for Chrome format
+				Timestamp: displayStartNs / 1000, // Convert to µs for Chrome format
 				Duration:  durationNs / 1000,
 				ProcessID: 1,
 				ThreadID:  0,
 				Args: map[string]interface{}{
-					"index":       cb.Index,
-					"start_ticks": cb.StartTicks,
-					"end_ticks":   cb.EndTicks,
-					"duration_us": float64(durationNs) / 1000,
-					"duration_ms": float64(durationNs) / 1e6,
-					"real_timing": true,
+					"index":               cb.Index,
+					"start_ticks":         cb.StartTicks,
+					"end_ticks":           cb.EndTicks,
+					"raw_start_offset_ns": rawStartOffsetNs,
+					"duration_us":         float64(durationNs) / 1000,
+					"duration_ms":         float64(durationNs) / 1e6,
+					"timing_source":       "APSTimelineData Command Buffer Timestamps",
+					"real_timing":         true,
 				},
 			}
 			timeline.Events = append(timeline.Events, event)
-
-			// Update timeline bounds
-			if startNs < timeline.StartTime || timeline.StartTime == 0 {
-				timeline.StartTime = startNs
-			}
-			endNs := startNs + durationNs
-			if endNs > timeline.EndTime {
+			if endNs := displayStartNs + durationNs; endNs > timeline.EndTime {
 				timeline.EndTime = endNs
 			}
+			displayStartNs += durationNs
 		}
 	}
 
-	// Add encoder events from encoder timing (profiler data)
-	// Initialize with timeline start time (lowest CB start) to align tracks
-
-    // If no command buffers were found (or they start at 0), try to find a better offset from the raw trace if possible.
-    // However, if we found command buffers starting at e.g. 210ms, currentTimeNs is now 210ms.
-    // If stats.Timeline was nil, timeline.StartTime is 0.
-    
-    // Explicitly check for disjoint misalignment:
-    // If we have GPRWCNTR data later in the pipeline that starts > 0, we want to align to that.
-    // But we don't have GPRWCNTR here yet if it's added later.
-    
-    // Logic Fix:
-    // Ensure that if we have a valid absoluteTime from Timeline, we respect it.
-    // Ideally, we wait to generate Encoders until we know the global offset.
-    // But encoders differ from CBs. Encoders are derived from "Shader Profile" text (duration only).
-    // Kicks/CBs are "Hardware" (timestamps).
-    // We assume the first Encoder corresponds to the start of the first Command Buffer.
-    // So currentTimeNs = timeline.StartTime is correct IF timeline.StartTime is set.
-    
-    if timeline.StartTime == 0 && stats.Timeline != nil && len(stats.Timeline.CommandBufferTimestamps) > 0 {
-         cb0 := stats.Timeline.CommandBufferTimestamps[0]
-         if cb0.StartTicks > stats.Timeline.AbsoluteTime {
-              startNs := (cb0.StartTicks - stats.Timeline.AbsoluteTime) * stats.Timeline.TimebaseNumer / stats.Timeline.TimebaseDenom
-              timeline.StartTime = startNs
-         }
-    }
-    
-    var currentTimeNs uint64 = timeline.StartTime
+	// Add encoder events from duration-only profiler timing.
+	var currentTimeNs uint64
 	for i, et := range stats.EncoderTimings {
 		durationNs := uint64(et.DurationMicros) * 1000
 		startTimeNs := currentTimeNs
+		endTimeNs := startTimeNs + durationNs
 
 		label := et.Label
 		if label == "" {
@@ -1666,10 +1669,13 @@ func buildTimelineFromProfilerData(tracePath string, stats *counter.StreamDataSt
 			Label:     label,
 			Type:      "compute",
 			StartTime: startTimeNs,
-			EndTime:   startTimeNs + durationNs,
+			EndTime:   endTimeNs,
 			Duration:  durationNs,
 		}
 		timeline.Encoders = append(timeline.Encoders, encoderInfo)
+		if endTimeNs > timeline.EndTime {
+			timeline.EndTime = endTimeNs
+		}
 
 		event := TimelineEvent{
 			Name:      label,
@@ -1688,7 +1694,7 @@ func buildTimelineFromProfilerData(tracePath string, stats *counter.StreamDataSt
 		}
 		timeline.Events = append(timeline.Events, event)
 
-		currentTimeNs += durationNs
+		currentTimeNs = endTimeNs
 	}
 
 	// Add GPRWCNTR encoder profile events
@@ -1758,6 +1764,9 @@ func buildTimelineFromProfilerData(tracePath string, stats *counter.StreamDataSt
 			Duration:  durationNs,
 		}
 		timeline.Kernels = append(timeline.Kernels, kernelInfo)
+		if kernelInfo.EndTime > timeline.EndTime {
+			timeline.EndTime = kernelInfo.EndTime
+		}
 
 		event := TimelineEvent{
 			Name:      name,
@@ -1813,13 +1822,36 @@ func buildTimelineFromProfilerData(tracePath string, stats *counter.StreamDataSt
 			}
 		}
 		// Also shift the bounds
-		if timeline.StartTime >= globalMinTs {
-			timeline.StartTime -= globalMinTs
+		globalMinNs := globalMinTs * 1000
+		if timeline.StartTime >= globalMinNs {
+			timeline.StartTime -= globalMinNs
 		} else {
 			timeline.StartTime = 0
 		}
-		if timeline.EndTime >= globalMinTs {
-			timeline.EndTime -= globalMinTs
+		if timeline.EndTime >= globalMinNs {
+			timeline.EndTime -= globalMinNs
+		}
+		for i := range timeline.Encoders {
+			enc := &timeline.Encoders[i]
+			if enc.StartTime >= globalMinNs {
+				enc.StartTime -= globalMinNs
+			} else {
+				enc.StartTime = 0
+			}
+			if enc.EndTime >= globalMinNs {
+				enc.EndTime -= globalMinNs
+			}
+		}
+		for i := range timeline.Kernels {
+			k := &timeline.Kernels[i]
+			if k.StartTime >= globalMinNs {
+				k.StartTime -= globalMinNs
+			} else {
+				k.StartTime = 0
+			}
+			if k.EndTime >= globalMinNs {
+				k.EndTime -= globalMinNs
+			}
 		}
 	}
 
@@ -1904,6 +1936,10 @@ func generateInteractiveHTML(timelineJSON string) string {
         #stats {
             font-size: 12px;
             color: #858585;
+            max-width: 620px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         #main {
@@ -1990,6 +2026,31 @@ func generateInteractiveHTML(timelineJSON string) string {
         .counter-unit {
             color: #858585;
             margin-left: 4px;
+        }
+
+        #detail-panel {
+            background: #2d2d30;
+            border-radius: 3px;
+            padding: 8px 10px;
+            font-size: 12px;
+            color: #d4d4d4;
+        }
+
+        .detail-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 5px;
+        }
+
+        .detail-label {
+            color: #858585;
+        }
+
+        .detail-value {
+            color: #d4d4d4;
+            text-align: right;
+            overflow-wrap: anywhere;
         }
 
         #tooltip {
@@ -2081,6 +2142,9 @@ func generateInteractiveHTML(timelineJSON string) string {
 
                 <div class="section-title" style="margin-top: 20px;">Counter Tracks</div>
                 <div id="counter-list"></div>
+
+                <div class="section-title" style="margin-top: 20px;">Selection</div>
+                <div id="detail-panel"></div>
             </div>
 
             <div id="timeline-container">
@@ -2112,6 +2176,7 @@ func generateInteractiveHTML(timelineJSON string) string {
 
         // Constants
         const COLORS = {
+            commandBuffer: '#d7ba7d',
             encoder: '#0e639c',
             encoderSelected: '#1177bb',
             kernel: '#6a9955',
@@ -2137,6 +2202,7 @@ func generateInteractiveHTML(timelineJSON string) string {
         const statsEl = document.getElementById('stats');
         const encoderList = document.getElementById('encoder-list');
         const counterList = document.getElementById('counter-list');
+        const detailPanel = document.getElementById('detail-panel');
 
         // Initialize canvas
         function resizeCanvas() {
@@ -2184,11 +2250,23 @@ func generateInteractiveHTML(timelineJSON string) string {
             }
 
             updateStats();
+            updateDetails();
         }
 
         function updateStats() {
-            const duration = (state.timeline.duration / 1000000).toFixed(2);
-            statsEl.textContent = ` + "`" + `${state.timeline.encoders.length} encoders | ${duration} ms | Zoom: ${(state.zoom * 100).toFixed(0)}%` + "`" + `;
+            const timing = state.timeline.timing || {};
+            const displayDuration = timing.display_duration_ns || state.timeline.duration;
+            const source = timing.display_duration_source || 'timeline duration';
+            statsEl.textContent = ` + "`" + `${state.timeline.encoders.length} encoders | Display ${formatNs(displayDuration)} | Encoder span ${formatNs(timing.encoder_span_ns || state.timeline.duration)} | Zoom ${(state.zoom * 100).toFixed(0)}%` + "`" + `;
+            statsEl.title = timing.timing_source || source;
+        }
+
+        function formatNs(ns) {
+            if (!ns) return '0 ns';
+            if (ns >= 1000000000) return (ns / 1000000000).toFixed(2) + ' s';
+            if (ns >= 1000000) return (ns / 1000000).toFixed(2) + ' ms';
+            if (ns >= 1000) return (ns / 1000).toFixed(2) + ' µs';
+            return ns + ' ns';
         }
 
         function selectEncoder(idx) {
@@ -2199,7 +2277,29 @@ func generateInteractiveHTML(timelineJSON string) string {
                 item.classList.toggle('selected', i === state.selectedEncoder);
             });
 
+            updateDetails();
             render();
+        }
+
+        function updateDetails() {
+            const timing = state.timeline.timing || {};
+            if (state.selectedEncoder !== null) {
+                const encoder = state.timeline.encoders[state.selectedEncoder];
+                detailPanel.innerHTML = ` + "`" + `
+                    <div class="detail-row"><span class="detail-label">Name</span><span class="detail-value">${encoder.label || 'Encoder ' + state.selectedEncoder}</span></div>
+                    <div class="detail-row"><span class="detail-label">Type</span><span class="detail-value">${encoder.type || 'compute'}</span></div>
+                    <div class="detail-row"><span class="detail-label">Start</span><span class="detail-value">${formatNs(encoder.start_time)}</span></div>
+                    <div class="detail-row"><span class="detail-label">Duration</span><span class="detail-value">${formatNs(encoder.duration)}</span></div>
+                    <div class="detail-row"><span class="detail-label">Index</span><span class="detail-value">${encoder.index}</span></div>
+                ` + "`" + `;
+                return;
+            }
+            detailPanel.innerHTML = ` + "`" + `
+                <div class="detail-row"><span class="detail-label">Timing</span><span class="detail-value">${timing.timing_source || 'not available'}</span></div>
+                <div class="detail-row"><span class="detail-label">CB active</span><span class="detail-value">${formatNs(timing.command_buffer_active_time_ns || 0)}</span></div>
+                <div class="detail-row"><span class="detail-label">CB wall</span><span class="detail-value">${formatNs(timing.command_buffer_wall_time_ns || 0)}</span></div>
+                <div class="detail-row"><span class="detail-label">Dispatch span</span><span class="detail-value">${formatNs(timing.dispatch_span_ns || 0)}</span></div>
+            ` + "`" + `;
         }
 
         // Render timeline
@@ -2220,8 +2320,20 @@ func generateInteractiveHTML(timelineJSON string) string {
             // Draw time grid
             drawTimeGrid(w, h, scaledTimeScale, startTime, duration);
 
-            // Draw encoder tracks
             let y = LAYOUT.headerHeight;
+            const commandBuffers = state.timeline.events.filter(ev => ev.cat === 'command_buffer');
+            if (commandBuffers.length) {
+                drawEventLane('Command Buffers', commandBuffers, y, scaledTimeScale, startTime, COLORS.commandBuffer);
+                y += LAYOUT.trackHeight;
+            }
+
+            const kernels = state.timeline.events.filter(ev => ev.cat === 'kernel');
+            if (kernels.length) {
+                drawEventLane('Shaders', kernels, y, scaledTimeScale, startTime, COLORS.kernel);
+                y += LAYOUT.trackHeight;
+            }
+
+            // Draw encoder tracks
             state.timeline.encoders.forEach((encoder, idx) => {
                 const isSelected = idx === state.selectedEncoder;
                 const isHovered = state.hoveredItem?.type === 'encoder' && state.hoveredItem?.index === idx;
@@ -2312,6 +2424,28 @@ func generateInteractiveHTML(timelineJSON string) string {
             }
         }
 
+        function drawEventLane(label, events, y, timeScale, startTime, color) {
+            const w = canvas.width / window.devicePixelRatio;
+            ctx.fillStyle = '#252526';
+            ctx.fillRect(50, y, w - 50, LAYOUT.trackHeight);
+
+            ctx.fillStyle = COLORS.text;
+            ctx.font = '12px -apple-system, sans-serif';
+            ctx.fillText(label, 5, y + LAYOUT.trackHeight / 2 + 4);
+
+            const barHeight = LAYOUT.minBarHeight;
+            const barY = y + (LAYOUT.trackHeight - barHeight) / 2;
+            ctx.fillStyle = color;
+            events.forEach(event => {
+                const relStart = ((event.ts * 1000) - startTime) / 1000000;
+                const duration = (event.dur || 1) / 1000;
+                const x = 50 + relStart * timeScale + state.panX;
+                const width = Math.max(duration * timeScale, 2);
+                if (x + width < 50 || x > w) return;
+                ctx.fillRect(x, barY, width, barHeight);
+            });
+        }
+
         function drawCounterTrack(track, idx, y, timeScale, startTime) {
             const w = canvas.width / window.devicePixelRatio;
 
@@ -2371,6 +2505,12 @@ func generateInteractiveHTML(timelineJSON string) string {
             const startTime = state.timeline.start_time;
 
             let trackY = LAYOUT.headerHeight;
+            if (state.timeline.events.some(ev => ev.cat === 'command_buffer')) {
+                trackY += LAYOUT.trackHeight;
+            }
+            if (state.timeline.events.some(ev => ev.cat === 'kernel')) {
+                trackY += LAYOUT.trackHeight;
+            }
 
             // Test encoders
             for (let i = 0; i < state.timeline.encoders.length; i++) {
