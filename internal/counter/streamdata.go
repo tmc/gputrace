@@ -61,6 +61,20 @@ type DispatchInfo struct {
 	EndTicks        uint64  `json:"end_ticks,omitempty"`        // Absolute end timestamp in ticks
 }
 
+// DisplayName returns the shader name used in Xcode-style reports.
+func (d DispatchInfo) DisplayName() string {
+	if d.FunctionName != "" {
+		return d.FunctionName
+	}
+	if d.PipelineID != 0 {
+		return fmt.Sprintf("(pipeline_%d)", d.PipelineID)
+	}
+	if d.PipelineIndex >= 0 {
+		return fmt.Sprintf("(pipeline_index_%d)", d.PipelineIndex)
+	}
+	return "(pipeline_unknown)"
+}
+
 // EncoderTimingInfo contains timing information for a single encoder from streamData.
 type EncoderTimingInfo struct {
 	Index           int    `json:"index"`             // Encoder index (0-based)
@@ -1360,10 +1374,7 @@ func AggregateDispatchSamples(dispatches []DispatchInfo) []DispatchSampleStats {
 
 	var totalSamples, totalDuration int
 	for _, d := range dispatches {
-		name := d.FunctionName
-		if name == "" {
-			name = fmt.Sprintf("pipeline_%d", d.PipelineIndex)
-		}
+		name := d.DisplayName()
 		funcSamples[name] += d.SampleCount
 		funcDuration[name] += d.DurationUs
 		funcCount[name]++

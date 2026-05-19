@@ -95,3 +95,15 @@ func TestCommandBufferTimestampDurationRejectsNegativeRange(t *testing.T) {
 		t.Fatalf("DurationNs = %d, want 0", got)
 	}
 }
+
+func TestDispatchInfoDisplayNameUsesPipelineID(t *testing.T) {
+	d := DispatchInfo{PipelineIndex: 0, PipelineID: 2288}
+	if got, want := d.DisplayName(), "(pipeline_2288)"; got != want {
+		t.Fatalf("DisplayName = %q, want %q", got, want)
+	}
+
+	d.FunctionName = "kernel0"
+	if got, want := d.DisplayName(), "kernel0"; got != want {
+		t.Fatalf("DisplayName = %q, want %q", got, want)
+	}
+}

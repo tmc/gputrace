@@ -119,15 +119,3 @@ func TestExecutionCostBasisPointsSumsTo10000(t *testing.T) {
 		t.Fatalf("basis point sum = %d, want %d", got, want)
 	}
 }
-
-func TestStreamDispatchNameUsesPipelineID(t *testing.T) {
-	d := counter.DispatchInfo{PipelineIndex: 0, PipelineID: 2288}
-	if got, want := streamDispatchName(d), "(pipeline_2288)"; got != want {
-		t.Fatalf("streamDispatchName = %q, want %q", got, want)
-	}
-
-	d.FunctionName = "kernel0"
-	if got, want := streamDispatchName(d), "kernel0"; got != want {
-		t.Fatalf("streamDispatchName = %q, want %q", got, want)
-	}
-}

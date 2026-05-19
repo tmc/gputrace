@@ -250,13 +250,6 @@ func dispatchExecutionCostValues(stats *counter.StreamDataStats, costs *counter.
 	return values
 }
 
-func streamDispatchName(d counter.DispatchInfo) string {
-	if d.FunctionName != "" {
-		return d.FunctionName
-	}
-	return fmt.Sprintf("(pipeline_%d)", d.PipelineID)
-}
-
 // ToPprofWithMetrics converts GPU trace timing metrics to pprof format with improved accuracy.
 // This version constructs a full hierarchy (GPU -> Queue -> CommandBuffer -> Encoder)
 // and includes dependency information.
@@ -821,7 +814,7 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 		}
 
 		for i, d := range streamStats.Dispatches {
-			funcName := streamDispatchName(d)
+			funcName := d.DisplayName()
 
 			// Get or create location for this function
 			var funcLoc *profile.Location
