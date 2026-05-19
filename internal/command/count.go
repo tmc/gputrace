@@ -18,26 +18,47 @@ type DetailedCommandBuffer struct {
 	// QueueAddress is the address of the command queue
 	QueueAddress uint64
 
-	// API calls within this command buffer
+	// API calls within this command buffer.
 	Calls []APICall
 
-	// Encoders within this command buffer
+	// Encoders within this command buffer, when explicit encoder records exist.
 	Encoders []*ComputeEncoder
+
+	// Dispatches within this command buffer.
+	Dispatches []DispatchThreads
 }
 
-// APICall represents a single Metal API call.
+// APICall represents a parsed Metal command record.
 type APICall struct {
-	// Type of call (from Ct record f5 field)
-	// 12 = addCompletedHandler
-	// 13 = fence/barrier operations
-	// 14 = setComputePipelineState or setBuffer
+	// Type is retained for older callers. For Ct records it is the binding
+	// count, not a Metal API selector.
 	Type uint32
 
-	// Object address (from f1 field)
+	// RecordType is the MTSP record type, such as Ct.
+	RecordType string
+
+	// CommandFlags are the record flags.
+	CommandFlags uint32
+
+	// ObjectAddr is the primary object address. For Ct records this is the
+	// pipeline state address.
 	ObjectAddr uint64
 
-	// Target address (from f3 field) - e.g., pipeline state, handler, fence
+	// TargetAddr is retained for older callers. For Ct records this is the low
+	// 32 bits of FunctionAddr.
 	TargetAddr uint32
+
+	// PipelineAddr is the Metal pipeline state address.
+	PipelineAddr uint64
+
+	// FunctionAddr is the Metal function address associated with PipelineAddr.
+	FunctionAddr uint64
+
+	// BindingCount is the number of resource bindings listed in the Ct record.
+	BindingCount uint32
+
+	// BufferBindings are the resource binding addresses from the Ct record.
+	BufferBindings []uint64
 
 	// Offset in capture file
 	Offset int64
@@ -106,49 +127,64 @@ func ParseDetailedCommandBuffer(t *trace.Trace, cbIndex int) (*DetailedCommandBu
 		return nil, fmt.Errorf("parse encoders: %w", err)
 	}
 
+	dispatches, err := t.ParseDispatchInRegion(cbData, cbStart)
+	if err != nil {
+		return nil, fmt.Errorf("parse dispatches: %w", err)
+	}
+
 	return &DetailedCommandBuffer{
 		CommandBuffer: cb,
 		QueueAddress:  queueAddr,
 		Calls:         calls,
 		Encoders:      encoders,
+		Dispatches:    dispatches,
 	}, nil
 }
 
 func parseAPICallsInRegion(data []byte, baseOffset int64) ([]APICall, error) {
 	var calls []APICall
-	ctMarker := []byte("Ct\x00\x00")
 
+	ctMarker := []byte("Ct\x00\x00")
 	offset := 0
 	for {
 		pos := bytes.Index(data[offset:], ctMarker)
 		if pos == -1 {
 			break
 		}
+		markerOffset := offset + pos
+		recordOffset := markerOffset - 0x24
+		offset = markerOffset + len(ctMarker)
 
-		absolutePos := offset + pos
-
-		// Parse Ct record structure:
-		// +0x00: "Ct\x00\x00" (4 bytes)
-		// +0x04: object address (8 bytes)
-		// +0x0C: unknown (4 bytes)
-		// +0x10: target address (4 bytes)
-		// +0x14: unknown (4 bytes)
-		// +0x18: type field (4 bytes)
-
-		if absolutePos+24 <= len(data) {
-			objectAddr := binary.LittleEndian.Uint64(data[absolutePos+4 : absolutePos+12])
-			targetAddr := binary.LittleEndian.Uint32(data[absolutePos+16 : absolutePos+20])
-			typeField := binary.LittleEndian.Uint32(data[absolutePos+20 : absolutePos+24])
-
-			calls = append(calls, APICall{
-				Type:       typeField,
-				ObjectAddr: objectAddr,
-				TargetAddr: targetAddr,
-				Offset:     baseOffset + int64(absolutePos),
-			})
+		if recordOffset < 0 || recordOffset+0x40 > len(data) {
+			continue
+		}
+		recordSize := int(binary.LittleEndian.Uint32(data[recordOffset : recordOffset+4]))
+		if recordSize < 0x40 || recordOffset+recordSize > len(data) {
+			continue
 		}
 
-		offset += pos + 4
+		rec := trace.MTSPRecord{
+			Type:   trace.RecordTypeCt,
+			Offset: recordOffset,
+			Size:   recordSize,
+			Data:   data[recordOffset : recordOffset+recordSize],
+		}
+		ct, err := rec.ParseCtRecord()
+		if err != nil {
+			return nil, err
+		}
+		calls = append(calls, APICall{
+			Type:           ct.BindingCount,
+			RecordType:     rec.Type,
+			CommandFlags:   ct.CommandFlags,
+			ObjectAddr:     ct.PipelineAddr,
+			TargetAddr:     uint32(ct.FunctionAddr),
+			PipelineAddr:   ct.PipelineAddr,
+			FunctionAddr:   ct.FunctionAddr,
+			BindingCount:   ct.BindingCount,
+			BufferBindings: append([]uint64(nil), ct.BufferBindings...),
+			Offset:         baseOffset + int64(rec.Offset),
+		})
 	}
 
 	return calls, nil
@@ -223,29 +259,9 @@ func DumpCommandBuffer(t *trace.Trace, w io.Writer, cbIndex int) error {
 	}
 	fmt.Fprintf(w, "\n")
 
-	// Get dispatch info
-	capturePath := filepath.Join(t.Path, "capture")
-	data, err := os.ReadFile(capturePath)
-	if err != nil {
-		return err
-	}
-
-	var cbEnd int64
-	commandBuffers, _ := t.ParseCommandBuffers()
-	if cbIndex+1 < len(commandBuffers) {
-		cbEnd = commandBuffers[cbIndex+1].Offset
-	} else {
-		cbEnd = int64(len(data))
-	}
-
-	cbData := data[dcb.Offset:cbEnd]
-	dispatches, err := t.ParseDispatchInRegion(cbData, dcb.Offset)
-	if err != nil {
-		return err
-	}
-
 	// Format API calls
 	callIdx := 524 // Start numbering like the example (adjust as needed)
+	pipelineMap := t.BuildPipelineFunctionMap()
 
 	for _, encoder := range dcb.Encoders {
 		fmt.Fprintf(w, "#%d 0x%x = computeCommandEncoder\n", callIdx, encoder.Address)
@@ -253,34 +269,28 @@ func DumpCommandBuffer(t *trace.Trace, w io.Writer, cbIndex int) error {
 	}
 
 	// Print calls grouped by encoder
-	dispatchIdx := 0
 	for _, call := range dcb.Calls {
-		switch call.Type {
-		case 12:
-			fmt.Fprintf(w, "#%d [addCompletedHandler:0x%08x]\n", callIdx, call.TargetAddr)
-		case 13:
-			// Could be fence, barrier, or pipeline state
-			if call.TargetAddr&0xF000 != 0 {
-				fmt.Fprintf(w, "#%d [setComputePipelineState:0x%x]\n", callIdx, call.TargetAddr)
+		switch call.RecordType {
+		case trace.RecordTypeCt:
+			name := pipelineMap[call.PipelineAddr]
+			if name != "" {
+				fmt.Fprintf(w, "#%d [setComputePipelineState:0x%x (%s) function:0x%x bindings:%d flags:0x%x]\n",
+					callIdx, call.PipelineAddr, name, call.FunctionAddr, call.BindingCount, call.CommandFlags)
 			} else {
-				fmt.Fprintf(w, "#%d [fence/barrier operation:0x%x]\n", callIdx, call.TargetAddr)
+				fmt.Fprintf(w, "#%d [setComputePipelineState:0x%x function:0x%x bindings:%d flags:0x%x]\n",
+					callIdx, call.PipelineAddr, call.FunctionAddr, call.BindingCount, call.CommandFlags)
 			}
-		case 14:
-			fmt.Fprintf(w, "#%d [setComputePipelineState:0x%x]\n", callIdx, call.TargetAddr)
+			if len(call.BufferBindings) > 0 {
+				fmt.Fprintf(w, "    Bindings: %x\n", call.BufferBindings)
+			}
 		default:
-			fmt.Fprintf(w, "#%d [API call type %d: 0x%x -> 0x%x]\n", callIdx, call.Type, call.ObjectAddr, call.TargetAddr)
+			fmt.Fprintf(w, "#%d [%s record: 0x%x -> 0x%x]\n", callIdx, call.RecordType, call.ObjectAddr, call.TargetAddr)
 		}
 		callIdx++
-
-		// Check if there's a dispatch call near this offset
-		if dispatchIdx < len(dispatches) {
-			// Simplified: just print dispatches in order
-			// In reality, would need to correlate with surrounding API calls
-		}
 	}
 
 	// Print dispatch calls
-	for i, dispatch := range dispatches {
+	for i, dispatch := range dcb.Dispatches {
 		fmt.Fprintf(w, "    Dispatch #%d: threads:{%d, %d, %d} threadsPerGroup:{%d, %d, %d}\n",
 			i+1,
 			dispatch.ThreadsX, dispatch.ThreadsY, dispatch.ThreadsZ,
