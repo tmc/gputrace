@@ -249,6 +249,7 @@ func TestBuildXcodeParityReport(t *testing.T) {
 			Category: "kernel",
 			Args: map[string]interface{}{
 				"occupancy_pct":       62.5,
+				"alu_utilization_pct": 0.0,
 				"allocated_registers": 13,
 			},
 		}},
@@ -264,6 +265,12 @@ func TestBuildXcodeParityReport(t *testing.T) {
 		if gap.Metric == "occupancy_pct" {
 			t.Fatalf("occupancy_pct should be closed: %+v", report.RemainingGaps)
 		}
+		if gap.Metric == "alu_utilization_pct" {
+			t.Fatalf("alu_utilization_pct should be closed: %+v", report.RemainingGaps)
+		}
+	}
+	if !stringSliceContains(report.ClosedExamples, "alu_utilization_pct present on kernel events") {
+		t.Fatalf("missing closed alu example: %+v", report.ClosedExamples)
 	}
 }
 
@@ -524,6 +531,22 @@ func TestGenerateCounterTracksFromPerfDataKeepsSourceBackedZeroValues(t *testing
 	}
 }
 
+func TestDispatchKernelArgsKeepsSourceBackedZeroEncoderCounters(t *testing.T) {
+	args := dispatchKernelArgs(counter.DispatchInfo{}, nil, 0, 0, nil, nil, &counter.EncoderCounterMetrics{})
+	if got, ok := args["occupancy_pct"]; !ok || got != float64(0) {
+		t.Fatalf("occupancy_pct = %#v, %v, want source-backed zero", got, ok)
+	}
+	if got, ok := args["alu_utilization_pct"]; !ok || got != float64(0) {
+		t.Fatalf("alu_utilization_pct = %#v, %v, want source-backed zero", got, ok)
+	}
+	if got, want := args["occupancy_source"], "encoder counter fallback"; got != want {
+		t.Fatalf("occupancy_source = %#v, want %#v", got, want)
+	}
+	if got, want := args["alu_utilization_source"], "encoder counter fallback"; got != want {
+		t.Fatalf("alu_utilization_source = %#v, want %#v", got, want)
+	}
+}
+
 func findCounterTrackForTest(t *testing.T, tracks []CounterTrack, name string) CounterTrack {
 	t.Helper()
 	for _, track := range tracks {
@@ -533,4 +556,13 @@ func findCounterTrackForTest(t *testing.T, tracks []CounterTrack, name string) C
 	}
 	t.Fatalf("missing counter track %q", name)
 	return CounterTrack{}
+}
+
+func stringSliceContains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

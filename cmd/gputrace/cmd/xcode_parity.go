@@ -175,6 +175,9 @@ func buildXcodeParityReport(tracePath string, timeline *Timeline, bindings xcode
 	if present["occupancy_pct"] {
 		report.ClosedExamples = append(report.ClosedExamples, "occupancy_pct present on kernel events")
 	}
+	if present["alu_utilization_pct"] {
+		report.ClosedExamples = append(report.ClosedExamples, "alu_utilization_pct present on kernel events")
+	}
 	if containsTrack(report.CounterTracks, "ALU Utilization") {
 		report.ClosedExamples = append(report.ClosedExamples, "ALU Utilization counter track is source-backed")
 	}
