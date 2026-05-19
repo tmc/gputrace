@@ -148,15 +148,59 @@ func TestPprofValueIndexes(t *testing.T) {
 	}
 }
 
+func TestApplyEncoderCounterMetricsIncludesBytesAndBandwidth(t *testing.T) {
+	values := make([]int64, pprofValueCount)
+	values[19] = 7
+	applyEncoderCounterMetrics(values, &counter.EncoderCounterMetrics{
+		ALUUtilization:                 1.25,
+		KernelOccupancy:                0.81,
+		BytesReadFromDeviceMemory:      100,
+		BytesWrittenToDeviceMemory:     200,
+		BufferDeviceMemoryBytesRead:    300,
+		BufferDeviceMemoryBytesWritten: 400,
+		DeviceMemoryBandwidthGBps:      1.5,
+		BufferL1ReadBandwidth:          2.5,
+		BufferL1WriteBandwidth:         3.5,
+	})
+	if got := values[7]; got != 125 {
+		t.Fatalf("alu_util = %d, want 125", got)
+	}
+	if got := values[8]; got != 81 {
+		t.Fatalf("occupancy = %d, want 81", got)
+	}
+	if got := values[19]; got != 7 {
+		t.Fatalf("read_bytes overwritten with %d, want 7", got)
+	}
+	if got := values[20]; got != 200 {
+		t.Fatalf("write_bytes = %d, want 200", got)
+	}
+	if got := values[21]; got != 300 {
+		t.Fatalf("buffer_read_bytes = %d, want 300", got)
+	}
+	if got := values[22]; got != 400 {
+		t.Fatalf("buffer_write_bytes = %d, want 400", got)
+	}
+	if got := values[23]; got != 1500 {
+		t.Fatalf("device_bandwidth = %d, want 1500", got)
+	}
+	if got := values[24]; got != 2500 {
+		t.Fatalf("buffer_l1_read_bw = %d, want 2500", got)
+	}
+	if got := values[25]; got != 3500 {
+		t.Fatalf("buffer_l1_write_bw = %d, want 3500", got)
+	}
+}
+
 func TestPprofSampleTotals(t *testing.T) {
 	prof := &profile.Profile{
 		SampleType: []*profile.ValueType{
 			{Type: "simd_groups", Unit: "count"},
 			{Type: "high_reg", Unit: "count"},
+			{Type: "read_bytes", Unit: "bytes"},
 		},
 		Sample: []*profile.Sample{
-			{Value: []int64{32, 0}},
-			{Value: []int64{16, 0}},
+			{Value: []int64{32, 0, 100}},
+			{Value: []int64{16, 0, 200}},
 		},
 	}
 	totals := pprofSampleTotals(prof)
@@ -173,5 +217,8 @@ func TestPprofSampleTotals(t *testing.T) {
 	}
 	if !strings.Contains(comments, "gputrace xcode_metric_total high_reg: 0") {
 		t.Fatalf("comments missing high_reg total: %s", comments)
+	}
+	if !strings.Contains(comments, "gputrace xcode_metric_total read_bytes: 300") {
+		t.Fatalf("comments missing read_bytes total: %s", comments)
 	}
 }

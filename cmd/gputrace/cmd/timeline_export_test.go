@@ -262,9 +262,14 @@ func TestGenerateCounterTracksFromPerfDataUsesEncoderCounters(t *testing.T) {
 		KernelOccupancy:            0.81,
 		ALUUtilization:             3.25,
 		DeviceMemoryBandwidthGBps:  12.5,
+		BytesReadFromDeviceMemory:  500,
+		GPUWriteBandwidthGBps:      4.5,
 		InstructionThroughputUtil:  2.5,
 		ComputeUtilization:         3.25,
 		ComputeShaderLaunchLimiter: 0.17,
+		L1CacheLimiter:             0.25,
+		TextureReadLimiter:         0.5,
+		BufferL1MissRate:           1.25,
 	}}
 
 	streamStats := &gputrace.StreamDataStats{
@@ -300,6 +305,26 @@ func TestGenerateCounterTracksFromPerfDataUsesEncoderCounters(t *testing.T) {
 	bandwidth := findCounterTrackForTest(t, tracks, "Bandwidth")
 	if len(bandwidth.Samples) != 2 || bandwidth.Samples[0].Value != 12.5 {
 		t.Fatalf("bandwidth samples = %+v, want two samples at 12.5", bandwidth.Samples)
+	}
+	readBW := findCounterTrackForTest(t, tracks, "Memory Read BW")
+	if len(readBW.Samples) != 2 || readBW.Samples[0].Value != 5.0 {
+		t.Fatalf("memory read samples = %+v, want two samples at 5.0", readBW.Samples)
+	}
+	writeBW := findCounterTrackForTest(t, tracks, "Memory Write BW")
+	if len(writeBW.Samples) != 2 || writeBW.Samples[0].Value != 4.5 {
+		t.Fatalf("memory write samples = %+v, want two samples at 4.5", writeBW.Samples)
+	}
+	l1Miss := findCounterTrackForTest(t, tracks, "L1 Cache Miss Rate")
+	if len(l1Miss.Samples) != 2 || l1Miss.Samples[0].Value != 1.25 {
+		t.Fatalf("L1 miss samples = %+v, want two samples at 1.25", l1Miss.Samples)
+	}
+	computeLimiter := findCounterTrackForTest(t, tracks, "Limiter: Compute")
+	if len(computeLimiter.Samples) != 2 || computeLimiter.Samples[0].Value != 0.17 {
+		t.Fatalf("compute limiter samples = %+v, want two samples at 0.17", computeLimiter.Samples)
+	}
+	memoryLimiter := findCounterTrackForTest(t, tracks, "Limiter: Memory")
+	if len(memoryLimiter.Samples) != 2 || memoryLimiter.Samples[0].Value != 0.75 {
+		t.Fatalf("memory limiter samples = %+v, want two samples at 0.75", memoryLimiter.Samples)
 	}
 
 	activeCores := findCounterTrackForTest(t, tracks, "Active Cores")

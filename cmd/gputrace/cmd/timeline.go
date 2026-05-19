@@ -1023,42 +1023,65 @@ func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, str
 
 	// Generate samples for new tracks - only for encoders with real data
 	for _, encoder := range timeline.Encoders {
-		metrics, exists := shaderMetricsMap[encoder.Label]
-		if !exists {
+		metrics := shaderMetricsMap[encoder.Label]
+		var encoderMetric *counter.EncoderCounterMetrics
+		if m, exists := encoderMetricsByLabel[encoder.Label]; exists {
+			encoderMetric = m
+		} else if m, exists := encoderMetricsByIndex[encoder.Index]; exists {
+			encoderMetric = m
+		}
+		if metrics == nil && encoderMetric == nil {
 			// No real data for this encoder - skip it (no synthetic data)
 			continue
 		}
 
-		l1Miss := metrics.BufferL1MissRate
-		// Convert bytes to GB/s
+		var l1Miss float64
 		var memRead, memWrite float64
-		durationSec := float64(encoder.Duration) / 1e9
-		if durationSec > 0 {
-			memRead = float64(metrics.BytesReadFromDeviceMemory) / 1e9 / durationSec
-			memWrite = float64(metrics.BytesWrittenToDeviceMemory) / 1e9 / durationSec
+		var compLimit, memLimit float64
+
+		if metrics != nil {
+			l1Miss = metrics.BufferL1MissRate
+			durationSec := float64(encoder.Duration) / 1e9
+			if durationSec > 0 {
+				memRead = float64(metrics.BytesReadFromDeviceMemory) / 1e9 / durationSec
+				memWrite = float64(metrics.BytesWrittenToDeviceMemory) / 1e9 / durationSec
+			}
+			compLimit = metrics.ComputeShaderLaunchLimiter + metrics.ALUUtilization
+			memLimit = metrics.L1CacheLimiter + metrics.LastLevelCacheLimiter + metrics.TextureReadLimiter
 		}
-		compLimit := metrics.ComputeShaderLaunchLimiter + metrics.ALUUtilization                        // Proxy
-		memLimit := metrics.L1CacheLimiter + metrics.LastLevelCacheLimiter + metrics.TextureReadLimiter // Proxy
+		if encoderMetric != nil {
+			if l1Miss == 0 {
+				l1Miss = encoderMetric.BufferL1MissRate
+			}
+			if memRead == 0 {
+				if encoderMetric.GPUReadBandwidthGBps > 0 {
+					memRead = encoderMetric.GPUReadBandwidthGBps
+				} else if encoderMetric.BytesReadFromDeviceMemory > 0 && encoder.Duration > 0 {
+					durationSec := float64(encoder.Duration) / 1e9
+					memRead = float64(encoderMetric.BytesReadFromDeviceMemory) / 1e9 / durationSec
+				}
+			}
+			if memWrite == 0 {
+				if encoderMetric.GPUWriteBandwidthGBps > 0 {
+					memWrite = encoderMetric.GPUWriteBandwidthGBps
+				} else if encoderMetric.BytesWrittenToDeviceMemory > 0 && encoder.Duration > 0 {
+					durationSec := float64(encoder.Duration) / 1e9
+					memWrite = float64(encoderMetric.BytesWrittenToDeviceMemory) / 1e9 / durationSec
+				}
+			}
+			if compLimit == 0 {
+				compLimit = encoderMetric.ComputeShaderLaunchLimiter
+			}
+			if memLimit == 0 {
+				memLimit = encoderMetric.L1CacheLimiter + encoderMetric.LastLevelCacheLimiter + encoderMetric.TextureReadLimiter
+			}
+		}
 
-		l1MissTrack.Samples = append(l1MissTrack.Samples,
-			CounterSample{Timestamp: encoder.StartTime, Value: l1Miss},
-			CounterSample{Timestamp: encoder.EndTime, Value: l1Miss})
-
-		memReadTrack.Samples = append(memReadTrack.Samples,
-			CounterSample{Timestamp: encoder.StartTime, Value: memRead},
-			CounterSample{Timestamp: encoder.EndTime, Value: memRead})
-
-		memWriteTrack.Samples = append(memWriteTrack.Samples,
-			CounterSample{Timestamp: encoder.StartTime, Value: memWrite},
-			CounterSample{Timestamp: encoder.EndTime, Value: memWrite})
-
-		computeLimiterTrack.Samples = append(computeLimiterTrack.Samples,
-			CounterSample{Timestamp: encoder.StartTime, Value: compLimit},
-			CounterSample{Timestamp: encoder.EndTime, Value: compLimit})
-
-		memoryLimiterTrack.Samples = append(memoryLimiterTrack.Samples,
-			CounterSample{Timestamp: encoder.StartTime, Value: memLimit},
-			CounterSample{Timestamp: encoder.EndTime, Value: memLimit})
+		appendCounterTrackSample(&l1MissTrack, encoder, l1Miss)
+		appendCounterTrackSample(&memReadTrack, encoder, memRead)
+		appendCounterTrackSample(&memWriteTrack, encoder, memWrite)
+		appendCounterTrackSample(&computeLimiterTrack, encoder, compLimit)
+		appendCounterTrackSample(&memoryLimiterTrack, encoder, memLimit)
 	}
 
 	calculateTrackStats(&l1MissTrack)
