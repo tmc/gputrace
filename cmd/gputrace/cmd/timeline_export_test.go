@@ -200,3 +200,94 @@ func TestGenerateInteractiveHTMLIncludesShaderTooltipFields(t *testing.T) {
 		}
 	}
 }
+
+func TestGenerateCounterTracksFromPerfDataUsesEncoderCounters(t *testing.T) {
+	timeline := &Timeline{
+		Encoders: []EncoderInfo{{
+			Index:     1,
+			Label:     "kernel0",
+			Type:      "compute",
+			StartTime: 100,
+			EndTime:   200,
+			Duration:  100,
+		}},
+	}
+	encoderMetrics := []counter.EncoderCounterMetrics{{
+		EncoderIndex:               1,
+		EncoderLabel:               "kernel0",
+		KernelOccupancy:            0.81,
+		ALUUtilization:             3.25,
+		DeviceMemoryBandwidthGBps:  12.5,
+		InstructionThroughputUtil:  2.5,
+		ComputeUtilization:         3.25,
+		ComputeShaderLaunchLimiter: 0.17,
+	}}
+
+	streamStats := &gputrace.StreamDataStats{
+		FunctionNames: []string{"kernel0"},
+		Pipelines: []gputrace.PipelineStats{{
+			FunctionName:           "kernel0",
+			TemporaryRegisterCount: 46,
+			UniformRegisterCount:   8,
+			SpilledBytes:           16,
+			ThreadgroupMemory:      1024,
+		}},
+	}
+
+	tracks := generateCounterTracksFromPerfData(&gputrace.PerfCounterStats{}, streamStats, encoderMetrics, timeline)
+	occupancy := findCounterTrackForTest(t, tracks, "Occupancy")
+	if len(occupancy.Samples) != 2 {
+		t.Fatalf("occupancy samples = %d, want 2", len(occupancy.Samples))
+	}
+	if got := occupancy.Samples[0].Timestamp; got != uint64(100) {
+		t.Fatalf("occupancy first timestamp = %d, want 100", got)
+	}
+	if got := occupancy.Samples[1].Timestamp; got != uint64(200) {
+		t.Fatalf("occupancy second timestamp = %d, want 200", got)
+	}
+	if got := occupancy.Samples[0].Value; got != 0.81 {
+		t.Fatalf("occupancy value = %v, want 0.81", got)
+	}
+
+	alu := findCounterTrackForTest(t, tracks, "ALU Utilization")
+	if len(alu.Samples) != 2 || alu.Samples[0].Value != 3.25 {
+		t.Fatalf("ALU samples = %+v, want two samples at 3.25", alu.Samples)
+	}
+	bandwidth := findCounterTrackForTest(t, tracks, "Bandwidth")
+	if len(bandwidth.Samples) != 2 || bandwidth.Samples[0].Value != 12.5 {
+		t.Fatalf("bandwidth samples = %+v, want two samples at 12.5", bandwidth.Samples)
+	}
+
+	activeCores := findCounterTrackForTest(t, tracks, "Active Cores")
+	if len(activeCores.Samples) != 0 {
+		t.Fatalf("active cores samples = %+v, want none", activeCores.Samples)
+	}
+
+	allocated := findCounterTrackForTest(t, tracks, "Allocated Registers")
+	if len(allocated.Samples) != 2 || allocated.Samples[0].Value != 46 {
+		t.Fatalf("allocated register samples = %+v, want two samples at 46", allocated.Samples)
+	}
+	uniform := findCounterTrackForTest(t, tracks, "Uniform Registers")
+	if len(uniform.Samples) != 2 || uniform.Samples[0].Value != 8 {
+		t.Fatalf("uniform register samples = %+v, want two samples at 8", uniform.Samples)
+	}
+	spills := findCounterTrackForTest(t, tracks, "Spilled Bytes")
+	if len(spills.Samples) != 2 || spills.Samples[0].Value != 16 {
+		t.Fatalf("spilled byte samples = %+v, want two samples at 16", spills.Samples)
+	}
+	tgmem := findCounterTrackForTest(t, tracks, "Threadgroup Memory")
+	if len(tgmem.Samples) != 2 || tgmem.Samples[0].Value != 1024 {
+		t.Fatalf("threadgroup memory samples = %+v, want two samples at 1024", tgmem.Samples)
+	}
+}
+
+func findCounterTrackForTest(t *testing.T, tracks []CounterTrack, name string) CounterTrack {
+	t.Helper()
+	for _, track := range tracks {
+		if track.Name == name {
+			return track
+		}
+	}
+	t.Fatalf("missing counter track %q", name)
+	return CounterTrack{}
+}
