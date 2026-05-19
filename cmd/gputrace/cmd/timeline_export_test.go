@@ -8,6 +8,7 @@ import (
 
 	"github.com/tmc/gputrace"
 	"github.com/tmc/gputrace/internal/counter"
+	tracepkg "github.com/tmc/gputrace/internal/trace"
 )
 
 func TestExportChromeTracingIncludesTimingMetadata(t *testing.T) {
@@ -126,8 +127,12 @@ func TestAddDispatchKernelEventsIncludesXcodeShaderArgs(t *testing.T) {
 			TotalDurationNs:   7000,
 		}},
 	}
+	simd := timelineDispatchSIMDStats{
+		byName: map[string]uint64{"kernel0": 4096},
+		total:  4096,
+	}
 
-	if !addDispatchKernelEvents(timeline, stats, shaderReport, perfStats) {
+	if !addDispatchKernelEvents(timeline, stats, simd, shaderReport, perfStats) {
 		t.Fatal("addDispatchKernelEvents returned false")
 	}
 	if got := len(timeline.Kernels); got != 1 {
@@ -152,7 +157,7 @@ func TestAddDispatchKernelEventsIncludesXcodeShaderArgs(t *testing.T) {
 			t.Fatalf("arg %s = %#v, want %#v", key, got, want)
 		}
 	}
-	checkArg("xcode_cost_pct", 88.5)
+	checkArg("xcode_cost_pct", 100.0)
 	checkArg("profiling_cost_pct", 85.25)
 	checkArg("pipeline_state", "0xabc")
 	checkArg("simd_groups", uint64(4096))
@@ -163,4 +168,18 @@ func TestAddDispatchKernelEventsIncludesXcodeShaderArgs(t *testing.T) {
 	checkArg("shader_duration_ns", uint64(7000))
 	checkArg("gprwcntr_sample_count", 3)
 	checkArg("xcode_view", "Shaders")
+}
+
+func TestTimelineDispatchSIMDGroup(t *testing.T) {
+	dispatch := tracepkg.DispatchThreads{
+		ThreadsX:         1000,
+		ThreadsY:         1,
+		ThreadsZ:         1,
+		ThreadsPerGroupX: 256,
+		ThreadsPerGroupY: 1,
+		ThreadsPerGroupZ: 1,
+	}
+	if got, want := timelineDispatchSIMDGroup(dispatch), uint64(32); got != want {
+		t.Fatalf("timelineDispatchSIMDGroup = %d, want %d", got, want)
+	}
 }
