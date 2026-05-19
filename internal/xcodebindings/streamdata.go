@@ -49,14 +49,15 @@ type KeyCount struct {
 // ValueSummary reports the class and shallow metadata for a selected dictionary
 // value.
 type ValueSummary struct {
-	Array       string `json:"array"`
-	Index       uint64 `json:"index"`
-	Key         string `json:"key"`
-	Class       string `json:"class,omitempty"`
-	Description string `json:"description,omitempty"`
-	Bytes       uint64 `json:"bytes,omitempty"`
-	Count       uint64 `json:"count,omitempty"`
-	Number      uint64 `json:"number,omitempty"`
+	Array       string   `json:"array"`
+	Index       uint64   `json:"index"`
+	Key         string   `json:"key"`
+	Class       string   `json:"class,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Keys        []string `json:"keys,omitempty"`
+	Bytes       uint64   `json:"bytes,omitempty"`
+	Count       uint64   `json:"count,omitempty"`
+	Number      uint64   `json:"number,omitempty"`
 }
 
 // ObjectSummary describes a private Objective-C object without traversing its
@@ -111,8 +112,19 @@ func ProbeStreamData(path string) (StreamDataSummary, error) {
 	} else if value, ok := dictionaryNumberInArray(apsCounter, "ReplayerGPUTime"); ok {
 		summary.ReplayerGPUTimeNs = value
 	}
-	summary.SelectedValues = append(summary.SelectedValues, selectedValues(apsTimeline, "aps_timeline", "ReplayerGPUTime")...)
-	summary.SelectedValues = append(summary.SelectedValues, selectedValues(apsCounter, "aps_counter", "ReplayerGPUTime")...)
+	for _, key := range []string{
+		"ReplayerGPUTime",
+		"Binaries",
+		"Derived Counter Sample Data",
+		"Derived Counters Info Data",
+		"Encoder Time Sample Data",
+		"Encoder Sample Index Data",
+		"Encoder Infos",
+		"ShaderProfilerData",
+	} {
+		summary.SelectedValues = append(summary.SelectedValues, selectedValues(apsTimeline, "aps_timeline", key)...)
+		summary.SelectedValues = append(summary.SelectedValues, selectedValues(apsCounter, "aps_counter", key)...)
+	}
 	return summary, nil
 }
 
@@ -379,6 +391,7 @@ func selectedValues(array objc.ID, arrayName, key string) []ValueSummary {
 			Key:         key,
 			Class:       className(value),
 			Description: truncateString(objectivec.Object{ID: value}.Description(), 120),
+			Keys:        dictionaryKeys(value, 24),
 			Bytes:       dataLength(value),
 			Count:       arrayCount(value),
 		}
