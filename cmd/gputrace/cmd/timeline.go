@@ -380,6 +380,9 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 		}
 	}
 	dispatchSIMD := timelineDispatchSIMDGroups(trace, streamStats)
+	sourceMapper := gputrace.NewShaderSourceMapper()
+	_ = sourceMapper.IndexShaderSources()
+	_ = sourceMapper.IndexTraceBundleSources(trace.Path)
 
 	// Try to get real timing from profiler data first (streamData plist)
 	profilerTimings, totalTimeUs, profilerErr := gputrace.ExtractEncoderTimingsFromProfiler(trace)
@@ -564,8 +567,8 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 
 	// Add shader/kernel events. Prefer streamData dispatches so the Shaders lane
 	// matches Xcode's pipeline table instead of duplicating whole encoder spans.
-	if !addDispatchKernelEvents(timeline, streamStats, dispatchSIMD, shaderReport, perfStats, encoderMetrics) {
-		addEncoderKernelEvents(timeline, trace)
+	if !addDispatchKernelEvents(timeline, streamStats, dispatchSIMD, shaderReport, perfStats, encoderMetrics, sourceMapper) {
+		addEncoderKernelEvents(timeline, trace, sourceMapper)
 	}
 
 	// Add command buffer events - try to get real timing from APSTimelineData
@@ -1331,7 +1334,7 @@ func annotateDispatchExecutionCosts(stats *counter.StreamDataStats, profilerDir 
 	}
 }
 
-func addEncoderKernelEvents(timeline *Timeline, trace *gputrace.Trace) {
+func addEncoderKernelEvents(timeline *Timeline, trace *gputrace.Trace, sourceMapper *gputrace.ShaderSourceMapper) {
 	computeEncoders, _ := traceComputeEncoders(trace)
 
 	for i, encoder := range timeline.Encoders {
@@ -1360,6 +1363,13 @@ func addEncoderKernelEvents(timeline *Timeline, trace *gputrace.Trace) {
 					args["grid_size"] = gridSize
 					args["threadgroup_size"] = groupSize
 				}
+			}
+		}
+		if sourceMapper != nil {
+			if sourceFile, sourceLine := sourceMapper.GetSourceLocation(encoder.Label); sourceFile != "" {
+				args["source_available"] = true
+				args["source_file"] = sourceFile
+				args["source_line"] = sourceLine
 			}
 		}
 		kernelInfo := KernelInfo{
@@ -1409,7 +1419,7 @@ func parseEncoderDispatches(trace *gputrace.Trace, encoders []*tracepkg.ComputeE
 	return dispatches
 }
 
-func addDispatchKernelEvents(timeline *Timeline, stats *counter.StreamDataStats, simd timelineDispatchSIMDStats, shaderReport *gputrace.ShaderMetricsReport, perfStats *gputrace.PerfCounterStats, encoderMetrics []counter.EncoderCounterMetrics) bool {
+func addDispatchKernelEvents(timeline *Timeline, stats *counter.StreamDataStats, simd timelineDispatchSIMDStats, shaderReport *gputrace.ShaderMetricsReport, perfStats *gputrace.PerfCounterStats, encoderMetrics []counter.EncoderCounterMetrics, sourceMapper *gputrace.ShaderSourceMapper) bool {
 	if timeline == nil || stats == nil || len(stats.Dispatches) == 0 {
 		return false
 	}
@@ -1448,7 +1458,7 @@ func addDispatchKernelEvents(timeline *Timeline, stats *counter.StreamDataStats,
 		shaderMetric := shaderMetrics.find(name, pipeline)
 		encoderMetric := encoderMetricByIndex[d.EncoderIndex]
 		simdGroups, simdCostPct := simd.cost(name, d.Index)
-		args := dispatchKernelArgs(d, pipeline, simdGroups, simdCostPct, shaderMetric, metric, encoderMetric)
+		args := dispatchKernelArgs(d, pipeline, simdGroups, simdCostPct, shaderMetric, metric, encoderMetric, sourceMapper)
 
 		info := KernelInfo{
 			Name:      name,
@@ -1477,7 +1487,7 @@ func addDispatchKernelEvents(timeline *Timeline, stats *counter.StreamDataStats,
 	return true
 }
 
-func dispatchKernelArgs(d counter.DispatchInfo, p *counter.PipelineStats, simdGroups uint64, simdCostPct float64, shader *gputrace.ShaderMetrics, hardware *counter.ShaderHardwareMetrics, encoderMetric *counter.EncoderCounterMetrics) map[string]interface{} {
+func dispatchKernelArgs(d counter.DispatchInfo, p *counter.PipelineStats, simdGroups uint64, simdCostPct float64, shader *gputrace.ShaderMetrics, hardware *counter.ShaderHardwareMetrics, encoderMetric *counter.EncoderCounterMetrics, sourceMapper *gputrace.ShaderSourceMapper) map[string]interface{} {
 	args := map[string]interface{}{
 		"dispatch_index": d.Index,
 		"duration_us":    float64(d.DurationUs),
@@ -1523,6 +1533,17 @@ func dispatchKernelArgs(d counter.DispatchInfo, p *counter.PipelineStats, simdGr
 		args["alu_instruction_count"] = p.ALUInstructionCount
 		args["fp32_instruction_count"] = p.FP32InstructionCount
 		args["fp16_instruction_count"] = p.FP16InstructionCount
+	}
+	if sourceMapper != nil {
+		sourceName := d.FunctionName
+		if sourceName == "" && p != nil {
+			sourceName = p.FunctionName
+		}
+		if sourceFile, sourceLine := sourceMapper.GetSourceLocation(sourceName); sourceFile != "" {
+			args["source_available"] = true
+			args["source_file"] = sourceFile
+			args["source_line"] = sourceLine
+		}
 	}
 	if shader != nil {
 		if shader.PercentOfTotal > 0 && args["xcode_cost_pct"] == nil {
@@ -2367,8 +2388,8 @@ func buildTimelineFromProfilerData(tracePath string, stats *counter.StreamDataSt
 	}
 
 	// Add kernel events from streamData dispatches.
-	if !addDispatchKernelEvents(timeline, stats, timelineDispatchSIMDStats{}, nil, nil, nil) {
-		addEncoderKernelEvents(timeline, nil)
+	if !addDispatchKernelEvents(timeline, stats, timelineDispatchSIMDStats{}, nil, nil, nil, nil) {
+		addEncoderKernelEvents(timeline, nil, nil)
 	}
 
 	// Set timeline duration
