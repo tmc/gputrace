@@ -2,10 +2,12 @@ package shader
 
 import (
 	"bufio"
+	"bytes"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // ShaderSourceMapper helps map kernel names to Metal shader source files.
@@ -61,6 +63,66 @@ func (m *ShaderSourceMapper) IndexShaderSources() error {
 	return nil
 }
 
+// IndexTraceBundleSources scans a .gputrace bundle for embedded Metal source
+// sidecars and indexes any kernel definitions they contain.
+func (m *ShaderSourceMapper) IndexTraceBundleSources(tracePath string) error {
+	entries, err := os.ReadDir(tracePath)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !entry.Type().IsRegular() {
+			continue
+		}
+		name := entry.Name()
+		if skipTraceSidecarSource(name) {
+			continue
+		}
+		path := filepath.Join(tracePath, name)
+		data, err := os.ReadFile(path)
+		if err != nil || !looksLikeMetalSource(data) {
+			continue
+		}
+		if err := m.indexMetalFile(path); err != nil {
+			continue
+		}
+	}
+	return nil
+}
+
+func skipTraceSidecarSource(name string) bool {
+	if name == "capture" || name == "unsorted-capture" || name == "metadata" || name == "index" {
+		return true
+	}
+	prefixes := []string{
+		"device-resources-", "unused-device-resources-", "delta-device-resources-",
+		"startup-", "store", "MTLBuffer-", "MTLHeap-", "Counters_", "Profiling_",
+	}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeMetalSource(data []byte) bool {
+	if len(data) == 0 {
+		return false
+	}
+	if i := bytes.IndexByte(data, 0); i >= 0 {
+		data = data[:i]
+	}
+	if !utf8.Valid(data) {
+		return false
+	}
+	text := string(data)
+	return strings.Contains(text, "#include <metal_stdlib>") ||
+		strings.Contains(text, "using namespace metal") ||
+		strings.Contains(text, "kernel void ") ||
+		strings.Contains(text, "thread_position_in_grid")
+}
+
 // scanDirectory recursively scans for .metal files.
 func (m *ShaderSourceMapper) scanDirectory(dir string) error {
 	return filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
@@ -85,21 +147,32 @@ func (m *ShaderSourceMapper) indexMetalFile(path string) error {
 	defer f.Close()
 
 	// Regular expressions for Metal kernel definitions
-	kernelRegex := regexp.MustCompile(`kernel\s+void\s+(\w+)\s*\(`)
+	kernelRegex := regexp.MustCompile(`(?:kernel\s+void|\[\[kernel\]\]\s+void)\s+(\w+)\s*\(`)
+	hostNameRegex := regexp.MustCompile(`\[\[host_name\("([^"]+)"\)\]\]`)
 	funcRegex := regexp.MustCompile(`^\s*(?:inline\s+)?(?:device\s+|constant\s+)?(?:void|float|int|half|uint)\s+(\w+)\s*\(`)
 
 	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 1024), 16*1024*1024)
 	lineNum := 0
+	pendingHostName := ""
 
 	for scanner.Scan() {
 		lineNum++
 		line := scanner.Text()
+		if matches := hostNameRegex.FindStringSubmatch(line); len(matches) > 1 {
+			pendingHostName = matches[1]
+		}
 
 		// Check for kernel definitions
 		if matches := kernelRegex.FindStringSubmatch(line); len(matches) > 1 {
 			kernelName := matches[1]
 			m.kernelToFile[kernelName] = path
 			m.kernelToLine[kernelName] = lineNum
+			if pendingHostName != "" {
+				m.kernelToFile[pendingHostName] = path
+				m.kernelToLine[pendingHostName] = lineNum
+				pendingHostName = ""
+			}
 		}
 
 		// Also check for regular function definitions (helper functions)

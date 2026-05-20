@@ -152,7 +152,7 @@ func TestAddDispatchKernelEventsIncludesXcodeShaderArgs(t *testing.T) {
 		total:  4096,
 	}
 
-	if !addDispatchKernelEvents(timeline, stats, simd, shaderReport, perfStats, nil) {
+	if !addDispatchKernelEvents(timeline, stats, simd, shaderReport, perfStats, nil, nil) {
 		t.Fatal("addDispatchKernelEvents returned false")
 	}
 	if got := len(timeline.Kernels); got != 1 {
@@ -221,7 +221,7 @@ func TestAddDispatchKernelEventsUsesEncoderCounterFallback(t *testing.T) {
 		ComputeUtilization: 80,
 	}}
 
-	if !addDispatchKernelEvents(timeline, stats, timelineDispatchSIMDStats{}, nil, nil, encoderMetrics) {
+	if !addDispatchKernelEvents(timeline, stats, timelineDispatchSIMDStats{}, nil, nil, encoderMetrics, nil) {
 		t.Fatal("addDispatchKernelEvents returned false")
 	}
 	args := timeline.Events[0].Args
@@ -236,6 +236,53 @@ func TestAddDispatchKernelEventsUsesEncoderCounterFallback(t *testing.T) {
 	}
 	if got, want := args["alu_utilization_source"], "encoder counter fallback"; got != want {
 		t.Fatalf("alu_utilization_source = %#v, want %#v", got, want)
+	}
+}
+
+func TestAddDispatchKernelEventsAnnotatesSource(t *testing.T) {
+	dir := t.TempDir()
+	source := `#include <metal_stdlib>
+using namespace metal;
+
+kernel void source_backed_kernel(device float *out [[buffer(0)]],
+                                 uint tid [[thread_position_in_grid]]) {
+	out[tid] = 1;
+}
+`
+	sourcePath := filepath.Join(dir, "kernels.metal")
+	if err := os.WriteFile(sourcePath, []byte(source), 0666); err != nil {
+		t.Fatal(err)
+	}
+
+	mapper := gputrace.NewShaderSourceMapper(dir)
+	if err := mapper.IndexShaderSources(); err != nil {
+		t.Fatal(err)
+	}
+	timeline := &Timeline{
+		Encoders: []EncoderInfo{{Index: 0, StartTime: 1000}},
+	}
+	stats := &counter.StreamDataStats{
+		Dispatches: []counter.DispatchInfo{{
+			Index:         0,
+			FunctionName:  "source_backed_kernel",
+			EncoderIndex:  0,
+			PipelineIndex: 0,
+			DurationUs:    7,
+		}},
+	}
+
+	if !addDispatchKernelEvents(timeline, stats, timelineDispatchSIMDStats{}, nil, nil, nil, mapper) {
+		t.Fatal("addDispatchKernelEvents returned false")
+	}
+	args := timeline.Events[0].Args
+	if got := args["source_available"]; got != true {
+		t.Fatalf("source_available = %#v, want true", got)
+	}
+	if got := args["source_file"]; got != sourcePath {
+		t.Fatalf("source_file = %#v, want %q", got, sourcePath)
+	}
+	if got := args["source_line"]; got != 4 {
+		t.Fatalf("source_line = %#v, want 4", got)
 	}
 }
 
@@ -532,7 +579,7 @@ func TestGenerateCounterTracksFromPerfDataKeepsSourceBackedZeroValues(t *testing
 }
 
 func TestDispatchKernelArgsKeepsSourceBackedZeroEncoderCounters(t *testing.T) {
-	args := dispatchKernelArgs(counter.DispatchInfo{}, nil, 0, 0, nil, nil, &counter.EncoderCounterMetrics{})
+	args := dispatchKernelArgs(counter.DispatchInfo{}, nil, 0, 0, nil, nil, &counter.EncoderCounterMetrics{}, nil)
 	if got, ok := args["occupancy_pct"]; !ok || got != float64(0) {
 		t.Fatalf("occupancy_pct = %#v, %v, want source-backed zero", got, ok)
 	}

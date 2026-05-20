@@ -216,9 +216,10 @@ var (
 	FormatReplayAnalysis   = replay.FormatReplayAnalysis
 
 	// Shader source attribution functions (gputrace-105)
-	ExtractShaderSourceAttribution    = shader.ExtractShaderSourceAttribution
-	FormatShaderSourceAttribution     = shader.FormatShaderSourceAttribution
-	FormatShaderSourceAttributionHTML = shader.FormatShaderSourceAttributionHTML
+	ExtractShaderSourceAttribution           = shader.ExtractShaderSourceAttribution
+	ExtractShaderSourceAttributionWithMapper = shader.ExtractShaderSourceAttributionWithMapper
+	FormatShaderSourceAttribution            = shader.FormatShaderSourceAttribution
+	FormatShaderSourceAttributionHTML        = shader.FormatShaderSourceAttributionHTML
 
 	// Timing metrics functions (gputrace-106)
 	FormatTimingMetrics     = timing.FormatTimingMetrics

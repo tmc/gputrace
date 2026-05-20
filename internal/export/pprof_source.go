@@ -279,7 +279,10 @@ func ToPprofWithSourceLines(t *trace.Trace, timings []*EncoderTiming, mapper *Sh
 		locID++
 
 		// Get associated kernel name
-		kernelName := "unknown_kernel"
+		kernelName := timing.Label
+		if kernelName == "" {
+			kernelName = "unknown_kernel"
+		}
 		if kn, ok := kernelMap[timing.Label]; ok {
 			kernelName = kn
 		}
@@ -309,7 +312,7 @@ func ToPprofWithSourceLines(t *trace.Trace, timings []*EncoderTiming, mapper *Sh
 				funcID++
 
 				// Get line-level attribution
-				attribution, err := shader.ExtractShaderSourceAttribution(t, kernelName)
+				attribution, err := shader.ExtractShaderSourceAttributionWithMapper(t, kernelName, mapper)
 				if err == nil && len(attribution.Lines) > 0 {
 					// Create samples for each source line with non-zero cost
 					for _, lineAttr := range attribution.Lines {

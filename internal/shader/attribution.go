@@ -48,6 +48,21 @@ type SourceLineAttribution struct {
 
 // ExtractShaderSourceAttribution extracts source-level performance attribution for a specific shader.
 func ExtractShaderSourceAttribution(t *trace.Trace, shaderName string) (*ShaderSourceAttribution, error) {
+	mapper := NewShaderSourceMapper()
+	if err := mapper.IndexShaderSources(); err != nil {
+		return nil, fmt.Errorf("index shader sources: %w", err)
+	}
+	if t != nil {
+		if err := mapper.IndexTraceBundleSources(t.Path); err != nil {
+			return nil, fmt.Errorf("index trace shader sources: %w", err)
+		}
+	}
+	return ExtractShaderSourceAttributionWithMapper(t, shaderName, mapper)
+}
+
+// ExtractShaderSourceAttributionWithMapper extracts source-level performance
+// attribution using a caller-provided source mapper.
+func ExtractShaderSourceAttributionWithMapper(t *trace.Trace, shaderName string, mapper *ShaderSourceMapper) (*ShaderSourceAttribution, error) {
 	// Get shader metrics
 	metricsReport, err := ExtractShaderMetrics(t)
 	if err != nil {
@@ -67,10 +82,8 @@ func ExtractShaderSourceAttribution(t *trace.Trace, shaderName string) (*ShaderS
 		return nil, fmt.Errorf("shader %q not found in trace", shaderName)
 	}
 
-	// Get source location
-	mapper := NewShaderSourceMapper()
-	if err := mapper.IndexShaderSources(); err != nil {
-		return nil, fmt.Errorf("index shader sources: %w", err)
+	if mapper == nil {
+		return nil, fmt.Errorf("no shader source mapper")
 	}
 
 	sourceFile, startLine := mapper.GetSourceLocation(shaderName)

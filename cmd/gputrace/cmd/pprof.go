@@ -219,6 +219,9 @@ func generateSourceLinesPprof(tracePath string, searchPaths []string) error {
 	if err := mapper.IndexShaderSources(); err != nil {
 		log.Printf("Warning: failed to index shader sources: %v", err)
 	}
+	if err := mapper.IndexTraceBundleSources(tracePath); err != nil {
+		log.Printf("Warning: failed to index trace shader sources: %v", err)
+	}
 
 	// Get timing data - try multiple sources in order of preference
 	var timings []*export.EncoderTiming
@@ -259,6 +262,7 @@ func generateSourceLinesPprof(tracePath string, searchPaths []string) error {
 			timings = timing.GenerateSyntheticTiming(trace)
 		}
 	}
+	timings = appendSourceMappedEncoderTimings(trace, timings, mapper)
 
 	// Generate pprof with source lines
 	prof, err := export.ToPprofWithSourceLines(trace, timings, mapper)
@@ -295,4 +299,44 @@ func generateSourceLinesPprof(tracePath string, searchPaths []string) error {
 	fmt.Printf("  (pprof) list <kernel_name>\n")
 
 	return nil
+}
+
+func appendSourceMappedEncoderTimings(trace *gputrace.Trace, timings []*export.EncoderTiming, mapper *gputrace.ShaderSourceMapper) []*export.EncoderTiming {
+	if trace == nil || mapper == nil {
+		return timings
+	}
+	seen := make(map[string]bool)
+	var maxEnd uint64
+	for _, timing := range timings {
+		seen[timing.Label] = true
+		if timing.EndTimestamp > maxEnd {
+			maxEnd = timing.EndTimestamp
+		}
+	}
+	if maxEnd == 0 {
+		maxEnd = 1000000000000000
+	}
+	encoders, err := trace.ParseComputeEncoders()
+	if err != nil {
+		return timings
+	}
+	for _, enc := range encoders {
+		if enc.Label == "" || seen[enc.Label] {
+			continue
+		}
+		if sourceFile, _ := mapper.GetSourceLocation(enc.Label); sourceFile == "" {
+			continue
+		}
+		durationNs := uint64(1000000)
+		timings = append(timings, &export.EncoderTiming{
+			Label:          enc.Label,
+			StartTimestamp: maxEnd,
+			EndTimestamp:   maxEnd + durationNs,
+			DurationNs:     durationNs,
+			DurationMs:     float64(durationNs) / 1e6,
+		})
+		seen[enc.Label] = true
+		maxEnd += durationNs + 10000
+	}
+	return timings
 }
