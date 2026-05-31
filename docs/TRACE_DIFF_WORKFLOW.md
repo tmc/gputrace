@@ -47,6 +47,9 @@ gputrace diff A.gputrace B.gputrace --by pipeline
 # Dispatch outliers with source indices
 gputrace diff A.gputrace B.gputrace --by dispatch --limit 50 --min-delta-us 30
 
+# Matched dispatch rows
+gputrace diff A.gputrace B.gputrace --by matches
+
 # Timeline spike windows
 gputrace diff A.gputrace B.gputrace --by timeline-windows
 

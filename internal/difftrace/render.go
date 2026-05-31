@@ -108,7 +108,7 @@ func RenderText(report Report, by string, showMatches, showUnmatched, showOccurr
 		}
 	}
 
-	if showMatches {
+	if showMatches || sections["matches"] {
 		fmt.Fprintf(&b, "\nMatched Dispatches\n")
 		fmt.Fprintf(&b, "%-7s %-7s %-7s %-44s %8s %8s %9s %8s\n", "a_idx", "b_idx", "enc", "function", "a_us", "b_us", "delta", "conf")
 		for i, m := range report.MatchedPairs {
@@ -118,7 +118,7 @@ func RenderText(report Report, by string, showMatches, showUnmatched, showOccurr
 			fmt.Fprintf(&b, "%-7d %-7d %-7d %-44s %8d %8d %+9d %8.2f\n", m.SourceIndexA, m.SourceIndexB, m.EncoderIndex, truncate(safeFunctionName(m.FunctionName), 44), m.DurationAUs, m.DurationBUs, m.DeltaUs, m.Confidence)
 		}
 	}
-	if showUnmatched {
+	if showUnmatched || sections["unmatched"] {
 		fmt.Fprintf(&b, "\nUnmatched Dispatches\n")
 		fmt.Fprintf(&b, "%-6s %-7s %-7s %-10s %-24s %-24s %8s\n", "trace", "idx", "enc", "pipeline", "function", "kernel_id", "dur")
 		for i, u := range report.Unmatched {
