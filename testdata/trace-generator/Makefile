@@ -14,7 +14,7 @@ help:
 	@echo "Targets:"
 	@echo "  build                   Build release binary"
 	@echo "  run SCENARIO=...        Run scenario without capture"
-	@echo "  run-capture SCENARIO=.. Capture trace with timestamp"
+	@echo "  run-capture SCENARIO=.. Capture trace into CAPTURE_DIR"
 	@echo "  capture-all             Capture all scenarios RUNS times into CAPTURE_DIR"
 	@echo "  test                    Test build and run single-encoder"
 	@echo "  clean                   Clean build artifacts"
@@ -46,8 +46,8 @@ run-capture: build
 		echo "Run 'make list' to see available scenarios"; \
 		exit 1; \
 	fi
-	@mkdir -p "$(TRACES_DIR)/$(SCENARIO)"
-	@OUTPUT_PATH="$(TRACES_DIR)/$(SCENARIO)/$(SCENARIO)-$(TIMESTAMP).gputrace"; \
+	@mkdir -p "$(CAPTURE_DIR)/$(SCENARIO)"
+	@OUTPUT_PATH="$(CAPTURE_DIR)/$(SCENARIO)/$(SCENARIO)-$(TIMESTAMP).gputrace"; \
 	echo "Capturing trace: $$OUTPUT_PATH"; \
 	MTL_CAPTURE_ENABLED=1 .build/release/trace-generator "$(SCENARIO)" "$$OUTPUT_PATH"; \
 	if [ -d "$$OUTPUT_PATH" ]; then \

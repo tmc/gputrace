@@ -91,21 +91,24 @@ open -a Instruments
 #    - File > Export > Counters
 #    - Save as CSV
 
-# 5. Organize:
-mkdir -p ../traces/01-single-encoder
-mv ~/Downloads/trace-generator.gputrace ../traces/01-single-encoder/
-mv ~/Downloads/counters.csv ../traces/01-single-encoder/
+# 5. Organize local captures outside the checked-in fixture directories:
+CAPTURE_DIR=../traces/local-$(date +%Y%m%d-%H%M%S)/01-single-encoder
+mkdir -p "$CAPTURE_DIR"
+mv ~/Downloads/trace-generator.gputrace "$CAPTURE_DIR/trace.gputrace"
+mv ~/Downloads/counters.csv "$CAPTURE_DIR/counters.csv"
 ```
 
 ### Method 2: Command Line (Experimental)
 
 ```bash
 # Capture with xctrace (if available)
+CAPTURE_DIR=../traces/local-$(date +%Y%m%d-%H%M%S)
+mkdir -p "$CAPTURE_DIR"
 xcrun xctrace record \
     --template 'GPU Counters' \
     --launch .build/release/trace-generator \
     --launch-arg 01-single-encoder \
-    --output ../traces/01-single-encoder.trace
+    --output "$CAPTURE_DIR/01-single-encoder.trace"
 
 # Convert to .gputrace if needed
 ```
@@ -113,11 +116,11 @@ xcrun xctrace record \
 ### Method 3: Automated Batch Capture
 
 ```bash
-# Capture one scenario with programmatic Metal capture.
+# Capture one scenario with programmatic Metal capture. By default this writes
+# to ../traces/generated-YYYYMMDD-HHMMSS/ so checked-in fixtures are not replaced.
 make run-capture SCENARIO=01-single-encoder
 
-# Capture every scenario. By default this writes to
-# ../traces/generated-YYYYMMDD-HHMMSS/ so checked-in fixtures are not replaced.
+# Capture every scenario.
 make capture-all RUNS=3
 
 # Choose an explicit local output directory when needed.
@@ -161,7 +164,7 @@ Description: Known invocations: exactly 1000 (10 threadgroups × 100 threads)
 
 ## Directory Structure
 
-After manual capture organization or a single `make run-capture`:
+Checked-in fixtures use this layout:
 
 ```
 testdata/
@@ -172,9 +175,7 @@ testdata/
 │   └── .build/
 └── traces/                    # Captured traces
     ├── 01-single-encoder/
-    │   ├── trace.gputrace
-    │   ├── counters.csv
-    │   └── metadata.json
+    │   └── 01-single-encoder-run1.gputrace
     ├── 02-two-encoders/
     ├── 03-three-encoders/
     ├── 04-four-encoders/
@@ -187,8 +188,10 @@ testdata/
     └── high-occupancy-low-registers/
 ```
 
-Batch captures created with `make capture-all` are grouped under
-`testdata/traces/generated-YYYYMMDD-HHMMSS/` by default.
+Captures created with `make run-capture` or `make capture-all` are grouped
+under `testdata/traces/generated-YYYYMMDD-HHMMSS/` by default. Manual
+Instruments captures should use `testdata/traces/local-*` or another local
+directory unless intentionally refreshing checked-in fixtures.
 
 ## Analysis Workflow
 
@@ -201,9 +204,10 @@ Batch captures created with `make capture-all` are grouped under
 
 # Compare with the retained six-encoder fixture
 cd ../..
-python3 /tmp/analyze_all_files.py \
-    --trace1 testdata/traces/06-six-encoders/06-six-encoders-run1.gputrace \
-    --trace2 testdata/traces/01-single-encoder/01-single-encoder-run1.gputrace
+gputrace diff \
+    testdata/traces/06-six-encoders/06-six-encoders-run1.gputrace \
+    testdata/traces/01-single-encoder/01-single-encoder-run1.gputrace \
+    --explain
 ```
 
 **Key Question:** Does 1 encoder produce fewer counter files than 6 encoders?
@@ -345,7 +349,7 @@ Check Metal shader syntax in `main.swift`. All shaders are inline in source.
 2. **Compare:** With existing 6-encoder LLM trace
 3. **Decision:** Continue based on file count correlation
 4. **If promising:** Capture remaining scenarios
-5. **Analyze:** Use scripts in `/tmp/` to find field offsets
+5. **Analyze:** Compare checked-in and local captures to find field offsets
 
 ---
 

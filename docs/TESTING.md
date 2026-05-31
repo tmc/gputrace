@@ -8,8 +8,8 @@ go test ./...
 
 The default suite uses the small checked-in fixtures under `testdata/traces`
 when they are present and skips fixture-dependent cases when they are not.
-Set `GPUTRACE_REQUIRE_PERF_FIXTURES=1` to make missing checked-in perf fixtures
-fail instead of skip.
+Set `GPUTRACE_REQUIRE_PERF_FIXTURES=1` to make missing optional perf fixtures
+under the legacy test paths fail instead of skip.
 
 The checked-in fixture set covers structural traces and focused scenario
 captures. It does not include `.gpuprofiler_raw` profiler exports or Xcode
