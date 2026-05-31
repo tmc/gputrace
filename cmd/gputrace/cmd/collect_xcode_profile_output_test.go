@@ -3,10 +3,13 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 func TestXcodeProfileStatusWriter(t *testing.T) {
@@ -94,29 +97,75 @@ func TestWriteXcodeProfileActionOutputPlainNoop(t *testing.T) {
 	}
 }
 
-func TestRejectXcodeProfileJSON(t *testing.T) {
+func TestHiddenXcodeProfileUtilityCommandsRejectJSONBeforeRunE(t *testing.T) {
 	oldJSON := collectProfileJSON
+	oldPreRunE := collectXcodeProfileCmd.PersistentPreRunE
+	oldSilenceUsage := rootCmd.SilenceUsage
+	oldSilenceErrors := rootCmd.SilenceErrors
 	t.Cleanup(func() {
 		collectProfileJSON = oldJSON
+		collectXcodeProfileCmd.PersistentPreRunE = oldPreRunE
+		rootCmd.SilenceUsage = oldSilenceUsage
+		rootCmd.SilenceErrors = oldSilenceErrors
+		rootCmd.SetArgs(nil)
 	})
 
-	collectProfileJSON = false
-	if err := rejectXcodeProfileJSON("debug-file-browser"); err != nil {
-		t.Fatalf("rejectXcodeProfileJSON plain mode = %v, want nil", err)
+	rootCmd.SilenceUsage = true
+	rootCmd.SilenceErrors = true
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "send-key", args: []string{"escape"}},
+		{name: "check-goto-folder"},
+		{name: "debug-file-browser"},
 	}
 
-	collectProfileJSON = true
-	out, err := captureStdout(t, func() error {
-		return rejectXcodeProfileJSON("debug-file-browser")
-	})
-	if err == nil {
-		t.Fatal("rejectXcodeProfileJSON JSON mode returned nil error")
-	}
-	if !strings.Contains(err.Error(), "debug-file-browser does not support --json") {
-		t.Fatalf("error = %q, want unsupported JSON context", err)
-	}
-	if out != "" {
-		t.Fatalf("stdout = %q, want empty", out)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			command, _, err := collectXcodeProfileCmd.Find([]string{tt.name})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if command == nil || command.Name() != tt.name {
+				t.Fatalf("command = %#v, want %q", command, tt.name)
+			}
+
+			preRan := false
+			collectXcodeProfileCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+				preRan = true
+				return errors.New("persistent pre-run called")
+			}
+
+			ran := false
+			oldRunE := command.RunE
+			command.RunE = func(cmd *cobra.Command, args []string) error {
+				ran = true
+				return errors.New("runE called")
+			}
+			defer func() {
+				command.RunE = oldRunE
+			}()
+
+			collectProfileJSON = false
+			args := append([]string{"xcode-profile", "--json", tt.name}, tt.args...)
+			rootCmd.SetArgs(args)
+
+			err = rootCmd.Execute()
+			if err == nil {
+				t.Fatal("command returned nil error")
+			}
+			if got, want := err.Error(), tt.name+" does not support --json"; got != want {
+				t.Fatalf("error = %q, want %q", got, want)
+			}
+			if preRan {
+				t.Fatal("persistent pre-run ran after JSON rejection")
+			}
+			if ran {
+				t.Fatal("RunE ran after JSON rejection")
+			}
+		})
 	}
 }
 

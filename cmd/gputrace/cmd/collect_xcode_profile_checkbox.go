@@ -11,6 +11,21 @@ import (
 
 var ensureCheckedTrace string
 
+const unsupportedXcodeProfileJSONHelp = "This command does not support the inherited --json flag."
+
+func documentUnsupportedXcodeProfileJSON(cmd *cobra.Command) {
+	long := strings.TrimRight(cmd.Long, "\n")
+	if long == "" {
+		cmd.Long = unsupportedXcodeProfileJSONHelp
+		return
+	}
+	if strings.Contains(long, unsupportedXcodeProfileJSONHelp) {
+		cmd.Long = long
+		return
+	}
+	cmd.Long = long + "\n\n" + unsupportedXcodeProfileJSONHelp
+}
+
 func rejectUnsupportedXcodeProfileJSON(command string) error {
 	if !collectProfileJSON {
 		return nil
@@ -40,6 +55,7 @@ Example:
 		Args: unsupportedXcodeProfileJSONArgs("ensure-checked", cobra.ExactArgs(1)),
 		RunE: runEnsureChecked,
 	}
+	documentUnsupportedXcodeProfileJSON(ensureCheckedCmd)
 	ensureCheckedCmd.Flags().StringVar(&ensureCheckedTrace, "trace", "", "Target window by trace filename")
 	collectXcodeProfileCmd.AddCommand(ensureCheckedCmd)
 
@@ -50,6 +66,7 @@ Example:
 		Args:   unsupportedXcodeProfileJSONArgs("toggle-checkbox", cobra.ExactArgs(1)),
 		RunE:   runToggleCheckbox,
 	}
+	documentUnsupportedXcodeProfileJSON(toggleCheckboxCmd)
 	toggleCheckboxCmd.Flags().StringVar(&ensureCheckedTrace, "trace", "", "Target window by trace filename")
 	collectXcodeProfileCmd.AddCommand(toggleCheckboxCmd)
 }
