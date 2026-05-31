@@ -110,11 +110,15 @@ Some success paths require capabilities that are not shipped in the small in-rep
 - `profiler` requires traces with `.gpuprofiler_raw`
 - `shader-source` requires traces with source attribution data
 
+See [docs/TESTING.md](./docs/TESTING.md) for opt-in integration test
+environment variables and fixture handling.
+
 ## Documentation
 
 Detailed format and workflow documentation lives in `docs/`:
 
 - [README.md](./docs/README.md) -- docs index
+- [TESTING.md](./docs/TESTING.md) -- test fixtures and opt-in integration tests
 - [TRACE_DIFF_WORKFLOW.md](./docs/TRACE_DIFF_WORKFLOW.md) -- trace diff workflow and output interpretation
 - [STREAMDATA_FORMAT.md](./docs/STREAMDATA_FORMAT.md) -- streamData plist format
 - [trace-format.md](./docs/trace-format.md) -- trace format overview
