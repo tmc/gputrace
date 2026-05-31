@@ -376,7 +376,7 @@ func (p *GPUTraceProfiler) buildCombinedProfile() (*profile.Profile, error) {
 	prof := &profile.Profile{
 		SampleType: []*profile.ValueType{
 			{Type: "gpu_time", Unit: "nanoseconds"},
-			{Type: "gpu_utilization", Unit: "percentage"},
+			{Type: "gpu_utilization", Unit: "basis_points"},
 		},
 		DefaultSampleType: "gpu_time",
 	}
@@ -454,7 +454,7 @@ func (p *GPUTraceProfiler) buildCombinedProfile() (*profile.Profile, error) {
 			processLoc,
 		}
 
-		// Calculate utilization (percentage as integer)
+		// Store fractional percentages as basis points.
 		utilization := int64(timing.Percentage * 100)
 
 		sample := &profile.Sample{
