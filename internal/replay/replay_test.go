@@ -2,6 +2,7 @@ package replay
 
 import (
 	"encoding/binary"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -29,7 +30,7 @@ func TestValidateReplayRejectsICBExecutions(t *testing.T) {
 	}
 	for _, want := range []string{
 		"1 indirect command buffer executions cannot be replayed",
-		"seq=0",
+		"sequence=0",
 		"encoder=0",
 		"icb=0xabcddcba",
 		"count=3",
@@ -40,11 +41,30 @@ func TestValidateReplayRejectsICBExecutions(t *testing.T) {
 	}
 }
 
+func TestUnsupportedICBExecutionErrorWrapsSentinel(t *testing.T) {
+	err := unsupportedICBExecutionError(ReplayCommand{
+		Type:         "execute_icb",
+		SequenceNum:  5,
+		EncoderIndex: 1,
+		ICBAddr:      0xfeed,
+		ICBCount:     2,
+	})
+
+	if !errors.Is(err, ErrICBExecutionUnsupported) {
+		t.Fatalf("error = %v, want ErrICBExecutionUnsupported", err)
+	}
+	for _, want := range []string{"sequence=5", "encoder=1", "icb=0xfeed", "count=2"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q does not contain %q", err, want)
+		}
+	}
+}
+
 func TestFormatReplayValidationShowsICBError(t *testing.T) {
 	validation := &ReplayValidation{
 		CanReplay: false,
 		Errors: []string{
-			"1 indirect command buffer executions cannot be replayed: first seq=0 encoder=0 icb=0xabcddcba count=3",
+			"1 indirect command buffer executions cannot be replayed: first indirect command buffer execution cannot be replayed: sequence=0 encoder=0 icb=0xabcddcba count=3",
 		},
 	}
 

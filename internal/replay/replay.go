@@ -283,8 +283,8 @@ func (re *ReplayEngine) ValidateReplay() (*ReplayValidation, error) {
 		validation.CanReplay = false
 		if cmd, ok := firstReplayCommandOfType(plan, "execute_icb"); ok {
 			validation.Errors = append(validation.Errors,
-				fmt.Sprintf("%d indirect command buffer executions cannot be replayed: first seq=%d encoder=%d icb=0x%x count=%d",
-					plan.ICBExecutions, cmd.SequenceNum, cmd.EncoderIndex, cmd.ICBAddr, cmd.ICBCount))
+				fmt.Sprintf("%d indirect command buffer executions cannot be replayed: first %v",
+					plan.ICBExecutions, unsupportedICBExecutionError(cmd)))
 		} else {
 			validation.Errors = append(validation.Errors,
 				fmt.Sprintf("%d indirect command buffer executions cannot be replayed", plan.ICBExecutions))

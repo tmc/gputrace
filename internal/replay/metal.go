@@ -4,7 +4,6 @@
 package replay
 
 import (
-	"errors"
 	"fmt"
 	"unsafe"
 
@@ -12,12 +11,6 @@ import (
 	"github.com/tmc/apple/objc"
 	"github.com/tmc/gputrace/internal/mtlb"
 )
-
-// ErrICBExecutionUnsupported is returned when a replay plan contains an
-// indirect command buffer execution. The current replay state does not
-// reconstruct MTLIndirectCommandBuffer objects from traces, so Metal replay
-// rejects these plans before issuing any GPU work.
-var ErrICBExecutionUnsupported = errors.New("metal replay does not support indirect command buffer execution")
 
 // MetalReplayEngine extends ReplayEngine with actual Metal execution capabilities.
 type MetalReplayEngine struct {
@@ -329,13 +322,7 @@ func validateReplayPlanForMetalExecution(plan *ReplayPlan) error {
 		if cmd.Type != "execute_icb" {
 			continue
 		}
-		return fmt.Errorf("%w: sequence=%d encoder=%d icb=0x%x count=%d",
-			ErrICBExecutionUnsupported,
-			cmd.SequenceNum,
-			cmd.EncoderIndex,
-			cmd.ICBAddr,
-			cmd.ICBCount,
-		)
+		return unsupportedICBExecutionError(cmd)
 	}
 	return nil
 }
@@ -395,13 +382,7 @@ func (mre *MetalReplayEngine) encodeCommand(encoder *MetalComputeEncoderHandle, 
 		encoder.Dispatch(gridX, gridY, gridZ, threadgroupX, threadgroupY, threadgroupZ)
 
 	case "execute_icb":
-		return fmt.Errorf("%w: sequence=%d encoder=%d icb=0x%x count=%d",
-			ErrICBExecutionUnsupported,
-			cmd.SequenceNum,
-			cmd.EncoderIndex,
-			cmd.ICBAddr,
-			cmd.ICBCount,
-		)
+		return unsupportedICBExecutionError(cmd)
 
 	default:
 		return fmt.Errorf("unknown command type: %s", cmd.Type)
