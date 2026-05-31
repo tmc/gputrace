@@ -8,6 +8,8 @@ import (
 	"testing"
 )
 
+const agxpsProfilerRawDirEnv = "GPUTRACE_AGXPS_PROFILER_RAW_DIR"
+
 func TestInit(t *testing.T) {
 	err := Init()
 	if err != nil {
@@ -21,24 +23,31 @@ func TestInit(t *testing.T) {
 }
 
 func TestParseTimelineData(t *testing.T) {
-	err := Init()
+	profilerRawDir := os.Getenv(agxpsProfilerRawDirEnv)
+	if profilerRawDir == "" {
+		t.Skipf("set %s to a .gpuprofiler_raw directory containing Timeline_f_*.raw fixtures", agxpsProfilerRawDirEnv)
+	}
+	info, err := os.Stat(profilerRawDir)
+	if err != nil {
+		t.Fatalf("%s=%q is not accessible: %v", agxpsProfilerRawDirEnv, profilerRawDir, err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("%s=%q is not a directory", agxpsProfilerRawDirEnv, profilerRawDir)
+	}
+
+	err = Init()
 	if err != nil {
 		t.Skipf("Skipping test - GTShaderProfiler not available: %v", err)
 	}
 	defer Close()
 
-	// Look for Timeline_f_*.raw files in the test trace
-	traceDir := "/private/tmp/mlx-lm-generate_tokens_8_to_9-perfdata.gputrace"
-	profilerRawDir := filepath.Join(traceDir, "mlx-lm-generate_tokens_8_to_9.gputrace.gpuprofiler_raw")
-
-	if _, err := os.Stat(profilerRawDir); os.IsNotExist(err) {
-		t.Skipf("Test trace not found at %s", traceDir)
-	}
-
 	// Find Timeline_f_*.raw files
 	matches, err := filepath.Glob(filepath.Join(profilerRawDir, "Timeline_f_*.raw"))
-	if err != nil || len(matches) == 0 {
-		t.Skipf("No Timeline_f_*.raw files found in %s", profilerRawDir)
+	if err != nil {
+		t.Fatalf("failed to glob Timeline_f_*.raw files in %s: %v", profilerRawDir, err)
+	}
+	if len(matches) == 0 {
+		t.Fatalf("%s=%q contains no Timeline_f_*.raw files", agxpsProfilerRawDirEnv, profilerRawDir)
 	}
 
 	t.Logf("Found %d Timeline_f_*.raw files", len(matches))
