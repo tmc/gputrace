@@ -111,6 +111,59 @@ func TestCorrelateByNameComputesFrequencyForStreamDataTiming(t *testing.T) {
 	}
 }
 
+func TestCalculateCorrelationSummaryCountsMetricsIndependently(t *testing.T) {
+	report := &ShaderCorrelationReport{
+		CorrelatedShaders: 3,
+		Shaders: []*CorrelatedShaderMetrics{
+			{
+				ShaderName:  "cycles_only",
+				TotalCycles: 1_000,
+			},
+			{
+				ShaderName:            "kernel_a",
+				ALUUtilization:        80,
+				KernelOccupancy:       50,
+				TotalCycles:           2_000,
+				EstimatedGPUFreqGHz:   1.5,
+				CorrelationConfidence: 1,
+			},
+			{
+				ShaderName:            "kernel_b",
+				KernelOccupancy:       70,
+				TotalCycles:           3_000,
+				EstimatedGPUFreqGHz:   2.5,
+				CorrelationConfidence: 1,
+			},
+		},
+	}
+
+	calculateCorrelationSummary(report)
+
+	if got, want := report.TotalGPUCycles, uint64(6_000); got != want {
+		t.Fatalf("TotalGPUCycles = %d, want %d", got, want)
+	}
+	if got, want := report.AvgALUUtilization, 80.0; math.Abs(got-want) > 1e-9 {
+		t.Fatalf("AvgALUUtilization = %f, want %f", got, want)
+	}
+	if got, want := report.AvgKernelOccupancy, 60.0; math.Abs(got-want) > 1e-9 {
+		t.Fatalf("AvgKernelOccupancy = %f, want %f", got, want)
+	}
+	if got, want := report.EstimatedGPUFreqGHz, 2.0; math.Abs(got-want) > 1e-9 {
+		t.Fatalf("EstimatedGPUFreqGHz = %f, want %f", got, want)
+	}
+	if got, want := report.CorrelationRate, 100.0; math.Abs(got-want) > 1e-9 {
+		t.Fatalf("CorrelationRate = %f, want %f", got, want)
+	}
+
+	out := FormatCorrelationReport(report)
+	if !strings.Contains(out, "Total GPU Cycles: 6000") {
+		t.Fatalf("formatted report missing total cycles:\n%s", out)
+	}
+	if !strings.Contains(out, "Estimated GPU Frequency: 2.00 GHz") {
+		t.Fatalf("formatted report missing averaged frequency:\n%s", out)
+	}
+}
+
 func TestFormatCorrelationReportDisplaysTimingSource(t *testing.T) {
 	report := &ShaderCorrelationReport{
 		TraceSource:        "trace.gputrace",

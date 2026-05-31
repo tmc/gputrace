@@ -319,25 +319,35 @@ func calculateCorrelationSummary(report *ShaderCorrelationReport) {
 	totalOccupancy := 0.0
 	totalCycles := uint64(0)
 	totalFreq := 0.0
-	countWithMetrics := 0
+	countWithALU := 0
+	countWithOccupancy := 0
+	countWithFreq := 0
 
 	for _, shader := range report.Shaders {
+		totalCycles += shader.TotalCycles
+
 		if shader.ALUUtilization > 0 {
 			totalALU += shader.ALUUtilization
+			countWithALU++
+		}
+		if shader.KernelOccupancy > 0 {
 			totalOccupancy += shader.KernelOccupancy
-			totalCycles += shader.TotalCycles
-			countWithMetrics++
-
-			if shader.EstimatedGPUFreqGHz > 0 {
-				totalFreq += shader.EstimatedGPUFreqGHz
-			}
+			countWithOccupancy++
+		}
+		if shader.EstimatedGPUFreqGHz > 0 {
+			totalFreq += shader.EstimatedGPUFreqGHz
+			countWithFreq++
 		}
 	}
 
-	if countWithMetrics > 0 {
-		report.AvgALUUtilization = totalALU / float64(countWithMetrics)
-		report.AvgKernelOccupancy = totalOccupancy / float64(countWithMetrics)
-		report.EstimatedGPUFreqGHz = totalFreq / float64(countWithMetrics)
+	if countWithALU > 0 {
+		report.AvgALUUtilization = totalALU / float64(countWithALU)
+	}
+	if countWithOccupancy > 0 {
+		report.AvgKernelOccupancy = totalOccupancy / float64(countWithOccupancy)
+	}
+	if countWithFreq > 0 {
+		report.EstimatedGPUFreqGHz = totalFreq / float64(countWithFreq)
 	}
 
 	report.TotalGPUCycles = totalCycles
@@ -363,12 +373,15 @@ func FormatCorrelationReport(report *ShaderCorrelationReport) string {
 		output += "\n"
 	}
 
-	if report.AvgALUUtilization > 0 {
+	if report.AvgALUUtilization > 0 || report.AvgKernelOccupancy > 0 || report.TotalGPUCycles > 0 || report.EstimatedGPUFreqGHz > 0 {
 		output += "=== Summary Statistics ===\n"
 		output += fmt.Sprintf("Average ALU Utilization: %.1f%%\n", report.AvgALUUtilization)
 		output += fmt.Sprintf("Average Kernel Occupancy: %.1f%%\n", report.AvgKernelOccupancy)
 		output += fmt.Sprintf("Total GPU Cycles: %d\n", report.TotalGPUCycles)
-		output += fmt.Sprintf("Estimated GPU Frequency: %.2f GHz\n\n", report.EstimatedGPUFreqGHz)
+		if report.EstimatedGPUFreqGHz > 0 {
+			output += fmt.Sprintf("Estimated GPU Frequency: %.2f GHz\n", report.EstimatedGPUFreqGHz)
+		}
+		output += "\n"
 	}
 
 	output += "=== Per-Shader Metrics ===\n\n"
