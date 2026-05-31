@@ -41,6 +41,18 @@ type kernelUsageStats struct {
 	Writes   int
 }
 
+type analyzeKernelUsageJSON struct {
+	Name  string `json:"name"`
+	Count int    `json:"count"`
+}
+
+type analyzeBufferUsageJSON struct {
+	Address    string                   `json:"address"`
+	Name       string                   `json:"name"`
+	Dispatches int                      `json:"dispatches"`
+	Kernels    []analyzeKernelUsageJSON `json:"kernels"`
+}
+
 func runAnalyzeUsage(cmd *cobra.Command, args []string) error {
 	format, err := normalizeAnalyzeFormat(analyzeFormat)
 	if err != nil {
@@ -61,34 +73,7 @@ func runAnalyzeUsage(cmd *cobra.Command, args []string) error {
 	bufferUsage := collectAnalyzeUsage(events)
 
 	if format == "json" {
-		type kernelUsage struct {
-			Name  string `json:"name"`
-			Count int    `json:"count"`
-		}
-		type bufferUsageJSON struct {
-			Address    string        `json:"address"`
-			Name       string        `json:"name"`
-			Dispatches int           `json:"dispatches"`
-			Kernels    []kernelUsage `json:"kernels"`
-		}
-		var out []bufferUsageJSON
-		for _, stats := range sortedUsageStats(bufferUsage) {
-			entry := bufferUsageJSON{
-				Address:    fmt.Sprintf("0x%x", stats.Address),
-				Name:       stats.Name,
-				Dispatches: stats.Dispatches,
-			}
-			for _, kernel := range sortedKernelUsageStats(stats.Kernels) {
-				entry.Kernels = append(entry.Kernels, kernelUsage{Name: kernel.Name, Count: kernel.Accesses})
-			}
-			out = append(out, entry)
-		}
-		data, err := json.MarshalIndent(out, "", "  ")
-		if err != nil {
-			return fmt.Errorf("failed to marshal json: %w", err)
-		}
-		fmt.Println(string(data))
-		return nil
+		return writeAnalyzeUsageJSON(cmd.OutOrStdout(), bufferUsage)
 	}
 
 	if format == "dot" {
@@ -107,6 +92,27 @@ func runAnalyzeUsage(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	return nil
+}
+
+func writeAnalyzeUsageJSON(w io.Writer, bufferUsage map[uint64]*usageStats) error {
+	var out []analyzeBufferUsageJSON
+	for _, stats := range sortedUsageStats(bufferUsage) {
+		entry := analyzeBufferUsageJSON{
+			Address:    fmt.Sprintf("0x%x", stats.Address),
+			Name:       stats.Name,
+			Dispatches: stats.Dispatches,
+		}
+		for _, kernel := range sortedKernelUsageStats(stats.Kernels) {
+			entry.Kernels = append(entry.Kernels, analyzeKernelUsageJSON{Name: kernel.Name, Count: kernel.Accesses})
+		}
+		out = append(out, entry)
+	}
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(out); err != nil {
+		return fmt.Errorf("marshal json: %w", err)
+	}
 	return nil
 }
 
