@@ -2,6 +2,8 @@ package analysis
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -14,19 +16,23 @@ type BufferSizeInfo struct {
 	Buffers map[uint64]*BufferMetadata
 
 	// Summary statistics
-	TotalBuffers     int
-	TotalMemoryBytes uint64
-	TotalMemoryMB    float64
+	TotalBuffers       int
+	TotalMemoryBytes   uint64
+	TotalMemoryMB      float64
+	KnownSizeBuffers   int
+	UnknownSizeBuffers int
 }
 
 // BufferMetadata contains metadata about a single buffer.
 type BufferMetadata struct {
 	Address     uint64
-	Size        uint64 // Estimated or actual size
-	AccessCount int    // Number of times accessed
-	EncoderIDs  []int  // Which encoders used this buffer
-	FirstSeen   int    // Record index of first access
-	LastSeen    int    // Record index of last access
+	Size        uint64 // Actual size when SizeKnown is true
+	SizeKnown   bool
+	SizeSource  string
+	AccessCount int   // Number of times accessed
+	EncoderIDs  []int // Which encoders used this buffer
+	FirstSeen   int   // Record index of first access
+	LastSeen    int   // Record index of last access
 }
 
 // BufferDiff represents differences between two trace buffers.
@@ -38,24 +44,37 @@ type BufferDiff struct {
 	ChangedBuffers map[uint64]*BufferChange   // Buffers with different sizes/usage
 
 	// Summary statistics
-	TotalAdded        int
-	TotalRemoved      int
-	TotalChanged      int
-	TotalCommon       int
-	MemoryDeltaBytes  int64 // Positive = more memory in trace2
-	MemoryDeltaMB     float64
-	Trace1MemoryBytes uint64
-	Trace2MemoryBytes uint64
+	TotalAdded               int
+	TotalRemoved             int
+	TotalChanged             int
+	TotalCommon              int
+	MemoryDeltaBytes         int64 // Positive = more memory in trace2
+	MemoryDeltaMB            float64
+	Trace1MemoryBytes        uint64
+	Trace2MemoryBytes        uint64
+	Trace1KnownSizeBuffers   int
+	Trace1UnknownSizeBuffers int
+	Trace2KnownSizeBuffers   int
+	Trace2UnknownSizeBuffers int
+	SizeMetadataComplete     bool
 }
 
 // BufferChange represents a change in buffer metadata between traces.
 type BufferChange struct {
 	Address          uint64
 	SizeChange       int64 // Positive = larger in trace2
-	AccessCountDelta int   // Change in access count
+	SizeChangeKnown  bool
+	AccessCountDelta int // Change in access count
 	Trace1           *BufferMetadata
 	Trace2           *BufferMetadata
 }
+
+type bufferSizeMetadata struct {
+	Size   uint64
+	Source string
+}
+
+const bufferSizeSourceTraceMetadata = "trace metadata"
 
 // ExtractBufferSizes extracts buffer information from a trace.
 func ExtractBufferSizes(t *trace.Trace) (*BufferSizeInfo, error) {
@@ -68,6 +87,8 @@ func ExtractBufferSizes(t *trace.Trace) (*BufferSizeInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse MTSP records: %w", err)
 	}
+
+	bufferSizes := extractTraceBufferSizeMetadata(t, records)
 
 	// Track current encoder
 	encoderID := 0
@@ -100,6 +121,11 @@ func ExtractBufferSizes(t *trace.Trace) (*BufferSizeInfo, error) {
 						FirstSeen:  recordIdx,
 						EncoderIDs: []int{},
 					}
+					if sizeMetadata, ok := bufferSizes[bufferAddr]; ok {
+						metadata.Size = sizeMetadata.Size
+						metadata.SizeKnown = true
+						metadata.SizeSource = sizeMetadata.Source
+					}
 					info.Buffers[bufferAddr] = metadata
 				}
 
@@ -118,22 +144,104 @@ func ExtractBufferSizes(t *trace.Trace) (*BufferSizeInfo, error) {
 	// Compute summary statistics
 	info.TotalBuffers = len(info.Buffers)
 
-	// Estimate total memory (we don't have actual sizes, so this is approximate)
-	// In a real implementation, this would parse buffer metadata files
 	for _, buf := range info.Buffers {
-		// Estimate: use a heuristic based on access patterns
-		// This is just a placeholder - real sizes would come from trace metadata
-		if buf.Size == 0 {
-			// Heuristic: buffers accessed more frequently might be larger
-			// This is a rough estimate for demonstration
-			buf.Size = uint64(buf.AccessCount * 1024) // Very rough estimate
+		if buf.SizeKnown {
+			info.KnownSizeBuffers++
+			info.TotalMemoryBytes += buf.Size
+		} else {
+			info.UnknownSizeBuffers++
 		}
-		info.TotalMemoryBytes += buf.Size
 	}
 
 	info.TotalMemoryMB = float64(info.TotalMemoryBytes) / (1024 * 1024)
 
 	return info, nil
+}
+
+func extractTraceBufferSizeMetadata(t *trace.Trace, records []trace.MTSPRecord) map[uint64]bufferSizeMetadata {
+	nameSizes := loadMTLBufferFileSizes(t.Path)
+	if len(nameSizes) == 0 {
+		return nil
+	}
+
+	bufferSizes := make(map[uint64]bufferSizeMetadata)
+	for _, record := range records {
+		if record.Type != trace.RecordTypeCtU {
+			continue
+		}
+
+		ctu, err := record.ParseCtURecord()
+		if err != nil || ctu.Address == 0 || ctu.Name == "" {
+			continue
+		}
+
+		size, ok := mtlBufferSizeForName(ctu.Name, nameSizes)
+		if !ok {
+			continue
+		}
+
+		bufferSizes[ctu.Address] = bufferSizeMetadata{
+			Size:   size,
+			Source: bufferSizeSourceTraceMetadata,
+		}
+	}
+
+	return bufferSizes
+}
+
+func loadMTLBufferFileSizes(tracePath string) map[string]uint64 {
+	if tracePath == "" {
+		return nil
+	}
+
+	entries, err := os.ReadDir(tracePath)
+	if err != nil {
+		return nil
+	}
+
+	sizes := make(map[string]uint64)
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, "MTLBuffer-") {
+			continue
+		}
+
+		info, err := os.Stat(filepath.Join(tracePath, name))
+		if err != nil || info.IsDir() {
+			continue
+		}
+
+		sizes[name] = uint64(info.Size())
+	}
+
+	return sizes
+}
+
+func mtlBufferSizeForName(name string, sizes map[string]uint64) (uint64, bool) {
+	if size, ok := sizes[name]; ok {
+		return size, true
+	}
+
+	baseName := baseMTLBufferName(name)
+	if baseName == "" {
+		return 0, false
+	}
+
+	size, ok := sizes[baseName]
+	return size, ok
+}
+
+func baseMTLBufferName(name string) string {
+	if !strings.HasPrefix(name, "MTLBuffer-") {
+		return ""
+	}
+
+	parts := strings.Split(name, "-")
+	if len(parts) < 3 || parts[1] == "" {
+		return ""
+	}
+
+	return fmt.Sprintf("MTLBuffer-%s-0", parts[1])
 }
 
 // CompareBuffers compares buffer usage between two traces.
@@ -152,10 +260,13 @@ func CompareBuffers(info1, info2 *BufferSizeInfo) *BufferDiff {
 			diff.CommonBuffers[addr] = buf1
 
 			// Check for changes
-			if buf1.Size != buf2.Size || buf1.AccessCount != buf2.AccessCount {
+			sizeChanged := buf1.SizeKnown && buf2.SizeKnown && buf1.Size != buf2.Size
+			accessCountChanged := buf1.AccessCount != buf2.AccessCount
+			if sizeChanged || accessCountChanged {
 				diff.ChangedBuffers[addr] = &BufferChange{
 					Address:          addr,
 					SizeChange:       int64(buf2.Size) - int64(buf1.Size),
+					SizeChangeKnown:  buf1.SizeKnown && buf2.SizeKnown,
 					AccessCountDelta: buf2.AccessCount - buf1.AccessCount,
 					Trace1:           buf1,
 					Trace2:           buf2,
@@ -184,6 +295,11 @@ func CompareBuffers(info1, info2 *BufferSizeInfo) *BufferDiff {
 	diff.Trace2MemoryBytes = info2.TotalMemoryBytes
 	diff.MemoryDeltaBytes = int64(info2.TotalMemoryBytes) - int64(info1.TotalMemoryBytes)
 	diff.MemoryDeltaMB = float64(diff.MemoryDeltaBytes) / (1024 * 1024)
+	diff.Trace1KnownSizeBuffers = info1.KnownSizeBuffers
+	diff.Trace1UnknownSizeBuffers = info1.UnknownSizeBuffers
+	diff.Trace2KnownSizeBuffers = info2.KnownSizeBuffers
+	diff.Trace2UnknownSizeBuffers = info2.UnknownSizeBuffers
+	diff.SizeMetadataComplete = info1.UnknownSizeBuffers == 0 && info2.UnknownSizeBuffers == 0
 
 	return diff
 }
@@ -206,8 +322,22 @@ func FormatBufferDiff(diff *BufferDiff, trace1Path, trace2Path string) string {
 	out.WriteString(fmt.Sprintf("  Changed Buffers:  %d (size or usage changed)\n", diff.TotalChanged))
 	out.WriteString("\n")
 
+	out.WriteString("Buffer Size Metadata:\n")
+	out.WriteString(fmt.Sprintf("  Trace 1: %d known, %d unknown\n",
+		diff.Trace1KnownSizeBuffers, diff.Trace1UnknownSizeBuffers))
+	out.WriteString(fmt.Sprintf("  Trace 2: %d known, %d unknown\n",
+		diff.Trace2KnownSizeBuffers, diff.Trace2UnknownSizeBuffers))
+	if !diff.SizeMetadataComplete {
+		out.WriteString("  Status: incomplete; memory totals include only buffers with trace metadata\n")
+	}
+	out.WriteString("\n")
+
 	// Memory statistics
-	out.WriteString("Memory Usage:\n")
+	if diff.SizeMetadataComplete {
+		out.WriteString("Memory Usage:\n")
+	} else {
+		out.WriteString("Known Memory Usage:\n")
+	}
 	out.WriteString(fmt.Sprintf("  Trace 1: %.2f MB (%d bytes)\n",
 		float64(diff.Trace1MemoryBytes)/(1024*1024), diff.Trace1MemoryBytes))
 	out.WriteString(fmt.Sprintf("  Trace 2: %.2f MB (%d bytes)\n",
@@ -241,8 +371,8 @@ func FormatBufferDiff(diff *BufferDiff, trace1Path, trace2Path string) string {
 		}
 		for i := 0; i < limit; i++ {
 			buf := addedList[i]
-			out.WriteString(fmt.Sprintf("  [%d] 0x%016x: %d bytes, %d accesses, %d encoders\n",
-				i+1, buf.Address, buf.Size, buf.AccessCount, len(buf.EncoderIDs)))
+			out.WriteString(fmt.Sprintf("  [%d] 0x%016x: %s, %d accesses, %d encoders\n",
+				i+1, buf.Address, formatBufferSize(buf), buf.AccessCount, len(buf.EncoderIDs)))
 		}
 		if len(addedList) > limit {
 			out.WriteString(fmt.Sprintf("  ... and %d more added buffers\n", len(addedList)-limit))
@@ -270,8 +400,8 @@ func FormatBufferDiff(diff *BufferDiff, trace1Path, trace2Path string) string {
 		}
 		for i := 0; i < limit; i++ {
 			buf := removedList[i]
-			out.WriteString(fmt.Sprintf("  [%d] 0x%016x: %d bytes, %d accesses, %d encoders\n",
-				i+1, buf.Address, buf.Size, buf.AccessCount, len(buf.EncoderIDs)))
+			out.WriteString(fmt.Sprintf("  [%d] 0x%016x: %s, %d accesses, %d encoders\n",
+				i+1, buf.Address, formatBufferSize(buf), buf.AccessCount, len(buf.EncoderIDs)))
 		}
 		if len(removedList) > limit {
 			out.WriteString(fmt.Sprintf("  ... and %d more removed buffers\n", len(removedList)-limit))
@@ -289,9 +419,15 @@ func FormatBufferDiff(diff *BufferDiff, trace1Path, trace2Path string) string {
 			changedList = append(changedList, change)
 		}
 		sort.Slice(changedList, func(i, j int) bool {
+			if changedList[i].SizeChangeKnown != changedList[j].SizeChangeKnown {
+				return changedList[i].SizeChangeKnown
+			}
 			absI := abs(changedList[i].SizeChange)
 			absJ := abs(changedList[j].SizeChange)
-			return absI > absJ
+			if absI != absJ {
+				return absI > absJ
+			}
+			return absInt(changedList[i].AccessCountDelta) > absInt(changedList[j].AccessCountDelta)
 		})
 
 		// Show top 10
@@ -310,8 +446,8 @@ func FormatBufferDiff(diff *BufferDiff, trace1Path, trace2Path string) string {
 				accessSign = "+"
 			}
 
-			out.WriteString(fmt.Sprintf("  [%d] 0x%016x: %s%d bytes, %s%d accesses\n",
-				i+1, change.Address, sizeSign, change.SizeChange,
+			out.WriteString(fmt.Sprintf("  [%d] 0x%016x: %s, %s%d accesses\n",
+				i+1, change.Address, formatSizeChange(change, sizeSign),
 				accessSign, change.AccessCountDelta))
 		}
 		if len(changedList) > limit {
@@ -322,7 +458,9 @@ func FormatBufferDiff(diff *BufferDiff, trace1Path, trace2Path string) string {
 
 	// Optimization insights
 	out.WriteString("Insights:\n")
-	if diff.MemoryDeltaBytes > 0 {
+	if !diff.SizeMetadataComplete {
+		out.WriteString("  • Buffer size metadata is incomplete; memory-change insights are unavailable\n")
+	} else if diff.MemoryDeltaBytes > 0 {
 		out.WriteString(fmt.Sprintf("  • Memory usage increased by %.2f MB\n", diff.MemoryDeltaMB))
 		if diff.TotalAdded > 0 {
 			out.WriteString(fmt.Sprintf("    %d new buffers contribute to the increase\n", diff.TotalAdded))
@@ -346,8 +484,31 @@ func FormatBufferDiff(diff *BufferDiff, trace1Path, trace2Path string) string {
 	return out.String()
 }
 
+func formatBufferSize(buf *BufferMetadata) string {
+	if buf == nil || !buf.SizeKnown {
+		return "size unknown"
+	}
+
+	return fmt.Sprintf("%d bytes", buf.Size)
+}
+
+func formatSizeChange(change *BufferChange, sign string) string {
+	if change == nil || !change.SizeChangeKnown {
+		return "size unknown"
+	}
+
+	return fmt.Sprintf("%s%d bytes", sign, change.SizeChange)
+}
+
 // Helper function to get absolute value
 func abs(n int64) int64 {
+	if n < 0 {
+		return -n
+	}
+	return n
+}
+
+func absInt(n int) int {
 	if n < 0 {
 		return -n
 	}

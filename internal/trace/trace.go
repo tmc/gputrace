@@ -804,7 +804,7 @@ type DispatchEstimate struct {
 
 // EstimateDispatches estimates the number of GPU dispatches using MTSP analysis.
 // This provides a fast estimate (95%+ accuracy for most traces) without requiring
-// full performance counter parsing or Xcode integration.
+// performance-counter parsing or Xcode integration.
 //
 // Returns an estimate with confidence level. For exact counts, use GetExactDispatches
 // which integrates with Xcode Instruments (when available).
@@ -873,16 +873,18 @@ func (t *Trace) EstimateDispatches() (*DispatchEstimate, error) {
 // CountActualDispatches attempts to count dispatches for validation purposes.
 //
 // This function tries to get the most accurate count available:
-// 1. If performance counters are available, notes they exist (but parsing not implemented yet)
-// 2. Falls back to MTSP-based estimation (95%+ accuracy for standard workloads)
+//  1. If performance counters are available, notes that trace summaries do not
+//     currently derive dispatch counts from them. Hardware counter parsing lives
+//     in internal/counter.
+//  2. Falls back to MTSP-based estimation (95%+ accuracy for standard workloads)
 //
 // For production use, call EstimateDispatches() which provides confidence levels and method info.
 func (t *Trace) CountActualDispatches() (int, error) {
 	// Try performance counters first (if available)
-	// Note: Full parsing not implemented, but we document their presence
 	if t.HasPerfCounters() {
-		// Performance counter data exists, but parsing is not yet complete
-		// Fall through to estimation with a note
+		// Performance counter data exists, but this trace summary path does not
+		// consume internal/counter metrics when deriving dispatch counts.
+		// Fall through to the MTSP-based estimate.
 	}
 
 	// Use MTSP-based estimation

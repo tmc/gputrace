@@ -318,94 +318,116 @@ func TestParseInitCalls_CommandQueue(t *testing.T) {
 
 // TestParseInitCalls_Function tests parsing of function creation from CS records
 func TestParseInitCalls_Function(t *testing.T) {
-	t.Skip("TODO: Fix CS record parsing - address offset is incorrect")
+	const (
+		offset   = 0x500
+		funcAddr = 0xafcc88580
+		funcName = "vv_Addfloat32"
+	)
 
-	// TODO: The CS record structure needs more analysis
-	// Current parsing reads address at +4, but this includes extra bytes
-	// Test shows address 0x415f7676fcc88580 instead of 0xafcc88580
-	// The "415f7676" prefix is from the function name bytes being read as part of address
-	// Need to identify correct record structure from real traces
-
-	// Create a minimal capture with a CS record for a function
+	// Fixture layout: "CS\x00\x00" + function address + null-terminated name.
 	data := make([]byte, 0x1000)
-
-	// Write CS marker
-	offset := 0x500
 	copy(data[offset:], []byte("CS\x00\x00"))
-	binary.LittleEndian.PutUint64(data[offset+4:], 0xafcc88580) // function address
-	copy(data[offset+0x08:], []byte("vv_Addfloat32\x00"))       // function name
+	binary.LittleEndian.PutUint64(data[offset+4:], funcAddr)
+	copy(data[offset+0x0C:], []byte(funcName+"\x00"))
+
+	records, labelMap := parseCSRecordsFromInit(data)
+	if len(records) != 1 {
+		t.Fatalf("got %d CS records, want 1: %#v", len(records), records)
+	}
+	if records[0].CSAddress != funcAddr {
+		t.Fatalf("CS address = 0x%x, want 0x%x", records[0].CSAddress, funcAddr)
+	}
+	if records[0].Label != funcName {
+		t.Fatalf("CS label = %q, want %q", records[0].Label, funcName)
+	}
+	if records[0].Offset != int64(offset) {
+		t.Fatalf("CS offset = 0x%x, want 0x%x", records[0].Offset, offset)
+	}
+	if labelMap[funcAddr] != funcName {
+		t.Fatalf("labelMap[0x%x] = %q, want %q", funcAddr, labelMap[funcAddr], funcName)
+	}
 
 	calls, _, err := parseInitCalls(data, 0, nil, make(map[uint64]string))
 	if err != nil {
 		t.Fatalf("parseInitCalls failed: %v", err)
 	}
 
-	// Should find function creation
-	found := false
-	for _, call := range calls {
-		if call.Type == "newFunction" {
-			found = true
-			if call.Address != 0xafcc88580 {
-				t.Errorf("Expected function address 0xafcc88580, got 0x%x", call.Address)
-			}
-			expected := "vv_Addfloat32 = [0xafcc88580 newFunctionWithName:\"vv_Addfloat32\"]"
-			if call.Info != expected {
-				t.Errorf("Expected info %s, got %s", expected, call.Info)
-			}
-		}
+	if len(calls) != 1 {
+		t.Fatalf("got %d init calls, want 1: %#v", len(calls), calls)
 	}
-
-	if !found {
-		t.Error("Expected to find function creation call")
+	call := calls[0]
+	if call.Type != "newFunction" {
+		t.Fatalf("call type = %q, want newFunction", call.Type)
+	}
+	if call.Address != funcAddr {
+		t.Fatalf("function address = 0x%x, want 0x%x", call.Address, funcAddr)
+	}
+	if call.Label != funcName {
+		t.Fatalf("function label = %q, want %q", call.Label, funcName)
+	}
+	expected := "[0xafcc88580 newFunctionWithName:\"vv_Addfloat32\"]"
+	if call.Info != expected {
+		t.Fatalf("call info = %q, want %q", call.Info, expected)
+	}
+	if call.Offset != int64(offset) {
+		t.Fatalf("call offset = 0x%x, want 0x%x", call.Offset, offset)
 	}
 }
 
 // TestParseInitCalls_PipelineState tests parsing of pipeline state creation (Ctt records)
 func TestParseInitCalls_PipelineState(t *testing.T) {
-	t.Skip("TODO: Fix pipeline state function name lookup - depends on CS parsing fix")
+	const (
+		functionOffset = 0x500
+		pipelineOffset = 0x700
+		functionAddr   = 0xafcc88580
+		pipelineAddr   = 0x106d82550
+		functionName   = "vv_Addfloat32"
+	)
 
-	// TODO: Pipeline state parsing depends on correctly parsing CS records for functions
-	// Once CS parsing is fixed, this test should pass
-	// Function name lookup currently fails because CS parsing has wrong address offsets
-
-	// Create a minimal capture with function and pipeline state
 	data := make([]byte, 0x2000)
 
-	// First add a function (CS record)
-	offset := 0x500
-	copy(data[offset:], []byte("CS\x00\x00"))
-	binary.LittleEndian.PutUint64(data[offset+4:], 0xafcc88580)
-	copy(data[offset+0x08:], []byte("vv_Addfloat32\x00"))
+	copy(data[functionOffset:], []byte("CS\x00\x00"))
+	binary.LittleEndian.PutUint64(data[functionOffset+4:], functionAddr)
+	copy(data[functionOffset+0x0C:], []byte(functionName+"\x00"))
 
-	// Then add pipeline state (Ctt record)
-	offset = 0x700
-	copy(data[offset:], []byte("Ctt\x00"))
-	binary.LittleEndian.PutUint64(data[offset+0x04:], 0x106da64d0) // device address
-	binary.LittleEndian.PutUint64(data[offset+0x0C:], 0xafcc88580) // function address
-	binary.LittleEndian.PutUint64(data[offset+0x20:], 0x106d82550) // pipeline state address
+	copy(data[pipelineOffset:], []byte("Ctt\x00"))
+	binary.LittleEndian.PutUint64(data[pipelineOffset+0x04:], 0x106da64d0)
+	binary.LittleEndian.PutUint64(data[pipelineOffset+0x0C:], functionAddr)
+	binary.LittleEndian.PutUint64(data[pipelineOffset+0x20:], pipelineAddr)
 
 	calls, _, err := parseInitCalls(data, 0, nil, make(map[uint64]string))
 	if err != nil {
 		t.Fatalf("parseInitCalls failed: %v", err)
 	}
 
-	// Should find pipeline state with function name
-	found := false
-	for _, call := range calls {
-		if call.Type == "newPipelineState" {
-			found = true
-			if call.Address != 0x106d82550 {
-				t.Errorf("Expected pipeline address 0x106d82550, got 0x%x", call.Address)
-			}
-			// Should reference the function name
-			if call.Info != "[Device newComputePipelineStateWithFunction:vv_Addfloat32 error:nil]" {
-				t.Errorf("Expected function name in info, got %s", call.Info)
-			}
-		}
+	if len(calls) != 2 {
+		t.Fatalf("got %d init calls, want 2: %#v", len(calls), calls)
+	}
+	if calls[0].Type != "newFunction" {
+		t.Fatalf("first call type = %q, want newFunction", calls[0].Type)
+	}
+	if calls[0].Address != functionAddr {
+		t.Fatalf("function address = 0x%x, want 0x%x", calls[0].Address, functionAddr)
+	}
+	if calls[0].Label != functionName {
+		t.Fatalf("function label = %q, want %q", calls[0].Label, functionName)
+	}
+	if calls[0].Offset != functionOffset {
+		t.Fatalf("function offset = 0x%x, want 0x%x", calls[0].Offset, functionOffset)
 	}
 
-	if !found {
-		t.Error("Expected to find pipeline state creation call")
+	if calls[1].Type != "newPipelineState" {
+		t.Fatalf("second call type = %q, want newPipelineState", calls[1].Type)
+	}
+	if calls[1].Address != pipelineAddr {
+		t.Fatalf("pipeline address = 0x%x, want 0x%x", calls[1].Address, pipelineAddr)
+	}
+	expected := "[Device newComputePipelineStateWithFunction:vv_Addfloat32 error:nil]"
+	if calls[1].Info != expected {
+		t.Fatalf("pipeline info = %q, want %q", calls[1].Info, expected)
+	}
+	if calls[1].Offset != pipelineOffset {
+		t.Fatalf("pipeline offset = 0x%x, want 0x%x", calls[1].Offset, pipelineOffset)
 	}
 }
 

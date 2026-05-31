@@ -3,6 +3,8 @@ package replay
 import (
 	"encoding/binary"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	tracepkg "github.com/tmc/gputrace/internal/trace"
@@ -85,6 +87,53 @@ func TestParseDeviceResourcesInvalidMagic(t *testing.T) {
 	}
 }
 
+func TestDiscoverBuffersLeavesAddressUnknownUntilCorrelation(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "MTLBuffer-7-0"), []byte{1, 2, 3}, 0o644); err != nil {
+		t.Fatalf("write buffer: %v", err)
+	}
+
+	rs := NewReplayState(&Trace{Path: dir})
+	buffers, err := rs.DiscoverBuffers()
+	if err != nil {
+		t.Fatalf("DiscoverBuffers failed: %v", err)
+	}
+	if got, want := len(buffers), 1; got != want {
+		t.Fatalf("len(buffers) = %d, want %d", got, want)
+	}
+	if got := buffers[0].Address; got != 0 {
+		t.Fatalf("buffer address = 0x%x, want unknown zero address", got)
+	}
+	if got, want := buffers[0].Size, uint64(3); got != want {
+		t.Fatalf("buffer size = %d, want %d", got, want)
+	}
+}
+
+func TestCorrelateBufferAddressesUsesCaptureMetadata(t *testing.T) {
+	const addr = 0x123456789abc
+
+	buffers := []ReplayBufferInfo{
+		{Name: "MTLBuffer-7-0", Size: 4},
+	}
+	rs := NewReplayState(&Trace{
+		CaptureData: captureBufferRecord(addr, "MTLBuffer-7-0"),
+	})
+
+	got, err := rs.CorrelateBufferAddresses(buffers)
+	if err != nil {
+		t.Fatalf("CorrelateBufferAddresses failed: %v", err)
+	}
+	if got[0].Address != addr {
+		t.Fatalf("buffer address = 0x%x, want 0x%x", got[0].Address, addr)
+	}
+	if rs.BufferSizes[addr] != 4 {
+		t.Fatalf("BufferSizes[0x%x] = %d, want 4", addr, rs.BufferSizes[addr])
+	}
+	if rs.BufferNames[addr] != "MTLBuffer-7-0" {
+		t.Fatalf("BufferNames[0x%x] = %q, want MTLBuffer-7-0", addr, rs.BufferNames[addr])
+	}
+}
+
 func mtspData(parts ...[]byte) []byte {
 	data := make([]byte, 16)
 	copy(data, tracepkg.MagicMTSP)
@@ -107,5 +156,15 @@ func cttRecord(functionAddr, pipelineAddr uint64) []byte {
 	copy(rec, []byte("Ctt\x00"))
 	binary.LittleEndian.PutUint64(rec[0x0c:0x14], functionAddr)
 	binary.LittleEndian.PutUint64(rec[0x20:0x28], pipelineAddr)
+	return rec
+}
+
+func captureBufferRecord(addr uint64, name string) []byte {
+	const markerOffset = 16
+
+	rec := make([]byte, markerOffset+0x1c+len(name)+1)
+	copy(rec[markerOffset:], []byte("CtU<b>ulul"))
+	binary.LittleEndian.PutUint64(rec[markerOffset+0x14:markerOffset+0x1c], addr)
+	copy(rec[markerOffset+0x1c:], name)
 	return rec
 }

@@ -579,12 +579,9 @@ func (re *ReplayEngine) AnalyzeReplayWithCounters() (*ReplayPlan, *CounterSampli
 		return plan, nil, fmt.Errorf("resolve counters: %w", err)
 	}
 
-	// Aggregate metrics from counter samples
-	// TODO: These functions are commented out in counter package due to import cycle
-	// encoderMetrics := re.CounterSampler.AggregateEncoderMetrics(plan)
-	// dispatchMetrics := re.CounterSampler.AggregateDispatchMetrics(plan)
-	var encoderMetrics []counter.EncoderCounterMetrics
-	var dispatchMetrics []counter.DispatchCounterMetrics
+	// Aggregate metrics from resolved replay samples. Placeholder samples created
+	// before Metal resolution intentionally produce no metrics.
+	encoderMetrics, dispatchMetrics := aggregateReplayCounterSamples(plan, re.CounterSampler.Samples, re.CounterSampler.Config.GPUFrequency)
 
 	// Build result
 	result := &CounterSamplingResult{
