@@ -1,7 +1,6 @@
 package shader
 
 import (
-	"fmt"
 	"os"
 	"testing"
 
@@ -12,12 +11,12 @@ import (
 func TestDebugEncoders(t *testing.T) {
 	path := "../../testdata/traces/06-six-encoders/06-six-encoders-run1.gputrace"
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		t.Skipf("skipping test, trace file not found: %s", path)
+		t.Skipf("skipping test, trace file not found: %s. See docs/TESTING.md for fixture setup.", path)
 	}
 
 	tr, err := trace.Open(path)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("open trace fixture: %v", err)
 	}
 	defer tr.Close()
 
@@ -32,9 +31,9 @@ func TestDebugEncoders(t *testing.T) {
 			continue
 		}
 
-		fmt.Printf("CB %d: %d encoders\n", cb.Index, len(dcb.Encoders))
+		t.Logf("CB %d: %d encoders", cb.Index, len(dcb.Encoders))
 		for i, enc := range dcb.Encoders {
-			fmt.Printf("  [%d] %s\n", i, enc.Label)
+			t.Logf("  [%d] %s", i, enc.Label)
 		}
 	}
 }
