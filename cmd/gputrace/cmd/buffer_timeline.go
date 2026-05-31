@@ -91,7 +91,10 @@ func runBufferTimeline(cmd *cobra.Command, args []string) error {
 	case "summary":
 		output = gputrace.FormatBufferTimelineSummary(timeline)
 	case "chrome":
-		return fmt.Errorf("chrome trace format not yet implemented")
+		output, err = formatBufferTimelineChrome(timeline)
+		if err != nil {
+			return fmt.Errorf("format chrome trace: %w", err)
+		}
 	case "json":
 		output, err = formatBufferTimelineJSON(timeline)
 		if err != nil {
@@ -133,6 +136,27 @@ type bufferTimelineJSONBuffer struct {
 	SizeBytes       uint64 `json:"size_bytes,omitempty"`
 }
 
+type bufferTimelineChromeTrace struct {
+	TraceEvents []TimelineEvent                 `json:"traceEvents"`
+	Metadata    bufferTimelineChromeTraceHeader `json:"gputrace_buffer_timeline"`
+}
+
+type bufferTimelineChromeTraceHeader struct {
+	TotalBuffers     int     `json:"total_buffers"`
+	PeakMemoryBytes  uint64  `json:"peak_memory_bytes"`
+	TotalAllocations int     `json:"total_allocations"`
+	AverageLifetime  float64 `json:"average_lifetime_records"`
+	MinRecordIndex   int     `json:"min_record_index"`
+	MaxRecordIndex   int     `json:"max_record_index"`
+	TimeUnit         string  `json:"time_unit"`
+}
+
+type bufferTimelineCounterDelta struct {
+	recordIndex int
+	activeDelta int
+	bytesDelta  int64
+}
+
 func formatBufferTimelineJSON(timeline *gputrace.BufferTimelineAnalysis) (string, error) {
 	doc := bufferTimelineJSON{
 		TotalBuffers:     timeline.TotalBuffers,
@@ -144,16 +168,7 @@ func formatBufferTimelineJSON(timeline *gputrace.BufferTimelineAnalysis) (string
 		MaxRecordIndex:   timeline.MaxRecordIndex,
 	}
 
-	lifecycles := make([]*gputrace.BufferLifecycle, 0, len(timeline.BufferEvents))
-	for _, lifecycle := range timeline.BufferEvents {
-		lifecycles = append(lifecycles, lifecycle)
-	}
-	sort.Slice(lifecycles, func(i, j int) bool {
-		if lifecycles[i].FirstSeen != lifecycles[j].FirstSeen {
-			return lifecycles[i].FirstSeen < lifecycles[j].FirstSeen
-		}
-		return lifecycles[i].Address < lifecycles[j].Address
-	})
+	lifecycles := sortedBufferLifecycles(timeline)
 
 	for _, lifecycle := range lifecycles {
 		doc.Buffers = append(doc.Buffers, bufferTimelineJSONBuffer{
@@ -174,4 +189,214 @@ func formatBufferTimelineJSON(timeline *gputrace.BufferTimelineAnalysis) (string
 		return "", err
 	}
 	return string(data) + "\n", nil
+}
+
+func formatBufferTimelineChrome(timeline *gputrace.BufferTimelineAnalysis) (string, error) {
+	doc := bufferTimelineChromeTrace{
+		Metadata: bufferTimelineChromeTraceHeader{
+			TotalBuffers:     timeline.TotalBuffers,
+			PeakMemoryBytes:  timeline.PeakMemoryBytes,
+			TotalAllocations: timeline.TotalAllocations,
+			AverageLifetime:  timeline.AverageLifetime,
+			MinRecordIndex:   timeline.MinRecordIndex,
+			MaxRecordIndex:   timeline.MaxRecordIndex,
+			TimeUnit:         "record_index_as_microseconds",
+		},
+	}
+
+	events := []TimelineEvent{
+		{
+			Name:      "process_name",
+			Category:  "__metadata",
+			Phase:     "M",
+			ProcessID: 1,
+			ThreadID:  0,
+			Args: map[string]interface{}{
+				"name": "Buffer Timeline",
+			},
+		},
+		{
+			Name:      "thread_name",
+			Category:  "__metadata",
+			Phase:     "M",
+			ProcessID: 1,
+			ThreadID:  0,
+			Args: map[string]interface{}{
+				"name": "Summary",
+			},
+		},
+		{
+			Name:      "Buffer Timeline Summary",
+			Category:  "buffer_summary",
+			Phase:     "i",
+			Timestamp: 0,
+			ProcessID: 1,
+			ThreadID:  0,
+			Args: map[string]interface{}{
+				"total_buffers":            timeline.TotalBuffers,
+				"total_allocations":        timeline.TotalAllocations,
+				"peak_memory_bytes":        timeline.PeakMemoryBytes,
+				"average_lifetime_records": timeline.AverageLifetime,
+				"min_record_index":         timeline.MinRecordIndex,
+				"max_record_index":         timeline.MaxRecordIndex,
+				"time_unit":                "record_index_as_microseconds",
+			},
+		},
+	}
+
+	lifecycles := sortedBufferLifecycles(timeline)
+	counterDeltas := make([]bufferTimelineCounterDelta, 0, len(lifecycles)*2)
+	for i, lifecycle := range lifecycles {
+		threadID := i + 1
+		address := formatBufferAddress(lifecycle.Address)
+		lifetime := lifecycle.LastSeen - lifecycle.FirstSeen
+		duration := uint64(lifetime)
+		if duration == 0 {
+			duration = 1
+		}
+
+		events = append(events,
+			TimelineEvent{
+				Name:      "thread_name",
+				Category:  "__metadata",
+				Phase:     "M",
+				ProcessID: 1,
+				ThreadID:  threadID,
+				Args: map[string]interface{}{
+					"name": address,
+				},
+			},
+			TimelineEvent{
+				Name:      "Buffer " + address,
+				Category:  "buffer_lifetime",
+				Phase:     "X",
+				Timestamp: normalizedBufferRecordTimestamp(lifecycle.FirstSeen, timeline.MinRecordIndex),
+				Duration:  duration,
+				ProcessID: 1,
+				ThreadID:  threadID,
+				Args: map[string]interface{}{
+					"address":           address,
+					"first_seen_record": lifecycle.FirstSeen,
+					"last_seen_record":  lifecycle.LastSeen,
+					"lifetime_records":  lifetime,
+					"access_count":      lifecycle.AccessCount,
+					"encoder_ids":       append([]int(nil), lifecycle.EncoderIDs...),
+					"is_active":         lifecycle.IsActive,
+					"size_bytes":        lifecycle.Size,
+				},
+			},
+		)
+
+		for _, accessIndex := range lifecycle.AccessIndices {
+			events = append(events, TimelineEvent{
+				Name:      "Buffer access",
+				Category:  "buffer_access",
+				Phase:     "i",
+				Timestamp: normalizedBufferRecordTimestamp(accessIndex, timeline.MinRecordIndex),
+				ProcessID: 1,
+				ThreadID:  threadID,
+				Args: map[string]interface{}{
+					"address":      address,
+					"record_index": accessIndex,
+					"size_bytes":   lifecycle.Size,
+				},
+			})
+		}
+
+		counterDeltas = append(counterDeltas,
+			bufferTimelineCounterDelta{
+				recordIndex: lifecycle.FirstSeen,
+				activeDelta: 1,
+				bytesDelta:  int64(lifecycle.Size),
+			},
+			bufferTimelineCounterDelta{
+				recordIndex: lifecycle.LastSeen,
+				activeDelta: -1,
+				bytesDelta:  -int64(lifecycle.Size),
+			},
+		)
+	}
+
+	if len(lifecycles) > 0 {
+		counterThreadID := len(lifecycles) + 1
+		events = append(events, TimelineEvent{
+			Name:      "thread_name",
+			Category:  "__metadata",
+			Phase:     "M",
+			ProcessID: 1,
+			ThreadID:  counterThreadID,
+			Args: map[string]interface{}{
+				"name": "Observed buffer counters",
+			},
+		})
+		events = append(events, bufferTimelineCounterEvents(counterDeltas, counterThreadID, timeline.MinRecordIndex)...)
+	}
+
+	doc.TraceEvents = events
+	data, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(data) + "\n", nil
+}
+
+func sortedBufferLifecycles(timeline *gputrace.BufferTimelineAnalysis) []*gputrace.BufferLifecycle {
+	lifecycles := make([]*gputrace.BufferLifecycle, 0, len(timeline.BufferEvents))
+	for _, lifecycle := range timeline.BufferEvents {
+		lifecycles = append(lifecycles, lifecycle)
+	}
+	sort.Slice(lifecycles, func(i, j int) bool {
+		if lifecycles[i].FirstSeen != lifecycles[j].FirstSeen {
+			return lifecycles[i].FirstSeen < lifecycles[j].FirstSeen
+		}
+		return lifecycles[i].Address < lifecycles[j].Address
+	})
+	return lifecycles
+}
+
+func bufferTimelineCounterEvents(deltas []bufferTimelineCounterDelta, threadID, minRecordIndex int) []TimelineEvent {
+	sort.Slice(deltas, func(i, j int) bool {
+		if deltas[i].recordIndex != deltas[j].recordIndex {
+			return deltas[i].recordIndex < deltas[j].recordIndex
+		}
+		if deltas[i].activeDelta != deltas[j].activeDelta {
+			return deltas[i].activeDelta > deltas[j].activeDelta
+		}
+		return deltas[i].bytesDelta > deltas[j].bytesDelta
+	})
+
+	var events []TimelineEvent
+	var activeBuffers int
+	var knownBytes int64
+	for _, delta := range deltas {
+		activeBuffers += delta.activeDelta
+		knownBytes += delta.bytesDelta
+		if knownBytes < 0 {
+			knownBytes = 0
+		}
+		events = append(events, TimelineEvent{
+			Name:      "Observed buffer counters",
+			Category:  "buffer_counter",
+			Phase:     "C",
+			Timestamp: normalizedBufferRecordTimestamp(delta.recordIndex, minRecordIndex),
+			ProcessID: 1,
+			ThreadID:  threadID,
+			Args: map[string]interface{}{
+				"active_buffers":     activeBuffers,
+				"known_memory_bytes": knownBytes,
+			},
+		})
+	}
+	return events
+}
+
+func normalizedBufferRecordTimestamp(recordIndex, minRecordIndex int) uint64 {
+	if recordIndex <= minRecordIndex {
+		return 0
+	}
+	return uint64(recordIndex - minRecordIndex)
+}
+
+func formatBufferAddress(address uint64) string {
+	return fmt.Sprintf("0x%016x", address)
 }
