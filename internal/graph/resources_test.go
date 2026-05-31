@@ -55,6 +55,24 @@ func TestResourceGraphMermaid(t *testing.T) {
 	}
 }
 
+func TestResourceGraphOrdersUseEventsByTraceOffset(t *testing.T) {
+	tr := testResourceTraceWithUseBetweenEncoders()
+
+	got, err := NewDOTGenerator().Generate(tr, &Config{Type: "resources"})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	want := `enc0 -> res_3000 [label="Read"];`
+	if !strings.Contains(got, want) {
+		t.Fatalf("DOT output missing %q:\n%s", want, got)
+	}
+	bad := `enc1 -> res_3000 [label="Read"];`
+	if strings.Contains(got, bad) {
+		t.Fatalf("DOT output assigned use event to later encoder:\n%s", got)
+	}
+}
+
 func testResourceTrace() *trace.Trace {
 	buf := make([]byte, 256)
 	offset := 16
@@ -62,6 +80,27 @@ func testResourceTrace() *trace.Trace {
 	offset = putDispatch(buf, offset, 0xAAAA1111, 0x2000)
 	offset += 32
 	offset = putDispatch(buf, offset, 0xBBBB2222, 0x2000)
+
+	return &trace.Trace{
+		CaptureData: buf[:offset],
+		DeviceLabels: map[uint64]string{
+			0xAAAA1111: "Op1",
+			0xBBBB2222: "Op2",
+		},
+		FunctionToName: map[uint64]string{
+			0xAAAA1111: "Op1",
+			0xBBBB2222: "Op2",
+		},
+	}
+}
+
+func testResourceTraceWithUseBetweenEncoders() *trace.Trace {
+	buf := make([]byte, 512)
+	offset := 16
+
+	offset = putDispatch(buf, offset, 0xAAAA1111, 0x2000)
+	offset = putUse(buf, offset, 0x3000)
+	offset = putDispatch(buf, offset, 0xBBBB2222, 0x4000)
 
 	return &trace.Trace{
 		CaptureData: buf[:offset],
@@ -89,4 +128,12 @@ func putDispatch(buf []byte, offset int, function, resource uint64) int {
 	offset += 4
 	binary.LittleEndian.PutUint64(buf[offset:], resource)
 	return offset + 8
+}
+
+func putUse(buf []byte, offset int, resource uint64) int {
+	copy(buf[offset:], []byte("Ctulul\x00"))
+	binary.LittleEndian.PutUint32(buf[offset+32:], 1)
+	binary.LittleEndian.PutUint32(buf[offset+36:], 8)
+	binary.LittleEndian.PutUint64(buf[offset+40:], resource)
+	return offset + 48
 }
