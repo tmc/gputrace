@@ -100,13 +100,6 @@ func TestExportSixEncoders(t *testing.T) {
 		t.Fatalf("Export failed: %v", err)
 	}
 
-	// Write to file for manual inspection
-	if err := os.WriteFile("/tmp/gputrace-81-export.csv", buf.Bytes(), 0644); err != nil {
-		t.Logf("Warning: Could not write CSV to file: %v", err)
-	} else {
-		t.Logf("CSV written to /tmp/gputrace-81-export.csv")
-	}
-
 	// Parse the generated CSV
 	reader := csv.NewReader(strings.NewReader(buf.String()))
 	rows, err := reader.ReadAll()
