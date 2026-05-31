@@ -3,6 +3,8 @@ package cmd
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -525,24 +527,47 @@ func formatBuffersTable(buffers []BufferInfo, trace *gputrace.Trace) error {
 
 // formatBuffersJSON formats buffers as JSON.
 func formatBuffersJSON(buffers []BufferInfo) error {
-	fmt.Println("[")
-	for i, buf := range buffers {
-		comma := ","
-		if i == len(buffers)-1 {
-			comma = ""
-		}
-		fmt.Printf("  {\"id\": \"%s\", \"filename\": \"%s\", \"size\": %d, \"aliases\": %d}%s\n",
-			buf.ID, buf.Filename, buf.Size, len(buf.Aliases), comma)
+	output := make([]bufferJSONInfo, 0, len(buffers))
+	for _, buf := range buffers {
+		output = append(output, bufferJSONInfo{
+			ID:       buf.ID,
+			Filename: buf.Filename,
+			Size:     buf.Size,
+			Aliases:  len(buf.Aliases),
+		})
 	}
-	fmt.Println("]")
-	return nil
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(output)
+}
+
+type bufferJSONInfo struct {
+	ID       string `json:"id"`
+	Filename string `json:"filename"`
+	Size     uint64 `json:"size"`
+	Aliases  int    `json:"aliases"`
 }
 
 // formatBuffersCSV formats buffers as CSV.
 func formatBuffersCSV(buffers []BufferInfo) error {
-	fmt.Println("ID,Filename,Size,Aliases")
+	w := csv.NewWriter(os.Stdout)
+	if err := w.Write([]string{"ID", "Filename", "Size", "Aliases"}); err != nil {
+		return fmt.Errorf("write csv header: %w", err)
+	}
 	for _, buf := range buffers {
-		fmt.Printf("%s,%s,%d,%d\n", buf.ID, buf.Filename, buf.Size, len(buf.Aliases))
+		record := []string{
+			buf.ID,
+			buf.Filename,
+			fmt.Sprint(buf.Size),
+			fmt.Sprint(len(buf.Aliases)),
+		}
+		if err := w.Write(record); err != nil {
+			return fmt.Errorf("write csv record: %w", err)
+		}
+	}
+	w.Flush()
+	if err := w.Error(); err != nil {
+		return fmt.Errorf("flush csv: %w", err)
 	}
 	return nil
 }

@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 
 	"github.com/spf13/cobra"
 
@@ -11,7 +13,7 @@ import (
 var dependenciesVerbose bool
 
 var dependenciesCmd = &cobra.Command{
-	Use:   "dependencies <trace_path>",
+	Use:    "dependencies <trace_path>",
 	Short:  "Generate a dependency graph of operations",
 	Hidden: true,
 	Long: `Analyze buffer usage to generate a dependency graph of operations/encoders.
@@ -59,29 +61,33 @@ Example:
 				len(graph.Nodes), len(graph.Edges))
 		}
 
-		fmt.Println("digraph G {")
-		fmt.Println("  rankdir=LR;")
-		fmt.Println("  node [shape=box, style=filled, fontname=\"Helvetica\"];")
-		fmt.Println("  edge [fontname=\"Helvetica\", fontsize=10];")
-
-		for _, node := range graph.Nodes {
-			// Clean up label if it's too long?
-			// For now, keep as is or truncate
-			label := node.Label
-			if len(label) > 50 {
-				label = label[:47] + "..."
-			}
-			fmt.Printf("  n%d [label=\"%s\"];\n", node.ID, label)
-		}
-
-		for _, edge := range graph.Edges {
-			// Include hazard type in edge label for clarity
-			fmt.Printf("  n%d -> n%d [label=\"%s (%s)\"];\n", edge.From, edge.To, edge.Buffer, edge.Hazard)
-		}
-
-		fmt.Println("}")
-		return nil
+		return writeDependencyGraphDOT(cmd.OutOrStdout(), graph)
 	},
+}
+
+func writeDependencyGraphDOT(w io.Writer, graph *trace.DependencyGraph) error {
+	var buf bytes.Buffer
+	fmt.Fprintln(&buf, "digraph G {")
+	fmt.Fprintln(&buf, "  rankdir=LR;")
+	fmt.Fprintln(&buf, "  node [shape=box, style=filled, fontname=\"Helvetica\"];")
+	fmt.Fprintln(&buf, "  edge [fontname=\"Helvetica\", fontsize=10];")
+
+	for _, node := range graph.Nodes {
+		label := node.Label
+		if len(label) > 50 {
+			label = label[:47] + "..."
+		}
+		fmt.Fprintf(&buf, "  n%d [label=%q];\n", node.ID, label)
+	}
+
+	for _, edge := range graph.Edges {
+		label := fmt.Sprintf("%s (%s)", edge.Buffer, edge.Hazard)
+		fmt.Fprintf(&buf, "  n%d -> n%d [label=%q];\n", edge.From, edge.To, label)
+	}
+
+	fmt.Fprintln(&buf, "}")
+	_, err := w.Write(buf.Bytes())
+	return err
 }
 
 func init() {

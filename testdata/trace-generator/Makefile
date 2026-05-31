@@ -57,8 +57,13 @@ run-capture: build
 		echo "   Size: $$(du -sh "$$OUTPUT_PATH" | awk '{print $$1}')"; \
 		echo ""; \
 		echo "Analysis:"; \
-		echo "  # Count counter files"; \
-		echo "  ls $$OUTPUT_PATH/*.gpuprofiler_raw/Counters_f_*.raw 2>/dev/null | wc -l"; \
+		echo "  # Summarize captured trace"; \
+		echo "  gputrace stats \"$$OUTPUT_PATH\""; \
+		echo ""; \
+		echo "  # Generate profiled timing/counter data with Instruments"; \
+		echo "  gputrace xcode-profile run \"$$OUTPUT_PATH\" -o \"$${OUTPUT_PATH%.gputrace}-perfdata.gputrace\""; \
+		echo "  gputrace profiler \"$${OUTPUT_PATH%.gputrace}-perfdata.gputrace\""; \
+		echo "  gputrace timeline \"$${OUTPUT_PATH%.gputrace}-perfdata.gputrace\" --format perfetto -o \"$${OUTPUT_PATH%.gputrace}-timeline.json\""; \
 		echo ""; \
 		echo "  # Open in Instruments"; \
 		echo "  open $$OUTPUT_PATH"; \

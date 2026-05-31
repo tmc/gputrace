@@ -83,3 +83,16 @@ func TestTimingProfilerHelpMarksLegacyApproximateFallbacks(t *testing.T) {
 		}
 	}
 }
+
+func TestTimelineFormatHelpIncludesPerfetto(t *testing.T) {
+	flag := timelineCmd.Flags().Lookup("format")
+	if flag == nil {
+		t.Fatal("timeline format flag not found")
+	}
+	if !strings.Contains(flag.Usage, "perfetto") {
+		t.Fatalf("timeline format help does not mention perfetto: %s", flag.Usage)
+	}
+	if !strings.Contains(timelineCmd.Long, "timeline trace.gputrace --format chrome -o timeline.json") {
+		t.Fatalf("timeline file-output example should include explicit non-text format:\n%s", timelineCmd.Long)
+	}
+}

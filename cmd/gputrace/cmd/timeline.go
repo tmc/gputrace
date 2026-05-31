@@ -41,7 +41,7 @@ Examples:
   gputrace timeline trace.gputrace -o timeline.html --format html
 
   # Generate Chrome tracing format
-  gputrace timeline trace.gputrace -o timeline.json
+  gputrace timeline trace.gputrace --format chrome -o timeline.json
 
   # View in Chrome
   # 1. Open chrome://tracing in Chrome
@@ -63,7 +63,7 @@ func init() {
 	rootCmd.AddCommand(timelineCmd)
 
 	timelineCmd.Flags().StringVarP(&timelineOutput, "output", "o", "timeline.json", "Output file path")
-	timelineCmd.Flags().StringVar(&timelineFormat, "format", "text", "Output format: chrome, html, json, text")
+	timelineCmd.Flags().StringVar(&timelineFormat, "format", "text", "Output format: chrome, perfetto, html, json, text")
 }
 
 func runTimeline(cmd *cobra.Command, args []string) error {
@@ -715,7 +715,7 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 
 	// Apply shift if we found any events
 	if foundAny && globalMinTs > 0 {
-		fmt.Printf("Normalizing timeline: shifting by -%d µs\n", globalMinTs)
+		fmt.Fprintf(os.Stderr, "Normalizing timeline: shifting by -%d µs\n", globalMinTs)
 		for i := range timeline.Events {
 			ev := &timeline.Events[i]
 			if ev.Phase == "M" {
@@ -2015,6 +2015,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 
 	// Add counter track metadata and events
 	threadID := 16 // Start after GPRWCNTR lanes (7-14) and provenance lane (15).
+	counterEvents := make([]TimelineEvent, 0)
 	for _, track := range timeline.CounterTracks {
 		// Add thread name for this counter track
 		metadataEvents = append(metadataEvents, TimelineEvent{
@@ -2042,7 +2043,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 					track.Name: sample.Value,
 				},
 			}
-			timeline.Events = append(timeline.Events, counterEvent)
+			counterEvents = append(counterEvents, counterEvent)
 		}
 
 		threadID++
@@ -2050,6 +2051,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 
 	// Combine metadata events with timeline events
 	allEvents := append(metadataEvents, timeline.Events...)
+	allEvents = append(allEvents, counterEvents...)
 
 	// Chrome tracing format
 	// Standard format: { "traceEvents": [ ... ] }
@@ -2467,7 +2469,7 @@ func buildTimelineFromProfilerData(tracePath string, stats *counter.StreamDataSt
 
 	// Apply shift if we found any events
 	if foundAny && globalMinTs > 0 {
-		fmt.Printf("Normalizing timeline: shifting by -%d µs\n", globalMinTs)
+		fmt.Fprintf(os.Stderr, "Normalizing timeline: shifting by -%d µs\n", globalMinTs)
 		for i := range timeline.Events {
 			ev := &timeline.Events[i]
 			if ev.Phase == "M" {

@@ -101,19 +101,24 @@ When enabled, traces include a `.gpuprofiler_raw` directory containing:
 
 The `streamData` file is the key metadata file containing:
 - **pipelineStateInfoData**: Pipeline-to-function mapping (40 bytes/record)
-- **gpuCommandInfoData**: Per-dispatch timing in microseconds (32 bytes/record)
-- **encoderInfoData**: Per-encoder timing (40 bytes/record)
+- **gpuCommandInfoData**: Per-dispatch durations or cumulative offsets (32 bytes/record)
+- **encoderInfoData**: Per-encoder timing offsets (40 bytes/record)
 - **pipelinePerformanceStatistics**: Instruction counts, register usage
+- **APSTimelineData**: ReplayerGPUTime, command-buffer active/wall timing, and GPRWCNTR encoder profile blobs
 
 See [STREAMDATA_FORMAT.md](./STREAMDATA_FORMAT.md) for detailed binary layouts.
 
-### Three Timing Metrics
+### Shader Table Metrics
 
-Xcode shows three distinct metrics:
+Xcode's shader table combines timing and sampling metrics:
 
-1. **Dispatch Duration**: Wall clock time per dispatch (from gpuCommandInfoData)
+1. **Dispatch Duration**: streamData dispatch duration or cumulative offset delta (from gpuCommandInfoData)
 2. **Kernel Duration**: Aggregated dispatch time per pipeline
 3. **Execution Cost**: Statistical GPU sampling percentage (from Profiling_f_*.raw)
+
+Timeline and summary views use APSTimelineData when available for Effective GPU Time and
+command-buffer active/wall spans. Non-profiled traces may use approximate extracted or
+synthetic timing and should be treated as visualization data.
 
 ## Metal Libraries (MTLB)
 

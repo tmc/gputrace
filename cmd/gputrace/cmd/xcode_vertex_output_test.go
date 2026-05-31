@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -58,6 +59,28 @@ func TestVertexOutputJSON(t *testing.T) {
 			}
 			if got != tt.want {
 				t.Fatalf("vertexOutputJSON() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestVertexOutputStatusWriter(t *testing.T) {
+	tests := []struct {
+		name       string
+		jsonOutput bool
+		outputPath string
+		want       *os.File
+	}{
+		{name: "text stdout default", want: os.Stderr},
+		{name: "text stdout path", outputPath: "/dev/stdout", want: os.Stderr},
+		{name: "json stdout", jsonOutput: true, want: os.Stderr},
+		{name: "text file", outputPath: "vertex.txt", want: os.Stdout},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := vertexOutputStatusWriter(tt.jsonOutput, tt.outputPath); got != tt.want {
+				t.Fatalf("vertexOutputStatusWriter() = %v, want %v", got, tt.want)
 			}
 		})
 	}

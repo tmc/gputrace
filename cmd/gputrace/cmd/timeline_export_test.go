@@ -90,6 +90,41 @@ func TestExportChromeTracingIncludesTimingMetadata(t *testing.T) {
 	}
 }
 
+func TestExportChromeTracingDoesNotMutateTimelineEvents(t *testing.T) {
+	timeline := &Timeline{
+		Events: []TimelineEvent{{
+			Name:      "kernel",
+			Category:  "kernel",
+			Phase:     "X",
+			Timestamp: 10,
+			Duration:  5,
+			ProcessID: 1,
+			ThreadID:  3,
+		}},
+		CounterTracks: []CounterTrack{{
+			Name: "ALU Utilization",
+			Unit: "%",
+			Samples: []CounterSample{
+				{Timestamp: 20, Value: 42},
+			},
+		}},
+	}
+
+	out := filepath.Join(t.TempDir(), "timeline.json")
+	if err := exportChromeTracing(timeline, out); err != nil {
+		t.Fatalf("exportChromeTracing: %v", err)
+	}
+	if got, want := len(timeline.Events), 1; got != want {
+		t.Fatalf("timeline events after export = %d, want %d", got, want)
+	}
+	if err := exportChromeTracing(timeline, out); err != nil {
+		t.Fatalf("second exportChromeTracing: %v", err)
+	}
+	if got, want := len(timeline.Events), 1; got != want {
+		t.Fatalf("timeline events after second export = %d, want %d", got, want)
+	}
+}
+
 func TestGenerateTimelineAnnotatesSyntheticTimingSource(t *testing.T) {
 	tr := &gputrace.Trace{
 		Path:        timelineTimingSourceTraceDir(t),

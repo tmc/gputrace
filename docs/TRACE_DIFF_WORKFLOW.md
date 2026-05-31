@@ -73,14 +73,23 @@ gputrace diff A.gputrace B.gputrace --csv --by function > function_deltas.csv
 gputrace diff A.gputrace B.gputrace --md-out /tmp/gputrace_diff_report.md
 ```
 
-JSON arrays always include:
+The JSON object follows `internal/difftrace.Report`. Top-level keys include:
 
+- `schema_version`
+- `trace_a_path`
+- `trace_b_path`
+- `summary`
 - `top_function_deltas`
 - `top_dispatch_outliers`
 - `encoder_deltas`
+- `encoder_reports`
+- `pipeline_deltas`
 - `unnamed_dispatch_deltas`
 - `timeline_spike_windows`
+- `occurrence_matches`
 - `matched_pairs` (contains exact `source_index_a` and `source_index_b` for every match)
+- `unmatched`
+- `warnings`
 
 ## Interpretation Heuristics
 

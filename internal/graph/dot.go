@@ -3,6 +3,7 @@ package graph
 import (
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/tmc/gputrace/internal/trace"
 )
@@ -71,7 +72,7 @@ func (g *DOTGenerator) generateHierarchy(t *trace.Trace, config *Config) (string
 		if config.ShowTiming {
 			label += fmt.Sprintf("\\nTimestamp: %d", cb.Timestamp)
 		}
-		sb.WriteString(fmt.Sprintf("  %s [label=\"%s\", style=filled, fillcolor=lightgreen];\n", cbID, label))
+		sb.WriteString(fmt.Sprintf("  %s [label=\"%s\", style=filled, fillcolor=lightgreen];\n", cbID, dotLabel(label)))
 		sb.WriteString(fmt.Sprintf("  trace -> %s;\n", cbID))
 	}
 	sb.WriteString("\n")
@@ -93,7 +94,7 @@ func (g *DOTGenerator) generateHierarchy(t *trace.Trace, config *Config) (string
 					label += fmt.Sprintf("\\nDuration: %.2fms", float64(metrics.Duration)/1e6)
 				}
 			}
-			sb.WriteString(fmt.Sprintf("  %s [label=\"%s\", style=filled, fillcolor=lightyellow];\n", encID, label))
+			sb.WriteString(fmt.Sprintf("  %s [label=\"%s\", style=filled, fillcolor=lightyellow];\n", encID, dotLabel(label)))
 			sb.WriteString(fmt.Sprintf("  %s -> %s;\n", cbID, encID))
 		}
 	}
@@ -115,7 +116,7 @@ func (g *DOTGenerator) generateHierarchy(t *trace.Trace, config *Config) (string
 						label += fmt.Sprintf("\\nAvg: %.2fms", float64(metrics.Duration)/float64(metrics.ExecutionCount)/1e6)
 					}
 				}
-				sb.WriteString(fmt.Sprintf("  %s [label=\"%s\", shape=hexagon, style=filled, fillcolor=lightcoral];\n", shaderID, label))
+				sb.WriteString(fmt.Sprintf("  %s [label=\"%s\", shape=hexagon, style=filled, fillcolor=lightcoral];\n", shaderID, dotLabel(label)))
 				shaderNodes[shaderName] = true
 			}
 		}
@@ -180,12 +181,12 @@ func (g *DOTGenerator) generateFlow(t *trace.Trace, config *Config) (string, err
 		}
 
 		// Red rounded box for encoder
-		sb.WriteString(fmt.Sprintf("  %s [label=\"%s\", style=\"rounded,filled\", fillcolor=\"#CC5555\", fontcolor=white, width=2];\n", encID, label))
+		sb.WriteString(fmt.Sprintf("  %s [label=\"%s\", style=\"rounded,filled\", fillcolor=\"#CC5555\", fontcolor=white, width=2];\n", encID, dotLabel(label)))
 
 		// Add dispatch nodes (blue grids) below each encoder
 		// Assuming 3 dispatches per encoder (as shown in Xcode screenshot)
 		dispatchCount := 3
-		sb.WriteString(fmt.Sprintf("  // Dispatches for %s\n", label))
+		sb.WriteString("  // Dispatches for encoder\n")
 
 		// Create invisible rank for dispatch nodes
 		sb.WriteString("  { rank=same; ")
@@ -319,9 +320,16 @@ func (g *DOTGenerator) groupEncodersByCommandBuffer(t *trace.Trace, encoders []*
 
 // sanitizeID sanitizes a string to be used as a DOT node ID.
 func sanitizeID(s string) string {
-	// Replace invalid characters with underscores
-	s = strings.ReplaceAll(s, "-", "_")
-	s = strings.ReplaceAll(s, " ", "_")
-	s = strings.ReplaceAll(s, ".", "_")
-	return s
+	var b strings.Builder
+	for _, r := range s {
+		if r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('_')
+		}
+	}
+	if b.Len() == 0 {
+		return "node"
+	}
+	return b.String()
 }

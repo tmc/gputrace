@@ -121,6 +121,87 @@ func TestPprofSourceLinesDisclosesSyntheticTimingFallback(t *testing.T) {
 	}
 }
 
+func TestPprofStdoutContainsOnlyProfile(t *testing.T) {
+	tracePath := "../../../testdata/traces/01-single-encoder/01-single-encoder-run1.gputrace"
+
+	if _, err := os.Stat(tracePath); os.IsNotExist(err) {
+		t.Skipf("skipping test, trace file not found: %s. See docs/TESTING.md for fixture setup.", tracePath)
+	}
+
+	resetPprofTestFlags()
+	t.Cleanup(resetPprofTestFlags)
+
+	rootCmd.SetArgs([]string{"pprof", tracePath, "-o", "/dev/stdout"})
+
+	stdout, err := captureStdout(t, rootCmd.Execute)
+	if err != nil {
+		t.Fatalf("command failed: %v", err)
+	}
+
+	for _, bad := range []string{
+		"GPU profile written",
+		"Pprof: Found",
+		"No stats provided",
+	} {
+		if strings.Contains(stdout, bad) {
+			t.Fatalf("stdout contains status text %q", bad)
+		}
+	}
+	if _, err := profile.Parse(bytes.NewReader([]byte(stdout))); err != nil {
+		t.Fatalf("stdout is not a clean pprof profile: %v", err)
+	}
+}
+
+func TestPprofSourceLinesStdoutContainsOnlyProfile(t *testing.T) {
+	tracePath := "../../../testdata/traces/01-single-encoder/01-single-encoder-run1.gputrace"
+
+	if _, err := os.Stat(tracePath); os.IsNotExist(err) {
+		t.Skipf("skipping test, trace file not found: %s. See docs/TESTING.md for fixture setup.", tracePath)
+	}
+
+	resetPprofTestFlags()
+	t.Cleanup(resetPprofTestFlags)
+
+	rootCmd.SetArgs([]string{"pprof", tracePath, "--source-lines", "-o", "/dev/stdout"})
+
+	stdout, err := captureStdout(t, rootCmd.Execute)
+	if err != nil {
+		t.Fatalf("command failed: %v", err)
+	}
+
+	for _, bad := range []string{
+		"Timing source:",
+		"Source-lines pprof written",
+		"go tool pprof",
+	} {
+		if strings.Contains(stdout, bad) {
+			t.Fatalf("stdout contains status text %q", bad)
+		}
+	}
+	if _, err := profile.Parse(bytes.NewReader([]byte(stdout))); err != nil {
+		t.Fatalf("stdout is not a clean source-lines pprof profile: %v", err)
+	}
+}
+
+func TestPprofStatusWriterUsesStderrForStdoutOutput(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want *os.File
+	}{
+		{name: "file", path: "gpu.pprof", want: os.Stdout},
+		{name: "stdout", path: "/dev/stdout", want: os.Stderr},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := pprofStatusWriter(tt.path); got != tt.want {
+				t.Fatalf("pprofStatusWriter(%q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFormatSourceLineTimingNotice(t *testing.T) {
 	tests := []struct {
 		name   string

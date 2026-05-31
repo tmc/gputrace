@@ -67,6 +67,9 @@ func init() {
 
 func runTiming(cmd *cobra.Command, args []string) error {
 	tracePath := args[0]
+	if err := validateTimingOutputPaths(); err != nil {
+		return err
+	}
 
 	// Verify trace file exists
 	if err := checkTraceFile(tracePath); err != nil {
@@ -90,7 +93,7 @@ func runTiming(cmd *cobra.Command, args []string) error {
 	// Show table if requested
 	if timingTable {
 		report := gputrace.FormatTimingMetrics(metrics)
-		fmt.Println(report)
+		fmt.Fprintln(timingReportWriter(), report)
 	}
 
 	// Export JSON if requested
@@ -139,7 +142,7 @@ func runTiming(cmd *cobra.Command, args []string) error {
 		}
 
 		comparison := gputrace.CompareTraces(baselineMetrics, metrics)
-		fmt.Println("\n" + gputrace.FormatTimingComparison(comparison))
+		fmt.Fprintln(timingReportWriter(), "\n"+gputrace.FormatTimingComparison(comparison))
 
 		if comparison.RegressionCount > 0 {
 			// Return error to indicate regressions found
@@ -152,6 +155,10 @@ func runTiming(cmd *cobra.Command, args []string) error {
 
 // runTimingFromProfiler extracts timing from .gpuprofiler_raw when unsorted-capture is missing.
 func runTimingFromProfiler(tracePath string) error {
+	if err := validateTimingOutputPaths(); err != nil {
+		return err
+	}
+
 	// Find .gpuprofiler_raw directory
 	profilerDir := ""
 
@@ -190,7 +197,7 @@ func runTimingFromProfiler(tracePath string) error {
 	// Show table if requested
 	if timingTable {
 		report := formatProfilerTimingMetrics(metrics)
-		fmt.Println(report)
+		fmt.Fprintln(timingReportWriter(), report)
 	}
 
 	// Export JSON if requested
@@ -221,6 +228,31 @@ func runTimingFromProfiler(tracePath string) error {
 		fmt.Fprintf(os.Stderr, "Exported CSV to %s\n", timingCSV)
 	}
 
+	return nil
+}
+
+func timingReportWriter() *os.File {
+	if timingOutputPathIsStdout(timingJSON) || timingOutputPathIsStdout(timingCSV) {
+		return os.Stderr
+	}
+	return os.Stdout
+}
+
+func timingOutputPathIsStdout(path string) bool {
+	return path == "/dev/stdout"
+}
+
+func validateTimingOutputPaths() error {
+	stdoutExports := 0
+	if timingOutputPathIsStdout(timingJSON) {
+		stdoutExports++
+	}
+	if timingOutputPathIsStdout(timingCSV) {
+		stdoutExports++
+	}
+	if stdoutExports > 1 {
+		return fmt.Errorf("only one timing export can write to /dev/stdout")
+	}
 	return nil
 }
 
