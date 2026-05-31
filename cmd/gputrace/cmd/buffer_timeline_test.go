@@ -149,7 +149,7 @@ func testBufferTimelineAnalysis() *gputrace.BufferTimelineAnalysis {
 func TestRunBufferTimelineJSONWritesOutputFile(t *testing.T) {
 	tracePath := "../../../testdata/traces/01-single-encoder/01-single-encoder-run1.gputrace"
 	if _, err := os.Stat(tracePath); os.IsNotExist(err) {
-		t.Skipf("skipping test, trace file not found: %s. Run 'make fetch-testdata' to fetch test assets.", tracePath)
+		t.Skipf("skipping test, trace file not found: %s. See docs/TESTING.md for fixture setup.", tracePath)
 	} else if err != nil {
 		t.Fatalf("stat trace fixture: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestRunBufferTimelineJSONWritesOutputFile(t *testing.T) {
 func TestRunBufferTimelineChromeWritesOutputFile(t *testing.T) {
 	tracePath := "../../../testdata/traces/01-single-encoder/01-single-encoder-run1.gputrace"
 	if _, err := os.Stat(tracePath); os.IsNotExist(err) {
-		t.Skipf("skipping test, trace file not found: %s. Run 'make fetch-testdata' to fetch test assets.", tracePath)
+		t.Skipf("skipping test, trace file not found: %s. See docs/TESTING.md for fixture setup.", tracePath)
 	} else if err != nil {
 		t.Fatalf("stat trace fixture: %v", err)
 	}
