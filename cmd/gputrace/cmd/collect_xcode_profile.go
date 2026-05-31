@@ -113,7 +113,7 @@ Navigation:
   show-performance  Click Show Performance button
   show-summary      Select Summary tab
   show-counters     Select Counters tab
-  show-memory       Select Memory tab
+  show-memory       Click the Show Memory button
   show-dependencies Click Show Dependencies button
 
 Data Export:
