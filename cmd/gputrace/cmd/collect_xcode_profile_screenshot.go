@@ -54,17 +54,9 @@ func runScreenshot(cmd *cobra.Command, args []string) error {
 		traceFile = args[0]
 	}
 
-	// Determine output path from -o flag
-	outputPath := screenshotOutput
-	if outputPath == "" {
-		outputPath = fmt.Sprintf("/tmp/xcode-screenshot-%s.png", time.Now().Format("20060102-150405"))
-	}
-
-	// Make absolute path
-	var err error
-	outputPath, err = filepath.Abs(outputPath)
+	outputPath, err := resolveScreenshotOutputPath(screenshotOutput, time.Now())
 	if err != nil {
-		return fmt.Errorf("invalid output path: %w", err)
+		return err
 	}
 
 	// Get Xcode window info using AX
@@ -104,6 +96,20 @@ func runScreenshot(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Screenshot saved to: %s\n", outputPath)
 	return nil
+}
+
+func resolveScreenshotOutputPath(output string, now time.Time) (string, error) {
+	if output == "" {
+		output = fmt.Sprintf("/tmp/xcode-screenshot-%s.png", now.Format("20060102-150405"))
+	}
+	if commandOutputPathIsStdout(output) {
+		return "", fmt.Errorf("screenshot output must be a file path, not stdout")
+	}
+	outputPath, err := filepath.Abs(output)
+	if err != nil {
+		return "", fmt.Errorf("invalid output path: %w", err)
+	}
+	return outputPath, nil
 }
 
 // triggerScreenRecordingTCC calls CGDisplayCreateImage to create a TCC
