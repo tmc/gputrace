@@ -23,12 +23,15 @@ type (
 type CorrelatedShaderMetrics struct {
 	ShaderName string `json:"shader_name"`
 
-	// Timing Data (from .gputrace)
+	// Timing data. TimingSource identifies whether duration fields came from
+	// profiler streamData, a capture heuristic, or a synthetic estimate.
 	ExecutionCount int           `json:"execution_count"`
 	TotalDuration  time.Duration `json:"total_duration"`
 	AvgDuration    time.Duration `json:"avg_duration"`
 	MinDuration    time.Duration `json:"min_duration"`
 	MaxDuration    time.Duration `json:"max_duration"`
+	TimingSource   string        `json:"timing_source,omitempty"`
+	TimingApprox   bool          `json:"timing_approximate,omitempty"`
 
 	// Hardware Metrics (from .gpuprofiler_raw)
 	ALUUtilization  float64 `json:"alu_utilization"`  // 0-100%
@@ -40,7 +43,7 @@ type CorrelatedShaderMetrics struct {
 	TotalCycles     uint64  `json:"total_cycles"`
 
 	// Correlation Metadata
-	CorrelationMethod     string  `json:"correlation_method"`     // "name", "address", "order"
+	CorrelationMethod     string  `json:"correlation_method"`     // "name", "execution-order", "timing-only"
 	CorrelationConfidence float64 `json:"correlation_confidence"` // 0.0-1.0
 
 	// Computed Metrics
@@ -66,21 +69,33 @@ type ShaderCorrelationReport struct {
 	ProfilerSource string `json:"profiler_source"`
 }
 
-// CorrelateShaderMetrics combines timing data from the trace with hardware metrics
-// from the profiler data, matching shaders by name, address, or execution order.
+type correlationTiming struct {
+	Name            string
+	InvocationCount int
+	TotalDuration   time.Duration
+	AvgDuration     time.Duration
+	MinDuration     time.Duration
+	MaxDuration     time.Duration
+	TimingSource    string
+	TimingApprox    bool
+}
+
+// CorrelateShaderMetrics combines timing data from the trace with hardware
+// metrics from the profiler data, matching shaders by name or execution order.
 func CorrelateShaderMetrics(trace *Trace) (*ShaderCorrelationReport, error) {
-	// Extract timing metrics from trace
-	// TODO: Implement proper timing metrics extraction
-	// For now, use simplified approach
-	timingMetrics := &TimingMetrics{
-		KernelTimings: make([]*KernelTiming, 0),
+	// Extract shader timings through ShaderMetrics so correlation inherits the
+	// same timing-source and approximation model used by shader reports.
+	shaderMetrics, err := ExtractShaderMetrics(trace)
+	if err != nil {
+		return nil, fmt.Errorf("extract shader metrics: %w", err)
 	}
+	timings := correlationTimingsFromShaderMetrics(shaderMetrics)
 
 	// Parse performance counters from profiler data
 	perfStats, err := counter.ParsePerfCounters(trace)
 	if err != nil {
 		// Profiler data not available - return timing-only report
-		return createTimingOnlyReport(timingMetrics, trace.Path), nil
+		return createTimingOnlyReport(timings, trace.Path), nil
 	}
 
 	// Create correlation report
@@ -91,7 +106,7 @@ func CorrelateShaderMetrics(trace *Trace) (*ShaderCorrelationReport, error) {
 	}
 
 	// Build maps for correlation
-	timingMap := buildTimingMap(timingMetrics)
+	timingMap := buildTimingMap(timings)
 	hardwareMap := buildHardwareMap(perfStats)
 
 	// Correlate by shader name (primary method)
@@ -112,21 +127,23 @@ func CorrelateShaderMetrics(trace *Trace) (*ShaderCorrelationReport, error) {
 }
 
 // createTimingOnlyReport creates a report with timing data only (no hardware metrics).
-func createTimingOnlyReport(metrics *TimingMetrics, tracePath string) *ShaderCorrelationReport {
+func createTimingOnlyReport(timings []*correlationTiming, tracePath string) *ShaderCorrelationReport {
 	report := &ShaderCorrelationReport{
 		Shaders:        make([]*CorrelatedShaderMetrics, 0),
 		TraceSource:    tracePath,
 		ProfilerSource: "(not available)",
 	}
 
-	for _, kt := range metrics.KernelTimings {
+	for _, timing := range timings {
 		correlated := &CorrelatedShaderMetrics{
-			ShaderName:            kt.Name,
-			ExecutionCount:        kt.InvocationCount,
-			TotalDuration:         kt.TotalDuration,
-			AvgDuration:           kt.AvgDuration,
-			MinDuration:           kt.MinDuration,
-			MaxDuration:           kt.MaxDuration,
+			ShaderName:            timing.Name,
+			ExecutionCount:        timing.InvocationCount,
+			TotalDuration:         timing.TotalDuration,
+			AvgDuration:           timing.AvgDuration,
+			MinDuration:           timing.MinDuration,
+			MaxDuration:           timing.MaxDuration,
+			TimingSource:          timing.TimingSource,
+			TimingApprox:          timing.TimingApprox,
 			CorrelationMethod:     "timing-only",
 			CorrelationConfidence: 1.0,
 		}
@@ -140,11 +157,44 @@ func createTimingOnlyReport(metrics *TimingMetrics, tracePath string) *ShaderCor
 	return report
 }
 
+func correlationTimingsFromShaderMetrics(report *ShaderMetricsReport) []*correlationTiming {
+	if report == nil {
+		return nil
+	}
+
+	timings := make([]*correlationTiming, 0, len(report.Shaders))
+	for _, metrics := range report.Shaders {
+		timing := correlationTimingFromShaderMetrics(metrics)
+		if timing == nil {
+			continue
+		}
+		timings = append(timings, timing)
+	}
+	return timings
+}
+
+func correlationTimingFromShaderMetrics(metrics *ShaderMetrics) *correlationTiming {
+	if metrics == nil || metrics.Name == "" || metrics.TimingSource == "" {
+		return nil
+	}
+
+	return &correlationTiming{
+		Name:            metrics.Name,
+		InvocationCount: metrics.InvocationCount,
+		TotalDuration:   time.Duration(metrics.TotalDurationNs),
+		AvgDuration:     time.Duration(metrics.AvgDurationNs),
+		MinDuration:     time.Duration(metrics.MinDurationNs),
+		MaxDuration:     time.Duration(metrics.MaxDurationNs),
+		TimingSource:    metrics.TimingSource,
+		TimingApprox:    metrics.TimingApprox,
+	}
+}
+
 // buildTimingMap creates a map of shader name -> timing data.
-func buildTimingMap(metrics *TimingMetrics) map[string]*KernelTiming {
-	timingMap := make(map[string]*KernelTiming)
-	for _, kt := range metrics.KernelTimings {
-		timingMap[kt.Name] = kt
+func buildTimingMap(timings []*correlationTiming) map[string]*correlationTiming {
+	timingMap := make(map[string]*correlationTiming)
+	for _, timing := range timings {
+		timingMap[timing.Name] = timing
 	}
 	return timingMap
 }
@@ -160,42 +210,14 @@ func buildHardwareMap(stats *PerfCounterStats) map[string]*ShaderHardwareMetrics
 }
 
 // correlateByName matches shaders by exact name match.
-func correlateByName(timingMap map[string]*KernelTiming, hardwareMap map[string]*ShaderHardwareMetrics, report *ShaderCorrelationReport) {
+func correlateByName(timingMap map[string]*correlationTiming, hardwareMap map[string]*ShaderHardwareMetrics, report *ShaderCorrelationReport) {
 	correlated := make(map[string]bool)
 
 	for name, timing := range timingMap {
 		if hardware, ok := hardwareMap[name]; ok {
 			correlated[name] = true
 
-			merged := &CorrelatedShaderMetrics{
-				ShaderName:            name,
-				ExecutionCount:        timing.InvocationCount,
-				TotalDuration:         timing.TotalDuration,
-				AvgDuration:           timing.AvgDuration,
-				MinDuration:           timing.MinDuration,
-				MaxDuration:           timing.MaxDuration,
-				ALUUtilization:        hardware.ALUUtilization,
-				KernelOccupancy:       hardware.KernelOccupancy,
-				SIMDGroups:            hardware.SIMDGroups,
-				AllocatedRegs:         hardware.AllocatedRegs,
-				SpilledBytes:          hardware.SpilledBytes,
-				MemoryBandwidth:       hardware.MemoryBandwidth,
-				TotalCycles:           hardware.TotalCycles,
-				CorrelationMethod:     "name",
-				CorrelationConfidence: 1.0,
-			}
-
-			// Calculate derived metrics
-			if merged.ExecutionCount > 0 {
-				merged.CyclesPerInvocation = merged.TotalCycles / uint64(merged.ExecutionCount)
-			}
-
-			// Estimate GPU frequency: cycles / duration
-			if timing.AvgDuration.Nanoseconds() > 0 {
-				avgCycles := float64(merged.TotalCycles) / float64(merged.ExecutionCount)
-				avgSeconds := timing.AvgDuration.Seconds()
-				merged.EstimatedGPUFreqGHz = avgCycles / avgSeconds / 1e9
-			}
+			merged := mergeTimingAndHardware(timing, hardware, name, "name", 1.0)
 
 			report.Shaders = append(report.Shaders, merged)
 		}
@@ -206,14 +228,14 @@ func correlateByName(timingMap map[string]*KernelTiming, hardwareMap map[string]
 
 // correlateByExecutionOrder attempts to correlate remaining shaders by execution order.
 // This is a fallback when shader names don't match (e.g., UUIDs vs readable names).
-func correlateByExecutionOrder(timingMap map[string]*KernelTiming, hardwareMap map[string]*ShaderHardwareMetrics, report *ShaderCorrelationReport) {
+func correlateByExecutionOrder(timingMap map[string]*correlationTiming, hardwareMap map[string]*ShaderHardwareMetrics, report *ShaderCorrelationReport) {
 	// Get lists of uncorrelated shaders
 	correlatedNames := make(map[string]bool)
 	for _, shader := range report.Shaders {
 		correlatedNames[shader.ShaderName] = true
 	}
 
-	var uncorrelatedTiming []*KernelTiming
+	var uncorrelatedTiming []*correlationTiming
 	for name, timing := range timingMap {
 		if !correlatedNames[name] {
 			uncorrelatedTiming = append(uncorrelatedTiming, timing)
@@ -245,38 +267,46 @@ func correlateByExecutionOrder(timingMap map[string]*KernelTiming, hardwareMap m
 		timing := uncorrelatedTiming[i]
 		hardware := uncorrelatedHardware[i]
 
-		merged := &CorrelatedShaderMetrics{
-			ShaderName:            timing.Name + " → " + hardware.ShaderName,
-			ExecutionCount:        timing.InvocationCount,
-			TotalDuration:         timing.TotalDuration,
-			AvgDuration:           timing.AvgDuration,
-			MinDuration:           timing.MinDuration,
-			MaxDuration:           timing.MaxDuration,
-			ALUUtilization:        hardware.ALUUtilization,
-			KernelOccupancy:       hardware.KernelOccupancy,
-			SIMDGroups:            hardware.SIMDGroups,
-			AllocatedRegs:         hardware.AllocatedRegs,
-			SpilledBytes:          hardware.SpilledBytes,
-			MemoryBandwidth:       hardware.MemoryBandwidth,
-			TotalCycles:           hardware.TotalCycles,
-			CorrelationMethod:     "execution-order",
-			CorrelationConfidence: 0.7, // Lower confidence for order-based matching
-		}
-
-		if merged.ExecutionCount > 0 {
-			merged.CyclesPerInvocation = merged.TotalCycles / uint64(merged.ExecutionCount)
-		}
-
-		if timing.AvgDuration.Nanoseconds() > 0 {
-			avgCycles := float64(merged.TotalCycles) / float64(merged.ExecutionCount)
-			avgSeconds := timing.AvgDuration.Seconds()
-			merged.EstimatedGPUFreqGHz = avgCycles / avgSeconds / 1e9
-		}
+		merged := mergeTimingAndHardware(timing, hardware, timing.Name+" → "+hardware.ShaderName, "execution-order", 0.7)
 
 		report.Shaders = append(report.Shaders, merged)
 	}
 
 	report.CorrelatedShaders = len(report.Shaders)
+}
+
+func mergeTimingAndHardware(timing *correlationTiming, hardware *ShaderHardwareMetrics, shaderName, method string, confidence float64) *CorrelatedShaderMetrics {
+	merged := &CorrelatedShaderMetrics{
+		ShaderName:            shaderName,
+		ExecutionCount:        timing.InvocationCount,
+		TotalDuration:         timing.TotalDuration,
+		AvgDuration:           timing.AvgDuration,
+		MinDuration:           timing.MinDuration,
+		MaxDuration:           timing.MaxDuration,
+		TimingSource:          timing.TimingSource,
+		TimingApprox:          timing.TimingApprox,
+		ALUUtilization:        hardware.ALUUtilization,
+		KernelOccupancy:       hardware.KernelOccupancy,
+		SIMDGroups:            hardware.SIMDGroups,
+		AllocatedRegs:         hardware.AllocatedRegs,
+		SpilledBytes:          hardware.SpilledBytes,
+		MemoryBandwidth:       hardware.MemoryBandwidth,
+		TotalCycles:           hardware.TotalCycles,
+		CorrelationMethod:     method,
+		CorrelationConfidence: confidence,
+	}
+
+	if merged.ExecutionCount > 0 {
+		merged.CyclesPerInvocation = merged.TotalCycles / uint64(merged.ExecutionCount)
+	}
+
+	if !timing.TimingApprox && merged.ExecutionCount > 0 && timing.AvgDuration.Nanoseconds() > 0 {
+		avgCycles := float64(merged.TotalCycles) / float64(merged.ExecutionCount)
+		avgSeconds := timing.AvgDuration.Seconds()
+		merged.EstimatedGPUFreqGHz = avgCycles / avgSeconds / 1e9
+	}
+
+	return merged
 }
 
 // calculateCorrelationSummary computes summary statistics for the correlation report.
@@ -325,6 +355,13 @@ func FormatCorrelationReport(report *ShaderCorrelationReport) string {
 	output += fmt.Sprintf("Profiler: %s\n", report.ProfilerSource)
 	output += fmt.Sprintf("Correlated Shaders: %d/%d (%.1f%%)\n\n",
 		report.CorrelatedShaders, report.TotalShaders, report.CorrelationRate)
+	if len(report.Shaders) > 0 {
+		output += fmt.Sprintf("Timing Sources: %s\n", formatCorrelationTimingSources(report.Shaders))
+		if hasApproximateCorrelationTiming(report.Shaders) {
+			output += "Timing Note: heuristic and synthetic timing is approximate; duration-derived frequency is omitted for those rows.\n"
+		}
+		output += "\n"
+	}
 
 	if report.AvgALUUtilization > 0 {
 		output += "=== Summary Statistics ===\n"
@@ -354,6 +391,47 @@ func FormatCorrelationReport(report *ShaderCorrelationReport) string {
 }
 
 // Helper functions
+
+func formatCorrelationTimingSources(shaders []*CorrelatedShaderMetrics) string {
+	seen := make(map[string]bool)
+	sources := make([]string, 0)
+	for _, shader := range shaders {
+		if shader.TimingSource == "" || seen[shader.TimingSource] {
+			continue
+		}
+		seen[shader.TimingSource] = true
+		source := shader.TimingSource
+		if shader.TimingApprox {
+			source += " (approximate)"
+		}
+		sources = append(sources, source)
+	}
+	if len(sources) == 0 {
+		return "(not available)"
+	}
+	sort.Strings(sources)
+	return joinStrings(sources, ", ")
+}
+
+func hasApproximateCorrelationTiming(shaders []*CorrelatedShaderMetrics) bool {
+	for _, shader := range shaders {
+		if shader.TimingApprox {
+			return true
+		}
+	}
+	return false
+}
+
+func joinStrings(values []string, sep string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	out := values[0]
+	for _, value := range values[1:] {
+		out += sep + value
+	}
+	return out
+}
 
 func truncateString(s string, maxLen int) string {
 	if len(s) <= maxLen {
