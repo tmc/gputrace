@@ -1,3 +1,5 @@
+//go:build darwin
+
 package cmd
 
 import (
@@ -8,7 +10,7 @@ import (
 )
 
 var debugXCUICmd = &cobra.Command{
-	Use:   "debug-xcui",
+	Use:    "debug-xcui",
 	Short:  "Debug XCUI",
 	Hidden: true,
 	Run: func(cmd *cobra.Command, args []string) {

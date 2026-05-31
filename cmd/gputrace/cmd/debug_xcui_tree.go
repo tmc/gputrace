@@ -1,3 +1,5 @@
+//go:build darwin
+
 package cmd
 
 import (
@@ -14,9 +16,9 @@ func init() {
 		Use:    "debug-tree [trace_file]",
 		Short:  "Print UI tree to find key elements",
 		Hidden: true,
-		Long:  `Prints the Accessibility tree structure showing paths to key buttons like Replay, Stop, Show Performance.`,
-		Args:  cobra.MaximumNArgs(1),
-		RunE:  runDebugTree,
+		Long:   `Prints the Accessibility tree structure showing paths to key buttons like Replay, Stop, Show Performance.`,
+		Args:   cobra.MaximumNArgs(1),
+		RunE:   runDebugTree,
 	}
 	debugTreeCmd.Flags().BoolVarP(&debugTreeVerbose, "verbose", "v", false, "Print verbose progress info")
 	collectXcodeProfileCmd.AddCommand(debugTreeCmd)
