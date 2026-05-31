@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 
 	"github.com/spf13/cobra"
 
@@ -14,6 +15,21 @@ var (
 	cmdBuffersDetailed bool
 	cmdBuffersJSON     bool
 )
+
+type commandBufferEncoderJSON struct {
+	Index int    `json:"index"`
+	Label string `json:"label,omitempty"`
+}
+
+type commandBufferJSON struct {
+	Index           int                        `json:"index"`
+	Label           string                     `json:"label,omitempty"`
+	Offset          string                     `json:"offset"`
+	Encoders        []commandBufferEncoderJSON `json:"encoders,omitempty"`
+	Calls           int                        `json:"calls"`
+	PipelineRecords int                        `json:"pipeline_records"`
+	Dispatches      int                        `json:"dispatches"`
+}
 
 var commandBuffersCmd = &cobra.Command{
 	Use:   "command-buffers <trace.gputrace>",
@@ -63,46 +79,11 @@ func runCommandBuffers(cmd *cobra.Command, args []string) error {
 	}
 
 	if cmdBuffersJSON {
-		type cbEncoderJSON struct {
-			Index int    `json:"index"`
-			Label string `json:"label,omitempty"`
-		}
-		type cbJSON struct {
-			Index           int             `json:"index"`
-			Label           string          `json:"label,omitempty"`
-			Offset          string          `json:"offset"`
-			Encoders        []cbEncoderJSON `json:"encoders,omitempty"`
-			Calls           int             `json:"calls"`
-			PipelineRecords int             `json:"pipeline_records"`
-			Dispatches      int             `json:"dispatches"`
-		}
-		out := make([]cbJSON, len(commandBuffers))
-		for i, cb := range commandBuffers {
-			entry := cbJSON{
-				Index:  cb.Index,
-				Label:  cb.Label,
-				Offset: fmt.Sprintf("0x%08x", cb.Offset),
-			}
-			dcb, err := gputrace.ParseDetailedCommandBuffer(trace, cb.Index)
-			if err == nil {
-				entry.Calls = len(dcb.Calls)
-				entry.PipelineRecords = len(dcb.Calls)
-				entry.Dispatches = len(dcb.Dispatches)
-				for _, enc := range dcb.Encoders {
-					entry.Encoders = append(entry.Encoders, cbEncoderJSON{
-						Index: enc.Index,
-						Label: enc.Label,
-					})
-				}
-			}
-			out[i] = entry
-		}
-		data, err := json.MarshalIndent(out, "", "  ")
+		out, err := commandBuffersJSONOutput(trace, commandBuffers)
 		if err != nil {
-			return fmt.Errorf("failed to marshal json: %w", err)
+			return err
 		}
-		fmt.Println(string(data))
-		return nil
+		return writeCommandBuffersJSON(cmd.OutOrStdout(), out)
 	}
 
 	// Compact one-line-per-buffer output
@@ -157,5 +138,39 @@ func runCommandBuffers(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	return nil
+}
+
+func commandBuffersJSONOutput(trace *gputrace.Trace, commandBuffers []*gputrace.CommandBuffer) ([]commandBufferJSON, error) {
+	out := make([]commandBufferJSON, len(commandBuffers))
+	for i, cb := range commandBuffers {
+		entry := commandBufferJSON{
+			Index:  cb.Index,
+			Label:  cb.Label,
+			Offset: fmt.Sprintf("0x%08x", cb.Offset),
+		}
+		dcb, err := gputrace.ParseDetailedCommandBuffer(trace, cb.Index)
+		if err == nil {
+			entry.Calls = len(dcb.Calls)
+			entry.PipelineRecords = len(dcb.Calls)
+			entry.Dispatches = len(dcb.Dispatches)
+			for _, enc := range dcb.Encoders {
+				entry.Encoders = append(entry.Encoders, commandBufferEncoderJSON{
+					Index: enc.Index,
+					Label: enc.Label,
+				})
+			}
+		}
+		out[i] = entry
+	}
+	return out, nil
+}
+
+func writeCommandBuffersJSON(w io.Writer, out []commandBufferJSON) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(out); err != nil {
+		return fmt.Errorf("marshal json: %w", err)
+	}
 	return nil
 }

@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 
 	"github.com/spf13/cobra"
 
@@ -68,17 +69,21 @@ func runBufferAccess(cmd *cobra.Command, args []string) error {
 	}
 
 	if bufferAccessJSON {
-		data, err := json.MarshalIndent(analysis, "", "  ")
-		if err != nil {
-			return fmt.Errorf("failed to marshal json: %w", err)
-		}
-		fmt.Println(string(data))
-		return nil
+		return writeBufferAccessJSON(cmd.OutOrStdout(), analysis)
 	}
 
 	// Format and display report
 	report := gputrace.FormatBufferAccessReport(analysis, bufferAccessVerbose)
 	fmt.Print(report)
 
+	return nil
+}
+
+func writeBufferAccessJSON(w io.Writer, analysis *gputrace.BufferAccessAnalysis) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(analysis); err != nil {
+		return fmt.Errorf("marshal json: %w", err)
+	}
 	return nil
 }

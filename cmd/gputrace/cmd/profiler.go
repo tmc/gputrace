@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -73,9 +74,7 @@ func runProfiler(cmd *cobra.Command, args []string) error {
 			StreamDataStats: stats,
 			ExecutionCost:   execCost,
 		}
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(output)
+		return writeProfilerJSON(cmd.OutOrStdout(), output)
 	}
 
 	// Print human-readable output
@@ -418,6 +417,12 @@ func runProfiler(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+func writeProfilerJSON(w io.Writer, output ProfilerOutputStats) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(output)
 }
 
 // limiterMetrics holds extracted performance limiter values per encoder.

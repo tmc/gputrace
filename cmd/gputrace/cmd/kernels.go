@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
@@ -134,38 +135,7 @@ func runKernels(cmd *cobra.Command, args []string) error {
 	})
 
 	if kernelsJSON {
-		type kernelJSON struct {
-			Name          string         `json:"name"`
-			PipelineAddr  string         `json:"pipeline_addr"`
-			DispatchCount int            `json:"dispatch_count"`
-			DebugGroups   map[string]int `json:"debug_groups,omitempty"`
-			EncoderLabels map[string]int `json:"encoder_labels,omitempty"`
-			TotalTimeMs   float64        `json:"total_time_ms,omitempty"`
-			AvgTimeMs     float64        `json:"avg_time_ms,omitempty"`
-		}
-		out := make([]kernelJSON, len(kernels))
-		for i, k := range kernels {
-			kj := kernelJSON{
-				Name:          k.Name,
-				PipelineAddr:  fmt.Sprintf("0x%x", k.PipelineAddr),
-				DispatchCount: k.DispatchCount,
-				DebugGroups:   k.DebugGroups,
-				EncoderLabels: k.EncoderLabels,
-			}
-			if tStat, ok := timingStats[k.Name]; ok {
-				kj.TotalTimeMs = tStat.TotalTime
-				if k.DispatchCount > 0 {
-					kj.AvgTimeMs = tStat.TotalTime / float64(k.DispatchCount)
-				}
-			}
-			out[i] = kj
-		}
-		data, err := json.MarshalIndent(out, "", "  ")
-		if err != nil {
-			return fmt.Errorf("failed to marshal json: %w", err)
-		}
-		fmt.Println(string(data))
-		return nil
+		return writeKernelsJSON(cmd.OutOrStdout(), kernels, timingStats)
 	}
 
 	// Count unique kernels
@@ -295,5 +265,47 @@ func runKernels(cmd *cobra.Command, args []string) error {
 		fmt.Printf("\nUnknown Pipelines: %d dispatches (encoder: %v)\n", k.DispatchCount, k.EncoderLabels)
 	}
 
+	return nil
+}
+
+func writeKernelsJSON(w io.Writer, kernels []*gputrace.KernelStat, timingStats map[string]*gputrace.TimingStat) error {
+	type kernelJSON struct {
+		Name          string         `json:"name"`
+		PipelineAddr  string         `json:"pipeline_addr"`
+		DispatchCount int            `json:"dispatch_count"`
+		DebugGroups   map[string]int `json:"debug_groups,omitempty"`
+		EncoderLabels map[string]int `json:"encoder_labels,omitempty"`
+		TotalTimeMs   float64        `json:"total_time_ms,omitempty"`
+		AvgTimeMs     float64        `json:"avg_time_ms,omitempty"`
+	}
+
+	out := make([]kernelJSON, len(kernels))
+	for i, k := range kernels {
+		kj := kernelJSON{
+			Name:          k.Name,
+			PipelineAddr:  fmt.Sprintf("0x%x", k.PipelineAddr),
+			DispatchCount: k.DispatchCount,
+			DebugGroups:   k.DebugGroups,
+			EncoderLabels: k.EncoderLabels,
+		}
+		if tStat, ok := timingStats[k.Name]; ok {
+			kj.TotalTimeMs = tStat.TotalTime
+			if k.DispatchCount > 0 {
+				kj.AvgTimeMs = tStat.TotalTime / float64(k.DispatchCount)
+			}
+		}
+		out[i] = kj
+	}
+
+	data, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal json: %w", err)
+	}
+	if _, err := w.Write(data); err != nil {
+		return fmt.Errorf("write json: %w", err)
+	}
+	if _, err := io.WriteString(w, "\n"); err != nil {
+		return fmt.Errorf("write json: %w", err)
+	}
 	return nil
 }
