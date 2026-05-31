@@ -39,13 +39,6 @@ Examples:
 	collectXcodeProfileCmd.AddCommand(openExportCmd)
 }
 
-func rejectXcodeProfileJSON(command string) error {
-	if !collectProfileJSON {
-		return nil
-	}
-	return fmt.Errorf("%s does not support --json", command)
-}
-
 func runExport(cmd *cobra.Command, args []string) error {
 	status := xcodeProfileStatusWriter()
 	var outputPath string
@@ -340,7 +333,7 @@ func init() {
 		Use:    "send-key <key>",
 		Short:  "Send a keyboard shortcut (for debugging)",
 		Hidden: true,
-		Args:   cobra.ExactArgs(1),
+		Args:   unsupportedXcodeProfileJSONArgs("send-key", cobra.ExactArgs(1)),
 		RunE:   runSendKey,
 	}
 	collectXcodeProfileCmd.AddCommand(sendKeyCmd)
@@ -349,15 +342,13 @@ func init() {
 		Use:    "check-goto-folder",
 		Short:  "Check if Go to Folder dialog is open",
 		Hidden: true,
+		Args:   unsupportedXcodeProfileJSONArgs("check-goto-folder", cobra.NoArgs),
 		RunE:   runCheckGoToFolder,
 	}
 	collectXcodeProfileCmd.AddCommand(checkGoToFolderCmd)
 }
 
 func runSendKey(cmd *cobra.Command, args []string) error {
-	if err := rejectXcodeProfileJSON("send-key"); err != nil {
-		return err
-	}
 	status := xcodeProfileStatusWriter()
 	if err := setupMacgo(); err != nil {
 		return err
@@ -397,9 +388,6 @@ func runSendKey(cmd *cobra.Command, args []string) error {
 }
 
 func runCheckGoToFolder(cmd *cobra.Command, args []string) error {
-	if err := rejectXcodeProfileJSON("check-goto-folder"); err != nil {
-		return err
-	}
 	status := xcodeProfileStatusWriter()
 	if err := setupMacgo(); err != nil {
 		return err
@@ -472,15 +460,13 @@ func init() {
 		Use:    "debug-file-browser",
 		Short:  "Debug: list file browser elements in export dialog",
 		Hidden: true,
+		Args:   unsupportedXcodeProfileJSONArgs("debug-file-browser", cobra.NoArgs),
 		RunE:   runDebugFileBrowser,
 	}
 	collectXcodeProfileCmd.AddCommand(debugFileBrowserCmd)
 }
 
 func runDebugFileBrowser(cmd *cobra.Command, args []string) error {
-	if err := rejectXcodeProfileJSON("debug-file-browser"); err != nil {
-		return err
-	}
 	status := xcodeProfileStatusWriter()
 	if err := setupMacgo(); err != nil {
 		return err
