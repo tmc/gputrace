@@ -29,9 +29,11 @@ go.work.sum
 
 # Local development
 CLAUDE.md
+.mcp.json
 docs/planning/
 scripts/
 !scripts/collect_profile.sh
+cmd/calc_kernel/
 node_modules/
 
 # Benchmark outputs
