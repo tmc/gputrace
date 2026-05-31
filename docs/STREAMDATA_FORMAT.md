@@ -18,13 +18,13 @@ trace.gputrace/
     └── Timeline_f_*.raw    ← Timeline visualization data
 ```
 
-## Three GPU Metrics
+## Shader Table Metrics
 
-Xcode Instruments displays three distinct timing metrics. Understanding their differences is critical for accurate profiling:
+Xcode Instruments displays several shader-table metrics. Understanding their differences is critical for accurate profiling:
 
 | Metric | Source | What It Measures | Use Case |
 |--------|--------|------------------|----------|
-| **Dispatch Duration** | gpuCommandInfoData | Wall clock time from dispatch start to next dispatch | Per-dispatch granularity |
+| **Dispatch Duration** | gpuCommandInfoData | StreamData dispatch duration or cumulative offset delta | Per-dispatch granularity |
 | **Kernel Duration** | gpuCommandInfoData aggregated | Sum of dispatch durations per pipeline | Function-level aggregation |
 | **Execution Cost** | Profiling_f_*.raw | Statistical GPU sampling percentage | Relative cost comparison |
 
@@ -38,6 +38,16 @@ Example: If `gemv_t_float16` is called 10 times with 16.4 µs average, Kernel Du
 ### Execution Cost (Statistical Profiling)
 
 The "Execution Cost" percentage shown in Xcode uses statistical GPU sampling from `Profiling_f_*.raw` files. This is **not** the same as dispatch timing. See `internal/counter/execution_cost.go` for the implementation.
+
+## Timeline and Summary Timing
+
+Measured replay timing comes from `.gpuprofiler_raw/streamData` when APSTimelineData is present:
+
+- `ReplayerGPUTime`: Xcode Effective GPU Time.
+- Command Buffer Timestamps: command-buffer active and wall-clock spans.
+- `encoderInfoData` and `gpuCommandInfoData`: encoder and dispatch cumulative offsets.
+
+GPRWCNTR encoder profile blobs annotate timeline/profile samples. They do not replace measured wall-clock timing.
 
 ## NSKeyedArchiver Structure
 
@@ -57,6 +67,7 @@ The plist uses Apple's NSKeyedArchiver format with a `$objects` array containing
 | `functionInfoSize` | uint64 | Record size (typically 48 bytes) |
 | `encoderInfoData` | UID | Binary data with encoder timing |
 | `encoderInfoSize` | uint64 | Record size (typically 40 bytes) |
+| `APSTimelineData` | UID | Nested timeline data with ReplayerGPUTime, command-buffer timestamps, and GPRWCNTR encoder profile blobs |
 
 ## Binary Data Structures
 

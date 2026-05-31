@@ -28,7 +28,7 @@ gputrace pprof trace.gputrace -o trace.pb
 go tool pprof -http=:8080 trace.pb
 
 # Export Chrome/Perfetto timeline
-gputrace timeline trace.gputrace -o trace.json
+gputrace timeline trace.gputrace --format perfetto -o trace.json
 
 # Compare two traces
 gputrace diff A.gputrace B.gputrace --explain
@@ -135,9 +135,12 @@ Reverse-engineering notes and implementation status documents live in [`docs/res
 
 `.gputrace` files do not contain pre-computed timing percentages. Xcode Instruments derives
 shader cost by replaying captured GPU workloads with performance counters enabled. This library
-extracts timing from profiler streamData (dispatch/kernel duration, execution cost sampling,
-and GPRWCNTR encoder profiles) when a `.gpuprofiler_raw` directory is present. For traces
-without profiler data, only structural information (kernels, encoders, buffers) is available.
+uses `.gpuprofiler_raw/streamData` for measured timing when profiler data is present:
+APSTimelineData `ReplayerGPUTime`, command-buffer timestamps, and encoder/dispatch
+cumulative offsets. Execution-cost sampling from `Profiling_f_*.raw` and GPRWCNTR
+encoder profiles are reported as counter/profile annotations, not as wall-clock timing
+sources. Non-profiled traces may emit approximate `extracted` or `synthetic` timing for
+visualization and triage; treat those values as estimates.
 
 ## Developer Convenience
 

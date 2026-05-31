@@ -83,3 +83,13 @@ func TestTimingProfilerHelpMarksLegacyApproximateFallbacks(t *testing.T) {
 		}
 	}
 }
+
+func TestTimelineFormatHelpIncludesPerfetto(t *testing.T) {
+	flag := timelineCmd.Flags().Lookup("format")
+	if flag == nil {
+		t.Fatal("timeline format flag not found")
+	}
+	if !strings.Contains(flag.Usage, "perfetto") {
+		t.Fatalf("timeline format help does not mention perfetto: %s", flag.Usage)
+	}
+}

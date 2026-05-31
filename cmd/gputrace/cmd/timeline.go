@@ -63,7 +63,7 @@ func init() {
 	rootCmd.AddCommand(timelineCmd)
 
 	timelineCmd.Flags().StringVarP(&timelineOutput, "output", "o", "timeline.json", "Output file path")
-	timelineCmd.Flags().StringVar(&timelineFormat, "format", "text", "Output format: chrome, html, json, text")
+	timelineCmd.Flags().StringVar(&timelineFormat, "format", "text", "Output format: chrome, perfetto, html, json, text")
 }
 
 func runTimeline(cmd *cobra.Command, args []string) error {

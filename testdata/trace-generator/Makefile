@@ -60,7 +60,10 @@ run-capture: build
 		echo "  # Summarize captured trace"; \
 		echo "  gputrace stats \"$$OUTPUT_PATH\""; \
 		echo ""; \
-		echo "  # GPU counters require an Instruments GPU Counters capture"; \
+		echo "  # Generate profiled timing/counter data with Instruments"; \
+		echo "  gputrace xcode-profile run \"$$OUTPUT_PATH\" -o \"$${OUTPUT_PATH%.gputrace}-perfdata.gputrace\""; \
+		echo "  gputrace profiler \"$${OUTPUT_PATH%.gputrace}-perfdata.gputrace\""; \
+		echo "  gputrace timeline \"$${OUTPUT_PATH%.gputrace}-perfdata.gputrace\" --format perfetto -o \"$${OUTPUT_PATH%.gputrace}-timeline.json\""; \
 		echo ""; \
 		echo "  # Open in Instruments"; \
 		echo "  open $$OUTPUT_PATH"; \
