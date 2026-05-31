@@ -1,6 +1,7 @@
 package gputrace
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -8,13 +9,7 @@ import (
 
 func TestOpenMinimalTraceBundle(t *testing.T) {
 	tracePath := filepath.Join(t.TempDir(), "minimal.gputrace")
-	if err := os.Mkdir(tracePath, 0o777); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(tracePath, "metadata"), []byte(minimalMetadataPlist), 0o666); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(tracePath, "capture"), []byte(MagicMTSP), 0o666); err != nil {
+	if err := writeMinimalTraceBundle(tracePath); err != nil {
 		t.Fatal(err)
 	}
 
@@ -37,6 +32,44 @@ func TestOpenMinimalTraceBundle(t *testing.T) {
 	if len(trace.DeviceResources) != 0 {
 		t.Fatalf("DeviceResources length = %d, want 0", len(trace.DeviceResources))
 	}
+}
+
+func ExampleOpen() {
+	dir, err := os.MkdirTemp("", "gputrace-example-*")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	defer os.RemoveAll(dir)
+
+	tracePath := filepath.Join(dir, "minimal.gputrace")
+	if err := writeMinimalTraceBundle(tracePath); err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	trace, err := Open(tracePath)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	fmt.Println(trace.Metadata.UUID)
+	fmt.Println(len(trace.CaptureData))
+
+	// Output:
+	// minimal-test-trace
+	// 4
+}
+
+func writeMinimalTraceBundle(path string) error {
+	if err := os.Mkdir(path, 0o777); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(path, "metadata"), []byte(minimalMetadataPlist), 0o666); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(path, "capture"), []byte(MagicMTSP), 0o666)
 }
 
 const minimalMetadataPlist = `<?xml version="1.0" encoding="UTF-8"?>
