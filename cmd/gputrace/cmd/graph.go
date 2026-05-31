@@ -52,6 +52,11 @@ func init() {
 }
 
 func runGraph(cmd *cobra.Command, args []string) error {
+	opts, err := validateGraphOptions(graphFormat, graphType)
+	if err != nil {
+		return err
+	}
+
 	tracePath := args[0]
 
 	// Verify trace file exists
@@ -67,18 +72,16 @@ func runGraph(cmd *cobra.Command, args []string) error {
 
 	// Create graph generator based on format
 	var generator graph.Generator
-	switch graphFormat {
+	switch opts.format {
 	case "dot":
 		generator = graph.NewDOTGenerator()
 	case "mermaid":
 		generator = graph.NewMermaidGenerator()
-	default:
-		return fmt.Errorf("unsupported format: %s (supported: dot, mermaid)", graphFormat)
 	}
 
 	// Configure generator
 	config := &graph.Config{
-		Type:       graphType,
+		Type:       opts.graphType,
 		ShowTiming: graphShowTiming,
 		ShowMemory: graphShowMemory,
 	}
@@ -90,6 +93,41 @@ func runGraph(cmd *cobra.Command, args []string) error {
 	}
 
 	return writeGraphOutput(cmd, graphOutput, output)
+}
+
+type graphOptions struct {
+	format    string
+	graphType string
+}
+
+func validateGraphOptions(format, graphType string) (graphOptions, error) {
+	format, err := normalizeGraphFormat(format)
+	if err != nil {
+		return graphOptions{}, err
+	}
+	graphType, err = normalizeGraphType(graphType)
+	if err != nil {
+		return graphOptions{}, err
+	}
+	return graphOptions{format: format, graphType: graphType}, nil
+}
+
+func normalizeGraphFormat(format string) (string, error) {
+	switch format {
+	case "dot", "mermaid":
+		return format, nil
+	default:
+		return "", fmt.Errorf("invalid graph format %q (must be dot or mermaid)", format)
+	}
+}
+
+func normalizeGraphType(graphType string) (string, error) {
+	switch graphType {
+	case "hierarchy", "flow", "resources":
+		return graphType, nil
+	default:
+		return "", fmt.Errorf("invalid graph type %q (must be hierarchy, flow, or resources)", graphType)
+	}
 }
 
 func writeGraphOutput(cmd *cobra.Command, outputPath, output string) error {
