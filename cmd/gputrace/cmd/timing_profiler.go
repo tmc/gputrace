@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 
@@ -85,7 +86,7 @@ Alternatively, use one of the other timing extraction methods:
 	extractor := gputrace.NewTimingExtractorProfilerRaw(trace)
 
 	// Extract timing
-	fmt.Println("Inspecting legacy .gpuprofiler_raw timing fallbacks...")
+	fmt.Fprintln(os.Stderr, "Inspecting legacy .gpuprofiler_raw timing fallbacks...")
 	timings, err := extractor.ExtractTimingFromProfilerRaw()
 	if err != nil {
 		return fmt.Errorf("failed to extract timing: %w", err)
