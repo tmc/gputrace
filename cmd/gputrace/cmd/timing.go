@@ -90,7 +90,7 @@ func runTiming(cmd *cobra.Command, args []string) error {
 	// Show table if requested
 	if timingTable {
 		report := gputrace.FormatTimingMetrics(metrics)
-		fmt.Println(report)
+		fmt.Fprintln(timingReportWriter(), report)
 	}
 
 	// Export JSON if requested
@@ -139,7 +139,7 @@ func runTiming(cmd *cobra.Command, args []string) error {
 		}
 
 		comparison := gputrace.CompareTraces(baselineMetrics, metrics)
-		fmt.Println("\n" + gputrace.FormatTimingComparison(comparison))
+		fmt.Fprintln(timingReportWriter(), "\n"+gputrace.FormatTimingComparison(comparison))
 
 		if comparison.RegressionCount > 0 {
 			// Return error to indicate regressions found
@@ -190,7 +190,7 @@ func runTimingFromProfiler(tracePath string) error {
 	// Show table if requested
 	if timingTable {
 		report := formatProfilerTimingMetrics(metrics)
-		fmt.Println(report)
+		fmt.Fprintln(timingReportWriter(), report)
 	}
 
 	// Export JSON if requested
@@ -222,6 +222,17 @@ func runTimingFromProfiler(tracePath string) error {
 	}
 
 	return nil
+}
+
+func timingReportWriter() *os.File {
+	if timingOutputPathIsStdout(timingJSON) || timingOutputPathIsStdout(timingCSV) {
+		return os.Stderr
+	}
+	return os.Stdout
+}
+
+func timingOutputPathIsStdout(path string) bool {
+	return path == "/dev/stdout"
 }
 
 // convertStreamDataToTimingMetrics converts StreamDataStats to TimingMetrics.
