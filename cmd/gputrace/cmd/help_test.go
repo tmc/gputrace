@@ -31,3 +31,55 @@ func TestShadersHelpMarksHighRegisterSourceBacked(t *testing.T) {
 		t.Fatalf("shaders help should not imply high register is always available:\n%s", shadersCmd.Long)
 	}
 }
+
+func TestTimingHelpDocumentsTimingSources(t *testing.T) {
+	help := timingCmd.Long
+	for _, want := range []string{
+		".gpuprofiler_raw/streamData",
+		"APSTimelineData",
+		"kdebug/signpost-derived timing",
+		"synthetic timing for visualization only",
+		"Hardware counter files",
+		"not treated as direct shader timing",
+	} {
+		if !strings.Contains(help, want) {
+			t.Fatalf("timing help does not contain %q:\n%s", want, help)
+		}
+	}
+
+	for _, stale := range []string{
+		"Traces without profiling\n      data will use synthetic/estimated timing",
+		"hardware counters alone provide timing",
+	} {
+		if strings.Contains(help, stale) {
+			t.Fatalf("timing help still contains stale wording %q:\n%s", stale, help)
+		}
+	}
+}
+
+func TestTimingProfilerHelpMarksLegacyApproximateFallbacks(t *testing.T) {
+	help := timingProfilerCmd.Long
+	for _, want := range []string{
+		`Prefer "gputrace timing"`,
+		".gpuprofiler_raw/streamData",
+		"APSTimelineData",
+		"kdebug GPU execution events",
+		"counter-file limiter heuristics",
+		"Counter files alone are not direct shader timing",
+		"approximate",
+	} {
+		if !strings.Contains(help, want) {
+			t.Fatalf("timing-profiler help does not contain %q:\n%s", want, help)
+		}
+	}
+
+	for _, stale := range []string{
+		"Extract GPU timing data from .gpuprofiler_raw hardware performance counters",
+		"These files contain the same data that\nInstruments uses to calculate shader cost percentages",
+		"The timing data extracted from performance counters is the most accurate available",
+	} {
+		if strings.Contains(help, stale) {
+			t.Fatalf("timing-profiler help still contains stale wording %q:\n%s", stale, help)
+		}
+	}
+}

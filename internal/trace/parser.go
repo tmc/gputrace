@@ -29,8 +29,16 @@ type CommandBufferInfo struct {
 type EncoderInfo struct {
 	Index      int
 	Label      string
+	Source     string
 	Dispatches []DispatchInfo
 }
+
+const (
+	// EncoderSourceParsedLabel means the encoder came from a label parsed out of the trace.
+	EncoderSourceParsedLabel = "parsed_label"
+	// EncoderSourceSynthetic means the encoder was inferred because no parsed labels were present.
+	EncoderSourceSynthetic = "synthetic"
+)
 
 // DispatchInfo represents a single compute dispatch.
 type DispatchInfo struct {
@@ -113,8 +121,9 @@ func (t *Trace) extractEncoders() []EncoderInfo {
 	// Use existing encoder labels
 	for i, label := range t.EncoderLabels {
 		enc := EncoderInfo{
-			Index: i,
-			Label: label,
+			Index:  i,
+			Label:  label,
+			Source: EncoderSourceParsedLabel,
 		}
 		encoders = append(encoders, enc)
 	}
@@ -122,8 +131,9 @@ func (t *Trace) extractEncoders() []EncoderInfo {
 	// If no encoder labels, create synthetic entries based on kernel count
 	if len(encoders) == 0 && len(t.KernelNames) > 0 {
 		enc := EncoderInfo{
-			Index: 0,
-			Label: "ComputeEncoder",
+			Index:  0,
+			Label:  "ComputeEncoder",
+			Source: EncoderSourceSynthetic,
 		}
 		encoders = append(encoders, enc)
 	}
