@@ -42,6 +42,11 @@ type kernelUsageStats struct {
 }
 
 func runAnalyzeUsage(cmd *cobra.Command, args []string) error {
+	format, err := normalizeAnalyzeFormat(analyzeFormat)
+	if err != nil {
+		return err
+	}
+
 	tracePath := args[0]
 	t, err := trace.Open(tracePath)
 	if err != nil {
@@ -55,7 +60,7 @@ func runAnalyzeUsage(cmd *cobra.Command, args []string) error {
 	}
 	bufferUsage := collectAnalyzeUsage(events)
 
-	if analyzeFormat == "json" {
+	if format == "json" {
 		type kernelUsage struct {
 			Name  string `json:"name"`
 			Count int    `json:"count"`
@@ -86,7 +91,7 @@ func runAnalyzeUsage(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	if analyzeFormat == "dot" {
+	if format == "dot" {
 		return writeAnalyzeUsageDOT(cmd.OutOrStdout(), bufferUsage)
 	}
 
@@ -103,6 +108,15 @@ func runAnalyzeUsage(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+func normalizeAnalyzeFormat(format string) (string, error) {
+	switch format {
+	case "text", "dot", "json":
+		return format, nil
+	default:
+		return "", fmt.Errorf("unknown analyze-usage format %q", format)
+	}
 }
 
 func collectAnalyzeUsage(events []trace.DependencyEvent) map[uint64]*usageStats {

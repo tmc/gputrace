@@ -62,6 +62,11 @@ func init() {
 }
 
 func runBuffers(cmd *cobra.Command, args []string) error {
+	opts, err := validateBuffersOptions(buffersFormat, buffersSort, buffersMinSize, buffersInspect, buffersInspectBytes, buffersInspectFormat)
+	if err != nil {
+		return err
+	}
+
 	tracePath := args[0]
 
 	// Verify trace file exists
@@ -77,7 +82,7 @@ func runBuffers(cmd *cobra.Command, args []string) error {
 
 	// If --inspect is specified, handle buffer inspection
 	if buffersInspect != "" {
-		return inspectBuffer(tracePath, buffersInspect, buffersInspectBytes, buffersInspectFormat)
+		return inspectBuffer(tracePath, buffersInspect, opts.inspectBytes, opts.inspectFormat)
 	}
 
 	// Extract buffer information
@@ -86,21 +91,11 @@ func runBuffers(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to extract buffer info: %w", err)
 	}
 
-	// Parse minimum size if specified
-	minSize := uint64(0)
-	if buffersMinSize != "" {
-		parsed, err := parseSize(buffersMinSize)
-		if err != nil {
-			return fmt.Errorf("invalid min-size: %w", err)
-		}
-		minSize = parsed
-	}
-
 	// Filter by minimum size
-	if minSize > 0 {
+	if opts.minSize > 0 {
 		filtered := make([]BufferInfo, 0, len(buffers))
 		for _, buf := range buffers {
-			if buf.Size >= minSize {
+			if buf.Size >= opts.minSize {
 				filtered = append(filtered, buf)
 			}
 		}
@@ -108,16 +103,87 @@ func runBuffers(cmd *cobra.Command, args []string) error {
 	}
 
 	// Sort buffers
-	sortBuffers(buffers, buffersSort)
+	sortBuffers(buffers, opts.sort)
 
 	// Format and display
-	switch buffersFormat {
+	switch opts.format {
 	case "json":
 		return formatBuffersJSON(buffers)
 	case "csv":
 		return formatBuffersCSV(buffers)
 	default:
 		return formatBuffersTable(buffers, trace)
+	}
+}
+
+type buffersOptions struct {
+	format        string
+	sort          string
+	minSize       uint64
+	inspectBytes  int
+	inspectFormat string
+}
+
+func validateBuffersOptions(format, sortBy, minSize, inspect string, inspectBytes int, inspectFormat string) (buffersOptions, error) {
+	format, err := normalizeBuffersFormat(format)
+	if err != nil {
+		return buffersOptions{}, err
+	}
+	sortBy, err = normalizeBuffersSort(sortBy)
+	if err != nil {
+		return buffersOptions{}, err
+	}
+
+	var minBytes uint64
+	if minSize != "" {
+		minBytes, err = parseSize(minSize)
+		if err != nil {
+			return buffersOptions{}, fmt.Errorf("invalid min-size: %w", err)
+		}
+	}
+	if inspect != "" {
+		if inspectBytes <= 0 {
+			return buffersOptions{}, fmt.Errorf("inspect bytes must be greater than zero")
+		}
+		inspectFormat, err = normalizeBuffersInspectFormat(inspectFormat)
+		if err != nil {
+			return buffersOptions{}, err
+		}
+	}
+
+	return buffersOptions{
+		format:        format,
+		sort:          sortBy,
+		minSize:       minBytes,
+		inspectBytes:  inspectBytes,
+		inspectFormat: inspectFormat,
+	}, nil
+}
+
+func normalizeBuffersFormat(format string) (string, error) {
+	switch format {
+	case "table", "json", "csv":
+		return format, nil
+	default:
+		return "", fmt.Errorf("invalid buffers format %q (must be table, json, or csv)", format)
+	}
+}
+
+func normalizeBuffersSort(sortBy string) (string, error) {
+	switch sortBy {
+	case "size", "id", "name":
+		return sortBy, nil
+	default:
+		return "", fmt.Errorf("invalid buffers sort %q (must be size, id, or name)", sortBy)
+	}
+}
+
+func normalizeBuffersInspectFormat(format string) (string, error) {
+	switch format {
+	case "hex", "float32", "int32", "uint32", "float16":
+		return format, nil
+	default:
+		return "", fmt.Errorf("invalid inspect format %q (must be hex, float32, int32, uint32, or float16)", format)
 	}
 }
 

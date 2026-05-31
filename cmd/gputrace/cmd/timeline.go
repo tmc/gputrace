@@ -69,6 +69,9 @@ func init() {
 
 func runTimeline(cmd *cobra.Command, args []string) error {
 	tracePath := args[0]
+	if err := validateTimelineFormat(timelineFormat); err != nil {
+		return err
+	}
 
 	// Verify trace file exists
 	if err := checkTraceFile(tracePath); err != nil {
@@ -130,11 +133,20 @@ func runTimeline(cmd *cobra.Command, args []string) error {
 		}
 		return nil
 	default:
-		return fmt.Errorf("unknown format: %s (supported: chrome, perfetto, html, json, text)", timelineFormat)
+		return validateTimelineFormat(timelineFormat)
 	}
 
 	printTimelineExportStatus(outputPath, timelineFormat, false)
 	return nil
+}
+
+func validateTimelineFormat(format string) error {
+	switch format {
+	case "chrome", "perfetto", "html", "json", "text":
+		return nil
+	default:
+		return fmt.Errorf("invalid timeline format %q (supported: chrome, perfetto, html, json, text)", format)
+	}
 }
 
 func timelineOutputPath(format, output string) string {
@@ -2257,6 +2269,10 @@ func exportHTML(timeline *Timeline, outputPath string) error {
 
 // runTimelineFromProfiler generates timeline from profiler-only traces (.gpuprofiler_raw without unsorted-capture).
 func runTimelineFromProfiler(tracePath string) error {
+	if err := validateTimelineFormat(timelineFormat); err != nil {
+		return err
+	}
+
 	// Find .gpuprofiler_raw directory
 	profilerDir := ""
 	if filepath.Ext(tracePath) == ".gpuprofiler_raw" {
@@ -2316,7 +2332,7 @@ func runTimelineFromProfiler(tracePath string) error {
 		}
 		return nil
 	default:
-		return fmt.Errorf("unknown format: %s (supported: chrome, perfetto, html, json, text)", timelineFormat)
+		return validateTimelineFormat(timelineFormat)
 	}
 
 	printTimelineExportStatus(outputPath, timelineFormat, true)

@@ -22,6 +22,11 @@ var mtlbExportFunctionsCmd = &cobra.Command{
 	Short: "Export function list to various formats",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		format, err := validateMTLBExportFormat(exportFormat)
+		if err != nil {
+			return err
+		}
+
 		tracePath := args[0]
 
 		files, err := mtlb.FindMTLBFiles(tracePath)
@@ -85,7 +90,7 @@ var mtlbExportFunctionsCmd = &cobra.Command{
 			finalFuncs = allFuncs
 		}
 
-		if exportFormat == "json" {
+		if format == "json" {
 			type funcData struct {
 				Name       string `json:"name"`
 				Dispatches int    `json:"dispatches,omitempty"`
@@ -101,7 +106,7 @@ var mtlbExportFunctionsCmd = &cobra.Command{
 			enc := json.NewEncoder(os.Stdout)
 			enc.SetIndent("", "  ")
 			return enc.Encode(output)
-		} else if exportFormat == "csv" {
+		} else if format == "csv" {
 			w := csv.NewWriter(os.Stdout)
 			header := []string{"Name"}
 			if exportUsage {
@@ -117,10 +122,19 @@ var mtlbExportFunctionsCmd = &cobra.Command{
 			}
 			w.Flush()
 			return w.Error()
-		} else {
-			return fmt.Errorf("unknown format: %s", exportFormat)
 		}
+
+		return nil
 	},
+}
+
+func validateMTLBExportFormat(format string) (string, error) {
+	switch format {
+	case "json", "csv":
+		return format, nil
+	default:
+		return "", fmt.Errorf("invalid mtlb export format %q (must be json or csv)", format)
+	}
 }
 
 func init() {

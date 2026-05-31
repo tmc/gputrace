@@ -17,6 +17,8 @@ var (
 	bufferTimelineOutput string
 )
 
+const minBufferTimelineWidth = 21
+
 var bufferTimelineCmd = &cobra.Command{
 	Use:   "buffer-timeline <trace.gputrace>",
 	Short: "Visualize buffer allocation and usage timeline",
@@ -66,6 +68,10 @@ func init() {
 func runBufferTimeline(cmd *cobra.Command, args []string) error {
 	tracePath := args[0]
 
+	if err := validateBufferTimelineWidth(bufferTimelineWidth); err != nil {
+		return err
+	}
+
 	// Verify trace file exists
 	if err := checkTraceFile(tracePath); err != nil {
 		return err
@@ -105,6 +111,13 @@ func runBufferTimeline(cmd *cobra.Command, args []string) error {
 	}
 
 	return writeBufferTimelineOutput(bufferTimelineOutput, output)
+}
+
+func validateBufferTimelineWidth(width int) error {
+	if width < minBufferTimelineWidth {
+		return fmt.Errorf("--width must be >= %d", minBufferTimelineWidth)
+	}
+	return nil
 }
 
 func writeBufferTimelineOutput(outputPath, output string) error {

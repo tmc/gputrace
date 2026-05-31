@@ -4,6 +4,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -88,6 +89,16 @@ func resolveXcodeProfileTraceOutputPath(outputPath string) (string, error) {
 	return abs, nil
 }
 
+func validateXcodeProfileOptions(timeout, wait time.Duration) error {
+	if timeout <= 0 {
+		return errors.New("--timeout must be > 0")
+	}
+	if wait < 0 {
+		return errors.New("--wait must be >= 0")
+	}
+	return nil
+}
+
 var collectXcodeProfileCmd = &cobra.Command{
 	Use:     "xcode-profile [trace_file]",
 	Aliases: []string{"xp", "collect-xcode-profile"},
@@ -129,6 +140,10 @@ Example:
 `,
 	Args: cobra.MaximumNArgs(1),
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		if err := validateXcodeProfileOptions(collectProfileTimeout, collectProfileWait); err != nil {
+			return err
+		}
+
 		// Start pprof server if requested
 		if collectProfilePprof {
 			port := "6060"

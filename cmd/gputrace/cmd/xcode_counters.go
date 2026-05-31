@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -58,6 +59,10 @@ func init() {
 }
 
 func runXcodeCounters(cmd *cobra.Command, args []string) error {
+	if err := validateXcodeCountersOptions(xcodeCountersFormat, xcodeCountersTop); err != nil {
+		return err
+	}
+
 	tracePath := args[0]
 
 	// Open trace
@@ -84,6 +89,18 @@ func runXcodeCounters(cmd *cobra.Command, args []string) error {
 	default:
 		return fmt.Errorf("unknown format: %s (use summary, detailed, metrics, or json)", xcodeCountersFormat)
 	}
+}
+
+func validateXcodeCountersOptions(format string, top int) error {
+	switch format {
+	case "summary", "detailed", "metrics", "json":
+	default:
+		return fmt.Errorf("unknown format: %s (valid: summary, detailed, metrics, json)", format)
+	}
+	if top < 0 {
+		return errors.New("--top must be >= 0")
+	}
+	return nil
 }
 
 func printXcodeSummary(csvData *gputrace.XcodeCounterData) error {
@@ -252,8 +269,8 @@ func filterTopEncoders(csvData *gputrace.XcodeCounterData, metricName string, to
 		return values[i].value > values[j].value
 	})
 
-	// Take top N
-	if top > len(values) {
+	// Take top N. Non-positive values mean no limit for direct callers.
+	if top <= 0 || top > len(values) {
 		top = len(values)
 	}
 

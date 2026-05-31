@@ -181,6 +181,70 @@ func TestTimelineOutputPath(t *testing.T) {
 	}
 }
 
+func TestValidateTimelineFormat(t *testing.T) {
+	for _, format := range []string{"chrome", "perfetto", "html", "json", "text"} {
+		t.Run(format, func(t *testing.T) {
+			if err := validateTimelineFormat(format); err != nil {
+				t.Fatalf("validateTimelineFormat(%q): %v", format, err)
+			}
+		})
+	}
+
+	tests := []struct {
+		name   string
+		format string
+		want   string
+	}{
+		{
+			name:   "empty",
+			format: "",
+			want:   `invalid timeline format "" (supported: chrome, perfetto, html, json, text)`,
+		},
+		{
+			name:   "uppercase",
+			format: "Chrome",
+			want:   `invalid timeline format "Chrome" (supported: chrome, perfetto, html, json, text)`,
+		},
+		{
+			name:   "unsupported",
+			format: "svg",
+			want:   `invalid timeline format "svg" (supported: chrome, perfetto, html, json, text)`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateTimelineFormat(tt.format)
+			if err == nil {
+				t.Fatalf("validateTimelineFormat(%q) = nil, want error", tt.format)
+			}
+			if got := err.Error(); got != tt.want {
+				t.Fatalf("validateTimelineFormat(%q) = %q, want %q", tt.format, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRunTimelineValidatesFormatBeforeTraceIO(t *testing.T) {
+	oldFormat := timelineFormat
+	oldOutput := timelineOutput
+	t.Cleanup(func() {
+		timelineFormat = oldFormat
+		timelineOutput = oldOutput
+	})
+
+	timelineFormat = "svg"
+	timelineOutput = ""
+	err := runTimeline(nil, []string{filepath.Join(t.TempDir(), "missing.gputrace")})
+	if err == nil {
+		t.Fatal("runTimeline = nil, want error")
+	}
+	want := `invalid timeline format "svg" (supported: chrome, perfetto, html, json, text)`
+	if got := err.Error(); got != want {
+		t.Fatalf("runTimeline error = %q, want %q", got, want)
+	}
+}
+
 func TestExportTextTimelineWritesOutputFile(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "timeline.txt")
 	if err := exportTextTimeline(&Timeline{}, out); err != nil {

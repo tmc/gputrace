@@ -125,6 +125,32 @@ func TestWriteBufferTimelineOutputStdout(t *testing.T) {
 	}
 }
 
+func TestRunBufferTimelineRejectsInvalidWidthBeforeTraceIO(t *testing.T) {
+	oldFormat := bufferTimelineFormat
+	oldOutput := bufferTimelineOutput
+	oldWidth := bufferTimelineWidth
+	t.Cleanup(func() {
+		bufferTimelineFormat = oldFormat
+		bufferTimelineOutput = oldOutput
+		bufferTimelineWidth = oldWidth
+	})
+
+	bufferTimelineFormat = "ascii"
+	bufferTimelineOutput = ""
+	tracePath := filepath.Join(t.TempDir(), "missing.gputrace")
+
+	for _, width := range []int{-1, minBufferTimelineWidth - 1} {
+		bufferTimelineWidth = width
+		err := runBufferTimeline(nil, []string{tracePath})
+		if err == nil {
+			t.Fatalf("runBufferTimeline width %d returned nil error", width)
+		}
+		if got, want := err.Error(), "--width must be >= 21"; got != want {
+			t.Fatalf("runBufferTimeline width %d error = %q, want %q", width, got, want)
+		}
+	}
+}
+
 func testBufferTimelineAnalysis() *gputrace.BufferTimelineAnalysis {
 	return &gputrace.BufferTimelineAnalysis{
 		BufferEvents: map[uint64]*gputrace.BufferLifecycle{

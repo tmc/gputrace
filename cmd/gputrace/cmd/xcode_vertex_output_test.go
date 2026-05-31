@@ -89,6 +89,37 @@ func TestVertexOutputStatusWriter(t *testing.T) {
 	}
 }
 
+func TestValidateVertexOutputDraw(t *testing.T) {
+	tests := []struct {
+		name    string
+		draw    int
+		wantErr string
+	}{
+		{name: "default", draw: 21},
+		{name: "first draw", draw: 1},
+		{name: "zero", draw: 0, wantErr: "--draw must be > 0"},
+		{name: "negative", draw: -1, wantErr: "--draw must be > 0"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateVertexOutputDraw(tt.draw)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("validateVertexOutputDraw(%d): %v", tt.draw, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("validateVertexOutputDraw(%d) succeeded, want %q", tt.draw, tt.wantErr)
+			}
+			if got := err.Error(); got != tt.wantErr {
+				t.Fatalf("validateVertexOutputDraw(%d) = %q, want %q", tt.draw, got, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestWriteVertexOutputStdoutText(t *testing.T) {
 	oldFile := vertexOutputFile
 	oldFormat := vertexOutputFormat

@@ -88,6 +88,11 @@ func runShaderSource(cmd *cobra.Command, args []string) error {
 	tracePath := args[0]
 	shaderName := args[1]
 
+	format, err := validateShaderSourceFormat(shaderSourceFormat)
+	if err != nil {
+		return err
+	}
+
 	// Verify trace file exists
 	if err := checkTraceFile(tracePath); err != nil {
 		return err
@@ -109,7 +114,7 @@ func runShaderSource(cmd *cobra.Command, args []string) error {
 	var output string
 	var data interface{}
 
-	switch shaderSourceFormat {
+	switch format {
 	case "text":
 		output = gputrace.FormatShaderSourceAttribution(attribution, shaderSourceHints)
 
@@ -118,9 +123,6 @@ func runShaderSource(cmd *cobra.Command, args []string) error {
 
 	case "json":
 		data = attribution
-
-	default:
-		return fmt.Errorf("unknown format: %s (valid: text, html, json)", shaderSourceFormat)
 	}
 
 	writer, closeOutput, err := createCommandOutput(shaderSourceOutput)
@@ -147,4 +149,13 @@ func runShaderSource(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+func validateShaderSourceFormat(format string) (string, error) {
+	switch format {
+	case "text", "html", "json":
+		return format, nil
+	default:
+		return "", fmt.Errorf("invalid shader-source format %q (must be text, html, or json)", format)
+	}
 }

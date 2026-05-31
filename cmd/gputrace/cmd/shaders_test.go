@@ -3,11 +3,76 @@ package cmd
 import (
 	"encoding/csv"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/tmc/gputrace"
 )
+
+func TestValidateShadersFormatAcceptsKnownValues(t *testing.T) {
+	for _, format := range []string{"text", "csv", "json"} {
+		t.Run(format, func(t *testing.T) {
+			if err := validateShadersFormat(format); err != nil {
+				t.Fatalf("validateShadersFormat(%q): %v", format, err)
+			}
+		})
+	}
+}
+
+func TestValidateShadersFormatRejectsUnknownValues(t *testing.T) {
+	tests := []struct {
+		name   string
+		format string
+		want   string
+	}{
+		{
+			name:   "empty",
+			format: "",
+			want:   `invalid shaders format "" (must be text, csv, or json)`,
+		},
+		{
+			name:   "xml",
+			format: "xml",
+			want:   `invalid shaders format "xml" (must be text, csv, or json)`,
+		},
+		{
+			name:   "uppercase",
+			format: "JSON",
+			want:   `invalid shaders format "JSON" (must be text, csv, or json)`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateShadersFormat(tt.format)
+			if err == nil {
+				t.Fatal("validateShadersFormat succeeded, want error")
+			}
+			if err.Error() != tt.want {
+				t.Fatalf("error = %q, want %q", err.Error(), tt.want)
+			}
+		})
+	}
+}
+
+func TestRunShadersValidatesFormatBeforeTraceIO(t *testing.T) {
+	oldFormat := shadersFormat
+	shadersFormat = "xml"
+	t.Cleanup(func() {
+		shadersFormat = oldFormat
+	})
+
+	missingTrace := filepath.Join(t.TempDir(), "missing.gputrace")
+	err := runShaders(nil, []string{missingTrace})
+	if err == nil {
+		t.Fatal("runShaders succeeded, want error")
+	}
+	want := `invalid shaders format "xml" (must be text, csv, or json)`
+	if err.Error() != want {
+		t.Fatalf("error = %q, want %q", err.Error(), want)
+	}
+}
 
 func TestWriteShadersNoCostHonorsJSONFormat(t *testing.T) {
 	report := testShaderMetricsReport()
