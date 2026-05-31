@@ -11,17 +11,20 @@ GPU trace directories contain:
 - `device-resources-0xADDRESS` - Device resource snapshots with MTSP format (1.6MB typical)
 - `delta-device-resources-0xADDRESS` - Delta/diff files (420B typical)
 - `MTLBuffer-XXXX-Y` - Metal buffer snapshots (Y=0 is data, Y=1,2 are symlinks)
-- `store0` - zlib-compressed file (typically all zeros - no timing data stored)
+- `store0` - zlib-compressed file (typically all zeros - no command timing data stored)
 - Hex-named files (e.g., `FE52ED69B41ABB45`) - Metal shader libraries/pipeline states
-- `.gpuprofiler_raw/` - (Optional) Hardware performance counters if profiling enabled (~6GB)
+- `.gpuprofiler_raw/` - (Optional) Profiler export data if profiling is enabled, including `streamData`, APSTimelineData timing, and hardware counter files
 
-### ⚠️ Important: No Timing Data in Records
+### ⚠️ Important: No Execution Timing in MTSP Records
 
 **MTSP records contain command structure, NOT execution timing.**
 
 The records document what GPU commands were submitted, but not how long they took to execute. For timing information:
 - Xcode Instruments: Replays the workload with performance counters
-- This library: Uses kdebug events, signposts, or synthetic estimates
+- Profiler exports: May include `.gpuprofiler_raw/streamData` with APSTimelineData `ReplayerGPUTime`, command-buffer timestamps, and encoder/dispatch cumulative offsets
+- This library: Uses streamData/APSTimelineData when present; otherwise kdebug events, signposts, or approximate fallbacks
+- Shader metrics expose `TimingSource` and `TimingApprox` so consumers can distinguish real profiler timing from heuristic/synthetic estimates
+- Direct IOReport channel timing is not treated as a supported timing source unless it can fail closed with fixture-backed duration semantics
 - See [INSTRUMENTS_TIMING_INVESTIGATION.md](./INSTRUMENTS_TIMING_INVESTIGATION.md) for details
 
 ### Metadata File Format
@@ -316,5 +319,7 @@ strings trace.gputrace/device-resources-* | grep MTLBuffer
 - `internal/analysis/stats.go` - Statistics computation
 - `internal/trace/kdebug.go` - Kernel debug trace parsing
 - `internal/trace/cs.go` - CS record parsing
+- `internal/counter/streamdata.go` - `.gpuprofiler_raw/streamData` and APSTimelineData timing parsing
+- `internal/shader/metrics.go` - Shader timing source labels and approximation flags
 - `cmd/gputrace/cmd/stats.go` - Command-line statistics tool
 - GPUDebugger.ideplugin - Apple's Xcode plugin with GTTimeline.framework for trace processing
