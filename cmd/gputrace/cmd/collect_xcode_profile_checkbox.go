@@ -11,6 +11,22 @@ import (
 
 var ensureCheckedTrace string
 
+func rejectUnsupportedXcodeProfileJSON(command string) error {
+	if !collectProfileJSON {
+		return nil
+	}
+	return fmt.Errorf("%s does not support --json", command)
+}
+
+func unsupportedXcodeProfileJSONArgs(command string, validate cobra.PositionalArgs) cobra.PositionalArgs {
+	return func(cmd *cobra.Command, args []string) error {
+		if err := rejectUnsupportedXcodeProfileJSON(command); err != nil {
+			return err
+		}
+		return validate(cmd, args)
+	}
+}
+
 func init() {
 	ensureCheckedCmd := &cobra.Command{
 		Use:    "ensure-checked <checkbox_title>",
@@ -21,7 +37,7 @@ func init() {
 Example:
   gputrace collect-xcode-profile ensure-checked "Profile after replay"
   gputrace collect-xcode-profile ensure-checked "Profile after replay" --trace my.gputrace`,
-		Args: cobra.ExactArgs(1),
+		Args: unsupportedXcodeProfileJSONArgs("ensure-checked", cobra.ExactArgs(1)),
 		RunE: runEnsureChecked,
 	}
 	ensureCheckedCmd.Flags().StringVar(&ensureCheckedTrace, "trace", "", "Target window by trace filename")
@@ -31,7 +47,7 @@ Example:
 		Use:    "toggle-checkbox <checkbox_title>",
 		Short:  "Toggle a checkbox",
 		Hidden: true,
-		Args:   cobra.ExactArgs(1),
+		Args:   unsupportedXcodeProfileJSONArgs("toggle-checkbox", cobra.ExactArgs(1)),
 		RunE:   runToggleCheckbox,
 	}
 	toggleCheckboxCmd.Flags().StringVar(&ensureCheckedTrace, "trace", "", "Target window by trace filename")
@@ -39,6 +55,10 @@ Example:
 }
 
 func runEnsureChecked(cmd *cobra.Command, args []string) error {
+	if err := rejectUnsupportedXcodeProfileJSON("ensure-checked"); err != nil {
+		return err
+	}
+
 	title := args[0]
 
 	if err := setupMacgo(); err != nil {
@@ -85,6 +105,10 @@ func runEnsureChecked(cmd *cobra.Command, args []string) error {
 }
 
 func runToggleCheckbox(cmd *cobra.Command, args []string) error {
+	if err := rejectUnsupportedXcodeProfileJSON("toggle-checkbox"); err != nil {
+		return err
+	}
+
 	title := args[0]
 
 	if err := setupMacgo(); err != nil {

@@ -43,7 +43,8 @@ func runReplay(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	fmt.Println("Starting replay...")
+	status := xcodeProfileStatusWriter()
+	fmt.Fprintln(status, "Starting replay...")
 
 	appAX, err := FindXcodeApp()
 	if err != nil {
@@ -60,8 +61,11 @@ func runReplay(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("replay failed: %w", err)
 	}
 
-	fmt.Print(Colorize("Replay started\n", ColorGreen))
-	return nil
+	fmt.Fprint(status, Colorize("Replay started\n", ColorGreen))
+	return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+		Action: "run-profile",
+		Target: traceFile,
+	})
 }
 
 func runWaitReplay(cmd *cobra.Command, args []string) error {
@@ -74,7 +78,8 @@ func runWaitReplay(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	fmt.Println("Waiting for replay to complete...")
+	status := xcodeProfileStatusWriter()
+	fmt.Fprintln(status, "Waiting for replay to complete...")
 
 	appAX, err := FindXcodeApp()
 	if err != nil {
@@ -92,6 +97,9 @@ func runWaitReplay(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("wait failed: %w", err)
 	}
 
-	fmt.Print(Colorize("Replay completed\n", ColorGreen))
-	return nil
+	fmt.Fprint(status, Colorize("Replay completed\n", ColorGreen))
+	return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+		Action: "wait-profile",
+		Target: traceFile,
+	})
 }

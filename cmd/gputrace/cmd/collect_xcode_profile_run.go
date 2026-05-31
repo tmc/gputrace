@@ -33,14 +33,13 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid input path: %w", err)
 	}
 
-	if collectProfileOutput == "" {
-		ext := filepath.Ext(inputPath)
-		base := inputPath[:len(inputPath)-len(ext)]
-		collectProfileOutput = base + "-perfdata" + ext
+	output := collectProfileOutput
+	if output == "" {
+		output = defaultXcodeProfileOutputPath(inputPath)
 	}
-	outputPath, err := filepath.Abs(collectProfileOutput)
+	outputPath, err := resolveXcodeProfileTraceOutputPath(output)
 	if err != nil {
-		return fmt.Errorf("invalid output path: %w", err)
+		return err
 	}
 
 	// Acquire lock to prevent concurrent profiling

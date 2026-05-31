@@ -18,7 +18,7 @@ Examples:
   gputrace xp list-menus              # List all menu bar items
   gputrace xp list-menus Editor       # List items in the Editor menu
   gputrace xp list-menus "Editor"     # Same as above`,
-		Args: cobra.MaximumNArgs(1),
+		Args: unsupportedXcodeProfileJSONArgs("list-menus", cobra.MaximumNArgs(1)),
 		RunE: runListMenus,
 	}
 	collectXcodeProfileCmd.AddCommand(listMenusCmd)
@@ -32,13 +32,17 @@ Examples:
 Examples:
   gputrace xp click-menu Editor "Export Encoder Counters…"
   gputrace xp click-menu File Export`,
-		Args: cobra.ExactArgs(2),
+		Args: unsupportedXcodeProfileJSONArgs("click-menu", cobra.ExactArgs(2)),
 		RunE: runClickMenu,
 	}
 	collectXcodeProfileCmd.AddCommand(clickMenuCmd)
 }
 
 func runListMenus(cmd *cobra.Command, args []string) error {
+	if err := rejectUnsupportedXcodeProfileJSON("list-menus"); err != nil {
+		return err
+	}
+
 	if err := setupMacgo(); err != nil {
 		return err
 	}
@@ -123,6 +127,10 @@ func runListMenus(cmd *cobra.Command, args []string) error {
 }
 
 func runClickMenu(cmd *cobra.Command, args []string) error {
+	if err := rejectUnsupportedXcodeProfileJSON("click-menu"); err != nil {
+		return err
+	}
+
 	if err := setupMacgo(); err != nil {
 		return err
 	}
