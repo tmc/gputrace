@@ -9,18 +9,13 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
-
-	"github.com/tmc/gputrace/internal/trace"
 )
 
 // TestCompareAggregationStrategies tests whether limiter values need to be summed/averaged.
 func TestCompareAggregationStrategies(t *testing.T) {
 	tracePath := filepath.Join("..", "..", "testdata", "traces", "01-single-encoder", "01-single-encoder-run1-perf.gputrace")
 
-	tr, err := trace.Open(tracePath)
-	if err != nil {
-		t.Skipf("Trace not available: %v", err)
-	}
+	tr := openPerfTraceOrSkip(t, tracePath)
 	defer tr.Close()
 
 	// Read CSV to get expected values
@@ -153,10 +148,7 @@ func TestCompareAggregationStrategies(t *testing.T) {
 func TestExamineRecordStructure(t *testing.T) {
 	tracePath := filepath.Join("..", "..", "testdata", "traces", "01-single-encoder", "01-single-encoder-run1-perf.gputrace")
 
-	tr, err := trace.Open(tracePath)
-	if err != nil {
-		t.Skipf("Trace not available: %v", err)
-	}
+	tr := openPerfTraceOrSkip(t, tracePath)
 	defer tr.Close()
 
 	entries, err := os.ReadDir(tr.Path)
