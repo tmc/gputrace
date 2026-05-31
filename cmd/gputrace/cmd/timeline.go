@@ -1798,7 +1798,7 @@ func timelineMetricsSource(metrics *gputrace.TimingMetrics) string {
 
 // exportChromeTracing exports timeline in Chrome tracing format.
 func exportChromeTracing(timeline *Timeline, outputPath string) error {
-	f, closeOutput, err := createTimelineOutput(outputPath)
+	f, closeOutput, err := createCommandOutput(outputPath)
 	if err != nil {
 		return err
 	}
@@ -2200,7 +2200,7 @@ func timelineTimingArgs(timing *TimelineTiming) map[string]interface{} {
 
 // exportTimelineJSON exports raw timeline data as JSON.
 func exportTimelineJSON(timeline *Timeline, outputPath string) error {
-	f, closeOutput, err := createTimelineOutput(outputPath)
+	f, closeOutput, err := createCommandOutput(outputPath)
 	if err != nil {
 		return err
 	}
@@ -2215,7 +2215,7 @@ func exportTimelineJSON(timeline *Timeline, outputPath string) error {
 
 // exportHTML exports an interactive standalone HTML timeline viewer.
 func exportHTML(timeline *Timeline, outputPath string) error {
-	f, closeOutput, err := createTimelineOutput(outputPath)
+	f, closeOutput, err := createCommandOutput(outputPath)
 	if err != nil {
 		return err
 	}
@@ -2233,17 +2233,6 @@ func exportHTML(timeline *Timeline, outputPath string) error {
 	html := generateInteractiveHTML(string(timelineJSON))
 	_, err = io.WriteString(f, html)
 	return err
-}
-
-func createTimelineOutput(outputPath string) (io.Writer, func() error, error) {
-	if outputPath == "/dev/stdout" {
-		return os.Stdout, nil, nil
-	}
-	f, err := os.Create(outputPath)
-	if err != nil {
-		return nil, nil, err
-	}
-	return f, f.Close, nil
 }
 
 // runTimelineFromProfiler generates timeline from profiler-only traces (.gpuprofiler_raw without unsorted-capture).

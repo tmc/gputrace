@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -122,37 +123,27 @@ func runShaderSource(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("unknown format: %s (valid: text, html, json)", shaderSourceFormat)
 	}
 
-	// Write output
-	if shaderSourceOutput != "" {
-		f, err := os.Create(shaderSourceOutput)
-		if err != nil {
-			return fmt.Errorf("failed to create output file: %w", err)
-		}
-		defer f.Close()
+	writer, closeOutput, err := createCommandOutput(shaderSourceOutput)
+	if err != nil {
+		return fmt.Errorf("failed to create output file: %w", err)
+	}
+	if closeOutput != nil {
+		defer closeOutput()
+	}
 
-		if output != "" {
-			if _, err := f.WriteString(output); err != nil {
-				return fmt.Errorf("failed to write output: %w", err)
-			}
-		} else {
-			encoder := json.NewEncoder(f)
-			encoder.SetIndent("", "  ")
-			if err := encoder.Encode(data); err != nil {
-				return fmt.Errorf("failed to write JSON: %w", err)
-			}
+	if output != "" {
+		if _, err := io.WriteString(writer, output); err != nil {
+			return fmt.Errorf("failed to write output: %w", err)
 		}
-
-		fmt.Fprintf(os.Stderr, "✓ Written to: %s\n", shaderSourceOutput)
 	} else {
-		if output != "" {
-			fmt.Print(output)
-		} else {
-			encoder := json.NewEncoder(os.Stdout)
-			encoder.SetIndent("", "  ")
-			if err := encoder.Encode(data); err != nil {
-				return fmt.Errorf("failed to write JSON: %w", err)
-			}
+		encoder := json.NewEncoder(writer)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(data); err != nil {
+			return fmt.Errorf("failed to write JSON: %w", err)
 		}
+	}
+	if shaderSourceOutput != "" {
+		fmt.Fprintf(os.Stderr, "✓ Written to: %s\n", shaderSourceOutput)
 	}
 
 	return nil
