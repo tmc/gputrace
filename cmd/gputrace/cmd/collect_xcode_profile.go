@@ -244,7 +244,7 @@ func setupMacgo() error {
 
 	if collectProfileNoBundle || os.Getenv("GPUTRACE_SKIP_MACGO") != "" {
 		verboseLog("setupMacgo: skipping macgo (--no-bundle or GPUTRACE_SKIP_MACGO)")
-		fmt.Printf("Skipping macgo (using current process identity)\n")
+		fmt.Fprintln(os.Stderr, "Skipping macgo (using current process identity)")
 		return nil
 	}
 
@@ -271,13 +271,13 @@ func setupMacgo() error {
 	verboseLog("setupMacgo: calling macgo.Start with BundleID=%s, UIMode=Accessory, DevMode=true", cfg.BundleID)
 
 	if err := macgo.Start(cfg); err != nil {
-		fmt.Printf(Colorize("macgo app bundle setup failed: %v\n", ColorRed), err)
-		fmt.Printf("\nThe app bundle is required for Accessibility permissions.\n")
-		fmt.Printf("Try these steps:\n")
-		fmt.Printf("  1. Reset TCC: tccutil reset Accessibility com.tmc.gputrace\n")
-		fmt.Printf("  2. Set debug: export MACGO_DEBUG=1\n")
-		fmt.Printf("  3. Re-run the command\n")
-		fmt.Printf("\nOr use --no-bundle if Terminal.app has Accessibility permission.\n")
+		fmt.Fprintf(os.Stderr, Colorize("macgo app bundle setup failed: %v\n", ColorRed), err)
+		fmt.Fprintln(os.Stderr, "\nThe app bundle is required for Accessibility permissions.")
+		fmt.Fprintln(os.Stderr, "Try these steps:")
+		fmt.Fprintln(os.Stderr, "  1. Reset TCC: tccutil reset Accessibility com.tmc.gputrace")
+		fmt.Fprintln(os.Stderr, "  2. Set debug: export MACGO_DEBUG=1")
+		fmt.Fprintln(os.Stderr, "  3. Re-run the command")
+		fmt.Fprintln(os.Stderr, "\nOr use --no-bundle if Terminal.app has Accessibility permission.")
 		return fmt.Errorf("macgo setup failed: %w", err)
 	}
 	verboseLog("setupMacgo: macgo.Start completed successfully")
@@ -343,10 +343,10 @@ func verifyAccessibilityPermission() error {
 
 // accessibilityPermissionError returns a helpful error for missing Accessibility permission.
 func accessibilityPermissionError() error {
-	fmt.Print(Colorize("Accessibility permission not granted.\n", ColorRed))
-	fmt.Printf("\nPlease grant Accessibility permission to gputrace in:\n")
-	fmt.Printf("  System Settings > Privacy & Security > Accessibility\n\n")
-	fmt.Printf("Then re-run the command.\n")
+	fmt.Fprint(os.Stderr, Colorize("Accessibility permission not granted.\n", ColorRed))
+	fmt.Fprintln(os.Stderr, "\nPlease grant Accessibility permission to gputrace in:")
+	fmt.Fprintln(os.Stderr, "  System Settings > Privacy & Security > Accessibility")
+	fmt.Fprintln(os.Stderr, "\nThen re-run the command.")
 	exec.Command("open", "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility").Run()
 	return fmt.Errorf("accessibility permission required")
 }
@@ -365,10 +365,10 @@ func checkPermissions() error {
 			return fmt.Errorf("accessibility permission not granted (use axperms -enable gputrace)")
 		}
 
-		fmt.Print(Colorize("Note: Accessibility check returned false. Triggering prompt...\n", ColorYellow))
+		fmt.Fprint(os.Stderr, Colorize("Note: Accessibility check returned false. Triggering prompt...\n", ColorYellow))
 		osa.PromptAccessibilityPermission()
 
-		fmt.Println("Waiting for Accessibility permission... (please click Allow in System Settings)")
+		fmt.Fprintln(os.Stderr, "Waiting for Accessibility permission... (please click Allow in System Settings)")
 		timeout := 60 * time.Second
 		deadline := time.Now().Add(timeout)
 
@@ -376,15 +376,15 @@ func checkPermissions() error {
 		for time.Now().Before(deadline) {
 			if osa.HasAccessibilityPermission() {
 				granted = true
-				fmt.Print(Colorize("\nAccessibility permission granted.\n", ColorGreen))
+				fmt.Fprint(os.Stderr, Colorize("\nAccessibility permission granted.\n", ColorGreen))
 				break
 			}
-			fmt.Print(".")
+			fmt.Fprint(os.Stderr, ".")
 			time.Sleep(1 * time.Second)
 		}
 
 		if !granted {
-			fmt.Println()
+			fmt.Fprintln(os.Stderr)
 			return fmt.Errorf("accessibility permission timed out")
 		}
 	}

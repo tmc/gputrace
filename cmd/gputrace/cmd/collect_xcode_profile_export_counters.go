@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -129,7 +130,7 @@ func runXcodeExportCounters(cmd *cobra.Command, args []string) error {
 	var menuErr error
 	for _, menuName := range menuNames {
 		if collectProfileDebug {
-			fmt.Printf("Trying menu: Editor > %s\n", menuName)
+			fmt.Fprintf(os.Stderr, "Trying menu: Editor > %s\n", menuName)
 		}
 		if err := ClickMenuItem(appAX, []string{"Editor", menuName}); err == nil {
 			menuErr = nil

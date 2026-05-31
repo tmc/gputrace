@@ -49,8 +49,8 @@ Example:
 		Use:    "list-tabs [trace_file]",
 		Short:  "List available tabs in the trace viewer",
 		Hidden: true,
-		Args:  cobra.MaximumNArgs(1),
-		RunE:  runListTabs,
+		Args:   cobra.MaximumNArgs(1),
+		RunE:   runListTabs,
 	}
 	collectXcodeProfileCmd.AddCommand(listTabsCmd)
 
@@ -232,7 +232,7 @@ func runSelectNavigatorItem(name string) error {
 	role := axString(el, "AXRole")
 	actions := axActionNames(el)
 	if collectProfileDebug {
-		fmt.Printf("Found element: role=%s, actions=%v\n", role, actions)
+		fmt.Fprintf(os.Stderr, "Found element: role=%s, actions=%v\n", role, actions)
 	}
 
 	// If we found a text element, find its parent row for actions
@@ -244,7 +244,7 @@ func runSelectNavigatorItem(name string) error {
 			role = axString(targetEl, "AXRole")
 			actions = axActionNames(targetEl)
 			if collectProfileDebug {
-				fmt.Printf("Using parent: role=%s, actions=%v\n", role, actions)
+				fmt.Fprintf(os.Stderr, "Using parent: role=%s, actions=%v\n", role, actions)
 			}
 		}
 	}
