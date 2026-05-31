@@ -1,18 +1,15 @@
 package counter
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/tmc/gputrace/internal/trace"
 )
 
 func TestXcodeCountersCSVParsing(t *testing.T) {
-	tracePath := "/tmp/llm-tool_1762220084.gputrace"
-
-	tr, err := trace.Open(tracePath)
-	if err != nil {
-		t.Skipf("Test trace not available: %v", err)
-	}
+	tr := openCountersCSVTrace(t)
 
 	// Try to parse the Xcode Counters.csv
 	csvData, err := ImportCountersCSV(tr)
@@ -40,12 +37,7 @@ func TestXcodeCountersCSVParsing(t *testing.T) {
 }
 
 func TestXcodeCSVMemoryBandwidth(t *testing.T) {
-	tracePath := "/tmp/llm-tool_1762220084.gputrace"
-
-	tr, err := trace.Open(tracePath)
-	if err != nil {
-		t.Skipf("Test trace not available: %v", err)
-	}
+	tr := openCountersCSVTrace(t)
 
 	csvData, err := ImportCountersCSV(tr)
 	if err != nil {
@@ -61,4 +53,31 @@ func TestXcodeCSVMemoryBandwidth(t *testing.T) {
 		t.Logf("  GPU Read BW: %.2f GB/s", enc.GPUReadBandwidth)
 		t.Logf("  GPU Write BW: %.2f GB/s", enc.GPUWriteBandwidth)
 	}
+}
+
+func openCountersCSVTrace(t *testing.T) *trace.Trace {
+	t.Helper()
+
+	tracePath := os.Getenv("GPUTRACE_COUNTERS_CSV_TRACE")
+	if tracePath == "" {
+		t.Skip("set GPUTRACE_COUNTERS_CSV_TRACE to run Xcode Counters.csv fixture tests")
+	}
+	tracePath = filepath.Clean(tracePath)
+
+	info, err := os.Stat(tracePath)
+	if err != nil {
+		t.Fatalf("GPUTRACE_COUNTERS_CSV_TRACE=%q is not accessible: %v", tracePath, err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("GPUTRACE_COUNTERS_CSV_TRACE=%q must point to a .gputrace directory", tracePath)
+	}
+	if filepath.Ext(tracePath) != ".gputrace" {
+		t.Fatalf("GPUTRACE_COUNTERS_CSV_TRACE=%q must point to a .gputrace directory", tracePath)
+	}
+
+	tr, err := trace.Open(tracePath)
+	if err != nil {
+		t.Fatalf("open trace from GPUTRACE_COUNTERS_CSV_TRACE=%q: %v", tracePath, err)
+	}
+	return tr
 }

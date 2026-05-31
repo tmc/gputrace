@@ -3,7 +3,6 @@
 package mtlb
 
 import (
-	"os"
 	"sort"
 	"testing"
 
@@ -14,19 +13,7 @@ import (
 // TestMTLBParserAgainstMetal validates that our MTLB parser extracts the same
 // function names as Metal's native library loading APIs.
 func TestMTLBParserAgainstMetal(t *testing.T) {
-	// Path to a real MTLB file from a GPU trace
-	mtlbPath := "/tmp/mlx-lm-generate_tokens_8_to_9.gputrace/671438C4BF69309E"
-
-	// Skip if file doesn't exist
-	if _, err := os.Stat(mtlbPath); os.IsNotExist(err) {
-		t.Skipf("MTLB test file not found: %s", mtlbPath)
-	}
-
-	// Read the file
-	data, err := os.ReadFile(mtlbPath)
-	if err != nil {
-		t.Fatalf("Failed to read MTLB file: %v", err)
-	}
+	data := loadMTLBTestData(t)
 
 	// Parse with our parser
 	mtlb, err := ParseMTLB(data)
