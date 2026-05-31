@@ -153,6 +153,14 @@ func exportTextTimeline(timeline *Timeline) error {
 		return nil
 	}
 
+	if timeline.Timing != nil && timeline.Timing.EncoderTimingSource != "" {
+		sourceKind := "measured"
+		if timeline.Timing.EncoderTimingApproximate {
+			sourceKind = "approximate"
+		}
+		fmt.Printf("Timing source: %s (%s)\n", timeline.Timing.EncoderTimingSource, sourceKind)
+	}
+
 	// Find command buffer events
 	var cbs []TimelineEvent
 	for _, event := range timeline.Events {
@@ -278,16 +286,18 @@ type Timeline struct {
 
 // TimelineTiming summarizes the timing sources that Xcode and gputrace expose.
 type TimelineTiming struct {
-	EncoderSpanNs         uint64  `json:"encoder_span_ns,omitempty"`
-	DispatchSpanNs        uint64  `json:"dispatch_span_ns,omitempty"`
-	EffectiveGPUTimeNs    *uint64 `json:"effective_gpu_time_ns,omitempty"`
-	CommandBufferActiveNs uint64  `json:"command_buffer_active_time_ns,omitempty"`
-	CommandBufferWallNs   uint64  `json:"command_buffer_wall_time_ns,omitempty"`
-	RestoreActiveNs       uint64  `json:"restore_active_time_ns,omitempty"`
-	RestoreWallNs         uint64  `json:"restore_wall_time_ns,omitempty"`
-	DisplayDurationNs     uint64  `json:"display_duration_ns,omitempty"`
-	DisplayDurationSource string  `json:"display_duration_source,omitempty"`
-	TimingSource          string  `json:"timing_source,omitempty"`
+	EncoderSpanNs            uint64  `json:"encoder_span_ns,omitempty"`
+	DispatchSpanNs           uint64  `json:"dispatch_span_ns,omitempty"`
+	EffectiveGPUTimeNs       *uint64 `json:"effective_gpu_time_ns,omitempty"`
+	CommandBufferActiveNs    uint64  `json:"command_buffer_active_time_ns,omitempty"`
+	CommandBufferWallNs      uint64  `json:"command_buffer_wall_time_ns,omitempty"`
+	RestoreActiveNs          uint64  `json:"restore_active_time_ns,omitempty"`
+	RestoreWallNs            uint64  `json:"restore_wall_time_ns,omitempty"`
+	DisplayDurationNs        uint64  `json:"display_duration_ns,omitempty"`
+	DisplayDurationSource    string  `json:"display_duration_source,omitempty"`
+	TimingSource             string  `json:"timing_source,omitempty"`
+	EncoderTimingSource      string  `json:"encoder_timing_source,omitempty"`
+	EncoderTimingApproximate bool    `json:"encoder_timing_approximate"`
 }
 
 // TimelineEvent represents a single event in the timeline.
@@ -384,24 +394,22 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 	_ = sourceMapper.IndexShaderSources()
 	_ = sourceMapper.IndexTraceBundleSources(trace.Path)
 
-	// Try to get real timing from profiler data first (streamData plist)
-	profilerTimings, totalTimeUs, profilerErr := gputrace.ExtractEncoderTimingsFromProfiler(trace)
-	useProfilerTiming := profilerErr == nil && len(profilerTimings) > 0
-
 	// Get real encoder labels from ParseComputeEncoders (primary source for labels)
 	computeEncoders, _ := trace.ParseComputeEncoders()
 
-	// Extract timing metrics (fallback)
+	// Extract timing metrics. This records whether encoder timings came from
+	// measured profiler data or approximate extracted/synthetic fallback data.
 	extractor := gputrace.NewTimingMetricsExtractor(trace)
 	metrics, err := extractor.Extract()
 	if err != nil {
 		return nil, fmt.Errorf("extract timing: %w", err)
 	}
+	useProfilerTiming := timelineMetricsSource(metrics) == "profiler"
 
-	// If we have real profiler timing, use it
+	// If TimingMetrics selected profiler timing, use it as measured timing.
 	if useProfilerTiming {
 		// Calculate total duration
-		timeline.Duration = uint64(totalTimeUs) * 1000 // Convert µs to ns
+		timeline.Duration = uint64(metrics.TotalDuration)
 		timeline.StartTime = 0
 		timeline.EndTime = timeline.Duration
 
@@ -414,14 +422,16 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 			}
 		}
 
-		// Build timeline from profiler timing
-		var currentTimeNs uint64
-		for i, pt := range profilerTimings {
-			durationNs := uint64(pt.DurationMicros) * 1000 // Convert µs to ns
-			startTimeNs := currentTimeNs
-			endTimeNs := startTimeNs + durationNs
+		// Build timeline from profiler timing selected by TimingMetrics.
+		for i, et := range metrics.EncoderTimings {
+			durationNs := et.DurationNs
+			startTimeNs := et.StartTimestamp
+			endTimeNs := et.EndTimestamp
+			if endTimeNs <= startTimeNs {
+				endTimeNs = startTimeNs + durationNs
+			}
 
-			label := pt.Label
+			label := et.Label
 			if label == "" && i < len(computeEncoders) {
 				label = computeEncoders[i].Label
 			}
@@ -452,12 +462,10 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 					"index":       i,
 					"duration_ms": float64(durationNs) / 1e6,
 					"duration_us": float64(durationNs) / 1e3,
-					"real_timing": true,
 				},
 			}
+			addTimingMetricsEventArgs(event.Args, metrics)
 			timeline.Events = append(timeline.Events, event)
-
-			currentTimeNs = endTimeNs
 		}
 	} else {
 		// Fall back to synthetic/heuristic timing
@@ -531,6 +539,7 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 						"duration_us": float64(duration) / 1e3,
 					},
 				}
+				addTimingMetricsEventArgs(event.Args, metrics)
 				timeline.Events = append(timeline.Events, event)
 			}
 		} else {
@@ -560,10 +569,12 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 						"duration_us": float64(encoder.DurationNs) / 1e3,
 					},
 				}
+				addTimingMetricsEventArgs(event.Args, metrics)
 				timeline.Events = append(timeline.Events, event)
 			}
 		}
 	}
+	annotateTimelineWithTimingMetrics(timeline, metrics)
 
 	// Add shader/kernel events. Prefer streamData dispatches so the Shaders lane
 	// matches Xcode's pipeline table instead of duplicating whole encoder spans.
@@ -1745,6 +1756,38 @@ func timelineTimingFromStats(stats *counter.StreamDataStats) *TimelineTiming {
 	return timing
 }
 
+func annotateTimelineWithTimingMetrics(timeline *Timeline, metrics *gputrace.TimingMetrics) {
+	source := timelineMetricsSource(metrics)
+	if timeline == nil || source == "" {
+		return
+	}
+	if timeline.Timing == nil {
+		timeline.Timing = &TimelineTiming{}
+	}
+	timeline.Timing.EncoderTimingSource = source
+	timeline.Timing.EncoderTimingApproximate = metrics.TimingApproximate
+	if timeline.Timing.EncoderSpanNs == 0 && metrics.TotalDuration > 0 {
+		timeline.Timing.EncoderSpanNs = uint64(metrics.TotalDuration)
+	}
+}
+
+func addTimingMetricsEventArgs(args map[string]interface{}, metrics *gputrace.TimingMetrics) {
+	source := timelineMetricsSource(metrics)
+	if args == nil || source == "" {
+		return
+	}
+	args["timing_source"] = source
+	args["timing_approximate"] = metrics.TimingApproximate
+	args["real_timing"] = !metrics.TimingApproximate
+}
+
+func timelineMetricsSource(metrics *gputrace.TimingMetrics) string {
+	if metrics == nil {
+		return ""
+	}
+	return fmt.Sprint(metrics.TimingSource)
+}
+
 // exportChromeTracing exports timeline in Chrome tracing format.
 func exportChromeTracing(timeline *Timeline, outputPath string) error {
 	f, err := os.Create(outputPath)
@@ -2095,6 +2138,10 @@ func timelineXcodeMetricsArgs(timeline *Timeline) map[string]interface{} {
 	if timeline.Timing != nil {
 		args["display_duration_source"] = timeline.Timing.DisplayDurationSource
 		args["timing_source"] = timeline.Timing.TimingSource
+		if timeline.Timing.EncoderTimingSource != "" {
+			args["encoder_timing_source"] = timeline.Timing.EncoderTimingSource
+			args["encoder_timing_approximate"] = timeline.Timing.EncoderTimingApproximate
+		}
 		args["has_effective_gpu_time"] = timeline.Timing.EffectiveGPUTimeNs != nil
 	} else {
 		args["has_effective_gpu_time"] = false
@@ -2128,6 +2175,10 @@ func timelineTimingArgs(timing *TimelineTiming) map[string]interface{} {
 		"display_duration_ns":           timing.DisplayDurationNs,
 		"display_duration_source":       timing.DisplayDurationSource,
 		"timing_source":                 timing.TimingSource,
+	}
+	if timing.EncoderTimingSource != "" {
+		args["encoder_timing_source"] = timing.EncoderTimingSource
+		args["encoder_timing_approximate"] = timing.EncoderTimingApproximate
 	}
 	if timing.EffectiveGPUTimeNs != nil {
 		args["effective_gpu_time_ns"] = *timing.EffectiveGPUTimeNs
@@ -2255,6 +2306,11 @@ func buildTimelineFromProfilerData(tracePath string, stats *counter.StreamDataSt
 		APICallseq: make([]APICall, 0),
 		Timing:     timelineTimingFromStats(stats),
 	}
+	if timeline.Timing == nil {
+		timeline.Timing = &TimelineTiming{}
+	}
+	timeline.Timing.EncoderTimingSource = "profiler"
+	timeline.Timing.EncoderTimingApproximate = false
 
 	// Get timebase from timeline info
 	var timebaseNumer, timebaseDenom uint64 = 125, 3 // Default
@@ -2340,10 +2396,12 @@ func buildTimelineFromProfilerData(tracePath string, stats *counter.StreamDataSt
 			ProcessID: 1,
 			ThreadID:  1 + (i % 2),
 			Args: map[string]interface{}{
-				"index":       i,
-				"duration_ms": float64(durationNs) / 1e6,
-				"duration_us": float64(durationNs) / 1e3,
-				"real_timing": true,
+				"index":              i,
+				"duration_ms":        float64(durationNs) / 1e6,
+				"duration_us":        float64(durationNs) / 1e3,
+				"timing_source":      "profiler",
+				"timing_approximate": false,
+				"real_timing":        true,
 			},
 		}
 		timeline.Events = append(timeline.Events, event)

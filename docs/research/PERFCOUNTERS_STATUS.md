@@ -111,7 +111,8 @@ func (t *Trace) GetDispatchCountMethod() string
 
 **Shader Metrics Integration:**
 - `FormatShadersXcodeStyle()` uses real register data when available
-- Automatic fallback to estimates with "(est)" marker
+- Missing hardware counter/register fields remain absent or source-labelled;
+  heuristic/synthetic timing paths report `TimingSource` and `TimingApprox`
 - `formatSpilledBytes()` helper for human-readable output
 
 **CLI Command:**
@@ -259,10 +260,12 @@ func parseCounterRecord(data []byte, offset int64, gpuFamily string) *CounterRec
 
 **These components can be used now:**
 - `HasPerfCounters()` - Detection works
-- `ParsePerfCounters()` - Framework complete
+- `ParsePerfCounters()` - Framework complete and fail-closed for missing or
+  invalid `.gpuprofiler_raw` counter records
 - `GetRegisterDataForShader()` - API ready (returns false until fields extracted)
 - `correlateShaderNames()` - Correlation works
-- Shader metrics integration - Falls back gracefully to estimates
+- Shader metrics integration - Uses parsed counters and streamData where
+  available; heuristic or synthetic timing is explicitly source-labelled
 
 ### Requires More Validated Fixtures
 
@@ -430,7 +433,10 @@ kernel invocation extraction and streamData-backed register/spill extraction,
 but exact offsets beyond `0x0064` should only be promoted after fixture-backed
 CSV validation.
 
-**Zero breaking changes.** All code gracefully handles missing counter data, falling back to estimates with clear "(est)" markers.
+**Zero breaking changes.** Missing or invalid counter data is not silently
+promoted to parsed hardware counters: `ParsePerfCounters` fails closed, and
+downstream heuristic or synthetic timing/export fallbacks are explicitly
+source-labelled rather than presented as counter-derived values.
 
 **Ready for immediate use with known limits.** Detection, correlation, CSV
 enhancement, deterministic counter-file mapping, and streamData enrichment work

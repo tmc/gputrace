@@ -666,16 +666,20 @@ func getFloat(m map[string]interface{}, key string) float64 {
 }
 
 // ExtractEncoderTimingsFromProfiler extracts per-encoder timing data from the trace's
-// .gpuprofiler_raw directory. This provides accurate GPU timing to replace synthetic estimates.
+// .gpuprofiler_raw/streamData. streamData carries replay profiler timing, and
+// ParseStreamData also records APSTimelineData-derived timing source details
+// such as ReplayerGPUTime and command-buffer timestamps when they are present.
 //
 // The returned timings are indexed to match ParseComputeEncoders() output order.
-// Call this function first; if it fails, fall back to TimingMetricsExtractor.
+// Call this function first for profiled exports. If it fails, callers should
+// fall back to TimingMetricsExtractor and preserve its approximate timing labels
+// for kdebug/signpost heuristics or synthetic estimates.
 //
 // Usage:
 //
 //	timings, err := counter.ExtractEncoderTimingsFromProfiler(trace)
 //	if err != nil {
-//	    // Fall back to synthetic timing
+//	    // Fall back to approximate kdebug/signpost or synthetic timing.
 //	}
 func ExtractEncoderTimingsFromProfiler(t *trace.Trace) ([]EncoderTimingInfo, int, error) {
 	// Find .gpuprofiler_raw directory
@@ -701,7 +705,9 @@ func ExtractEncoderTimingsFromProfiler(t *trace.Trace) ([]EncoderTimingInfo, int
 		}
 	}
 
-	// Parse streamData for timing
+	// Parse streamData for timing. APSTimelineData, when present, is captured
+	// in stats.TimingSource and effective/command-buffer totals; this helper
+	// returns encoderInfoData-derived per-encoder timings for existing callers.
 	stats, err := ParseStreamData(perfDir)
 	if err != nil {
 		return nil, 0, fmt.Errorf("parse streamData: %w", err)

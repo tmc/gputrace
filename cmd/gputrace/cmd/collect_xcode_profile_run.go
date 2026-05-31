@@ -747,6 +747,16 @@ func showPerformanceBeforeExport(windowAX uintptr) (bool, error) {
 	return true, nil
 }
 
+// targetedShowPerformanceFound is a found-only marker for hasShowPerformance.
+// That traversal confirms the button is present but does not return an AX
+// element handle, so callers must not pass this value to IsElementEnabled or
+// AXPress.
+const targetedShowPerformanceFound uintptr = 1
+
+func isTargetedShowPerformanceFound(button uintptr) bool {
+	return button == targetedShowPerformanceFound
+}
+
 func waitForReplayComplete(appAX uintptr, traceFileName string, initialWindowAX uintptr, timeout time.Duration) error {
 	start := time.Now()
 	currentWindow := initialWindowAX
@@ -768,7 +778,7 @@ func waitForReplayComplete(appAX uintptr, traceFileName string, initialWindowAX 
 			return 0
 		}
 		if name == "Show Performance" && hasShowPerformance(w) {
-			return 1 // placeholder non-zero to indicate found
+			return targetedShowPerformanceFound
 		}
 		return findButtonBFS(w, name, buttonSearchDepth)
 	}
@@ -913,14 +923,18 @@ func waitForReplayComplete(appAX uintptr, traceFileName string, initialWindowAX 
 			return nil
 		}
 		// Also try findButtonOrFail as fallback (searches all windows with deeper BFS)
-		// Note: for Show Performance, findButton returns 1 (placeholder) when found via targeted traversal,
-		// so we don't check IsElementEnabled (which would fail on the placeholder value)
+		// findButton can return targetedShowPerformanceFound for this button.
+		// That sentinel is not an AX element, so skip IsElementEnabled here.
 		showPerfBtn, err := findButtonOrFail("Show Performance")
 		if err != nil {
 			return err
 		}
 		if showPerfBtn != 0 {
-			verboseLog("waitForReplayComplete: Show Performance button found - complete")
+			if isTargetedShowPerformanceFound(showPerfBtn) {
+				verboseLog("waitForReplayComplete: Show Performance button found (targeted sentinel) - complete")
+			} else {
+				verboseLog("waitForReplayComplete: Show Performance button found - complete")
+			}
 			return nil
 		}
 
