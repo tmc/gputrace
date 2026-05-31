@@ -57,6 +57,10 @@ func init() {
 }
 
 func runShaders(cmd *cobra.Command, args []string) error {
+	if err := validateShadersFormat(shadersFormat); err != nil {
+		return err
+	}
+
 	tracePath := args[0]
 
 	// Verify trace file exists
@@ -88,6 +92,19 @@ func runShaders(cmd *cobra.Command, args []string) error {
 
 	// Profiler-only: use dispatch duration for cost
 	return runShadersFromProfiler(tracePath)
+}
+
+func validateShadersFormat(format string) error {
+	switch format {
+	case "text", "csv", "json":
+		return nil
+	default:
+		return invalidShadersFormatError(format)
+	}
+}
+
+func invalidShadersFormatError(format string) error {
+	return fmt.Errorf("invalid shaders format %q (must be text, csv, or json)", format)
 }
 
 // checkUnsortedCapture checks if unsorted-capture file or directory exists.
@@ -127,7 +144,7 @@ func writeShadersNoCost(report *gputrace.ShaderMetricsReport, tracePath string) 
 	case "text":
 		return formatShadersNoCostText(os.Stdout, report)
 	default:
-		return fmt.Errorf("invalid format: %s (must be text, csv, or json)", shadersFormat)
+		return invalidShadersFormatError(shadersFormat)
 	}
 }
 
@@ -166,7 +183,7 @@ func runShadersFromFullTrace(tracePath string) error {
 				}
 				return gputrace.FormatShadersSimple(os.Stdout, report)
 			default:
-				return fmt.Errorf("invalid format: %s (must be text, csv, or json)", shadersFormat)
+				return invalidShadersFormatError(shadersFormat)
 			}
 		}
 		// Fall through to legacy method if combined approach fails
@@ -212,7 +229,7 @@ func runShadersFromFullTrace(tracePath string) error {
 			gputrace.FormatShadersSimple(os.Stdout, report)
 		}
 	default:
-		return fmt.Errorf("invalid format: %s (must be text, csv, or json)", shadersFormat)
+		return invalidShadersFormatError(shadersFormat)
 	}
 
 	return nil
@@ -429,7 +446,7 @@ func runShadersFromProfiler(tracePath string) error {
 			gputrace.FormatShadersSimple(os.Stdout, report)
 		}
 	default:
-		return fmt.Errorf("invalid format: %s (must be text, csv, or json)", shadersFormat)
+		return invalidShadersFormatError(shadersFormat)
 	}
 
 	return nil
