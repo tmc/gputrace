@@ -362,7 +362,7 @@ func parseInitCalls(data []byte, startCallNum int, csRecords []FunctionRecord, l
 				Offset:     record.Offset + 1,
 			})
 			callNum++
-		} else if strings.Contains(strings.ToLower(name), "_") || (name[0] >= 'a' && name[0] <= 'z') {
+		} else if isLikelyInitFunctionLabel(name) {
 			// Likely a function name (has underscores or starts lowercase)
 			// Only create init call if this looks like a library address (top 32 bits >= 0x7)
 			// This filters out the runtime function address (0x101...) and keeps only the CS record address (0x704...)
@@ -491,6 +491,17 @@ func parseInitCalls(data []byte, startCallNum int, csRecords []FunctionRecord, l
 	callNum = startCallNum + len(calls)
 
 	return calls, callNum, nil
+}
+
+func isLikelyInitFunctionLabel(name string) bool {
+	if name == "" {
+		return false
+	}
+	switch strings.ToLower(name) {
+	case "fences":
+		return false
+	}
+	return strings.Contains(strings.ToLower(name), "_") || (name[0] >= 'a' && name[0] <= 'z')
 }
 
 // EncoderSection represents a compute encoder and its associated calls.
