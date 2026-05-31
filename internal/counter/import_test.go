@@ -8,6 +8,85 @@ import (
 	"github.com/tmc/gputrace/internal/trace"
 )
 
+func TestParseXcodeCountersCSVUsesHeaderColumns(t *testing.T) {
+	tests := []struct {
+		name              string
+		csv               string
+		wantIndex         int
+		wantFunctionIndex int
+		wantCommandBuffer string
+		wantEncoderLabel  string
+		wantALU           float64
+		wantInvocations   float64
+	}{
+		{
+			name: "debug_group",
+			csv: "Index,Encoder FunctionIndex,CommandBuffer Label,Debug Group,Encoder Label,,ALU Utilization,Kernel Invocations\n" +
+				"1,7,Command Buffer 0,root/group,kernel_add,,12.5,64\n",
+			wantIndex:         1,
+			wantFunctionIndex: 7,
+			wantCommandBuffer: "Command Buffer 0",
+			wantEncoderLabel:  "kernel_add",
+			wantALU:           12.5,
+			wantInvocations:   64,
+		},
+		{
+			name: "legacy_without_debug_group",
+			csv: "Index,Encoder FunctionIndex,CommandBuffer Label,Encoder Label,,ALU Utilization,Kernel Invocations\n" +
+				"2,8,Command Buffer 1,kernel_mul,,25,128\n",
+			wantIndex:         2,
+			wantFunctionIndex: 8,
+			wantCommandBuffer: "Command Buffer 1",
+			wantEncoderLabel:  "kernel_mul",
+			wantALU:           25,
+			wantInvocations:   128,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "Counters.csv")
+			if err := os.WriteFile(path, []byte(tt.csv), 0o666); err != nil {
+				t.Fatal(err)
+			}
+
+			data, err := ParseXcodeCountersCSV(nil, path)
+			if err != nil {
+				t.Fatalf("ParseXcodeCountersCSV: %v", err)
+			}
+			if len(data.Encoders) != 1 {
+				t.Fatalf("len(Encoders) = %d, want 1", len(data.Encoders))
+			}
+			if len(data.Metrics) != 2 || data.Metrics[0] != "ALU Utilization" || data.Metrics[1] != "Kernel Invocations" {
+				t.Fatalf("Metrics = %#v, want ALU Utilization and Kernel Invocations", data.Metrics)
+			}
+
+			enc := data.Encoders[0]
+			if enc.Index != tt.wantIndex || enc.FunctionIndex != tt.wantFunctionIndex {
+				t.Fatalf("index fields = (%d, %d), want (%d, %d)", enc.Index, enc.FunctionIndex, tt.wantIndex, tt.wantFunctionIndex)
+			}
+			if enc.CommandBufferLabel != tt.wantCommandBuffer {
+				t.Fatalf("CommandBufferLabel = %q, want %q", enc.CommandBufferLabel, tt.wantCommandBuffer)
+			}
+			if enc.EncoderLabel != tt.wantEncoderLabel {
+				t.Fatalf("EncoderLabel = %q, want %q", enc.EncoderLabel, tt.wantEncoderLabel)
+			}
+			if enc.Counters["ALU Utilization"] != tt.wantALU {
+				t.Fatalf("ALU Utilization = %v, want %v", enc.Counters["ALU Utilization"], tt.wantALU)
+			}
+			if enc.Counters["Kernel Invocations"] != tt.wantInvocations {
+				t.Fatalf("Kernel Invocations = %v, want %v", enc.Counters["Kernel Invocations"], tt.wantInvocations)
+			}
+			if _, ok := enc.Counters["Debug Group"]; ok {
+				t.Fatalf("Counters contains Debug Group metadata: %#v", enc.Counters)
+			}
+			if _, ok := enc.Counters[""]; ok {
+				t.Fatalf("Counters contains empty separator column: %#v", enc.Counters)
+			}
+		})
+	}
+}
+
 func TestXcodeCountersCSVParsing(t *testing.T) {
 	tr := openCountersCSVTrace(t)
 
