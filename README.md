@@ -110,8 +110,9 @@ The repository includes small canonical fixtures under `testdata/traces`:
 
 Some success paths require capabilities that are not shipped in the small in-repo fixtures:
 
-- `profiler` and perf-counter validation require traces with `.gpuprofiler_raw`
-  and Xcode `Counters.csv` exports
+- `profiler` requires profiled traces with `.gpuprofiler_raw/streamData`
+- perf-counter validation and CSV import require local `.gpuprofiler_raw`
+  counter records or Xcode `Counters.csv` exports
 - `shader-source` requires traces with source attribution data
 
 See [docs/TESTING.md](./docs/TESTING.md) for opt-in integration test

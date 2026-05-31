@@ -198,16 +198,14 @@ directory unless intentionally refreshing checked-in fixtures.
 ### Step 1: Baseline Comparison
 
 ```bash
-# Capture single encoder trace
+# Capture profiled local traces with Instruments first; the checked-in fixtures
+# are structural and do not include profiler streamData.
 .build/release/trace-generator 01-single-encoder
 # [Capture with Instruments]
 
-# Compare with the retained six-encoder fixture
+# Compare local profiled captures
 cd ../..
-gputrace diff \
-    testdata/traces/06-six-encoders/06-six-encoders-run1.gputrace \
-    testdata/traces/01-single-encoder/01-single-encoder-run1.gputrace \
-    --explain
+gputrace diff "$LOCAL_SIX_ENCODER_PERFDATA" "$LOCAL_SINGLE_ENCODER_PERFDATA" --explain
 ```
 
 **Key Question:** Does 1 encoder produce fewer counter files than 6 encoders?
@@ -316,7 +314,7 @@ make run-capture SCENARIO=01-single-encoder
 #    Arguments: 01-single-encoder
 
 # 4. Export and analyze
-#    Compare with existing LLM trace
+#    Compare with the retained six-encoder fixture or a local LLM capture
 
 # 5. Decide on next steps based on results
 ```
@@ -346,7 +344,7 @@ Check Metal shader syntax in `main.swift`. All shaders are inline in source.
 ## Next Steps
 
 1. **Immediate:** Capture baseline `01-single-encoder` trace
-2. **Compare:** With existing 6-encoder LLM trace
+2. **Compare:** With the retained six-encoder fixture or a local LLM capture
 3. **Decision:** Continue based on file count correlation
 4. **If promising:** Capture remaining scenarios
 5. **Analyze:** Compare checked-in and local captures to find field offsets
