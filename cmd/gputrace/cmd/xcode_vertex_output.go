@@ -72,6 +72,9 @@ func runVertexOutput(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := validateVertexOutputDraw(vertexOutputDrawCall); err != nil {
+		return err
+	}
 	statusOut := vertexOutputStatusWriter(jsonOutput, vertexOutputFile)
 
 	inputPath, err := filepath.Abs(args[0])
@@ -197,6 +200,13 @@ func runVertexOutput(cmd *cobra.Command, args []string) error {
 	}
 	if vertexOutputFile != "" {
 		fmt.Fprintf(statusOut, "  Wrote vertex output to %s\n", vertexOutputFile)
+	}
+	return nil
+}
+
+func validateVertexOutputDraw(draw int) error {
+	if draw <= 0 {
+		return errors.New("--draw must be > 0")
 	}
 	return nil
 }
