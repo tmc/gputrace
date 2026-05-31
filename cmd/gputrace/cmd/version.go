@@ -3,7 +3,6 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 	"github.com/tmc/gputrace/internal/buildinfo"
@@ -28,11 +27,11 @@ var versionCmd = &cobra.Command{
 			Date:    buildinfo.Date,
 		}
 		if versionJSON {
-			enc := json.NewEncoder(os.Stdout)
+			enc := json.NewEncoder(cmd.OutOrStdout())
 			enc.SetIndent("", "  ")
 			return enc.Encode(info)
 		}
-		_, err := fmt.Fprintf(os.Stdout, "gputrace %s (commit %s, built %s)\n", info.Version, info.Commit, info.Date)
+		_, err := fmt.Fprintf(cmd.OutOrStdout(), "gputrace %s (commit %s, built %s)\n", info.Version, info.Commit, info.Date)
 		return err
 	},
 }
