@@ -1,6 +1,7 @@
 # GPU Profiling APIs Discovered from GPUToolsReplayService
 
 **Investigation Date:** 2025-11-03
+**Implementation Status Reconciled:** 2026-05-31
 **Method:** Profiled GPUToolsReplayService.xpc with Instruments Time Profiler
 
 ## Executive Summary
@@ -219,91 +220,92 @@ IOReportIterate(channels, ^(IOReportChannelRef channel) {
 - Could potentially link against it (unsupported)
 - Provides same replay mechanism as Instruments
 
+## Current gputrace Timing Model
+
+This research explains how Xcode collects profiler data during replay. It should
+not be read as a pending implementation plan to derive shader timing directly
+from generic IOReport channels.
+
+Current gputrace timing behavior is source-labelled where it affects shader
+duration claims:
+
+- **Profiler traces:** `internal/counter/streamdata.go` parses
+  `.gpuprofiler_raw/streamData`. `StreamDataStats.TimingSource` identifies
+  `APSTimelineData ReplayerGPUTime`, `APSTimelineData Command Buffer Timestamps
+  active time`, or `encoderInfoData/gpuCommandInfoData cumulative offsets`.
+- **Shader metrics:** `internal/shader/metrics.go` prefers
+  `gpuCommandInfoData` per-dispatch durations and marks them as
+  `TimingSource: "streamData gpuCommandInfoData dispatch durations"` with
+  `TimingApprox: false`.
+- **Shader fallbacks:** if streamData dispatch timing is absent, shader metrics
+  use capture timestamp extraction (`timing.ExtractTimingData`), synthetic
+  kernel-name timing (`timing.GenerateSyntheticTiming`), or a thread-count
+  estimate. These are marked approximate through `TimingApprox: true`.
+- **Timing metrics:** `internal/timing/metrics.go` aggregates encoder timings
+  by trying `counter.ExtractEncoderTimingsFromProfiler` first, then capture
+  timestamp extraction, then synthetic timing. This path is useful for timing
+  reports, while the shader path is the source-labelled path for per-shader
+  duration claims.
+- **Raw counter fallback:** `internal/timing/profiler.go` can try kdebug GPU
+  execution intervals before using a low-confidence counter limiter heuristic.
+  That fallback is separate from direct IOReport channel enumeration.
+
+See [STREAMDATA_FORMAT.md](../STREAMDATA_FORMAT.md) for the documented
+`streamData` timing records and [README.md](../../README.md#gpu-timing-methodology)
+for the public timing methodology summary.
+
 ## Recommendations for gputrace
 
-### Option 1: Use IOReport (Recommended)
-- **Pros:** Public API, documented, stable
-- **Cons:** Less detailed than APS, requires active GPU
-- **Implementation:** Add IOReport-based timing to `timing_v2.go`
+### Option 1: Keep streamData/APSTimelineData as the supported profiler source
+- **Pros:** Captured with profiler traces, parseable offline, documented in this repo
+- **Cons:** Only present when the trace includes `.gpuprofiler_raw`
+- **Implementation:** Continue improving `internal/counter/streamdata.go` and the
+  shader timing-source labels in `internal/shader/metrics.go`
 
-### Option 2: Implement Metal Performance Counters
+### Option 2: Treat IOReport as research-only until proven by fixtures
+- **Pros:** Public API for channel discovery and coarse counter inspection
+- **Cons:** Channel enumeration alone does not map samples to dispatches,
+  encoders, or shader functions
+- **Implementation:** Do not add an IOReport timing source until a fixture-backed
+  parser proves per-dispatch or per-encoder correlation and can label confidence
+
+### Option 3: Implement Metal Performance Counters
 - **Pros:** Public Metal API, well-documented
 - **Cons:** Requires replay implementation
 - **API:** `MTLCounterSampleBuffer`, `MTLCounterSet`
-- **Implementation:** New `replay.go` module
-
-### Option 3: Parse .gpuprofiler_raw (If Available)
-- **Pros:** One-time parse, no replay needed
-- **Cons:** Only available if trace captured with counters
-- **Implementation:** Extend existing counter parsing code
+- **Implementation:** New replay/counter module, with explicit source labels
 
 ### Option 4: Runtime Hook APS APIs (Advanced)
 - **Pros:** Get exact data Instruments gets
 - **Cons:** Complex, fragile, unsupported
 - **Method:** Use `DYLD_INSERT_LIBRARIES` to intercept APS calls
 
-## Sample Code: Using IOReport
+## IOReport Channel Timing Status
 
-```go
-package gputrace
+The earlier sample-code note to iterate IOReport channels and extract timing is
+closed as a documentation correction. IOReport channel enumeration can discover
+available GPU or energy channels, but this repo does not currently have evidence
+that those generic channels provide per-dispatch shader durations or a stable
+mapping back to Metal encoders.
 
-/*
-#cgo LDFLAGS: -framework IOKit -framework CoreFoundation
-#include <IOKit/IOKitLib.h>
-#include <CoreFoundation/CoreFoundation.h>
+Any future IOReport implementation must fail closed unless it can provide:
 
-// Forward declare IOReport functions
-extern CFDictionaryRef IOReportCopyChannelsInCategories(
-    CFStringRef categories,
-    CFStringRef deviceID,
-    CFStringRef channelID,
-    CFDictionaryRef channelFilter
-);
-
-extern CFDictionaryRef IOReportCreateSubscription(
-    void *a,
-    CFDictionaryRef channels,
-    CFMutableDictionaryRef *outSub,
-    uint64_t,
-    CFTypeRef
-);
-*/
-import "C"
-import "unsafe"
-
-func GetGPUPerformanceChannels() error {
-    // Create category string for GPU
-    gpuCategory := C.CFStringCreateWithCString(
-        nil,
-        C.CString("GPU"),
-        C.kCFStringEncodingUTF8,
-    )
-    defer C.CFRelease(C.CFTypeRef(gpuCategory))
-
-    // Get all GPU performance channels
-    channels := C.IOReportCopyChannelsInCategories(
-        gpuCategory,
-        nil,  // All devices
-        nil,  // All channels
-        nil,  // No filter
-    )
-    if channels == nil {
-        return fmt.Errorf("failed to get GPU channels")
-    }
-    defer C.CFRelease(C.CFTypeRef(channels))
-
-    // TODO: Iterate channels and extract timing data
-
-    return nil
-}
-```
+1. Fixture-backed channel samples from a profiled replay
+2. A deterministic mapping from channel samples to dispatches, encoders, or
+   shader functions
+3. A `TimingSource`/confidence label consistent with the shader timing-source
+   model
 
 ## Next Steps
 
-1. **Experiment with IOReport** - Validate we can get useful GPU timing
-2. **Document MTLCounterSampleBuffer** - Research Metal's official profiling API
-3. **Create proof-of-concept** - Implement simple replay with counter collection
-4. **Update documentation** - Add findings to main README
+1. **Expand streamData fixtures** - Validate `APSTimelineData`,
+   `encoderInfoData`, and `gpuCommandInfoData` across Apple GPU generations
+2. **Expose timing provenance consistently** - Consider adding timing-source
+   metadata to `internal/timing.TimingMetrics`, matching the shader path
+3. **Research Metal counters separately** - Document `MTLCounterSampleBuffer`
+   only after replay/counter fixtures prove what can be measured
+4. **Keep IOReport claims narrow** - Treat IOReport as channel discovery until
+   evidence supports per-dispatch or per-encoder timing
 
 ## References
 
