@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -86,6 +87,112 @@ func TestExportChromeTracingIncludesTimingMetadata(t *testing.T) {
 	}
 	if !foundCoverage {
 		t.Fatal("missing Xcode Metrics Coverage event")
+	}
+}
+
+func TestGenerateTimelineAnnotatesSyntheticTimingSource(t *testing.T) {
+	tr := &gputrace.Trace{
+		Path:        timelineTimingSourceTraceDir(t),
+		KernelNames: []string{"block_softmax_float32"},
+	}
+
+	timeline, err := generateTimeline(tr)
+	if err != nil {
+		t.Fatalf("generateTimeline: %v", err)
+	}
+
+	if timeline.Timing == nil {
+		t.Fatal("timeline timing metadata is nil")
+	}
+	if got, want := timeline.Timing.EncoderTimingSource, "synthetic"; got != want {
+		t.Fatalf("EncoderTimingSource = %q, want %q", got, want)
+	}
+	if !timeline.Timing.EncoderTimingApproximate {
+		t.Fatal("EncoderTimingApproximate = false, want true")
+	}
+
+	event := firstTimelineEventByCategory(timeline, "encoder")
+	if event == nil {
+		t.Fatal("missing encoder event")
+	}
+	if got, want := event.Args["timing_source"], "synthetic"; got != want {
+		t.Fatalf("event timing_source = %v, want %q", got, want)
+	}
+	if got, want := event.Args["timing_approximate"], true; got != want {
+		t.Fatalf("event timing_approximate = %v, want %v", got, want)
+	}
+	if got, want := event.Args["real_timing"], false; got != want {
+		t.Fatalf("event real_timing = %v, want %v", got, want)
+	}
+}
+
+func TestGenerateTimelineAnnotatesExtractedTimingSource(t *testing.T) {
+	const label = "encoder_from_capture"
+	start := uint64(0x023456789abcdef1)
+	end := start + 250_000
+
+	tr := &gputrace.Trace{
+		Path:          timelineTimingSourceTraceDir(t),
+		CaptureData:   timelineCaptureWithExtractedTiming(label, start, end),
+		EncoderLabels: []string{label},
+	}
+
+	timeline, err := generateTimeline(tr)
+	if err != nil {
+		t.Fatalf("generateTimeline: %v", err)
+	}
+
+	if timeline.Timing == nil {
+		t.Fatal("timeline timing metadata is nil")
+	}
+	if got, want := timeline.Timing.EncoderTimingSource, "extracted"; got != want {
+		t.Fatalf("EncoderTimingSource = %q, want %q", got, want)
+	}
+	if !timeline.Timing.EncoderTimingApproximate {
+		t.Fatal("EncoderTimingApproximate = false, want true")
+	}
+
+	event := firstTimelineEventByCategory(timeline, "encoder")
+	if event == nil {
+		t.Fatal("missing encoder event")
+	}
+	if got, want := event.Args["timing_source"], "extracted"; got != want {
+		t.Fatalf("event timing_source = %v, want %q", got, want)
+	}
+	if got, want := event.Args["timing_approximate"], true; got != want {
+		t.Fatalf("event timing_approximate = %v, want %v", got, want)
+	}
+	if got, want := event.Args["real_timing"], false; got != want {
+		t.Fatalf("event real_timing = %v, want %v", got, want)
+	}
+}
+
+func TestTimelineTimingSourceHelpersMarkProfilerMeasured(t *testing.T) {
+	metrics := &gputrace.TimingMetrics{
+		TimingSource:      "profiler",
+		TimingApproximate: false,
+	}
+
+	args := map[string]interface{}{}
+	addTimingMetricsEventArgs(args, metrics)
+	if got, want := args["timing_source"], "profiler"; got != want {
+		t.Fatalf("timing_source = %v, want %q", got, want)
+	}
+	if got, want := args["timing_approximate"], false; got != want {
+		t.Fatalf("timing_approximate = %v, want %v", got, want)
+	}
+	if got, want := args["real_timing"], true; got != want {
+		t.Fatalf("real_timing = %v, want %v", got, want)
+	}
+
+	timeline := &Timeline{}
+	annotateTimelineWithTimingMetrics(timeline, metrics)
+	timingArgs := timelineTimingArgs(timeline.Timing)
+	if got, want := timingArgs["encoder_timing_source"], "profiler"; got != want {
+		t.Fatalf("encoder_timing_source = %v, want %q", got, want)
+	}
+	if got, want := timingArgs["encoder_timing_approximate"], false; got != want {
+		t.Fatalf("encoder_timing_approximate = %v, want %v", got, want)
 	}
 }
 
@@ -592,6 +699,38 @@ func TestDispatchKernelArgsKeepsSourceBackedZeroEncoderCounters(t *testing.T) {
 	if got, want := args["alu_utilization_source"], "encoder counter fallback"; got != want {
 		t.Fatalf("alu_utilization_source = %#v, want %#v", got, want)
 	}
+}
+
+func timelineTimingSourceTraceDir(t *testing.T) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "capture"), nil, 0o644); err != nil {
+		t.Fatalf("write empty capture: %v", err)
+	}
+	return dir
+}
+
+func timelineCaptureWithExtractedTiming(label string, start, end uint64) []byte {
+	const labelOffset = 96
+
+	data := make([]byte, 160)
+	binary.LittleEndian.PutUint64(data[labelOffset-40:], start)
+	copy(data[labelOffset:], label)
+	binary.LittleEndian.PutUint64(data[labelOffset+len(label)+8:], end)
+	return data
+}
+
+func firstTimelineEventByCategory(timeline *Timeline, category string) *TimelineEvent {
+	if timeline == nil {
+		return nil
+	}
+	for i := range timeline.Events {
+		if timeline.Events[i].Category == category {
+			return &timeline.Events[i]
+		}
+	}
+	return nil
 }
 
 func findCounterTrackForTest(t *testing.T, tracks []CounterTrack, name string) CounterTrack {
