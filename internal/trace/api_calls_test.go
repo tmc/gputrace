@@ -627,10 +627,46 @@ func TestFormatAPICallList_BufferHeapOffset(t *testing.T) {
 
 // TestFormatAPICallList_SetLabel tests formatting of setLabel calls
 func TestFormatAPICallList_SetLabel(t *testing.T) {
-	t.Skip("TODO: Implement setLabel formatting test")
+	const (
+		queueAddr = 0x106da64d0
+		cbAddr    = 0x780c115e0
+		label     = "Stream 0"
+	)
 
-	// setLabel should not have "0x... =" prefix
-	// Format should be: "#8 [Stream 0 setLabel:\"Stream 0\"]"
+	dir := t.TempDir()
+	capture := make([]byte, 0, 128)
+	capture = append(capture, []byte("CS\x00\x00")...)
+	capture = binary.LittleEndian.AppendUint64(capture, queueAddr)
+	capture = append(capture, label...)
+	capture = append(capture, 0)
+	capture = append(capture, []byte("CUUU")...)
+	capture = binary.LittleEndian.AppendUint64(capture, 0x12345678)
+	capture = append(capture, []byte("C\x00\x00\x00")...)
+	capture = binary.LittleEndian.AppendUint64(capture, queueAddr)
+	capture = append(capture, []byte("C\x00\x00\x00")...)
+	capture = binary.LittleEndian.AppendUint64(capture, cbAddr)
+
+	if err := os.WriteFile(filepath.Join(dir, "capture"), capture, 0o666); err != nil {
+		t.Fatal(err)
+	}
+
+	tr := &Trace{Path: dir}
+	var buf bytes.Buffer
+	if err := tr.FormatAPICallList(&buf); err != nil {
+		t.Fatal(err)
+	}
+
+	output := buf.String()
+	want := "#1 [Stream 0 setLabel:\"Stream 0\"]\n"
+	if !bytes.Contains(buf.Bytes(), []byte(want)) {
+		t.Fatalf("formatted API calls missing %q in:\n%s", want, output)
+	}
+	if bytes.Contains(buf.Bytes(), []byte("#1 0x106da64d0 =")) {
+		t.Fatalf("setLabel should not have address prefix:\n%s", output)
+	}
+	if bytes.Contains(buf.Bytes(), []byte("#1 Stream 0 =")) {
+		t.Fatalf("setLabel should not have label assignment prefix:\n%s", output)
+	}
 }
 
 // TestParseBufferBindings tests buffer binding extraction
