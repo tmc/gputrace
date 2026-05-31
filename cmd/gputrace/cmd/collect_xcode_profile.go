@@ -8,6 +8,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -63,6 +64,26 @@ func writeXcodeProfileActionOutput(output xcodeProfileActionOutput) error {
 	}
 	output.Success = true
 	return encodeXcodeProfileJSON(os.Stdout, output)
+}
+
+func defaultXcodeProfileOutputPath(inputPath string) string {
+	ext := filepath.Ext(inputPath)
+	base := strings.TrimSuffix(inputPath, ext)
+	return base + "-perfdata" + ext
+}
+
+func resolveXcodeProfileTraceOutputPath(outputPath string) (string, error) {
+	if outputPath == "" {
+		return "", nil
+	}
+	if commandOutputPathIsStdout(outputPath) {
+		return "", fmt.Errorf("trace output must be a file path, not stdout")
+	}
+	abs, err := filepath.Abs(outputPath)
+	if err != nil {
+		return "", fmt.Errorf("invalid output path: %w", err)
+	}
+	return abs, nil
 }
 
 var collectXcodeProfileCmd = &cobra.Command{

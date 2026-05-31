@@ -43,9 +43,9 @@ func runExport(cmd *cobra.Command, args []string) error {
 	var outputPath string
 	if len(args) > 0 {
 		var err error
-		outputPath, err = filepath.Abs(args[0])
+		outputPath, err = resolveXcodeProfileTraceOutputPath(args[0])
 		if err != nil {
-			return fmt.Errorf("invalid output path: %w", err)
+			return err
 		}
 	}
 
@@ -109,9 +109,9 @@ func runOpenExport(cmd *cobra.Command, args []string) error {
 	var outputPath string
 	if len(args) > 0 {
 		var err error
-		outputPath, err = filepath.Abs(args[0])
+		outputPath, err = resolveXcodeProfileTraceOutputPath(args[0])
 		if err != nil {
-			return fmt.Errorf("invalid output path: %w", err)
+			return err
 		}
 	}
 
