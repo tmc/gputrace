@@ -2015,6 +2015,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 
 	// Add counter track metadata and events
 	threadID := 16 // Start after GPRWCNTR lanes (7-14) and provenance lane (15).
+	counterEvents := make([]TimelineEvent, 0)
 	for _, track := range timeline.CounterTracks {
 		// Add thread name for this counter track
 		metadataEvents = append(metadataEvents, TimelineEvent{
@@ -2042,7 +2043,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 					track.Name: sample.Value,
 				},
 			}
-			timeline.Events = append(timeline.Events, counterEvent)
+			counterEvents = append(counterEvents, counterEvent)
 		}
 
 		threadID++
@@ -2050,6 +2051,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 
 	// Combine metadata events with timeline events
 	allEvents := append(metadataEvents, timeline.Events...)
+	allEvents = append(allEvents, counterEvents...)
 
 	// Chrome tracing format
 	// Standard format: { "traceEvents": [ ... ] }
