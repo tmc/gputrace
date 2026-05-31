@@ -62,6 +62,25 @@ func TestMTLBUsageMarksRequiredTraceOperands(t *testing.T) {
 	}
 }
 
+func TestTraceUsageMarksRequiredTraceOperands(t *testing.T) {
+	checks := []*cobra.Command{
+		dumpCmd,
+		dumpRecordsCmd,
+		treeCmd,
+	}
+	for _, cmd := range checks {
+		if strings.Contains(cmd.Use, "[trace") {
+			t.Fatalf("%s usage marks required trace operand optional: %q", cmd.CommandPath(), cmd.Use)
+		}
+		if !strings.Contains(cmd.Use, "<trace-path>") {
+			t.Fatalf("%s usage does not mark required trace operand: %q", cmd.CommandPath(), cmd.Use)
+		}
+		if err := cmd.Args(cmd, nil); err == nil {
+			t.Fatalf("%s accepts missing required trace operand", cmd.CommandPath())
+		}
+	}
+}
+
 func walkCLI(t *testing.T, c *cobra.Command, fn func(*testing.T, *cobra.Command)) {
 	t.Helper()
 	fn(t, c)

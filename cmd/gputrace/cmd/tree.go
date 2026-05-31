@@ -17,7 +17,7 @@ var (
 )
 
 var treeCmd = &cobra.Command{
-	Use:   "tree [trace-path]",
+	Use:   "tree <trace-path>",
 	Short: "Display execution tree grouped by pipeline state or encoder",
 	Long: `Display a hierarchical view of GPU execution.
 

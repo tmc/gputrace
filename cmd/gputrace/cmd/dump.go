@@ -22,7 +22,7 @@ var (
 )
 
 var dumpCmd = &cobra.Command{
-	Use:   "dump [trace-path]",
+	Use:   "dump <trace-path>",
 	Short: "Dump all API calls from a GPU trace",
 	Long: `Dumps all Metal API calls from a GPU trace in a format similar to Xcode Instruments.
 
