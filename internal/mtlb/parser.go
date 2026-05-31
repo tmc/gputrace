@@ -94,7 +94,7 @@ func (m *MTLBFile) parseTaggedFunctionTable() ([]MTLBFunction, bool) {
 	count := binary.LittleEndian.Uint32(m.Data[start : start+4])
 	entrySize := binary.LittleEndian.Uint32(m.Data[start+4 : start+8])
 	if count == 0 {
-		return nil, true
+		return nil, false
 	}
 	if count > uint32(len(m.Data)) || entrySize < 4 {
 		return nil, false
