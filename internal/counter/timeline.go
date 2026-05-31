@@ -49,6 +49,8 @@ type TimelineHeader struct {
 const (
 	TimelineHeaderSize = 256
 	TimelineMagic      = 0x773d413b0016b551 // Common magic observed in Timeline files
+
+	rawTimelineUnsupportedStatus = "raw Timeline_f payload not decoded; use streamData APSTimelineData for command timing"
 )
 
 // GTMioKickTrace represents a GPU kick (encoder execution) trace record.
@@ -115,7 +117,7 @@ func ParseTimelineFile(path string) (*TimelineData, error) {
 		FilePath:        path,
 		FileSize:        int64(len(data)),
 		RawData:         data,
-		RawFormatStatus: "raw Timeline_f payload not decoded; use streamData APSTimelineData for command timing",
+		RawFormatStatus: rawTimelineUnsupportedStatus,
 	}
 
 	// Extract file index from filename
@@ -145,10 +147,11 @@ func ParseTimelineFile(path string) (*TimelineData, error) {
 		Reserved10:   binary.LittleEndian.Uint64(data[112:120]),
 		Reserved11:   binary.LittleEndian.Uint64(data[120:128]),
 	}
+	td.RawFormatStatus = timelineRawFormatStatus(data, td.Header)
 
 	// Calculate chunk count based on data offset (this is the data section size, not chunk size)
 	// The data section starts at DataOffset, so chunk count is calculated from remaining data
-	if td.Header.DataOffset > 0 && td.Header.DataOffset < uint64(len(data)) {
+	if td.Header.DataOffset > 0 && td.Header.DataOffset <= uint64(len(data)) {
 		// Count 256-byte blocks in the sparse index section.
 		if td.Header.DataOffset > TimelineHeaderSize {
 			td.ChunkCount = int((td.Header.DataOffset - TimelineHeaderSize) / 256)
@@ -171,7 +174,7 @@ func ParseTimelineFile(path string) (*TimelineData, error) {
 //
 // The sparse index section is scanned for valid timestamp patterns.
 func (td *TimelineData) parseChunks() {
-	if td.Header.DataOffset == 0 {
+	if td.Header.DataOffset <= TimelineHeaderSize || td.Header.DataOffset > uint64(len(td.RawData)) {
 		return
 	}
 
@@ -228,6 +231,54 @@ func (td *TimelineData) parseChunkRecords(chunk []byte) {
 	// APSTimelineData parsing lives in streamdata.go.
 	//
 	// Keeping this as a no-op until the format is properly understood.
+}
+
+func timelineRawFormatStatus(data []byte, header TimelineHeader) string {
+	detail := timelineRawFormatDetail(data, header)
+	if detail == "" {
+		return rawTimelineUnsupportedStatus
+	}
+	return rawTimelineUnsupportedStatus + "; " + detail
+}
+
+func timelineRawFormatDetail(data []byte, header TimelineHeader) string {
+	switch {
+	case header.DataOffset == 0:
+		return "missing data offset"
+	case header.DataOffset < TimelineHeaderSize:
+		return fmt.Sprintf("invalid data offset 0x%x before header end 0x%x", header.DataOffset, TimelineHeaderSize)
+	case header.DataOffset > uint64(len(data)):
+		return fmt.Sprintf("invalid data offset 0x%x beyond file size 0x%x", header.DataOffset, len(data))
+	}
+
+	payload := data[header.DataOffset:]
+	if len(payload) == 0 {
+		return "empty data section"
+	}
+	if hasZlibHeader(payload) {
+		return "data section starts with zlib header; decompression unsupported"
+	}
+	if hasLZ4FrameHeader(payload) {
+		return "data section starts with lz4 frame header; decompression unsupported"
+	}
+	return "data section encoding unknown"
+}
+
+func hasZlibHeader(data []byte) bool {
+	if len(data) < 2 {
+		return false
+	}
+
+	// RFC 1950 zlib streams use compression method 8 in CMF and a CMF/FLG
+	// checksum divisible by 31. This recognizes common headers such as
+	// 0x78 0x01, 0x78 0x5e, 0x78 0x9c, and 0x78 0xda without decoding.
+	cmf, flg := data[0], data[1]
+	return cmf&0x0f == 8 && cmf>>4 <= 7 && (uint16(cmf)<<8|uint16(flg))%31 == 0
+}
+
+func hasLZ4FrameHeader(data []byte) bool {
+	// LZ4 frame streams start with little-endian magic 0x184d2204.
+	return len(data) >= 4 && data[0] == 0x04 && data[1] == 0x22 && data[2] == 0x4d && data[3] == 0x18
 }
 
 // ParseTimelineFiles parses all Timeline_f_*.raw files from a trace.
