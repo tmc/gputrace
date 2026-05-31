@@ -16,10 +16,7 @@ func TestExportWithBinaryData(t *testing.T) {
 	// Test with single encoder perf trace that has binary counter data
 	tracePath := filepath.Join("..", "..", "testdata", "traces", "01-single-encoder", "01-single-encoder-run1-perf.gputrace")
 
-	tr, err := trace.Open(tracePath)
-	if err != nil {
-		t.Skipf("Trace not available: %v", err)
-	}
+	tr := openPerfTraceOrSkip(t, tracePath)
 	defer tr.Close()
 
 	// Create exporter
@@ -27,7 +24,7 @@ func TestExportWithBinaryData(t *testing.T) {
 
 	// Export to buffer
 	var buf bytes.Buffer
-	err = exporter.ExportCountersCSV(&buf)
+	err := exporter.ExportCountersCSV(&buf)
 	if err != nil {
 		t.Fatalf("Export failed: %v", err)
 	}
@@ -84,10 +81,7 @@ func TestExportWithBinaryData(t *testing.T) {
 func TestExportSixEncoders(t *testing.T) {
 	tracePath := filepath.Join("..", "..", "testdata", "traces", "06-six-encoders", "06-six-encoders-run1-perf.gputrace")
 
-	tr, err := trace.Open(tracePath)
-	if err != nil {
-		t.Skipf("Trace not available: %v", err)
-	}
+	tr := openPerfTraceOrSkip(t, tracePath)
 	defer tr.Close()
 
 	// Create exporter
@@ -95,7 +89,7 @@ func TestExportSixEncoders(t *testing.T) {
 
 	// Export to buffer
 	var buf bytes.Buffer
-	err = exporter.ExportCountersCSV(&buf)
+	err := exporter.ExportCountersCSV(&buf)
 	if err != nil {
 		t.Fatalf("Export failed: %v", err)
 	}
@@ -161,16 +155,13 @@ func TestExportComparison(t *testing.T) {
 	// Compare exported CSV with imported reference CSV
 	tracePath := filepath.Join("..", "..", "testdata", "traces", "06-six-encoders", "06-six-encoders-run1-perf.gputrace")
 
-	tr, err := trace.Open(tracePath)
-	if err != nil {
-		t.Skipf("Trace not available: %v", err)
-	}
+	tr := openPerfTraceOrSkip(t, tracePath)
 	defer tr.Close()
 
 	// Export our CSV
 	exporter := NewCountersCSVExporter(tr)
 	var buf bytes.Buffer
-	err = exporter.ExportCountersCSV(&buf)
+	err := exporter.ExportCountersCSV(&buf)
 	if err != nil {
 		t.Fatalf("Export failed: %v", err)
 	}
