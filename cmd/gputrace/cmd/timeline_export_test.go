@@ -125,6 +125,37 @@ func TestExportChromeTracingDoesNotMutateTimelineEvents(t *testing.T) {
 	}
 }
 
+func TestExportChromeTracingStdoutWritesCleanJSON(t *testing.T) {
+	timeline := &Timeline{
+		Events: []TimelineEvent{{
+			Name:      "kernel",
+			Category:  "kernel",
+			Phase:     "X",
+			Timestamp: 10,
+			Duration:  5,
+			ProcessID: 1,
+			ThreadID:  3,
+		}},
+	}
+
+	out, err := captureStdout(t, func() error {
+		return exportChromeTracing(timeline, "/dev/stdout")
+	})
+	if err != nil {
+		t.Fatalf("exportChromeTracing: %v", err)
+	}
+
+	var doc struct {
+		TraceEvents []TimelineEvent `json:"traceEvents"`
+	}
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("stdout is not clean JSON: %v\n%s", err, out)
+	}
+	if len(doc.TraceEvents) == 0 {
+		t.Fatalf("stdout JSON contains no trace events:\n%s", out)
+	}
+}
+
 func TestGenerateTimelineAnnotatesSyntheticTimingSource(t *testing.T) {
 	tr := &gputrace.Trace{
 		Path:        timelineTimingSourceTraceDir(t),

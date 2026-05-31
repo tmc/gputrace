@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -1797,11 +1798,13 @@ func timelineMetricsSource(metrics *gputrace.TimingMetrics) string {
 
 // exportChromeTracing exports timeline in Chrome tracing format.
 func exportChromeTracing(timeline *Timeline, outputPath string) error {
-	f, err := os.Create(outputPath)
+	f, closeOutput, err := createCommandOutput(outputPath)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	if closeOutput != nil {
+		defer closeOutput()
+	}
 
 	// Add process and thread name metadata events
 	metadataEvents := []TimelineEvent{
@@ -2197,11 +2200,13 @@ func timelineTimingArgs(timing *TimelineTiming) map[string]interface{} {
 
 // exportTimelineJSON exports raw timeline data as JSON.
 func exportTimelineJSON(timeline *Timeline, outputPath string) error {
-	f, err := os.Create(outputPath)
+	f, closeOutput, err := createCommandOutput(outputPath)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	if closeOutput != nil {
+		defer closeOutput()
+	}
 
 	encoder := json.NewEncoder(f)
 	encoder.SetIndent("", "  ")
@@ -2210,11 +2215,13 @@ func exportTimelineJSON(timeline *Timeline, outputPath string) error {
 
 // exportHTML exports an interactive standalone HTML timeline viewer.
 func exportHTML(timeline *Timeline, outputPath string) error {
-	f, err := os.Create(outputPath)
+	f, closeOutput, err := createCommandOutput(outputPath)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	if closeOutput != nil {
+		defer closeOutput()
+	}
 
 	// Serialize timeline data to JSON for embedding
 	timelineJSON, err := json.Marshal(timeline)
@@ -2224,7 +2231,7 @@ func exportHTML(timeline *Timeline, outputPath string) error {
 
 	// Generate the HTML content
 	html := generateInteractiveHTML(string(timelineJSON))
-	_, err = f.WriteString(html)
+	_, err = io.WriteString(f, html)
 	return err
 }
 

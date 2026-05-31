@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -196,20 +197,16 @@ func runReplayCounters(cmd *cobra.Command, args []string) error {
 }
 
 func writeOutput(filename, textOutput string, jsonData interface{}) error {
-	var writer *os.File
-	if filename != "" {
-		f, err := os.Create(filename)
-		if err != nil {
-			return fmt.Errorf("failed to create output file: %w", err)
-		}
-		defer f.Close()
-		writer = f
-	} else {
-		writer = os.Stdout
+	writer, closeOutput, err := createCommandOutput(filename)
+	if err != nil {
+		return fmt.Errorf("failed to create output file: %w", err)
+	}
+	if closeOutput != nil {
+		defer closeOutput()
 	}
 
 	if textOutput != "" {
-		if _, err := writer.WriteString(textOutput); err != nil {
+		if _, err := io.WriteString(writer, textOutput); err != nil {
 			return fmt.Errorf("failed to write output: %w", err)
 		}
 	} else if jsonData != nil {

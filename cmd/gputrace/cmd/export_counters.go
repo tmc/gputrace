@@ -101,17 +101,12 @@ func runExportCounters(cmd *cobra.Command, args []string) error {
 	exporter := gputrace.NewCountersCSVExporter(trace)
 	sourceSummary, sourceSummaryErr := summarizeExportCounterSources(trace)
 
-	// Determine output writer
-	var writer *os.File
-	if exportCountersOutput != "" {
-		f, err := os.Create(exportCountersOutput)
-		if err != nil {
-			return fmt.Errorf("failed to create output file: %w", err)
-		}
-		defer f.Close()
-		writer = f
-	} else {
-		writer = os.Stdout
+	writer, closeOutput, err := createCommandOutput(exportCountersOutput)
+	if err != nil {
+		return fmt.Errorf("failed to create output file: %w", err)
+	}
+	if closeOutput != nil {
+		defer closeOutput()
 	}
 
 	// Export CSV
