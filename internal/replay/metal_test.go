@@ -5,6 +5,7 @@ package replay
 
 import (
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unsafe"
@@ -26,7 +27,7 @@ kernel void vector_add(device const float* a [[buffer(0)]],
 func TestMetalReplayEngineInit(t *testing.T) {
 	// Create a minimal trace (would normally come from actual .gputrace file)
 	trace := &Trace{
-		Path: "/tmp/test.gputrace",
+		Path: testTracePath(t, "test.gputrace"),
 	}
 
 	engine, err := NewMetalReplayEngine(trace)
@@ -54,7 +55,7 @@ func TestMetalReplayEngineInit(t *testing.T) {
 
 func TestMetalReplayEngineBufferRestoration(t *testing.T) {
 	trace := &Trace{
-		Path: "/tmp/test.gputrace",
+		Path: testTracePath(t, "test.gputrace"),
 	}
 
 	engine, err := NewMetalReplayEngine(trace)
@@ -99,7 +100,7 @@ func TestMetalReplayEngineBufferRestoration(t *testing.T) {
 
 func TestMetalReplayEngineShaderCompilation(t *testing.T) {
 	trace := &Trace{
-		Path: "/tmp/test.gputrace",
+		Path: testTracePath(t, "test.gputrace"),
 	}
 
 	engine, err := NewMetalReplayEngine(trace)
@@ -140,7 +141,7 @@ func TestMetalReplayEngineShaderCompilation(t *testing.T) {
 func TestMetalReplayEngineRejectsICBPlanBeforeMetalWork(t *testing.T) {
 	engine := &MetalReplayEngine{}
 	plan := &ReplayPlan{
-		TraceePath: "/tmp/icb.gputrace",
+		TraceePath: testTracePath(t, "icb.gputrace"),
 		Commands: []ReplayCommand{
 			{
 				Type:         "execute_icb",
@@ -197,7 +198,7 @@ func TestMetalReplayEngineEncodeCommandRejectsICB(t *testing.T) {
 
 func TestMetalReplayEngineSimpleExecution(t *testing.T) {
 	trace := &Trace{
-		Path: "/tmp/test.gputrace",
+		Path: testTracePath(t, "test.gputrace"),
 	}
 
 	engine, err := NewMetalReplayEngine(trace)
@@ -300,7 +301,7 @@ func TestMetalReplayEngineSimpleExecution(t *testing.T) {
 
 func TestMetalReplayEngineClose(t *testing.T) {
 	trace := &Trace{
-		Path: "/tmp/test.gputrace",
+		Path: testTracePath(t, "test.gputrace"),
 	}
 
 	engine, err := NewMetalReplayEngine(trace)
@@ -323,6 +324,11 @@ func TestMetalReplayEngineClose(t *testing.T) {
 }
 
 // Helper functions
+func testTracePath(t *testing.T, name string) string {
+	t.Helper()
+	return filepath.Join(t.TempDir(), name)
+}
+
 func float32ToBytes(data []float32) []byte {
 	if len(data) == 0 {
 		return []byte{0}
