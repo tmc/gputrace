@@ -27,6 +27,9 @@ func collectResourceAccesses(t *trace.Trace) ([]resourceAccess, []resourceSummar
 	if err != nil {
 		return nil, nil, fmt.Errorf("parse dependency events: %w", err)
 	}
+	sort.SliceStable(events, func(i, j int) bool {
+		return events[i].Offset < events[j].Offset
+	})
 
 	var accesses []resourceAccess
 	resources := make(map[uint64]*resourceSummary)
