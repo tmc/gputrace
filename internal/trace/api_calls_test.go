@@ -395,15 +395,61 @@ func TestParseInitCalls_PipelineState(t *testing.T) {
 
 // TestParseInitCalls_RequestResidency tests parsing of requestResidency calls
 func TestParseInitCalls_RequestResidency(t *testing.T) {
-	t.Skip("TODO: Implement requestResidency parsing")
+	data := make([]byte, 0x100)
+	residencySetAddr := uint64(0x0afd018000)
 
-	// TODO: Need to identify the binary pattern for requestResidency calls
-	// These appear after residency set creation
-	// Format should be: "[0x<address> requestResidency]"
-	//
-	// From Xcode reference:
-	// #0 0xafd018000 = [Device newResidencySetWithDescriptor:<data> error:nil]
-	// #1 [0xafd018000 requestResidency]
+	offset := 0x2C
+	copy(data[offset:], []byte("CUt\x00"))
+	binary.LittleEndian.PutUint64(data[offset+4:], residencySetAddr)
+
+	offset = 0x60
+	copy(data[offset:], []byte("Ct\x00\x00"))
+	binary.LittleEndian.PutUint64(data[offset+4:], residencySetAddr)
+
+	calls, _, err := parseInitCalls(data, 0, nil, make(map[uint64]string))
+	if err != nil {
+		t.Fatalf("parseInitCalls failed: %v", err)
+	}
+
+	found := false
+	for _, call := range calls {
+		if call.Type == "requestResidency" {
+			found = true
+			if call.Address != residencySetAddr {
+				t.Errorf("Expected requestResidency address 0x%x, got 0x%x", residencySetAddr, call.Address)
+			}
+			if call.Info != "[0xafd018000 requestResidency]" {
+				t.Errorf("Unexpected info: %s", call.Info)
+			}
+		}
+	}
+
+	if !found {
+		t.Error("Expected to find requestResidency call")
+	}
+}
+
+func TestParseInitCalls_RequestResidencyRejectsUnknownCt(t *testing.T) {
+	data := make([]byte, 0x100)
+
+	offset := 0x2C
+	copy(data[offset:], []byte("CUt\x00"))
+	binary.LittleEndian.PutUint64(data[offset+4:], 0x0afd018000)
+
+	offset = 0x60
+	copy(data[offset:], []byte("Ct\x00\x00"))
+	binary.LittleEndian.PutUint64(data[offset+4:], 0x106d82550)
+
+	calls, _, err := parseInitCalls(data, 0, nil, make(map[uint64]string))
+	if err != nil {
+		t.Fatalf("parseInitCalls failed: %v", err)
+	}
+
+	for _, call := range calls {
+		if call.Type == "requestResidency" {
+			t.Fatalf("Unexpected requestResidency call for non-residency Ct address 0x%x", call.Address)
+		}
+	}
 }
 
 // TestParseInitCalls_AddResidencySet tests parsing of addResidencySet calls
