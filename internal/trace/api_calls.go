@@ -171,6 +171,7 @@ func parseInitCalls(data []byte, startCallNum int, csRecords []FunctionRecord, l
 
 	// Pattern: "C\x00\x00\x00" records with various types
 	// We'll parse different record types and sort them by offset
+	queueLabel, hasSingleQueue := singleCommandQueueLabel(csRecords)
 
 	// Find CUt records (residency set creation)
 	// Structure: "CUt\x00" + residency set address
@@ -263,6 +264,32 @@ func parseInitCalls(data []byte, startCallNum int, csRecords []FunctionRecord, l
 		offset += pos + 4
 	}
 
+	cMarker := []byte("C\x00\x00\x00")
+	if hasSingleQueue {
+		offset = 0
+		for {
+			pos := bytes.Index(data[offset:], cMarker)
+			if pos == -1 {
+				break
+			}
+			absolutePos := offset + pos
+
+			if resAddr, ok := parseAddResidencySetAddress(data, absolutePos); ok && residencySetAddrs[resAddr] {
+				calls = append(calls, InitCall{
+					CallNumber: callNum,
+					Type:       "addResidencySet",
+					Address:    resAddr,
+					Info:       fmt.Sprintf("[%s addResidencySet:0x%x]", queueLabel, resAddr),
+					Label:      queueLabel,
+					Offset:     int64(absolutePos),
+				})
+				callNum++
+			}
+
+			offset += pos + 4
+		}
+	}
+
 	// Find Culul records (buffer creation from heap)
 	// Structure:
 	// +0x00: "Culul\x00\x00\x00"
@@ -312,7 +339,6 @@ func parseInitCalls(data []byte, startCallNum int, csRecords []FunctionRecord, l
 
 	// Find C\x00\x00\x00 records for command queue creation
 	// Structure: "C\x00\x00\x00" + queue address + label info
-	cMarker := []byte("C\x00\x00\x00")
 	offset = 0
 	queueAddrs := make(map[uint64]bool)
 	for {
@@ -345,7 +371,7 @@ func parseInitCalls(data []byte, startCallNum int, csRecords []FunctionRecord, l
 		}
 
 		// Check if this is a command queue label (e.g., "Stream 0")
-		if strings.Contains(name, "Stream") || strings.Contains(name, "Queue") {
+		if isCommandQueueLabel(name) {
 			// This is a command queue - add newCommandQueue call
 			calls = append(calls, InitCall{
 				CallNumber: callNum,
@@ -494,6 +520,70 @@ func parseInitCalls(data []byte, startCallNum int, csRecords []FunctionRecord, l
 	callNum = startCallNum + len(calls)
 
 	return calls, callNum, nil
+}
+
+func singleCommandQueueLabel(records []FunctionRecord) (string, bool) {
+	var (
+		label string
+		addr  uint64
+		found bool
+	)
+	for _, record := range records {
+		if !isCommandQueueLabel(record.Label) {
+			continue
+		}
+		if found {
+			return "", false
+		}
+		label = record.Label
+		addr = record.CSAddress
+		found = true
+	}
+	if !found || label == "" || addr == 0 {
+		return "", false
+	}
+	return label, true
+}
+
+func isCommandQueueLabel(label string) bool {
+	return strings.Contains(label, "Stream") || strings.Contains(label, "Queue")
+}
+
+func parseAddResidencySetAddress(data []byte, markerPos int) (uint64, bool) {
+	const (
+		recordSizeOffset = 0x24
+		commandOffset    = 0x20
+		countOffset      = 0x04
+		addrOffset       = 0x04
+		field1Offset     = 0x0c
+		field2Offset     = 0x10
+		recordSize       = 0x58
+		commandFlags     = 0xffffc13d
+		markerCount      = 0x0a
+		field1           = 0x04
+		field2           = 0x08
+	)
+
+	if markerPos < recordSizeOffset || markerPos+field2Offset+4 > len(data) {
+		return 0, false
+	}
+	if binary.LittleEndian.Uint32(data[markerPos-recordSizeOffset:markerPos-commandOffset]) != recordSize {
+		return 0, false
+	}
+	if binary.LittleEndian.Uint32(data[markerPos-commandOffset:markerPos-commandOffset+4]) != commandFlags {
+		return 0, false
+	}
+	if binary.LittleEndian.Uint32(data[markerPos-countOffset:markerPos]) != markerCount {
+		return 0, false
+	}
+	if binary.LittleEndian.Uint32(data[markerPos+field1Offset:markerPos+field1Offset+4]) != field1 {
+		return 0, false
+	}
+	if binary.LittleEndian.Uint32(data[markerPos+field2Offset:markerPos+field2Offset+4]) != field2 {
+		return 0, false
+	}
+	addr := binary.LittleEndian.Uint64(data[markerPos+addrOffset : markerPos+addrOffset+8])
+	return addr, addr != 0
 }
 
 func parseCululHeapOffset(data []byte, cululPos int, bufAddr uint64) (uint64, bool) {
@@ -861,7 +951,7 @@ func (t *Trace) FormatAPICallList(w io.Writer) error {
 			continue
 		}
 
-		if call.Type == "setLabel" || call.Type == "requestResidency" {
+		if call.Type == "setLabel" || call.Type == "requestResidency" || call.Type == "addResidencySet" {
 			// These calls don't have the "address =" prefix
 			fmt.Fprintf(w, "#%d %s\n", displayCallNum, call.Info)
 		} else {
@@ -935,7 +1025,7 @@ func (t *Trace) FormatAPICallListFull(w io.Writer) error {
 			continue
 		}
 
-		if call.Type == "setLabel" || call.Type == "requestResidency" {
+		if call.Type == "setLabel" || call.Type == "requestResidency" || call.Type == "addResidencySet" {
 			fmt.Fprintf(w, "#%d %s\n", displayCallNum, call.Info)
 		} else {
 			prefix := fmt.Sprintf("0x%x", call.Address)
