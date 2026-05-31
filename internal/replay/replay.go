@@ -118,6 +118,7 @@ func (re *ReplayEngine) AnalyzeReplay() (*ReplayPlan, error) {
 		return nil, fmt.Errorf("analyze state: %w", err)
 	}
 	plan.StateAnalysis = stateAnalysis
+	replayState := newReplayStateLookup(stateAnalysis)
 
 	// Extract command sequence
 	sequenceNum := 0
@@ -147,15 +148,7 @@ func (re *ReplayEngine) AnalyzeReplay() (*ReplayPlan, error) {
 				BufferBindings: ct.BufferBindings,
 			}
 
-			// Try to resolve function name
-			if stateAnalysis != nil {
-				for _, fn := range stateAnalysis.Functions {
-					if fn.Address == ct.FunctionAddr {
-						cmd.FunctionName = fn.Name
-						break
-					}
-				}
-			}
+			replayState.resolveDispatch(&cmd)
 
 			plan.Commands = append(plan.Commands, cmd)
 			currentEncoder.CommandCount++
@@ -231,6 +224,46 @@ func (re *ReplayEngine) AnalyzeReplay() (*ReplayPlan, error) {
 	}
 
 	return plan, nil
+}
+
+type replayStateLookup struct {
+	functions map[uint64]FunctionInfo
+	pipelines map[uint64]PipelineInfo
+}
+
+func newReplayStateLookup(analysis *ReplayAnalysis) replayStateLookup {
+	lookup := replayStateLookup{
+		functions: make(map[uint64]FunctionInfo),
+		pipelines: make(map[uint64]PipelineInfo),
+	}
+	if analysis == nil {
+		return lookup
+	}
+	for _, fn := range analysis.Functions {
+		if fn.Address != 0 {
+			lookup.functions[fn.Address] = fn
+		}
+	}
+	for _, pso := range analysis.Pipelines {
+		if pso.Address != 0 {
+			lookup.pipelines[pso.Address] = pso
+		}
+	}
+	return lookup
+}
+
+func (lookup replayStateLookup) resolveDispatch(cmd *ReplayCommand) {
+	if pso, ok := lookup.pipelines[cmd.PipelineAddr]; ok {
+		if cmd.FunctionAddr == 0 {
+			cmd.FunctionAddr = pso.FunctionAddr
+		}
+		if cmd.FunctionAddr != 0 && cmd.FunctionName == "" {
+			cmd.FunctionName = pso.FunctionName
+		}
+	}
+	if fn, ok := lookup.functions[cmd.FunctionAddr]; ok && cmd.FunctionName == "" {
+		cmd.FunctionName = fn.Name
+	}
 }
 
 // ReplayPlan describes what would be executed during replay.
