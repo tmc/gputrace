@@ -137,6 +137,51 @@ func TestRunCaptureWithDepsWrapsCommandFailure(t *testing.T) {
 	}
 }
 
+func TestRunCaptureWithDepsRejectsStdoutOutput(t *testing.T) {
+	for _, output := range []string{"", "-", "/dev/stdout"} {
+		t.Run(output, func(t *testing.T) {
+			var ran bool
+			var validated bool
+			var merged bool
+
+			err := runCaptureWithDeps(captureConfig{
+				args:       []string{"app"},
+				cpuProfile: "cpu.pprof",
+				gpuTrace:   "trace.gputrace",
+				output:     output,
+			}, captureDeps{
+				run: func(_ []string, _ []string) error {
+					ran = true
+					return nil
+				},
+				validate: func(_, _ string) error {
+					validated = true
+					return nil
+				},
+				merge: func(_, _, _ string) error {
+					merged = true
+					return nil
+				},
+			})
+			if err == nil {
+				t.Fatal("expected stdout output error")
+			}
+			if !strings.Contains(err.Error(), "output cannot be stdout") {
+				t.Fatalf("error = %q, want stdout output context", err)
+			}
+			if ran {
+				t.Fatal("command should not run with stdout output")
+			}
+			if validated {
+				t.Fatal("validate should not be called with stdout output")
+			}
+			if merged {
+				t.Fatal("merge should not be called with stdout output")
+			}
+		})
+	}
+}
+
 func TestProfileOutputPathIsStdout(t *testing.T) {
 	tests := []struct {
 		name string
