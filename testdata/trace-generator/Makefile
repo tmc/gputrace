@@ -57,8 +57,10 @@ run-capture: build
 		echo "   Size: $$(du -sh "$$OUTPUT_PATH" | awk '{print $$1}')"; \
 		echo ""; \
 		echo "Analysis:"; \
-		echo "  # Count counter files"; \
-		echo "  ls $$OUTPUT_PATH/*.gpuprofiler_raw/Counters_f_*.raw 2>/dev/null | wc -l"; \
+		echo "  # Summarize captured trace"; \
+		echo "  gputrace stats \"$$OUTPUT_PATH\""; \
+		echo ""; \
+		echo "  # GPU counters require an Instruments GPU Counters capture"; \
 		echo ""; \
 		echo "  # Open in Instruments"; \
 		echo "  open $$OUTPUT_PATH"; \
