@@ -108,7 +108,7 @@ func formatAPICallsFiltered(w io.Writer, trace *gputrace.Trace, kernelFilter str
 			continue
 		}
 
-		if call.Type == "setLabel" || call.Type == "requestResidency" {
+		if call.Type == "setLabel" || call.Type == "requestResidency" || call.Type == "addResidencySet" {
 			fmt.Fprintf(w, "#%d %s\n", displayCallNum, call.Info)
 		} else {
 			prefix := fmt.Sprintf("0x%x", call.Address)

@@ -498,6 +498,62 @@ func TestParseInitCalls_RequestResidencyRejectsUnknownCt(t *testing.T) {
 	}
 }
 
+func TestParseInitCalls_AddResidencySet(t *testing.T) {
+	data := make([]byte, 0x100)
+
+	const (
+		queueAddr        = 0x106da64d0
+		residencySetAddr = 0x0afd018000
+	)
+
+	offset := 0x20
+	copy(data[offset:], []byte("CS\x00\x00"))
+	binary.LittleEndian.PutUint64(data[offset+4:], queueAddr)
+	copy(data[offset+0x0c:], []byte("Stream 0\x00"))
+
+	offset = 0x50
+	copy(data[offset:], []byte("CUt\x00"))
+	binary.LittleEndian.PutUint64(data[offset+4:], residencySetAddr)
+
+	putAddResidencySetRecord(data, 0xa0, residencySetAddr)
+
+	calls, _, err := parseInitCalls(data, 0, nil, make(map[uint64]string))
+	if err != nil {
+		t.Fatalf("parseInitCalls failed: %v", err)
+	}
+
+	found := false
+	for _, call := range calls {
+		if call.Type != "addResidencySet" {
+			continue
+		}
+		found = true
+		if call.Address != residencySetAddr {
+			t.Fatalf("Address = 0x%x, want 0x%x", call.Address, residencySetAddr)
+		}
+		if call.Label != "Stream 0" {
+			t.Fatalf("Label = %q, want Stream 0", call.Label)
+		}
+		want := "[Stream 0 addResidencySet:0xafd018000]"
+		if call.Info != want {
+			t.Fatalf("Info = %q, want %q", call.Info, want)
+		}
+	}
+	if !found {
+		t.Fatal("expected addResidencySet call")
+	}
+}
+
+func putAddResidencySetRecord(data []byte, offset int, residencySetAddr uint64) {
+	binary.LittleEndian.PutUint32(data[offset-0x24:], 0x58)
+	binary.LittleEndian.PutUint32(data[offset-0x20:], 0xffffc13d)
+	binary.LittleEndian.PutUint32(data[offset-0x04:], 0x0a)
+	copy(data[offset:], []byte("C\x00\x00\x00"))
+	binary.LittleEndian.PutUint64(data[offset+0x04:], residencySetAddr)
+	binary.LittleEndian.PutUint32(data[offset+0x0c:], 0x04)
+	binary.LittleEndian.PutUint32(data[offset+0x10:], 0x08)
+}
+
 func TestParseInitCalls_AddResidencySetFailsClosed(t *testing.T) {
 	data := make([]byte, 0x100)
 
@@ -545,6 +601,48 @@ func TestParseInitCalls_AddResidencySetFailsClosed(t *testing.T) {
 	}
 	if !foundRequest {
 		t.Fatal("expected requestResidency fixture to parse")
+	}
+}
+
+func TestFormatAPICallList_AddResidencySet(t *testing.T) {
+	const (
+		queueAddr        = 0x106da64d0
+		cbAddr           = 0x780c115e0
+		residencySetAddr = 0x0afd018000
+	)
+
+	dir := t.TempDir()
+	capture := make([]byte, 0x100)
+	copy(capture[0x00:], []byte("CS\x00\x00"))
+	binary.LittleEndian.PutUint64(capture[0x04:], queueAddr)
+	copy(capture[0x0c:], []byte("Stream 0\x00"))
+	copy(capture[0x30:], []byte("CUt\x00"))
+	binary.LittleEndian.PutUint64(capture[0x34:], residencySetAddr)
+	putAddResidencySetRecord(capture, 0x80, residencySetAddr)
+	copy(capture[0xc0:], []byte("CUUU"))
+	binary.LittleEndian.PutUint64(capture[0xc4:], 0x12345678)
+	copy(capture[0xcc:], []byte("C\x00\x00\x00"))
+	binary.LittleEndian.PutUint64(capture[0xd0:], queueAddr)
+	copy(capture[0xd8:], []byte("C\x00\x00\x00"))
+	binary.LittleEndian.PutUint64(capture[0xdc:], cbAddr)
+
+	if err := os.WriteFile(filepath.Join(dir, "capture"), capture, 0o666); err != nil {
+		t.Fatal(err)
+	}
+
+	tr := &Trace{Path: dir}
+	var buf bytes.Buffer
+	if err := tr.FormatAPICallList(&buf); err != nil {
+		t.Fatal(err)
+	}
+
+	output := buf.String()
+	want := "#3 [Stream 0 addResidencySet:0xafd018000]\n"
+	if !bytes.Contains(buf.Bytes(), []byte(want)) {
+		t.Fatalf("formatted API calls missing %q in:\n%s", want, output)
+	}
+	if bytes.Contains(buf.Bytes(), []byte("#3 Stream 0 =")) {
+		t.Fatalf("addResidencySet should not have label assignment prefix:\n%s", output)
 	}
 }
 
