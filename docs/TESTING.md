@@ -11,6 +11,11 @@ when they are present and skips fixture-dependent cases when they are not.
 Set `GPUTRACE_REQUIRE_PERF_FIXTURES=1` to make missing checked-in perf fixtures
 fail instead of skip.
 
+The checked-in fixture set covers structural traces and focused scenario
+captures. It does not include `.gpuprofiler_raw` profiler exports or Xcode
+`Counters.csv` files; tests that need those assets skip by default unless a
+local fixture is supplied through the variables below.
+
 Some integration tests need local traces or host capabilities that are not
 checked in. They are opt-in through environment variables:
 

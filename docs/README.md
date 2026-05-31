@@ -2,6 +2,7 @@
 
 Core user documentation:
 
+- [`ENVIRONMENT.md`](./ENVIRONMENT.md) for environment variables
 - [`TESTING.md`](./TESTING.md) for test fixtures and opt-in integration tests
 - [`trace-format.md`](./trace-format.md) for the capture bundle and MTSP overview
 - [`STREAMDATA_FORMAT.md`](./STREAMDATA_FORMAT.md) for profiler `streamData`
