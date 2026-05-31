@@ -1,19 +1,16 @@
 package trace
 
 import (
+	"bytes"
+	"compress/zlib"
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"testing"
 )
 
 func TestOpen(t *testing.T) {
-	// Try to find a test .gputrace file
-	testPath := "/tmp/objc_metal_trace.gputrace"
-
-	// Check if test file exists
-	if _, err := os.Stat(testPath); os.IsNotExist(err) {
-		t.Skip("Test .gputrace file not found at /tmp/objc_metal_trace.gputrace")
-	}
+	testPath := writeSyntheticTraceBundle(t)
 
 	trace, err := Open(testPath)
 	if err != nil {
@@ -24,13 +21,14 @@ func TestOpen(t *testing.T) {
 	if trace.Metadata == nil {
 		t.Error("Metadata is nil")
 	} else {
-		t.Logf("UUID: %s", trace.Metadata.UUID)
-		t.Logf("Graphics API: %d", trace.Metadata.GraphicsAPI)
-		t.Logf("Device ID: %d", trace.Metadata.DeviceID)
-		t.Logf("Captured Frames: %d", trace.Metadata.CapturedFramesCount)
-
+		if trace.Metadata.UUID != "synthetic-trace-test" {
+			t.Errorf("Expected synthetic UUID, got %q", trace.Metadata.UUID)
+		}
 		if trace.Metadata.GraphicsAPI != 1 {
 			t.Errorf("Expected Metal (API=1), got %d", trace.Metadata.GraphicsAPI)
+		}
+		if trace.Metadata.DeviceID != 1234 {
+			t.Errorf("Expected device ID 1234, got %d", trace.Metadata.DeviceID)
 		}
 	}
 
@@ -52,39 +50,29 @@ func TestOpen(t *testing.T) {
 	}
 
 	// Verify labels extracted
-	t.Logf("Kernel names found: %v", trace.KernelNames)
-	t.Logf("Encoder labels found: %v", trace.EncoderLabels)
-	t.Logf("Buffer labels found: %v", trace.BufferLabels)
-	t.Logf("Command queue label: %s", trace.CommandQueueLabel)
+	if !contains(trace.KernelNames, "synthetic_kernel") {
+		t.Errorf("Expected synthetic_kernel in kernel names, got %v", trace.KernelNames)
+	}
+	if !contains(trace.EncoderLabels, "synthetic_kernel") {
+		t.Errorf("Expected synthetic_kernel in encoder labels, got %v", trace.EncoderLabels)
+	}
+}
 
-	// Check for expected kernel names from our test case
-	expectedKernels := []string{"step1_normalize", "step2_apply_relu", "step3_scale_output"}
-	for _, expected := range expectedKernels {
-		found := false
-		for _, actual := range trace.KernelNames {
-			if actual == expected {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("Expected kernel '%s' not found", expected)
-		}
+func TestOpenRealTraceFromEnv(t *testing.T) {
+	testPath := os.Getenv("GPUTRACE_TRACE_TEST_TRACE")
+	if testPath == "" {
+		t.Skip("set GPUTRACE_TRACE_TEST_TRACE to run real-trace Open coverage")
 	}
 
-	// Check for expected encoder labels
-	expectedLabels := []string{"Stage1_Normalize", "Stage2_ReLU", "Stage3_Scale"}
-	for _, expected := range expectedLabels {
-		found := false
-		for _, actual := range trace.EncoderLabels {
-			if actual == expected {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("Expected encoder label '%s' not found", expected)
-		}
+	trace, err := Open(testPath)
+	if err != nil {
+		t.Fatalf("Open(%q) failed: %v", testPath, err)
+	}
+	if trace.Metadata == nil {
+		t.Fatal("Metadata is nil")
+	}
+	if len(trace.CaptureData) == 0 {
+		t.Fatal("No capture data loaded")
 	}
 }
 
@@ -110,34 +98,17 @@ func TestReadMTSPHeader(t *testing.T) {
 }
 
 func TestDecompressStore(t *testing.T) {
-	testPath := "/tmp/objc_metal_trace.gputrace"
-
-	if _, err := os.Stat(testPath); os.IsNotExist(err) {
-		t.Skip("Test .gputrace file not found")
-	}
-
-	// Check if store0 exists
-	store0Path := filepath.Join(testPath, "store0")
-	if _, err := os.Stat(store0Path); os.IsNotExist(err) {
-		t.Skip("store0 not found in test trace")
-	}
+	testPath := writeSyntheticTraceBundle(t)
+	want := []byte("deterministic store payload")
 
 	trace := &Trace{Path: testPath}
 	decompressed, err := trace.DecompressStore(0)
 	if err != nil {
 		t.Fatalf("DecompressStore failed: %v", err)
 	}
-
-	t.Logf("Decompressed store0: %d bytes", len(decompressed))
-
-	// Store is mostly zeros in our simple test case
-	nonZeroCount := 0
-	for _, b := range decompressed {
-		if b != 0 {
-			nonZeroCount++
-		}
+	if !bytes.Equal(decompressed, want) {
+		t.Fatalf("DecompressStore = %q, want %q", decompressed, want)
 	}
-	t.Logf("Non-zero bytes: %d (%.2f%%)", nonZeroCount, 100.0*float64(nonZeroCount)/float64(len(decompressed)))
 }
 
 func TestHelperFunctions(t *testing.T) {
@@ -183,4 +154,76 @@ func TestIsPrintable(t *testing.T) {
 			t.Errorf("isPrintable(%q) = %v, want %v", tt.input, result, tt.expected)
 		}
 	}
+}
+
+func writeSyntheticTraceBundle(t *testing.T) string {
+	t.Helper()
+
+	tracePath := filepath.Join(t.TempDir(), "synthetic.gputrace")
+	if err := os.Mkdir(tracePath, 0o755); err != nil {
+		t.Fatalf("mkdir synthetic trace: %v", err)
+	}
+
+	writeFile(t, filepath.Join(tracePath, "metadata"), []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>(uuid)</key>
+	<string>synthetic-trace-test</string>
+	<key>DYCaptureSession.capture_version</key>
+	<integer>1</integer>
+	<key>DYCaptureSession.graphics_api</key>
+	<integer>1</integer>
+	<key>DYCaptureSession.deviceId</key>
+	<integer>1234</integer>
+	<key>DYCaptureSession.nativePointerSize</key>
+	<integer>8</integer>
+	<key>DYCaptureEngine.captured_frames_count</key>
+	<integer>1</integer>
+	<key>DYCaptureSession.boundaryLess</key>
+	<false/>
+</dict>
+</plist>`))
+	writeFile(t, filepath.Join(tracePath, "capture"), syntheticMTSPData("synthetic_kernel"))
+	writeFile(t, filepath.Join(tracePath, "device-resources-0x1234"), syntheticMTSPData("resource_kernel"))
+	writeFile(t, filepath.Join(tracePath, "store0"), zlibData(t, []byte("deterministic store payload")))
+
+	return tracePath
+}
+
+func writeFile(t *testing.T, path string, data []byte) {
+	t.Helper()
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+func syntheticMTSPData(label string) []byte {
+	data := make([]byte, 16)
+	copy(data, MagicMTSP)
+	binary.LittleEndian.PutUint32(data[4:8], 0x400)
+	binary.LittleEndian.PutUint32(data[8:12], uint32(16+12+len(label)+1))
+
+	data = append(data, []byte("CS\x00\x00")...)
+	data = binary.LittleEndian.AppendUint64(data, 0x1234)
+	data = append(data, label...)
+	data = append(data, 0)
+	for len(data) < 300 {
+		data = append(data, 0)
+	}
+	return data
+}
+
+func zlibData(t *testing.T, data []byte) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+	w := zlib.NewWriter(&buf)
+	if _, err := w.Write(data); err != nil {
+		t.Fatalf("write zlib data: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close zlib writer: %v", err)
+	}
+	return buf.Bytes()
 }
