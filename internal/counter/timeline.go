@@ -88,15 +88,16 @@ type GTMioBinaryTrace struct {
 
 // TimelineData contains all parsed timeline information from a Timeline_f_*.raw file.
 type TimelineData struct {
-	Header      TimelineHeader
-	FilePath    string
-	FileIndex   int    // Index from filename (e.g., 0 from Timeline_f_0.raw)
-	FileSize    int64  // Total file size
-	RawData     []byte // Raw file data for advanced parsing
-	KickTraces  []GTMioKickTrace
-	DrawTraces  []GTMioDrawTrace
-	ChunkCount  int // Number of chunks in the file
-	ValidChunks int // Number of chunks with valid data
+	Header          TimelineHeader
+	FilePath        string
+	FileIndex       int    // Index from filename (e.g., 0 from Timeline_f_0.raw)
+	FileSize        int64  // Total file size
+	RawData         []byte // Raw file data for advanced parsing
+	KickTraces      []GTMioKickTrace
+	DrawTraces      []GTMioDrawTrace
+	ChunkCount      int    // Number of 256-byte sparse-index blocks before DataOffset.
+	ValidChunks     int    // Number of non-zero sparse-index blocks.
+	RawFormatStatus string // Current parser status for Timeline_f_*.raw payloads.
 }
 
 // ParseTimelineFile parses a single Timeline_f_*.raw file.
@@ -111,9 +112,10 @@ func ParseTimelineFile(path string) (*TimelineData, error) {
 	}
 
 	td := &TimelineData{
-		FilePath: path,
-		FileSize: int64(len(data)),
-		RawData:  data,
+		FilePath:        path,
+		FileSize:        int64(len(data)),
+		RawData:         data,
+		RawFormatStatus: "raw Timeline_f payload not decoded; use streamData APSTimelineData for command timing",
 	}
 
 	// Extract file index from filename
@@ -147,15 +149,14 @@ func ParseTimelineFile(path string) (*TimelineData, error) {
 	// Calculate chunk count based on data offset (this is the data section size, not chunk size)
 	// The data section starts at DataOffset, so chunk count is calculated from remaining data
 	if td.Header.DataOffset > 0 && td.Header.DataOffset < uint64(len(data)) {
-		// The data section contains zigzag varint-encoded counter data
-		// For now, we count the sparse index section as "chunks" for backwards compatibility
-		td.ChunkCount = int(td.Header.DataOffset / 256) // Approximate chunk count
-		if td.ChunkCount < 0 {
-			td.ChunkCount = 0
+		// Count 256-byte blocks in the sparse index section.
+		if td.Header.DataOffset > TimelineHeaderSize {
+			td.ChunkCount = int((td.Header.DataOffset - TimelineHeaderSize) / 256)
 		}
 	}
 
-	// Parse chunks for kick/draw traces
+	// Count sparse-index chunks. Raw record decoding is intentionally disabled
+	// until the delta/varint payload format is understood.
 	td.parseChunks()
 
 	return td, nil
@@ -224,7 +225,7 @@ func (td *TimelineData) parseChunkRecords(chunk []byte) {
 	//
 	// TODO: Investigate record markers/magic bytes in chunk data
 	// TODO: Check if chunks need decompression (zlib, lz4, etc.)
-	// TODO: Parse APSTimelineData from streamData plist for accurate timing
+	// APSTimelineData parsing lives in streamdata.go.
 	//
 	// Keeping this as a no-op until the format is properly understood.
 }

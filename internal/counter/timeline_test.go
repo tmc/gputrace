@@ -3,6 +3,7 @@
 package counter
 
 import (
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"testing"
@@ -83,6 +84,47 @@ func TestTimelineHeaderSize(t *testing.T) {
 	// Verify header structure size
 	if TimelineHeaderSize != 256 {
 		t.Errorf("TimelineHeaderSize should be 256, got %d", TimelineHeaderSize)
+	}
+}
+
+func TestParseTimelineFileCountsSparseIndexOnly(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "Timeline_f_7.raw")
+	data := make([]byte, TimelineHeaderSize+3*256+32)
+	binary.LittleEndian.PutUint64(data[0:8], TimelineMagic)
+	binary.LittleEndian.PutUint32(data[12:16], 752)
+	binary.LittleEndian.PutUint64(data[32:40], uint64(TimelineHeaderSize+3*256))
+	binary.LittleEndian.PutUint64(data[80:88], 9)
+	binary.LittleEndian.PutUint64(data[104:112], 600_000_000_000)
+
+	data[TimelineHeaderSize+256+17] = 1
+	data[TimelineHeaderSize+2*256+31] = 2
+
+	if err := os.WriteFile(path, data, 0666); err != nil {
+		t.Fatal(err)
+	}
+
+	td, err := ParseTimelineFile(path)
+	if err != nil {
+		t.Fatalf("ParseTimelineFile failed: %v", err)
+	}
+	if td.FileIndex != 7 {
+		t.Fatalf("FileIndex = %d, want 7", td.FileIndex)
+	}
+	if td.Header.CounterCount != 752 {
+		t.Fatalf("CounterCount = %d, want 752", td.Header.CounterCount)
+	}
+	if td.ChunkCount != 3 {
+		t.Fatalf("ChunkCount = %d, want 3", td.ChunkCount)
+	}
+	if td.ValidChunks != 2 {
+		t.Fatalf("ValidChunks = %d, want 2", td.ValidChunks)
+	}
+	if len(td.KickTraces) != 0 || len(td.DrawTraces) != 0 {
+		t.Fatalf("raw chunk parser produced heuristic records: kicks=%d draws=%d", len(td.KickTraces), len(td.DrawTraces))
+	}
+	if td.RawFormatStatus == "" {
+		t.Fatal("RawFormatStatus is empty")
 	}
 }
 
