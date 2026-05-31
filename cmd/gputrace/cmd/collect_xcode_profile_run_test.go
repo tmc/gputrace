@@ -38,3 +38,15 @@ func TestWaitForExportedTraceRequiresProfilerData(t *testing.T) {
 		t.Fatalf("path = %q, want %q", got, bundle)
 	}
 }
+
+func TestTargetedShowPerformanceFoundSentinel(t *testing.T) {
+	if targetedShowPerformanceFound == 0 {
+		t.Fatal("targetedShowPerformanceFound must be non-zero")
+	}
+	if !isTargetedShowPerformanceFound(targetedShowPerformanceFound) {
+		t.Fatal("targeted Show Performance sentinel not recognized")
+	}
+	if isTargetedShowPerformanceFound(0) {
+		t.Fatal("zero should not be recognized as targeted Show Performance sentinel")
+	}
+}
