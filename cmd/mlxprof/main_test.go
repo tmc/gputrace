@@ -137,6 +137,27 @@ func TestRunCaptureWithDepsWrapsCommandFailure(t *testing.T) {
 	}
 }
 
+func TestProfileOutputPathIsStdout(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "empty", path: "", want: true},
+		{name: "dash", path: "-", want: true},
+		{name: "dev stdout", path: "/dev/stdout", want: true},
+		{name: "file", path: "merged.pprof", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := profileOutputPathIsStdout(tt.path); got != tt.want {
+				t.Fatalf("profileOutputPathIsStdout(%q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
 func containsEnv(env []string, want string) bool {
 	for _, got := range env {
 		if got == want {
