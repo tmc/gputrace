@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 
 	"github.com/spf13/cobra"
@@ -10,11 +12,11 @@ import (
 )
 
 var analyzeUsageCmd = &cobra.Command{
-	Use:   "analyze-usage [trace-path]",
+	Use:    "analyze-usage [trace-path]",
 	Short:  "Analyze buffer usage across kernels",
 	Hidden: true,
-	Args:  cobra.ExactArgs(1),
-	RunE:  runAnalyzeUsage,
+	Args:   cobra.ExactArgs(1),
+	RunE:   runAnalyzeUsage,
 }
 
 var analyzeFormat string
@@ -22,6 +24,21 @@ var analyzeFormat string
 func init() {
 	analyzeUsageCmd.Flags().StringVar(&analyzeFormat, "format", "text", "Output format (text, dot, json)")
 	rootCmd.AddCommand(analyzeUsageCmd)
+}
+
+type usageStats struct {
+	Address    uint64
+	Name       string
+	Dispatches int
+	Kernels    map[string]*kernelUsageStats
+}
+
+type kernelUsageStats struct {
+	ID       string
+	Name     string
+	Accesses int
+	Reads    int
+	Writes   int
 }
 
 func runAnalyzeUsage(cmd *cobra.Command, args []string) error {
@@ -32,86 +49,12 @@ func runAnalyzeUsage(cmd *cobra.Command, args []string) error {
 	}
 	defer t.Close()
 
-	records, err := t.ParseMTSPRecords()
+	events, err := t.ParseDependencyEvents()
 	if err != nil {
-		return fmt.Errorf("parse records: %w", err)
+		return fmt.Errorf("parse dependency events: %w", err)
 	}
+	bufferUsage := collectAnalyzeUsage(events)
 
-	// 1. Build Symbol Table (Addr -> Name)
-	bufferNames := make(map[uint64]string)
-	kernelNames := make(map[uint64]string)
-
-	scanForSymbols := func(recs []trace.MTSPRecord) {
-		for _, rec := range recs {
-			if rec.Type == trace.RecordTypeCtU {
-				if ctu, err := rec.ParseCtURecord(); err == nil {
-					bufferNames[ctu.Address] = ctu.Name
-				}
-			}
-			if (rec.Type == trace.RecordTypeCS || rec.Type == trace.RecordTypeCSuwuw) && rec.Label != "" {
-				kernelNames[rec.Address] = rec.Label
-			}
-		}
-	}
-	for _, data := range t.DeviceResources {
-		if recs, err := t.ParseMTSPFromData(data); err == nil {
-			scanForSymbols(recs)
-		}
-	}
-	scanForSymbols(records)
-
-	// 2. Aggregate Usage
-	type usageStats struct {
-		Dispatches int
-		Kernels    map[uint64]int // KernelAddr -> count
-	}
-	bufferUsage := make(map[uint64]*usageStats)
-
-	var scanRecords func([]trace.MTSPRecord)
-	scanRecords = func(recs []trace.MTSPRecord) {
-		for _, rec := range recs {
-			// Check nested
-			if nested, err := t.ParseNestedRecords(rec); err == nil && len(nested) > 0 {
-				scanRecords(nested)
-			}
-
-			var bindings []uint64
-			var funcAddr uint64
-
-			switch rec.Type {
-			case trace.RecordTypeCt:
-				if ct, err := rec.ParseCtRecord(); err == nil {
-					bindings = ct.BufferBindings
-					funcAddr = ct.FunctionAddr
-				}
-			case trace.RecordTypeCtt:
-				if ctt, err := rec.ParseCttRecord(); err == nil {
-					bindings = ctt.BufferBindings
-					funcAddr = ctt.FunctionAddr
-				}
-			case trace.RecordTypeCtulul:
-				if ctulul, err := rec.ParseCtululRecord(); err == nil {
-					bindings = ctulul.BufferBindings
-					// Ctulul doesn't explicitly show FuncAddr, maybe context dependent?
-					// Or PipelineAddr. Let's group by Pipeline if Func missing?
-					funcAddr = ctulul.PipelineAddr // Fallback unique ID
-				}
-			}
-
-			if len(bindings) > 0 {
-				for _, bAddr := range bindings {
-					if _, ok := bufferUsage[bAddr]; !ok {
-						bufferUsage[bAddr] = &usageStats{Kernels: make(map[uint64]int)}
-					}
-					bufferUsage[bAddr].Dispatches++
-					bufferUsage[bAddr].Kernels[funcAddr]++
-				}
-			}
-		}
-	}
-	scanRecords(records)
-
-	// 3. Output
 	if analyzeFormat == "json" {
 		type kernelUsage struct {
 			Name  string `json:"name"`
@@ -124,22 +67,14 @@ func runAnalyzeUsage(cmd *cobra.Command, args []string) error {
 			Kernels    []kernelUsage `json:"kernels"`
 		}
 		var out []bufferUsageJSON
-		for bAddr, stats := range bufferUsage {
-			name := bufferNames[bAddr]
-			if name == "" {
-				name = fmt.Sprintf("Buffer@0x%x", bAddr)
-			}
+		for _, stats := range sortedUsageStats(bufferUsage) {
 			entry := bufferUsageJSON{
-				Address:    fmt.Sprintf("0x%x", bAddr),
-				Name:       name,
+				Address:    fmt.Sprintf("0x%x", stats.Address),
+				Name:       stats.Name,
 				Dispatches: stats.Dispatches,
 			}
-			for kAddr, count := range stats.Kernels {
-				kName := kernelNames[kAddr]
-				if kName == "" {
-					kName = fmt.Sprintf("Kernel/Pipeline@0x%x", kAddr)
-				}
-				entry.Kernels = append(entry.Kernels, kernelUsage{Name: kName, Count: count})
+			for _, kernel := range sortedKernelUsageStats(stats.Kernels) {
+				entry.Kernels = append(entry.Kernels, kernelUsage{Name: kernel.Name, Count: kernel.Accesses})
 			}
 			out = append(out, entry)
 		}
@@ -152,64 +87,166 @@ func runAnalyzeUsage(cmd *cobra.Command, args []string) error {
 	}
 
 	if analyzeFormat == "dot" {
-		fmt.Printf("digraph G {\n")
-		fmt.Printf("  rankdir=LR;\n")
-		for bAddr, stats := range bufferUsage {
-			if stats.Dispatches < 2 {
-				continue
-			} // Filter noise
-			bName := fmt.Sprintf("Buffer_0x%x", bAddr)
-			if name, ok := bufferNames[bAddr]; ok {
-				bName = fmt.Sprintf("%s\n(0x%x)", name, bAddr)
-			}
-			fmt.Printf("  \"%d\" [shape=box, label=%q];\n", bAddr, bName)
-
-			for kAddr := range stats.Kernels {
-				kName := fmt.Sprintf("Kernel_0x%x", kAddr)
-				if name, ok := kernelNames[kAddr]; ok {
-					kName = name
-				}
-				// TODO: We need read/write direction to make arrows meaningful.
-				// For now, undirected or bidirectional? Or just Kernel -> Buffer?
-				// Ctulul is "Dispatch", so Kernel uses Buffer.
-				fmt.Printf("  \"%d\" -> \"%d\";\n", kAddr, bAddr)
-				fmt.Printf("  \"%d\" [shape=ellipse, label=%q];\n", kAddr, kName)
-			}
-		}
-		fmt.Printf("}\n")
-		return nil
+		return writeAnalyzeUsageDOT(cmd.OutOrStdout(), bufferUsage)
 	}
 
 	fmt.Printf("Trace Buffer Usage Analysis\n")
 	fmt.Printf("=============================\n")
 
-	// Sort by most used
-	var sortedBuffers []uint64
-	for bAddr := range bufferUsage {
-		sortedBuffers = append(sortedBuffers, bAddr)
-	}
-	sort.Slice(sortedBuffers, func(i, j int) bool {
-		return bufferUsage[sortedBuffers[i]].Dispatches > bufferUsage[sortedBuffers[j]].Dispatches
-	})
-
-	for _, bAddr := range sortedBuffers {
-		stats := bufferUsage[bAddr]
-		name := bufferNames[bAddr]
-		if name == "" {
-			name = fmt.Sprintf("Buffer@0x%x", bAddr)
-		} else {
-			name = fmt.Sprintf("%s (0x%x)", name, bAddr)
-		}
+	for _, stats := range sortedUsageStats(bufferUsage) {
+		name := fmt.Sprintf("%s (0x%x)", stats.Name, stats.Address)
 
 		fmt.Printf("\n%s: Used in %d dispatches\n", name, stats.Dispatches)
-		for kAddr, count := range stats.Kernels {
-			kName := kernelNames[kAddr]
-			if kName == "" {
-				kName = fmt.Sprintf("Kernel/Pipeline@0x%x", kAddr)
-			}
-			fmt.Printf("  - %s: %d\n", kName, count)
+		for _, kernel := range sortedKernelUsageStats(stats.Kernels) {
+			fmt.Printf("  - %s: %d\n", kernel.Name, kernel.Accesses)
 		}
 	}
 
 	return nil
+}
+
+func collectAnalyzeUsage(events []trace.DependencyEvent) map[uint64]*usageStats {
+	events = append([]trace.DependencyEvent(nil), events...)
+	sort.SliceStable(events, func(i, j int) bool {
+		return events[i].Offset < events[j].Offset
+	})
+
+	bufferUsage := make(map[uint64]*usageStats)
+	currentKernelKey := ""
+	currentKernelName := ""
+	kernelSeq := 0
+
+	for _, ev := range events {
+		switch ev.Type {
+		case trace.EventCS:
+			currentKernelName = ev.Label
+			if currentKernelName == "" {
+				currentKernelName = fmt.Sprintf("Kernel %d", kernelSeq)
+			}
+			currentKernelKey = currentKernelName
+			kernelSeq++
+		case trace.EventBind, trace.EventUse:
+			if currentKernelKey == "" || ev.Address == 0 {
+				continue
+			}
+			read, write := analyzeUsageDirections(ev)
+			if !read && !write {
+				continue
+			}
+
+			stats := bufferUsage[ev.Address]
+			if stats == nil {
+				stats = &usageStats{
+					Address: ev.Address,
+					Name:    analyzeUsageBufferName(ev),
+					Kernels: make(map[string]*kernelUsageStats),
+				}
+				bufferUsage[ev.Address] = stats
+			}
+			if stats.Name == "" || stats.Name == fmt.Sprintf("Buffer@0x%x", ev.Address) {
+				stats.Name = analyzeUsageBufferName(ev)
+			}
+			stats.Dispatches++
+
+			kernel := stats.Kernels[currentKernelKey]
+			if kernel == nil {
+				kernel = &kernelUsageStats{
+					ID:   fmt.Sprintf("kernel:%s", currentKernelKey),
+					Name: currentKernelName,
+				}
+				stats.Kernels[currentKernelKey] = kernel
+			}
+			kernel.Accesses++
+			if read {
+				kernel.Reads++
+			}
+			if write {
+				kernel.Writes++
+			}
+		}
+	}
+
+	return bufferUsage
+}
+
+func analyzeUsageDirections(ev trace.DependencyEvent) (read, write bool) {
+	if ev.Type == trace.EventUse {
+		return true, false
+	}
+	if ev.Usage.IsRead() || ev.Usage&trace.MTLResourceUsageSample != 0 {
+		read = true
+	}
+	if ev.Usage.IsWrite() {
+		write = true
+	}
+	return read, write
+}
+
+func analyzeUsageBufferName(ev trace.DependencyEvent) string {
+	if ev.Name != "" {
+		return ev.Name
+	}
+	return fmt.Sprintf("Buffer@0x%x", ev.Address)
+}
+
+func sortedUsageStats(bufferUsage map[uint64]*usageStats) []*usageStats {
+	stats := make([]*usageStats, 0, len(bufferUsage))
+	for _, usage := range bufferUsage {
+		stats = append(stats, usage)
+	}
+	sort.Slice(stats, func(i, j int) bool {
+		if stats[i].Dispatches != stats[j].Dispatches {
+			return stats[i].Dispatches > stats[j].Dispatches
+		}
+		return stats[i].Address < stats[j].Address
+	})
+	return stats
+}
+
+func sortedKernelUsageStats(kernels map[string]*kernelUsageStats) []*kernelUsageStats {
+	stats := make([]*kernelUsageStats, 0, len(kernels))
+	for _, kernel := range kernels {
+		stats = append(stats, kernel)
+	}
+	sort.Slice(stats, func(i, j int) bool {
+		if stats[i].Name != stats[j].Name {
+			return stats[i].Name < stats[j].Name
+		}
+		return stats[i].ID < stats[j].ID
+	})
+	return stats
+}
+
+func writeAnalyzeUsageDOT(w io.Writer, bufferUsage map[uint64]*usageStats) error {
+	var buf bytes.Buffer
+	fmt.Fprintln(&buf, "digraph G {")
+	fmt.Fprintln(&buf, "  rankdir=LR;")
+	for _, stats := range sortedUsageStats(bufferUsage) {
+		if stats.Dispatches < 2 {
+			continue
+		}
+
+		bufferID := analyzeUsageBufferNodeID(stats.Address)
+		bufferLabel := fmt.Sprintf("%s\n(0x%x)", stats.Name, stats.Address)
+		fmt.Fprintf(&buf, "  %q [shape=box, label=%q];\n", bufferID, bufferLabel)
+
+		for _, kernel := range sortedKernelUsageStats(stats.Kernels) {
+			fmt.Fprintf(&buf, "  %q [shape=ellipse, label=%q];\n", kernel.ID, kernel.Name)
+			switch {
+			case kernel.Reads > 0 && kernel.Writes > 0:
+				fmt.Fprintf(&buf, "  %q -> %q [label=\"ReadWrite\", dir=both];\n", kernel.ID, bufferID)
+			case kernel.Reads > 0:
+				fmt.Fprintf(&buf, "  %q -> %q [label=\"Read\"];\n", bufferID, kernel.ID)
+			case kernel.Writes > 0:
+				fmt.Fprintf(&buf, "  %q -> %q [label=\"Write\"];\n", kernel.ID, bufferID)
+			}
+		}
+	}
+	fmt.Fprintln(&buf, "}")
+	_, err := w.Write(buf.Bytes())
+	return err
+}
+
+func analyzeUsageBufferNodeID(address uint64) string {
+	return fmt.Sprintf("buffer:0x%x", address)
 }
