@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -64,7 +65,7 @@ func setupCaptureBundle() error {
 			"com.apple.security.automation.apple-events", // AppleScript automation
 		},
 		AutoSign: true,
-		UIMode:    macgo.UIModeBackground,
+		UIMode:   macgo.UIModeBackground,
 		Info: map[string]interface{}{
 			"NSAppleEventsUsageDescription": "gputrace needs to control applications for GPU trace capture.",
 		},
@@ -72,8 +73,8 @@ func setupCaptureBundle() error {
 
 	if err := macgo.Start(cfg); err != nil {
 		// Don't fail hard - we can still try environment-based capture
-		fmt.Printf("Note: macgo bundle setup failed: %v\n", err)
-		fmt.Println("Proceeding with environment-based capture...")
+		fmt.Fprintf(os.Stderr, "Note: macgo bundle setup failed: %v\n", err)
+		fmt.Fprintln(os.Stderr, "Proceeding with environment-based capture...")
 		return nil
 	}
 
@@ -81,20 +82,19 @@ func setupCaptureBundle() error {
 }
 
 func runCapture(cmd *cobra.Command, args []string) error {
+	var status io.Writer = os.Stderr
+	if cmd != nil {
+		status = cmd.ErrOrStderr()
+	}
+
 	// Setup macgo bundle with GPU capture entitlements
 	if err := setupCaptureBundle(); err != nil {
 		return err
 	}
 
-	// Ensure output path has .gputrace extension
-	if !strings.HasSuffix(captureOutput, ".gputrace") {
-		captureOutput += ".gputrace"
-	}
-
-	// Get absolute path for output
-	absOutput, err := filepath.Abs(captureOutput)
+	absOutput, err := resolveCaptureOutputPath(captureOutput)
 	if err != nil {
-		return fmt.Errorf("failed to resolve output path: %w", err)
+		return err
 	}
 
 	// Remove existing file if present
@@ -113,7 +113,7 @@ func runCapture(cmd *cobra.Command, args []string) error {
 	if nameID != 0 {
 		nameCStr := objc.Send[*byte](nameID, objc.Sel("UTF8String"))
 		if nameCStr != nil {
-			fmt.Printf("Using Metal device: %s\n", objc.GoString(nameCStr))
+			fmt.Fprintf(status, "Using Metal device: %s\n", objc.GoString(nameCStr))
 		}
 	}
 
@@ -135,20 +135,20 @@ func runCapture(cmd *cobra.Command, args []string) error {
 	developerToolsSupported := manager.SupportsDestination(metal.MTLCaptureDestinationDeveloperTools)
 
 	if !gpuTraceSupported {
-		fmt.Println("Note: GPU trace document capture not directly supported (likely missing entitlements)")
-		fmt.Println("Attempting capture via environment variable injection...")
-		fmt.Println("")
-		fmt.Println("For the child process to be captured, it must:")
-		fmt.Println("  1. Use Metal APIs")
-		fmt.Println("  2. Be built with GPU Frame Capture enabled")
-		fmt.Println("  3. Or run: MTL_CAPTURE_ENABLED=1 <command>")
-		fmt.Println("")
+		fmt.Fprintln(status, "Note: GPU trace document capture not directly supported (likely missing entitlements)")
+		fmt.Fprintln(status, "Attempting capture via environment variable injection...")
+		fmt.Fprintln(status)
+		fmt.Fprintln(status, "For the child process to be captured, it must:")
+		fmt.Fprintln(status, "  1. Use Metal APIs")
+		fmt.Fprintln(status, "  2. Be built with GPU Frame Capture enabled")
+		fmt.Fprintln(status, "  3. Or run: MTL_CAPTURE_ENABLED=1 <command>")
+		fmt.Fprintln(status)
 
 		// Try proceeding anyway - some configurations still work
 		if !developerToolsSupported {
 			// Neither destination is supported - capture won't work from this process
 			// But we can still set up environment for child process
-			return runWithEnvCapture(args, absOutput)
+			return runWithEnvCapture(args, absOutput, status)
 		}
 	}
 
@@ -161,7 +161,7 @@ func runCapture(cmd *cobra.Command, args []string) error {
 	outputURL := foundation.NewURLFileURLWithPath(absOutput)
 	desc.SetOutputURL(outputURL)
 
-	fmt.Printf("Capture output: %s\n", absOutput)
+	fmt.Fprintf(status, "Capture output: %s\n", absOutput)
 
 	// 6. Start capture
 	ok, captureErr := manager.StartCaptureWithDescriptorError(desc)
@@ -177,7 +177,7 @@ func runCapture(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("capture did not start properly")
 	}
 
-	fmt.Println("GPU capture started...")
+	fmt.Fprintln(status, "GPU capture started...")
 
 	// 7. Run user command
 	userCmd := exec.Command(args[0], args[1:]...)
@@ -191,18 +191,18 @@ func runCapture(cmd *cobra.Command, args []string) error {
 		"METAL_DEVICE_WRAPPER_TYPE=1",
 	)
 
-	fmt.Printf("Running: %s\n", strings.Join(args, " "))
+	fmt.Fprintf(status, "Running: %s\n", strings.Join(args, " "))
 	cmdErr := userCmd.Run()
 
 	// 8. Stop capture
 	manager.StopCapture()
-	fmt.Println("GPU capture stopped.")
+	fmt.Fprintln(status, "GPU capture stopped.")
 
 	// Check if capture file was created
 	if fi, err := os.Stat(absOutput); err == nil {
-		fmt.Printf("Trace saved: %s (%.2f MB)\n", absOutput, float64(fi.Size())/(1024*1024))
+		fmt.Fprintf(status, "Trace saved: %s (%.2f MB)\n", absOutput, float64(fi.Size())/(1024*1024))
 	} else {
-		fmt.Println("Warning: trace file may not have been created")
+		fmt.Fprintln(status, "Warning: trace file may not have been created")
 	}
 
 	if cmdErr != nil {
@@ -212,11 +212,28 @@ func runCapture(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+func resolveCaptureOutputPath(outputPath string) (string, error) {
+	if outputPath == "" {
+		outputPath = "capture.gputrace"
+	}
+	if commandOutputPathIsStdout(outputPath) {
+		return "", fmt.Errorf("capture output must be a file path, not stdout")
+	}
+	if !strings.HasSuffix(outputPath, ".gputrace") {
+		outputPath += ".gputrace"
+	}
+	absOutput, err := filepath.Abs(outputPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve output path: %w", err)
+	}
+	return absOutput, nil
+}
+
 // runWithEnvCapture runs the command with environment variables set for Metal capture.
 // This is a fallback when programmatic capture is not supported due to entitlements.
-func runWithEnvCapture(args []string, outputPath string) error {
-	fmt.Println("Using environment-based capture (MTL_CAPTURE_ENABLED)...")
-	fmt.Println("")
+func runWithEnvCapture(args []string, outputPath string, status io.Writer) error {
+	fmt.Fprintln(status, "Using environment-based capture (MTL_CAPTURE_ENABLED)...")
+	fmt.Fprintln(status)
 
 	userCmd := exec.Command(args[0], args[1:]...)
 	userCmd.Stdout = os.Stdout
@@ -232,9 +249,9 @@ func runWithEnvCapture(args []string, outputPath string) error {
 		fmt.Sprintf("MTL_CAPTURE_OUTPUT=%s", outputPath),
 	)
 
-	fmt.Printf("Running: %s\n", strings.Join(args, " "))
-	fmt.Println("Metal capture environment variables set.")
-	fmt.Println("")
+	fmt.Fprintf(status, "Running: %s\n", strings.Join(args, " "))
+	fmt.Fprintln(status, "Metal capture environment variables set.")
+	fmt.Fprintln(status)
 
 	if err := userCmd.Run(); err != nil {
 		return fmt.Errorf("command failed: %w", err)
@@ -242,7 +259,7 @@ func runWithEnvCapture(args []string, outputPath string) error {
 
 	// Check if capture file was created
 	if fi, err := os.Stat(outputPath); err == nil {
-		fmt.Printf("\nTrace saved: %s (%.2f MB)\n", outputPath, float64(fi.Size())/(1024*1024))
+		fmt.Fprintf(status, "\nTrace saved: %s (%.2f MB)\n", outputPath, float64(fi.Size())/(1024*1024))
 	} else {
 		// Check default Metal capture locations
 		homeDir, _ := os.UserHomeDir()
@@ -250,13 +267,13 @@ func runWithEnvCapture(args []string, outputPath string) error {
 			filepath.Join(homeDir, "Desktop", "*.gputrace"),
 			"/tmp/*.gputrace",
 		}
-		fmt.Println("\nNote: Trace file not found at specified path.")
-		fmt.Println("Metal may have saved the capture to a default location:")
+		fmt.Fprintln(status, "\nNote: Trace file not found at specified path.")
+		fmt.Fprintln(status, "Metal may have saved the capture to a default location:")
 		for _, p := range defaultPaths {
 			matches, _ := filepath.Glob(p)
 			for _, m := range matches {
 				if fi, err := os.Stat(m); err == nil {
-					fmt.Printf("  Found: %s (%.2f MB)\n", m, float64(fi.Size())/(1024*1024))
+					fmt.Fprintf(status, "  Found: %s (%.2f MB)\n", m, float64(fi.Size())/(1024*1024))
 				}
 			}
 		}
