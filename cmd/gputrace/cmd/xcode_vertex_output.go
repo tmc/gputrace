@@ -70,10 +70,7 @@ func runVertexOutput(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	statusOut := io.Writer(os.Stdout)
-	if jsonOutput {
-		statusOut = os.Stderr
-	}
+	statusOut := vertexOutputStatusWriter(jsonOutput, vertexOutputFile)
 
 	inputPath, err := filepath.Abs(args[0])
 	if err != nil {
@@ -224,6 +221,17 @@ func writeVertexOutput(v any, text string) error {
 	}
 	fmt.Println(text)
 	return nil
+}
+
+func vertexOutputStatusWriter(jsonOutput bool, outputPath string) io.Writer {
+	if jsonOutput || vertexOutputOutputPathIsStdout(outputPath) {
+		return os.Stderr
+	}
+	return os.Stdout
+}
+
+func vertexOutputOutputPathIsStdout(path string) bool {
+	return path == "" || path == "/dev/stdout"
 }
 
 func vertexOutputJSON(globalJSON bool, format string) (bool, error) {

@@ -67,6 +67,9 @@ func init() {
 
 func runTiming(cmd *cobra.Command, args []string) error {
 	tracePath := args[0]
+	if err := validateTimingOutputPaths(); err != nil {
+		return err
+	}
 
 	// Verify trace file exists
 	if err := checkTraceFile(tracePath); err != nil {
@@ -152,6 +155,10 @@ func runTiming(cmd *cobra.Command, args []string) error {
 
 // runTimingFromProfiler extracts timing from .gpuprofiler_raw when unsorted-capture is missing.
 func runTimingFromProfiler(tracePath string) error {
+	if err := validateTimingOutputPaths(); err != nil {
+		return err
+	}
+
 	// Find .gpuprofiler_raw directory
 	profilerDir := ""
 
@@ -233,6 +240,20 @@ func timingReportWriter() *os.File {
 
 func timingOutputPathIsStdout(path string) bool {
 	return path == "/dev/stdout"
+}
+
+func validateTimingOutputPaths() error {
+	stdoutExports := 0
+	if timingOutputPathIsStdout(timingJSON) {
+		stdoutExports++
+	}
+	if timingOutputPathIsStdout(timingCSV) {
+		stdoutExports++
+	}
+	if stdoutExports > 1 {
+		return fmt.Errorf("only one timing export can write to /dev/stdout")
+	}
+	return nil
 }
 
 // convertStreamDataToTimingMetrics converts StreamDataStats to TimingMetrics.
