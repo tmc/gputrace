@@ -47,8 +47,8 @@ Examples:
   # Show annotated source for a shader
   gputrace shader-source trace.gputrace rope_single_freqs
 
-  # Include optimization hints
-  gputrace shader-source trace.gputrace rope_single_freqs --hints
+  # Hide optimization hints
+  gputrace shader-source trace.gputrace rope_single_freqs --hints=false
 
   # Generate HTML view
   gputrace shader-source trace.gputrace affine_qmm_t --format html -o shader.html
@@ -67,7 +67,7 @@ consider using Metal's shader profiler or GPU frame capture tools.
 
 See also:
   - gputrace shaders: List all shaders with aggregate metrics
-  - gputrace shader-metrics: Detailed per-shader performance analysis
+  - gputrace profiler: Show profiler timing and shader cost breakdowns
   - go tool pprof -list: Similar concept for CPU profiles`,
 	Args: cobra.ExactArgs(2),
 	RunE: runShaderSource,

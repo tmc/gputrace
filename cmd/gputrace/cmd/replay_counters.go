@@ -40,7 +40,7 @@ Use this command to inspect:
   - Memory requirements for counter buffers
   - Counter aggregation and reporting structure
 
-Use perfcounters when you need existing profiler data:
+Use profiler when you need existing profiler data:
    - Reads existing .gpuprofiler_raw files from Instruments
    - No GPU execution required
    - Binary format undocumented (reverse engineering needed)
@@ -88,8 +88,8 @@ Implementation Status:
   trace replay or GPU work.
 
 Related Commands:
-  - gputrace replay: Analyze replay structure
-  - gputrace perfcounters: Extract counters from .gpuprofiler_raw`,
+  - gputrace profiler: Extract profiler timing data from .gpuprofiler_raw/streamData
+  - gputrace xcode-counters: Display imported Xcode Counters.csv data`,
 	Args: cobra.ExactArgs(1),
 	RunE: runReplayCounters,
 }

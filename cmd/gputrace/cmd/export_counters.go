@@ -70,8 +70,8 @@ Use Cases:
 
 Related Commands:
   - gputrace timeline: Visual timeline with counter tracks
-  - gputrace perfcounters: Parse .gpuprofiler_raw files
-  - gputrace replay-counters: Collect fresh counters via replay`,
+  - gputrace profiler: Extract profiler timing data
+  - gputrace xcode-counters: Display counters from Xcode Counters.csv`,
 	Args: cobra.ExactArgs(1),
 	RunE: runExportCounters,
 }

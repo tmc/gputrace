@@ -52,7 +52,6 @@ Capture & Automation:
   xcode-profile    - Xcode GPU profiler automation
 
 Utilities:
-  serve            - Web server for trace browsing
   mtlb             - Metal Library Binary inspection
   clear-buffers    - Zero out buffers to reduce trace size
 

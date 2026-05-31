@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -67,6 +69,66 @@ func TestReplayCountersHelpUsesRegisteredBoolFlagSpelling(t *testing.T) {
 	}
 	if replayCountersCmd.Flags().Lookup("dispatch-boundaries") == nil {
 		t.Fatal("replay-counters dispatch-boundaries flag not registered")
+	}
+}
+
+func TestRootAndReadmeDoNotListMissingServe(t *testing.T) {
+	if strings.Contains(rootCmd.Long, "\n  serve") {
+		t.Fatalf("root help still lists missing serve command:\n%s", rootCmd.Long)
+	}
+
+	readmePath := filepath.Join("..", "..", "..", "README.md")
+	readme, err := os.ReadFile(readmePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(readme), "`serve`") {
+		t.Fatalf("README still lists missing serve command:\n%s", readme)
+	}
+}
+
+func TestHelpDoesNotReferenceMissingRelatedCommands(t *testing.T) {
+	checks := []struct {
+		name string
+		help string
+	}{
+		{"shader-source", shaderSourceCmd.Long},
+		{"export-counters", exportCountersCmd.Long},
+		{"replay-counters", replayCountersCmd.Long},
+	}
+	for _, check := range checks {
+		for _, stale := range []string{"shader-metrics", "perfcounters", "gputrace replay:"} {
+			if strings.Contains(check.help, stale) {
+				t.Fatalf("%s help still references missing command %q:\n%s", check.name, stale, check.help)
+			}
+		}
+	}
+
+	for _, want := range []string{"gputrace profiler", "gputrace xcode-counters"} {
+		if !strings.Contains(exportCountersCmd.Long, want) {
+			t.Fatalf("export-counters help does not contain existing related command %q:\n%s", want, exportCountersCmd.Long)
+		}
+		if !strings.Contains(replayCountersCmd.Long, want) {
+			t.Fatalf("replay-counters help does not contain existing related command %q:\n%s", want, replayCountersCmd.Long)
+		}
+	}
+}
+
+func TestPerformanceHelpDescribesCountersTab(t *testing.T) {
+	if !strings.Contains(performanceCmd.Long, "counters  Select the Counters tab") {
+		t.Fatalf("performance help should describe counters as tab selection:\n%s", performanceCmd.Long)
+	}
+	if strings.Contains(performanceCmd.Long, "counters  Extract GPU counter values (planned)") {
+		t.Fatalf("performance help still describes counters as planned extraction:\n%s", performanceCmd.Long)
+	}
+}
+
+func TestShaderSourceHintsExampleMatchesDefault(t *testing.T) {
+	if !strings.Contains(shaderSourceCmd.Long, "--hints=false") {
+		t.Fatalf("shader-source help should show how to disable default hints:\n%s", shaderSourceCmd.Long)
+	}
+	if strings.Contains(shaderSourceCmd.Long, "Include optimization hints") {
+		t.Fatalf("shader-source help still implies --hints is needed to include hints:\n%s", shaderSourceCmd.Long)
 	}
 }
 
