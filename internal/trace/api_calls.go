@@ -832,7 +832,7 @@ func parseCommandBufferCalls(data []byte, cb *CommandBuffer, startCallNum int, i
 					CallNumber: callNum,
 					Indented:   true,
 					Type:       "setBuffer",
-					Details:    fmt.Sprintf("setBuffer:0x%x offset:0 atIndex:%d", binding.BufferAddr, binding.Index),
+					Details:    fmt.Sprintf("setBuffer:0x%x offset:%d atIndex:%d", binding.BufferAddr, binding.BufferOffset, binding.Index),
 					Offset:     binding.Offset,
 				})
 				callNum++
@@ -888,9 +888,10 @@ func parseCommandBufferCalls(data []byte, cb *CommandBuffer, startCallNum int, i
 
 // CommandBufferBinding represents a buffer binding within a command buffer.
 type CommandBufferBinding struct {
-	BufferAddr uint64
-	Index      int
-	Offset     int64
+	BufferAddr   uint64
+	BufferOffset uint64
+	Index        int
+	Offset       int64
 }
 
 // parseBufferBindings extracts buffer binding records.
@@ -918,12 +919,14 @@ func parseBufferBindings(data []byte) ([]CommandBufferBinding, error) {
 		// Read buffer address at +0x10 and index at +0x20
 		if absolutePos+0x24 <= len(data) {
 			bufAddr := binary.LittleEndian.Uint64(data[absolutePos+0x10 : absolutePos+0x18])
+			bufOffset := binary.LittleEndian.Uint64(data[absolutePos+0x18 : absolutePos+0x20])
 			index := binary.LittleEndian.Uint32(data[absolutePos+0x20 : absolutePos+0x24])
 
 			bindings = append(bindings, CommandBufferBinding{
-				BufferAddr: bufAddr,
-				Index:      int(index),
-				Offset:     int64(absolutePos),
+				BufferAddr:   bufAddr,
+				BufferOffset: bufOffset,
+				Index:        int(index),
+				Offset:       int64(absolutePos),
 			})
 		}
 

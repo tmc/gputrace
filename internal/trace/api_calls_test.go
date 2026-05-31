@@ -961,11 +961,13 @@ func TestParseBufferBindings(t *testing.T) {
 	offset := 0x100
 	copy(data[offset:], []byte("Ctulul\x00\x00"))
 	binary.LittleEndian.PutUint64(data[offset+0x10:], 0x106da6190) // buffer address
+	binary.LittleEndian.PutUint64(data[offset+0x18:], 64)          // buffer offset
 	binary.LittleEndian.PutUint32(data[offset+0x20:], 0)           // index 0
 
 	offset = 0x200
 	copy(data[offset:], []byte("Ctulul\x00\x00"))
 	binary.LittleEndian.PutUint64(data[offset+0x10:], 0xafcdd0000) // buffer address
+	binary.LittleEndian.PutUint64(data[offset+0x18:], 256)         // buffer offset
 	binary.LittleEndian.PutUint32(data[offset+0x20:], 1)           // index 1
 
 	bindings, err := parseBufferBindings(data)
@@ -977,13 +979,59 @@ func TestParseBufferBindings(t *testing.T) {
 		t.Fatalf("Expected 2 bindings, got %d", len(bindings))
 	}
 
-	if bindings[0].BufferAddr != 0x106da6190 || bindings[0].Index != 0 {
-		t.Errorf("First binding incorrect: addr=0x%x, index=%d", bindings[0].BufferAddr, bindings[0].Index)
+	if bindings[0].BufferAddr != 0x106da6190 || bindings[0].BufferOffset != 64 || bindings[0].Index != 0 {
+		t.Errorf("First binding incorrect: addr=0x%x, offset=%d, index=%d", bindings[0].BufferAddr, bindings[0].BufferOffset, bindings[0].Index)
 	}
 
-	if bindings[1].BufferAddr != 0xafcdd0000 || bindings[1].Index != 1 {
-		t.Errorf("Second binding incorrect: addr=0x%x, index=%d", bindings[1].BufferAddr, bindings[1].Index)
+	if bindings[1].BufferAddr != 0xafcdd0000 || bindings[1].BufferOffset != 256 || bindings[1].Index != 1 {
+		t.Errorf("Second binding incorrect: addr=0x%x, offset=%d, index=%d", bindings[1].BufferAddr, bindings[1].BufferOffset, bindings[1].Index)
 	}
+}
+
+func TestParseCommandBufferCallsFormatsBufferOffsets(t *testing.T) {
+	const (
+		queueAddr   = 0x106da64d0
+		cbAddr      = 0x780c115e0
+		encoderAddr = 0xbd7895c00
+		bufferAddr  = 0x106da6190
+	)
+
+	data := make([]byte, 0x120)
+	copy(data[0x00:], []byte("CUUU"))
+	copy(data[0x10:], []byte("C\x00\x00\x00"))
+	binary.LittleEndian.PutUint64(data[0x14:], queueAddr)
+	copy(data[0x20:], []byte("C\x00\x00\x00"))
+	binary.LittleEndian.PutUint64(data[0x24:], cbAddr)
+
+	copy(data[0x40:], []byte("CS\x00\x00"))
+	binary.LittleEndian.PutUint64(data[0x44:], cbAddr)
+	copy(data[0x4c:], []byte("command buffer\x00"))
+
+	copy(data[0x70:], []byte("CS\x00\x00"))
+	binary.LittleEndian.PutUint64(data[0x74:], encoderAddr)
+	copy(data[0x7c:], []byte("kernel\x00"))
+
+	copy(data[0xa0:], []byte("Ctulul\x00\x00"))
+	binary.LittleEndian.PutUint64(data[0xb0:], bufferAddr)
+	binary.LittleEndian.PutUint64(data[0xb8:], 256)
+	binary.LittleEndian.PutUint32(data[0xc0:], 3)
+
+	cb := &CommandBuffer{Index: 0, Offset: 0}
+	cbCalls, _, err := parseCommandBufferCalls(data, cb, 0, nil, nil)
+	if err != nil {
+		t.Fatalf("parseCommandBufferCalls failed: %v", err)
+	}
+
+	for _, call := range cbCalls.Calls {
+		if call.Type == "setBuffer" {
+			want := "setBuffer:0x106da6190 offset:256 atIndex:3"
+			if call.Details != want {
+				t.Fatalf("setBuffer details = %q, want %q", call.Details, want)
+			}
+			return
+		}
+	}
+	t.Fatalf("setBuffer call not found in %#v", cbCalls.Calls)
 }
 
 func TestFormatAPICallList(t *testing.T) {
