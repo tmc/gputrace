@@ -23,7 +23,7 @@ func TestValidateBuffersOptionsAcceptsKnownValues(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := validateBuffersOptions(tt.format, tt.sort, tt.minSize)
+			got, err := validateBuffersOptions(tt.format, tt.sort, tt.minSize, "", "not-used")
 			if err != nil {
 				t.Fatalf("validateBuffersOptions: %v", err)
 			}
@@ -40,24 +40,86 @@ func TestValidateBuffersOptionsAcceptsKnownValues(t *testing.T) {
 	}
 }
 
-func TestRunBuffersValidatesOptionsBeforeTraceIO(t *testing.T) {
+func TestValidateBuffersOptionsAcceptsInspectFormats(t *testing.T) {
+	for _, format := range []string{"hex", "float32", "int32", "uint32", "float16"} {
+		t.Run(format, func(t *testing.T) {
+			got, err := validateBuffersOptions("table", "size", "", "MTLBuffer-1-0", format)
+			if err != nil {
+				t.Fatalf("validateBuffersOptions: %v", err)
+			}
+			if got.inspectFormat != format {
+				t.Fatalf("inspectFormat = %q, want %q", got.inspectFormat, format)
+			}
+		})
+	}
+}
+
+func TestValidateBuffersOptionsRejectsInvalidInspectFormat(t *testing.T) {
 	tests := []struct {
 		name   string
 		format string
-		sort   string
 		want   string
 	}{
 		{
-			name:   "invalid format",
-			format: "xml",
-			sort:   "size",
-			want:   `invalid buffers format "xml" (must be table, json, or csv)`,
+			name:   "empty",
+			format: "",
+			want:   `invalid inspect format "" (must be hex, float32, int32, uint32, or float16)`,
 		},
 		{
-			name:   "invalid sort",
-			format: "table",
-			sort:   "created",
-			want:   `invalid buffers sort "created" (must be size, id, or name)`,
+			name:   "raw",
+			format: "raw",
+			want:   `invalid inspect format "raw" (must be hex, float32, int32, uint32, or float16)`,
+		},
+		{
+			name:   "uppercase",
+			format: "FLOAT32",
+			want:   `invalid inspect format "FLOAT32" (must be hex, float32, int32, uint32, or float16)`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := validateBuffersOptions("table", "size", "", "MTLBuffer-1-0", tt.format)
+			if err == nil {
+				t.Fatal("validateBuffersOptions succeeded, want error")
+			}
+			if err.Error() != tt.want {
+				t.Fatalf("error = %q, want %q", err.Error(), tt.want)
+			}
+		})
+	}
+}
+
+func TestRunBuffersValidatesOptionsBeforeTraceIO(t *testing.T) {
+	tests := []struct {
+		name          string
+		format        string
+		sort          string
+		inspect       string
+		inspectFormat string
+		want          string
+	}{
+		{
+			name:          "invalid format",
+			format:        "xml",
+			sort:          "size",
+			inspectFormat: "hex",
+			want:          `invalid buffers format "xml" (must be table, json, or csv)`,
+		},
+		{
+			name:          "invalid sort",
+			format:        "table",
+			sort:          "created",
+			inspectFormat: "hex",
+			want:          `invalid buffers sort "created" (must be size, id, or name)`,
+		},
+		{
+			name:          "invalid inspect format",
+			format:        "table",
+			sort:          "size",
+			inspect:       "MTLBuffer-1-0",
+			inspectFormat: "raw",
+			want:          `invalid inspect format "raw" (must be hex, float32, int32, uint32, or float16)`,
 		},
 	}
 
@@ -66,13 +128,19 @@ func TestRunBuffersValidatesOptionsBeforeTraceIO(t *testing.T) {
 			oldFormat := buffersFormat
 			oldSort := buffersSort
 			oldMinSize := buffersMinSize
+			oldInspect := buffersInspect
+			oldInspectFormat := buffersInspectFormat
 			buffersFormat = tt.format
 			buffersSort = tt.sort
 			buffersMinSize = ""
+			buffersInspect = tt.inspect
+			buffersInspectFormat = tt.inspectFormat
 			t.Cleanup(func() {
 				buffersFormat = oldFormat
 				buffersSort = oldSort
 				buffersMinSize = oldMinSize
+				buffersInspect = oldInspect
+				buffersInspectFormat = oldInspectFormat
 			})
 
 			missingTrace := filepath.Join(t.TempDir(), "missing.gputrace")

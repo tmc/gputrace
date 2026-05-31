@@ -62,7 +62,7 @@ func init() {
 }
 
 func runBuffers(cmd *cobra.Command, args []string) error {
-	opts, err := validateBuffersOptions(buffersFormat, buffersSort, buffersMinSize)
+	opts, err := validateBuffersOptions(buffersFormat, buffersSort, buffersMinSize, buffersInspect, buffersInspectFormat)
 	if err != nil {
 		return err
 	}
@@ -82,7 +82,7 @@ func runBuffers(cmd *cobra.Command, args []string) error {
 
 	// If --inspect is specified, handle buffer inspection
 	if buffersInspect != "" {
-		return inspectBuffer(tracePath, buffersInspect, buffersInspectBytes, buffersInspectFormat)
+		return inspectBuffer(tracePath, buffersInspect, buffersInspectBytes, opts.inspectFormat)
 	}
 
 	// Extract buffer information
@@ -117,12 +117,13 @@ func runBuffers(cmd *cobra.Command, args []string) error {
 }
 
 type buffersOptions struct {
-	format  string
-	sort    string
-	minSize uint64
+	format        string
+	sort          string
+	minSize       uint64
+	inspectFormat string
 }
 
-func validateBuffersOptions(format, sortBy, minSize string) (buffersOptions, error) {
+func validateBuffersOptions(format, sortBy, minSize, inspect, inspectFormat string) (buffersOptions, error) {
 	format, err := normalizeBuffersFormat(format)
 	if err != nil {
 		return buffersOptions{}, err
@@ -139,11 +140,18 @@ func validateBuffersOptions(format, sortBy, minSize string) (buffersOptions, err
 			return buffersOptions{}, fmt.Errorf("invalid min-size: %w", err)
 		}
 	}
+	if inspect != "" {
+		inspectFormat, err = normalizeBuffersInspectFormat(inspectFormat)
+		if err != nil {
+			return buffersOptions{}, err
+		}
+	}
 
 	return buffersOptions{
-		format:  format,
-		sort:    sortBy,
-		minSize: minBytes,
+		format:        format,
+		sort:          sortBy,
+		minSize:       minBytes,
+		inspectFormat: inspectFormat,
 	}, nil
 }
 
@@ -162,6 +170,15 @@ func normalizeBuffersSort(sortBy string) (string, error) {
 		return sortBy, nil
 	default:
 		return "", fmt.Errorf("invalid buffers sort %q (must be size, id, or name)", sortBy)
+	}
+}
+
+func normalizeBuffersInspectFormat(format string) (string, error) {
+	switch format {
+	case "hex", "float32", "int32", "uint32", "float16":
+		return format, nil
+	default:
+		return "", fmt.Errorf("invalid inspect format %q (must be hex, float32, int32, uint32, or float16)", format)
 	}
 }
 
