@@ -101,7 +101,7 @@ func TestParseTimelineFileCountsSparseIndexOnly(t *testing.T) {
 	data[TimelineHeaderSize+256+17] = 1
 	data[TimelineHeaderSize+2*256+31] = 2
 
-	if err := os.WriteFile(path, data, 0666); err != nil {
+	if err := os.WriteFile(path, data, 0o666); err != nil {
 		t.Fatal(err)
 	}
 
@@ -126,6 +126,39 @@ func TestParseTimelineFileCountsSparseIndexOnly(t *testing.T) {
 	}
 	if td.RawFormatStatus == "" {
 		t.Fatal("RawFormatStatus is empty")
+	}
+	if !strings.Contains(td.RawFormatStatus, "data section encoding unknown") {
+		t.Fatalf("RawFormatStatus = %q, want unknown encoding detail", td.RawFormatStatus)
+	}
+}
+
+func TestParseTimelineFileIgnoresSparseIndexRecordMarkers(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "Timeline_f_3.raw")
+	dataOffset := TimelineHeaderSize + 256
+	data := make([]byte, dataOffset+32)
+	binary.LittleEndian.PutUint64(data[0:8], TimelineMagic)
+	binary.LittleEndian.PutUint64(data[32:40], uint64(dataOffset))
+	binary.LittleEndian.PutUint64(data[80:88], 1)
+
+	chunk := data[TimelineHeaderSize:dataOffset]
+	binary.LittleEndian.PutUint32(chunk[0:4], 0x4e)
+	binary.LittleEndian.PutUint64(chunk[8:16], 600_000_000_000)
+	binary.LittleEndian.PutUint64(chunk[16:24], 600_000_010_000)
+
+	if err := os.WriteFile(path, data, 0666); err != nil {
+		t.Fatal(err)
+	}
+
+	td, err := ParseTimelineFile(path)
+	if err != nil {
+		t.Fatalf("ParseTimelineFile failed: %v", err)
+	}
+	if td.ValidChunks != 1 {
+		t.Fatalf("ValidChunks = %d, want 1", td.ValidChunks)
+	}
+	if len(td.KickTraces) != 0 || len(td.DrawTraces) != 0 {
+		t.Fatalf("raw chunk parser decoded sparse-index marker bytes: kicks=%d draws=%d", len(td.KickTraces), len(td.DrawTraces))
 	}
 	if !strings.Contains(td.RawFormatStatus, "data section encoding unknown") {
 		t.Fatalf("RawFormatStatus = %q, want unknown encoding detail", td.RawFormatStatus)

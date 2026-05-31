@@ -206,31 +206,21 @@ func (td *TimelineData) parseChunks() {
 	}
 }
 
-// parseChunkRecords extracts records from a single chunk.
+// parseChunkRecords records that a sparse-index chunk is populated.
 //
-// WARNING: Timeline_f_*.raw data appears to be delta-encoded or compressed.
-// The raw binary format does not contain simple timestamp pairs. Heuristic
-// parsing produces false positives with unreasonable durations.
-//
-// For accurate timeline data, use APSTimelineData from streamData plist instead,
-// which provides correct command buffer timestamps (e.g., CB[0]=480µs).
-//
-// This function is left as a placeholder for future reverse engineering.
+// Timeline_f_*.raw record bytes are not decoded. The data section status is
+// reported by RawFormatStatus, including recognized zlib and lz4 frame headers.
+// Sparse-index bytes that look like record markers are intentionally ignored:
+// tests cover that no kick/draw records are synthesized from those markers.
 func (td *TimelineData) parseChunkRecords(chunk []byte) {
 	// Timeline chunks contain packed records that are likely:
 	// 1. Delta-encoded timestamps (not absolute)
 	// 2. Variable-length encoded
 	// 3. Possibly compressed
 	//
-	// The raw format requires further reverse engineering.
-	// For now, we do NOT attempt heuristic parsing as it produces
-	// false positives with durations like 8.6 trillion ticks.
-	//
-	// TODO: Investigate record markers/magic bytes in chunk data
-	// TODO: Check if chunks need decompression (zlib, lz4, etc.)
-	// APSTimelineData parsing lives in streamdata.go.
-	//
-	// Keeping this as a no-op until the format is properly understood.
+	// The raw format remains unsupported until the payload encoding is known.
+	// APSTimelineData parsing lives in streamdata.go and is the supported
+	// source for command timing.
 }
 
 func timelineRawFormatStatus(data []byte, header TimelineHeader) string {
