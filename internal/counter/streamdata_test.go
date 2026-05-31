@@ -3,18 +3,13 @@
 package counter
 
 import (
-	"os"
 	"testing"
 )
 
-func TestParseStreamData(t *testing.T) {
-	// Use the MLP trace from /tmp if available
-	gpuprofDir := "/tmp/bench_traces/BenchmarkQwen25_MLP_Go-perfdata.gputrace/BenchmarkQwen25_MLP_Go_.gputrace.gpuprofiler_raw"
+const streamDataIntegrationDirEnv = "GPUTRACE_COUNTER_STREAMDATA_DIR"
 
-	if _, err := os.Stat(gpuprofDir); os.IsNotExist(err) {
-		t.Skip("Test trace not available")
-	}
-
+func TestParseStreamDataIntegration(t *testing.T) {
+	gpuprofDir := integrationPathFromEnv(t, streamDataIntegrationDirEnv)
 	stats, err := ParseStreamData(gpuprofDir)
 	if err != nil {
 		t.Fatalf("ParseStreamData failed: %v", err)
