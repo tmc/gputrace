@@ -12,14 +12,7 @@ import (
 func TestDeterminism(t *testing.T) {
 	tracePath := filepath.Join("..", "..", "testdata", "traces", "01-single-encoder", "01-single-encoder-run1-perf.gputrace")
 
-	if _, err := os.Stat(tracePath); os.IsNotExist(err) {
-		t.Skipf("skipping test, trace file not found: %s. See docs/TESTING.md for fixture setup.", tracePath)
-	}
-
-	tr, err := trace.Open(tracePath)
-	if err != nil {
-		t.Skipf("Trace not available: %v", err)
-	}
+	tr := openPerfTraceOrSkip(t, tracePath)
 	defer tr.Close()
 
 	// Parse the same trace 3 times
@@ -127,14 +120,7 @@ func TestEdgeCases(t *testing.T) {
 func TestComprehensiveMetrics(t *testing.T) {
 	tracePath := filepath.Join("..", "..", "testdata", "traces", "06-six-encoders", "06-six-encoders-run1-perf.gputrace")
 
-	if _, err := os.Stat(tracePath); os.IsNotExist(err) {
-		t.Skipf("skipping test, trace file not found: %s. See docs/TESTING.md for fixture setup.", tracePath)
-	}
-
-	tr, err := trace.Open(tracePath)
-	if err != nil {
-		t.Skipf("Trace not available: %v", err)
-	}
+	tr := openPerfTraceOrSkip(t, tracePath)
 	defer tr.Close()
 
 	stats, err := ParsePerfCounters(tr)
@@ -247,14 +233,7 @@ func TestComprehensiveMetrics(t *testing.T) {
 func TestCSVRoundTrip(t *testing.T) {
 	tracePath := filepath.Join("..", "..", "testdata", "traces", "06-six-encoders", "06-six-encoders-run1-perf.gputrace")
 
-	if _, err := os.Stat(tracePath); os.IsNotExist(err) {
-		t.Skipf("skipping test, trace file not found: %s. See docs/TESTING.md for fixture setup.", tracePath)
-	}
-
-	tr, err := trace.Open(tracePath)
-	if err != nil {
-		t.Skipf("Trace not available: %v", err)
-	}
+	tr := openPerfTraceOrSkip(t, tracePath)
 	defer tr.Close()
 
 	// Import reference CSV if available
@@ -314,13 +293,7 @@ func TestMultipleTraces(t *testing.T) {
 
 	for _, tt := range traces {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := os.Stat(tt.path); os.IsNotExist(err) {
-				t.Skipf("skipping test, trace file not found: %s", tt.path)
-			}
-			tr, err := trace.Open(tt.path)
-			if err != nil {
-				t.Skipf("Trace not available: %v", err)
-			}
+			tr := openPerfTraceOrSkip(t, tt.path)
 			defer tr.Close()
 
 			stats, err := ParsePerfCounters(tr)
@@ -351,14 +324,7 @@ func TestMultipleTraces(t *testing.T) {
 func TestMetricValueRanges(t *testing.T) {
 	tracePath := filepath.Join("..", "..", "testdata", "traces", "06-six-encoders", "06-six-encoders-run1-perf.gputrace")
 
-	if _, err := os.Stat(tracePath); os.IsNotExist(err) {
-		t.Skipf("skipping test, trace file not found: %s. See docs/TESTING.md for fixture setup.", tracePath)
-	}
-
-	tr, err := trace.Open(tracePath)
-	if err != nil {
-		t.Skipf("Trace not available: %v", err)
-	}
+	tr := openPerfTraceOrSkip(t, tracePath)
 	defer tr.Close()
 
 	stats, err := ParsePerfCounters(tr)
