@@ -12,7 +12,7 @@ import (
 )
 
 var analyzeUsageCmd = &cobra.Command{
-	Use:    "analyze-usage [trace-path]",
+	Use:    "analyze-usage <trace-path>",
 	Short:  "Analyze buffer usage across kernels",
 	Hidden: true,
 	Args:   cobra.ExactArgs(1),
