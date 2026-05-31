@@ -51,7 +51,7 @@ type ReplayEngine struct {
 
 // ReplayCommand represents a reconstructed Metal command from the trace.
 type ReplayCommand struct {
-	Type         string // "compute_dispatch", "bind_buffer", "set_pipeline"
+	Type         string // "compute_dispatch", "execute_icb", "bind_buffer", "set_pipeline"
 	Offset       int    // Offset in capture file
 	SequenceNum  int    // Execution order
 	EncoderIndex int    // Which encoder this belongs to
@@ -279,6 +279,17 @@ func (re *ReplayEngine) ValidateReplay() (*ReplayValidation, error) {
 	if len(plan.Commands) == 0 {
 		validation.Warnings = append(validation.Warnings, "no commands found in trace")
 	}
+	if plan.ICBExecutions > 0 {
+		validation.CanReplay = false
+		if cmd, ok := firstReplayCommandOfType(plan, "execute_icb"); ok {
+			validation.Errors = append(validation.Errors,
+				fmt.Sprintf("%d indirect command buffer executions cannot be replayed: first seq=%d encoder=%d icb=0x%x count=%d",
+					plan.ICBExecutions, cmd.SequenceNum, cmd.EncoderIndex, cmd.ICBAddr, cmd.ICBCount))
+		} else {
+			validation.Errors = append(validation.Errors,
+				fmt.Sprintf("%d indirect command buffer executions cannot be replayed", plan.ICBExecutions))
+		}
+	}
 
 	// Check for buffers
 	if plan.StateAnalysis != nil && len(plan.StateAnalysis.Buffers) == 0 {
@@ -317,6 +328,15 @@ func (re *ReplayEngine) ValidateReplay() (*ReplayValidation, error) {
 	}
 
 	return validation, nil
+}
+
+func firstReplayCommandOfType(plan *ReplayPlan, typ string) (ReplayCommand, bool) {
+	for _, cmd := range plan.Commands {
+		if cmd.Type == typ {
+			return cmd, true
+		}
+	}
+	return ReplayCommand{}, false
 }
 
 // ReplayValidation contains validation results.
