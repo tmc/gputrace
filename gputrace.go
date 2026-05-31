@@ -1,20 +1,17 @@
-// Package gputrace provides parsing and analysis for .gputrace GPU trace files from Metal.
+// Package gputrace parses Metal .gputrace bundles.
 //
-// A .gputrace file is a directory bundle containing multiple files that represent
-// Metal GPU capture data. This package provides utilities to parse trace metadata,
-// extract kernel names, labels, and timing information.
+// A .gputrace file is a directory bundle containing Metal GPU capture data.
+// Use [Open] to read a bundle:
 //
-// The main entry point is the Open function which returns a Trace:
-//
-//	trace, err := gputrace.Open("path/to/trace.gputrace")
+//	trace, err := gputrace.Open("mytrace.gputrace")
 //	if err != nil {
 //		log.Fatal(err)
 //	}
 //
-// The Trace struct provides access to all parsed data and analysis capabilities.
+// The returned [Trace] contains the parsed metadata, capture data, command
+// buffers, timing data, counters, and shaders.
 //
-// For command-line usage, see cmd/gputrace which provides various subcommands
-// for analyzing traces, exporting to different formats, and generating insights.
+// The command-line tool is in cmd/gputrace.
 package gputrace
 
 import (
