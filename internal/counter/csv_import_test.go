@@ -1,20 +1,15 @@
 package counter
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/tmc/gputrace/internal/trace"
 )
 
 func TestParseCountersCSV(t *testing.T) {
 	// Test with single encoder CSV
 	csvPath := filepath.Join("..", "..", "testdata", "traces", "01-single-encoder", "01-single-encoder-run1 Counters.csv")
 
-	if _, err := os.Stat(csvPath); os.IsNotExist(err) {
-		t.Skipf("skipping test, csv file not found: %s", csvPath)
-	}
+	requirePerfFixturePath(t, csvPath)
 
 	data, err := ParseCountersCSV(csvPath)
 	if err != nil {
@@ -52,14 +47,8 @@ func TestImportCountersCSV(t *testing.T) {
 	// Test with six encoders trace
 	tracePath := filepath.Join("..", "..", "testdata", "traces", "06-six-encoders", "06-six-encoders-run1-perf.gputrace")
 
-	if _, err := os.Stat(tracePath); os.IsNotExist(err) {
-		t.Skipf("skipping test, trace file not found: %s. Run 'make fetch-testdata' to fetch test assets.", tracePath)
-	}
-
-	tr, err := trace.Open(tracePath)
-	if err != nil {
-		t.Skipf("Trace not available: %v", err)
-	}
+	requirePerfFixturePath(t, tracePath)
+	tr := openPerfTraceOrSkip(t, tracePath)
 	defer tr.Close()
 
 	data, err := ImportCountersCSV(tr)
@@ -87,9 +76,7 @@ func TestImportCountersCSV(t *testing.T) {
 func TestEnhanceMetricsFromCSV(t *testing.T) {
 	// Parse CSV
 	csvPath := filepath.Join("..", "..", "testdata", "traces", "01-single-encoder", "01-single-encoder-run1 Counters.csv")
-	if _, err := os.Stat(csvPath); os.IsNotExist(err) {
-		t.Skipf("skipping test, csv file not found: %s", csvPath)
-	}
+	requirePerfFixturePath(t, csvPath)
 	csvData, err := ParseCountersCSV(csvPath)
 	if err != nil {
 		t.Fatalf("ParseCountersCSV failed: %v", err)
