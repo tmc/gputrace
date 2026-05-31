@@ -318,45 +318,59 @@ func TestParseInitCalls_CommandQueue(t *testing.T) {
 
 // TestParseInitCalls_Function tests parsing of function creation from CS records
 func TestParseInitCalls_Function(t *testing.T) {
-	t.Skip("TODO: Fix CS record parsing - address offset is incorrect")
+	const (
+		offset   = 0x500
+		funcAddr = 0xafcc88580
+		funcName = "vv_Addfloat32"
+	)
 
-	// TODO: The CS record structure needs more analysis
-	// Current parsing reads address at +4, but this includes extra bytes
-	// Test shows address 0x415f7676fcc88580 instead of 0xafcc88580
-	// The "415f7676" prefix is from the function name bytes being read as part of address
-	// Need to identify correct record structure from real traces
-
-	// Create a minimal capture with a CS record for a function
+	// Fixture layout: "CS\x00\x00" + function address + null-terminated name.
 	data := make([]byte, 0x1000)
-
-	// Write CS marker
-	offset := 0x500
 	copy(data[offset:], []byte("CS\x00\x00"))
-	binary.LittleEndian.PutUint64(data[offset+4:], 0xafcc88580) // function address
-	copy(data[offset+0x08:], []byte("vv_Addfloat32\x00"))       // function name
+	binary.LittleEndian.PutUint64(data[offset+4:], funcAddr)
+	copy(data[offset+0x0C:], []byte(funcName+"\x00"))
+
+	records, labelMap := parseCSRecordsFromInit(data)
+	if len(records) != 1 {
+		t.Fatalf("got %d CS records, want 1: %#v", len(records), records)
+	}
+	if records[0].CSAddress != funcAddr {
+		t.Fatalf("CS address = 0x%x, want 0x%x", records[0].CSAddress, funcAddr)
+	}
+	if records[0].Label != funcName {
+		t.Fatalf("CS label = %q, want %q", records[0].Label, funcName)
+	}
+	if records[0].Offset != int64(offset) {
+		t.Fatalf("CS offset = 0x%x, want 0x%x", records[0].Offset, offset)
+	}
+	if labelMap[funcAddr] != funcName {
+		t.Fatalf("labelMap[0x%x] = %q, want %q", funcAddr, labelMap[funcAddr], funcName)
+	}
 
 	calls, _, err := parseInitCalls(data, 0, nil, make(map[uint64]string))
 	if err != nil {
 		t.Fatalf("parseInitCalls failed: %v", err)
 	}
 
-	// Should find function creation
-	found := false
-	for _, call := range calls {
-		if call.Type == "newFunction" {
-			found = true
-			if call.Address != 0xafcc88580 {
-				t.Errorf("Expected function address 0xafcc88580, got 0x%x", call.Address)
-			}
-			expected := "vv_Addfloat32 = [0xafcc88580 newFunctionWithName:\"vv_Addfloat32\"]"
-			if call.Info != expected {
-				t.Errorf("Expected info %s, got %s", expected, call.Info)
-			}
-		}
+	if len(calls) != 1 {
+		t.Fatalf("got %d init calls, want 1: %#v", len(calls), calls)
 	}
-
-	if !found {
-		t.Error("Expected to find function creation call")
+	call := calls[0]
+	if call.Type != "newFunction" {
+		t.Fatalf("call type = %q, want newFunction", call.Type)
+	}
+	if call.Address != funcAddr {
+		t.Fatalf("function address = 0x%x, want 0x%x", call.Address, funcAddr)
+	}
+	if call.Label != funcName {
+		t.Fatalf("function label = %q, want %q", call.Label, funcName)
+	}
+	expected := "[0xafcc88580 newFunctionWithName:\"vv_Addfloat32\"]"
+	if call.Info != expected {
+		t.Fatalf("call info = %q, want %q", call.Info, expected)
+	}
+	if call.Offset != int64(offset) {
+		t.Fatalf("call offset = 0x%x, want 0x%x", call.Offset, offset)
 	}
 }
 
