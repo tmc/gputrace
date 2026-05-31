@@ -204,34 +204,34 @@ func writeVertexOutput(v any, text string) error {
 	if err != nil {
 		return err
 	}
-	if vertexOutputFile != "" {
-		if jsonOutput {
-			data, err := json.MarshalIndent(v, "", "  ")
-			if err != nil {
-				return fmt.Errorf("marshal vertex output json: %w", err)
-			}
-			return os.WriteFile(vertexOutputFile, append(data, '\n'), 0644)
-		}
-		return os.WriteFile(vertexOutputFile, []byte(text), 0644)
+	writer, closeOutput, err := createCommandOutput(vertexOutputFile)
+	if err != nil {
+		return fmt.Errorf("create vertex output: %w", err)
+	}
+	if closeOutput != nil {
+		defer closeOutput()
 	}
 	if jsonOutput {
-		enc := json.NewEncoder(os.Stdout)
+		enc := json.NewEncoder(writer)
 		enc.SetIndent("", "  ")
 		return enc.Encode(v)
 	}
-	fmt.Println(text)
+	if vertexOutputFile == "" {
+		_, err = fmt.Fprintln(writer, text)
+	} else {
+		_, err = io.WriteString(writer, text)
+	}
+	if err != nil {
+		return fmt.Errorf("write vertex output: %w", err)
+	}
 	return nil
 }
 
 func vertexOutputStatusWriter(jsonOutput bool, outputPath string) io.Writer {
-	if jsonOutput || vertexOutputOutputPathIsStdout(outputPath) {
+	if jsonOutput || commandOutputPathIsStdout(outputPath) {
 		return os.Stderr
 	}
 	return os.Stdout
-}
-
-func vertexOutputOutputPathIsStdout(path string) bool {
-	return path == "" || path == "/dev/stdout"
 }
 
 func vertexOutputJSON(globalJSON bool, format string) (bool, error) {

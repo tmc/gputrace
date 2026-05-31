@@ -73,6 +73,7 @@ func TestVertexOutputStatusWriter(t *testing.T) {
 	}{
 		{name: "text stdout default", want: os.Stderr},
 		{name: "text stdout path", outputPath: "/dev/stdout", want: os.Stderr},
+		{name: "text stdout dash", outputPath: "-", want: os.Stderr},
 		{name: "json stdout", jsonOutput: true, want: os.Stderr},
 		{name: "text file", outputPath: "vertex.txt", want: os.Stdout},
 	}
@@ -83,5 +84,58 @@ func TestVertexOutputStatusWriter(t *testing.T) {
 				t.Fatalf("vertexOutputStatusWriter() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestWriteVertexOutputStdoutText(t *testing.T) {
+	oldFile := vertexOutputFile
+	oldFormat := vertexOutputFormat
+	oldJSON := collectProfileJSON
+	t.Cleanup(func() {
+		vertexOutputFile = oldFile
+		vertexOutputFormat = oldFormat
+		collectProfileJSON = oldJSON
+	})
+
+	vertexOutputFile = "/dev/stdout"
+	vertexOutputFormat = "text"
+	collectProfileJSON = false
+
+	out, err := captureStdout(t, func() error {
+		return writeVertexOutput("ignored", "row 1\n")
+	})
+	if err != nil {
+		t.Fatalf("writeVertexOutput: %v", err)
+	}
+	if got, want := out, "row 1\n"; got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+}
+
+func TestWriteVertexOutputDashJSON(t *testing.T) {
+	oldFile := vertexOutputFile
+	oldFormat := vertexOutputFormat
+	oldJSON := collectProfileJSON
+	t.Cleanup(func() {
+		vertexOutputFile = oldFile
+		vertexOutputFormat = oldFormat
+		collectProfileJSON = oldJSON
+	})
+
+	vertexOutputFile = "-"
+	vertexOutputFormat = "json"
+	collectProfileJSON = false
+
+	out, err := captureStdout(t, func() error {
+		return writeVertexOutput(vertexOutputResult{Status: "ok", Trace: "trace.gputrace", DrawCall: 21}, "")
+	})
+	if err != nil {
+		t.Fatalf("writeVertexOutput: %v", err)
+	}
+	if !strings.Contains(out, `"status": "ok"`) {
+		t.Fatalf("stdout JSON missing status:\n%s", out)
+	}
+	if !strings.Contains(out, `"draw_call": 21`) {
+		t.Fatalf("stdout JSON missing draw call:\n%s", out)
 	}
 }
