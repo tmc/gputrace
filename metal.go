@@ -1,5 +1,5 @@
-//go:build metal
-// +build metal
+//go:build darwin && metal
+// +build darwin,metal
 
 package gputrace
 

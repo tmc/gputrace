@@ -32,6 +32,7 @@ CLAUDE.md
 docs/planning/
 scripts/
 !scripts/collect_profile.sh
+node_modules/
 
 # Benchmark outputs
 Benchmark*.txt
