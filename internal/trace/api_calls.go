@@ -161,6 +161,7 @@ func parseInitCalls(data []byte, startCallNum int, csRecords []FunctionRecord, l
 	// Find CUt records (residency set creation)
 	// Structure: "CUt\x00" + residency set address
 	cutMarker := []byte("CUt\x00")
+	residencySetAddrs := make(map[uint64]bool)
 	offset := 0
 	for {
 		pos := bytes.Index(data[offset:], cutMarker)
@@ -173,6 +174,7 @@ func parseInitCalls(data []byte, startCallNum int, csRecords []FunctionRecord, l
 		if absolutePos+0x0c <= len(data) {
 			resAddr := binary.LittleEndian.Uint64(data[absolutePos+0x04 : absolutePos+0x0c])
 			if resAddr != 0 {
+				residencySetAddrs[resAddr] = true
 				calls = append(calls, InitCall{
 					CallNumber: callNum,
 					Type:       "newResidencySet",
@@ -186,9 +188,32 @@ func parseInitCalls(data []byte, startCallNum int, csRecords []FunctionRecord, l
 		offset += pos + 4
 	}
 
-	// TODO: Add requestResidency parsing
-	// Find "Ct\x00\x00" records followed by residency set addresses to detect requestResidency calls
-	// This requires more analysis of the binary format
+	// Find requestResidency calls. These use Ct records whose first address is a
+	// residency set created earlier in the init section.
+	ctMarker := []byte("Ct\x00\x00")
+	offset = 0
+	for {
+		pos := bytes.Index(data[offset:], ctMarker)
+		if pos == -1 {
+			break
+		}
+		absolutePos := offset + pos
+
+		if absolutePos+0x0c <= len(data) {
+			resAddr := binary.LittleEndian.Uint64(data[absolutePos+0x04 : absolutePos+0x0c])
+			if residencySetAddrs[resAddr] {
+				calls = append(calls, InitCall{
+					CallNumber: callNum,
+					Type:       "requestResidency",
+					Address:    resAddr,
+					Info:       fmt.Sprintf("[0x%x requestResidency]", resAddr),
+					Offset:     int64(absolutePos),
+				})
+			}
+		}
+
+		offset += pos + 4
+	}
 
 	// Find CU\x00\x00 records (heap creation)
 	// Structure:
