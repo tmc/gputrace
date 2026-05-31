@@ -6,8 +6,8 @@
 
 | Offset | Size | Type    | Metric                  | Formula/Notes                    | CSV Column |
 |--------|------|---------|-------------------------|----------------------------------|------------|
-| 0x0000 | 4    | uint32  | Record Size             | Always 464 (0x1D0) for samples   | -          |
-| 0x0004 | 4    | uint32  | Record Type             | Sample vs metadata marker        | -          |
+| 0x0000 | 4    | uint32  | Record Marker           | `0x0000004e`; used for boundaries | -          |
+| 0x0004 | 4    | uint32  | Record Payload Type     | Varies by record                 | -          |
 | 0x0064 | 4    | uint32  | **Kernel Invocations**  | `value ÷ 27.75`                  | 70         |
 | TBD    | 4    | float32 | **ALU Utilization**     | Range: 0.0-5.0%                  | 13         |
 | TBD    | 4    | float32 | **Kernel Occupancy**    | Range: 0.0-2.0 (0-200%)          | 71         |
@@ -121,14 +121,17 @@ func detectRecordType(data []byte) string {
         return "invalid"
     }
 
-    size := binary.LittleEndian.Uint32(data[0:4])
+    if binary.LittleEndian.Uint32(data[0:4]) != 0x4e {
+        return "invalid"
+    }
 
-    switch size {
+    switch len(data) {
     case 464:
         return "sample"      // Performance metrics
-    case 2300, 2400, 2500, 2600, 2700, 2800, 2900:
-        return "metadata"    // Encoder context
     default:
+        if len(data) >= 2300 && len(data) <= 2900 {
+            return "metadata" // Encoder context
+        }
         return "unknown"
     }
 }

@@ -248,7 +248,7 @@ type counterFileStats struct {
 // parseCounterFileWithMetrics parses a counter file and returns both statistics and extracted metrics.
 //
 // This function implements the encoder grouping and aggregation strategy documented in
-// docs/FIELD_OFFSET_ANALYSIS.md:
+// docs/research/PERFCOUNTER_FIELD_OFFSET_MAP.md:
 // 1. Parse all records and classify by size (metadata vs sample)
 // 2. Group sample records by their associated metadata/encoder
 // 3. Aggregate metrics within each encoder group
@@ -349,7 +349,7 @@ func correlateShaderNames(t *trace.Trace, stats *PerfCounterStats) error {
 
 // parseCounterRecord parses a single counter record.
 //
-// Based on analysis in docs/FIELD_OFFSET_ANALYSIS.md:
+// Based on analysis in docs/research/PERFCOUNTER_FIELD_OFFSET_MAP.md:
 // - Metadata records: 2,300-2,900 bytes (contain encoder identification)
 // - Sample records: 464 bytes (contain per-sample performance metrics)
 //
@@ -389,7 +389,7 @@ func parseCounterRecord(data []byte, offset int64) *CounterRecord {
 		record.IsMetadata = false
 
 		// This is a sample record - extract performance metrics
-		// Based on field offset analysis from docs/FIELD_OFFSET_ANALYSIS.md
+		// Based on field offset analysis from docs/research/PERFCOUNTER_FIELD_OFFSET_MAP.md
 		metrics := &ShaderHardwareMetrics{}
 
 		// Kernel Invocations - offset 0x0064

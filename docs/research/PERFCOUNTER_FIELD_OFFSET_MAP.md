@@ -251,7 +251,7 @@ type EncoderGroup struct {
 
 | Metric Type | Aggregation | Example |
 |------------|-------------|---------|
-| Kernel Invocations | **SUM** | Total across all samples |
+| Kernel Invocations | **FIRST** | Deterministic per encoder; use first non-zero sample |
 | ALU Utilization | **AVERAGE** | Mean of non-zero samples |
 | Kernel Occupancy | **AVERAGE** | Mean of non-zero samples |
 | Memory Bandwidth | **SUM** | Total bytes read + written |
@@ -262,15 +262,19 @@ type EncoderGroup struct {
 
 ```go
 func aggregateEncoderMetrics(group *EncoderGroup) *ShaderHardwareMetrics {
-    var totalInvocations int
+    var firstInvocations int
+    var invocationsSet bool
     var totalALUUtil float64
     var aluSamples int
 
     for _, record := range group.SampleRecords {
         metrics := record.ShaderMetric
 
-        // Sum: Kernel Invocations
-        totalInvocations += metrics.ExecutionCount
+        // First: Kernel Invocations are deterministic within an encoder
+        if !invocationsSet && metrics.ExecutionCount > 0 {
+            firstInvocations = metrics.ExecutionCount
+            invocationsSet = true
+        }
 
         // Average: ALU Utilization
         if metrics.ALUUtilization > 0 {
@@ -279,7 +283,7 @@ func aggregateEncoderMetrics(group *EncoderGroup) *ShaderHardwareMetrics {
         }
     }
 
-    aggregated.ExecutionCount = totalInvocations
+    aggregated.ExecutionCount = firstInvocations
     if aluSamples > 0 {
         aggregated.ALUUtilization = totalALUUtil / float64(aluSamples)
     }

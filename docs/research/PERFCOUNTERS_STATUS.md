@@ -1,11 +1,33 @@
 # Performance Counter Parsing Status
 
-**Date:** 2025-11-03
-**Status:** Infrastructure Complete, Field Extraction Pending
+**Date:** 2026-05-31
+**Status:** Core Field Extraction Active, Exact Raw Offsets Still Limited
 
 ## Overview
 
-The performance counter parsing framework is complete and production-ready. It provides APIs for accessing GPU hardware metrics from `.gpuprofiler_raw` files captured by Xcode Instruments Shader Profiler.
+The performance counter parsing framework is no longer only scaffolding. Current
+`internal/counter` code parses `.gpuprofiler_raw` counter records, extracts the
+validated `Kernel Invocations` field at offset `0x0064`, applies file-mapped
+counter extraction for selected metrics, optionally imports Xcode CSV data as
+ground truth, and enriches shader metrics with compilation statistics from
+`streamData`.
+
+Important boundary: register allocation and spill counts are currently sourced
+from `streamData` `pipelinePerformanceStatistics`, not from direct
+`Counters_f_*.raw` field offsets. `HighRegister` remains a real gap; the current
+binding-gap note records that the likely `GTMioShaderBinaryData` path needs a
+safe adapter before it can be used in export paths.
+
+## Current Implementation Snapshot
+
+| Metric or field | Current source | Evidence in repo | Remaining gap |
+|-----------------|----------------|------------------|---------------|
+| Kernel Invocations | `Counters_f_*.raw` sample record offset `0x0064`, scaled by `27.75` | `parseCounterRecord` and `aggregateEncoderMetrics` in `internal/counter/counter.go` | Scaling is validated for existing analysis traces, but still needs broader GPU-family validation. |
+| ALU Utilization | Xcode CSV when present; otherwise deterministic `Counters_f_12.raw` extraction and legacy float-range fallback | `ImportCountersCSV`, `counterConfigs`, `extractDeterministicMetrics` | Exact raw float offset is still not known. |
+| Kernel Occupancy | `Profiling_f_*.raw` in encoder metric conversion, with counter-file fallback | `ParseProfilingFiles` and `PopulateEncoderMetricsFromPerfCounterStats` | Profiling extraction is heuristic and needs more fixtures. |
+| Allocated registers | `streamData` `Temporary register count` | `PipelineStats.TemporaryRegisterCount`, `enhanceFromStreamData`, `applyPipelineStats` | Not a raw counter-file field offset. |
+| Spilled bytes | `streamData` `Spilled bytes` | `PipelineStats.SpilledBytes`, `enhanceFromStreamData`, `applyPipelineStats` | Not a raw counter-file field offset. |
+| High register | Not currently extracted safely | `docs/research/GTShaderProfiler_BINDING_GAPS.md` | Needs a safe `GTMioShaderBinaryData` or offline shader-binary adapter. |
 
 ## What's Complete ✅
 
@@ -126,41 +148,43 @@ gputrace perfcounters trace.gputrace
 - Details ring buffer implementation and data flow
 - Provides workflow diagrams and time budgets
 
-## What's Pending ⏳
+## What's Still Pending
 
-### 1. Binary Format Field Extraction
+### 1. Exact Raw Binary Field Offsets
 
 **Current State:**
-- Record boundaries identified (0x4E markers)
-- Record types parsed from offset 0x00
-- Pipeline state addresses extracted from offset 0x08
+- Record boundaries are identified by the `0x4E 0x00 0x00 0x00` marker.
+- Sample records are classified by length (`464` bytes); metadata records are
+  classified by length (`2300`-`2900` bytes).
+- Encoder groups are sequence-based because the previously suspected metadata
+  ID field at `0x01b4` was not unique enough for grouping.
+- `Kernel Invocations` is extracted from sample offset `0x0064`.
+- Several float and byte metrics are extracted with file-mapped or range-scan
+  heuristics when Xcode CSV data is unavailable.
 
 **Needs Implementation:**
-The exact byte offsets for these fields remain to be determined:
-- **AllocatedRegs** - Register count field location unknown
-- **HighRegister** - High register index field location unknown
-- **SpilledBytes** - Spill count field location unknown
-- **SIMDGroups** - SIMD group count field location unknown
-- **ALUUtilization** - ALU utilization percentage field location unknown
-- **KernelOccupancy** - Occupancy percentage field location unknown
-- **MemoryBandwidth** - Bandwidth metric field location unknown
-- **ExecutionCount** - Execution count field location unknown
-- **TotalCycles** - Cycle count field location unknown
+The exact raw byte offsets for these fields remain to be determined:
+- **HighRegister** - high register index field location or safe binary adapter
+  unknown
+- **SIMDGroups** - SIMD group count field location unknown in raw counters
+- **ALUUtilization** - exact float field offset unknown; current extraction is
+  CSV-first, file-mapped, or range-based
+- **KernelOccupancy** - exact field offset unknown; current extraction uses
+  `Profiling_f_*.raw` and counter fallback heuristics
+- **MemoryBandwidth** - exact byte counter offsets unknown for most columns
+- **TotalCycles** - cycle count field location unknown
 
-**Approach:**
+**Implemented direct-offset pattern:**
 ```go
-// In parseCounterRecord(), currently at line 194-215:
-if record.RecordType == 0x4E && len(data) >= 64 {
+// In parseCounterRecord():
+if len(data) == 464 {
     metrics := &ShaderHardwareMetrics{}
 
-    // Extract pipeline state (COMPLETE)
-    metrics.PipelineState = binary.LittleEndian.Uint64(data[8:16])
-
-    // TODO: Add field extraction once offsets determined
-    // Example pattern:
-    // if len(data) >= OFFSET_ALLOCATED_REGS + 4 {
-    //     metrics.AllocatedRegs = int(binary.LittleEndian.Uint32(data[OFFSET_ALLOCATED_REGS:]))
-    // }
+    // Kernel Invocations - offset 0x0064
+    if len(data) >= 0x0068 {
+        rawValue := binary.LittleEndian.Uint32(data[0x0064:0x0068])
+        metrics.ExecutionCount = int(float64(rawValue) / 27.75)
+    }
 
     record.ShaderMetric = metrics
 }
@@ -189,7 +213,7 @@ if record.RecordType == 0x4E && len(data) >= 64 {
    ```
 
 3. **Identify Field Patterns:**
-   - Look for integer values matching known register counts (4-256 range)
+   - Look for integer values matching known invocation or SIMD-group counts
    - Look for large values matching SIMD group counts (100s-100000s)
    - Look for percentage values (0.0-100.0 for utilization metrics)
    - Correlate file offsets with known shader configurations
@@ -203,8 +227,8 @@ if record.RecordType == 0x4E && len(data) >= 64 {
        stats := trace.ParsePerfCounters()
 
        // Validate against known Instruments values
-       assert.Equal(t, 162, stats.ShaderMetrics[0].AllocatedRegs)
-       assert.Equal(t, 182, stats.ShaderMetrics[0].HighRegister)
+       assert.Equal(t, 1024, stats.ShaderMetrics[0].ExecutionCount)
+       assert.InDelta(t, 3.25, stats.ShaderMetrics[0].ALUUtilization, 0.01)
    }
    ```
 
@@ -240,13 +264,14 @@ func parseCounterRecord(data []byte, offset int64, gpuFamily string) *CounterRec
 - `correlateShaderNames()` - Correlation works
 - Shader metrics integration - Falls back gracefully to estimates
 
-### Requires Profiled Trace 🔬
+### Requires More Validated Fixtures
 
-**These require .gpuprofiler_raw analysis:**
-- Actual register count extraction
-- Hardware metric field parsing
-- Utilization percentage extraction
-- Cycle count extraction
+**These require additional `.gpuprofiler_raw` analysis or a safe Xcode adapter:**
+- Exact raw offsets for ALU utilization, occupancy, memory bandwidth, SIMD
+  groups, and cycle counts
+- High-register extraction from `GTMioShaderBinaryData` or an offline shader
+  binary decoder
+- GPU-family validation for M3/M4 and later
 
 ## Testing Strategy
 
@@ -293,15 +318,19 @@ diff output.txt expected_instruments_output.txt
 
 ## Usage Examples
 
-### Current Usage (Estimates Only)
+### Current Usage
 
 ```bash
 $ gputrace shaders trace.gputrace
-Cost    Name                      # Allocated Registers   High Register
-12.12%  block_softmax_float32     44 (est)                44 (est)
+Cost    Name                      # Allocated Registers   Spilled Bytes
+12.12%  block_softmax_float32     44                      0 bytes
 ```
 
-### Future Usage (With Real Data)
+When streamData is available, allocated registers and spilled bytes come from
+`pipelinePerformanceStatistics`. The `High Register` column is still not backed
+by a safe source-specific extraction path.
+
+### Future Usage (With High Register Adapter)
 
 ```bash
 $ gputrace shaders profiled_trace.gputrace
@@ -339,20 +368,20 @@ if trace.HasPerfCounters() {
 
 ### Immediate (P1)
 
-1. **Obtain Profiled Trace:**
-   - Capture MLX workload with Instruments Shader Profiler
-   - Verify .gpuprofiler_raw directory is created
-   - Note GPU model and architecture
+1. **Add checked-in or fetchable profiler fixtures:**
+   - Include Xcode CSV ground truth separately from generated raw traces
+   - Record GPU model, Xcode version, and capture command
+   - Keep raw trace dumps out of the repo unless intentionally added as fixtures
 
-2. **Analyze Binary Format:**
-   - Hexdump counter files
-   - Compare with Instruments output
-   - Identify field offset patterns
+2. **Validate current extractors:**
+   - Compare `Kernel Invocations` offset `0x0064` against CSV on each fixture
+   - Validate `Profiling_f_*.raw` occupancy against CSV
+   - Track whether file-mapped metrics remain stable across GPU families
 
-3. **Implement Field Extraction:**
-   - Add offset constants
-   - Update parseCounterRecord()
-   - Validate against known values
+3. **Implement only evidence-backed new offsets:**
+   - Add offset constants after a CSV-backed fixture proves the location
+   - Keep range-scan metrics labelled as heuristic
+   - Do not report high-register values as source-backed until the adapter is safe
 
 ### Future (P2)
 
@@ -362,9 +391,9 @@ if trace.HasPerfCounters() {
    - Test across M1/M2/M3/M4
 
 5. **Comprehensive Metrics:**
-   - ALU utilization extraction
-   - Memory bandwidth parsing
-   - Kernel occupancy calculation
+   - Exact ALU utilization offset
+   - Exact memory bandwidth offsets
+   - Source-backed high-register extraction
 
 6. **Performance Optimization:**
    - Memory-efficient parsing for large counter files
@@ -396,8 +425,14 @@ if trace.HasPerfCounters() {
 - Correlates with shader names
 - Provides clean API
 
-**Field extraction awaits profiled trace analysis.** Once we have a `.gpuprofiler_raw` directory from Instruments, determining field offsets is straightforward pattern matching and validation.
+**Additional field extraction requires evidence.** The repo already contains
+kernel invocation extraction and streamData-backed register/spill extraction,
+but exact offsets beyond `0x0064` should only be promoted after fixture-backed
+CSV validation.
 
 **Zero breaking changes.** All code gracefully handles missing counter data, falling back to estimates with clear "(est)" markers.
 
-**Ready for immediate use.** The detection, correlation, and API layers work now. Metrics will populate automatically once field offsets are added to `parseCounterRecord()`.
+**Ready for immediate use with known limits.** Detection, correlation, CSV
+enhancement, deterministic counter-file mapping, and streamData enrichment work
+now. Missing high-register and exact raw-offset values should remain visible as
+gaps rather than being silently filled from unsupported guesses.

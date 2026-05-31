@@ -58,8 +58,8 @@ Sample records contain performance metrics for a single encoder/kernel execution
 ```text
 Offset    Size    Type      Field                     Notes
 ------    ----    ----      -----                     -----
-0x0000    4       uint32    Record Size               Always 464 (0x1D0)
-0x0004    4       uint32    Record Type               Sample marker
+0x0000    4       uint32    Record Marker             Always 0x0000004e
+0x0004    4       uint32    Record Payload Type       Varies by metric/file
 0x0008    56      -         Unknown header
 0x0040    4       float32   Metric candidate 1        Range-based search
 0x0044    4       float32   Metric candidate 2
