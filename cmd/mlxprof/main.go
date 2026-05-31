@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 
@@ -82,7 +83,7 @@ func runCaptureWithDeps(cfg captureConfig, deps captureDeps) error {
 		return fmt.Errorf("gpu trace path required")
 	}
 
-	fmt.Printf("Running: %v\n", cfg.args)
+	fmt.Fprintf(os.Stderr, "Running: %v\n", cfg.args)
 
 	env := append(os.Environ(), captureEnv(cfg.gpuTrace)...)
 	if err := deps.run(cfg.args, env); err != nil {
@@ -154,7 +155,7 @@ func validateGPUTrace(path string) error {
 }
 
 func mergeProfiles(cpuPath, gpuPath, outputPath string) error {
-	fmt.Printf("Merging %s and %s -> %s\n", cpuPath, gpuPath, outputPath)
+	fmt.Fprintf(os.Stderr, "Merging %s and %s -> %s\n", cpuPath, gpuPath, outputPath)
 
 	// Load CPU Profile
 	fCPU, err := os.Open(cpuPath)
@@ -196,7 +197,7 @@ func mergeProfiles(cpuPath, gpuPath, outputPath string) error {
 	//     GPU Time  -> Index 1
 
 	if len(cpuProf.SampleType) == 2 && cpuProf.SampleType[1].Unit == "nanoseconds" {
-		fmt.Println("Adapting GPU profile to match Go CPU profile format...")
+		fmt.Fprintln(os.Stderr, "Adapting GPU profile to match Go CPU profile format...")
 		gpuProf.PeriodType = cpuProf.PeriodType
 		gpuProf.SampleType = cpuProf.SampleType
 
@@ -225,7 +226,7 @@ func mergeProfiles(cpuPath, gpuPath, outputPath string) error {
 	} else {
 		// Fallback: Just force PeriodType to match to try standard merge,
 		// but if SampleTypes differ in count/unit, pprof.Merge will still fail or drop data.
-		fmt.Printf("Warning: CPU profile has unexpected format: %v. Attempting best-effort merge.\n", cpuProf.SampleType)
+		fmt.Fprintf(os.Stderr, "Warning: CPU profile has unexpected format: %v. Attempting best-effort merge.\n", cpuProf.SampleType)
 		gpuProf.PeriodType = cpuProf.PeriodType
 		// We can't easily unify values if we don't know the schema.
 		// But let's try to match PeriodType at least.
@@ -243,11 +244,28 @@ func mergeProfiles(cpuPath, gpuPath, outputPath string) error {
 	}
 
 	// Write
-	outF, err := os.Create(outputPath)
+	outF, closeOutput, err := createProfileOutput(outputPath)
 	if err != nil {
 		return fmt.Errorf("create output: %w", err)
 	}
-	defer outF.Close()
+	if closeOutput != nil {
+		defer closeOutput()
+	}
 
 	return merged.Write(outF)
+}
+
+func createProfileOutput(path string) (io.Writer, func() error, error) {
+	if profileOutputPathIsStdout(path) {
+		return os.Stdout, nil, nil
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	return f, f.Close, nil
+}
+
+func profileOutputPathIsStdout(path string) bool {
+	return path == "" || path == "-" || path == "/dev/stdout"
 }
