@@ -35,7 +35,8 @@ func runOpenTrace(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("trace file does not exist: %s", inputPath)
 	}
 
-	fmt.Printf("Opening trace in Xcode: %s\n", inputPath)
+	status := xcodeProfileStatusWriter()
+	fmt.Fprintf(status, "Opening trace in Xcode: %s\n", inputPath)
 
 	// Use -g to open in background by default (doesn't steal focus)
 	openArgs := xcodeOpenArgs()
@@ -49,7 +50,7 @@ func runOpenTrace(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to open trace in Xcode: %w\n  output: %s", err, string(output))
 	}
 
-	fmt.Println("Waiting for Xcode window...")
+	fmt.Fprintln(status, "Waiting for Xcode window...")
 
 	// Wait for window using AX polling (doesn't steal focus)
 	deadline := time.Now().Add(30 * time.Second)
@@ -101,8 +102,11 @@ func runOpenTrace(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	fmt.Print(Colorize("Trace opened successfully in Xcode\n", ColorGreen))
-	return nil
+	fmt.Fprint(status, Colorize("Trace opened successfully in Xcode\n", ColorGreen))
+	return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+		Action: "open",
+		Input:  inputPath,
+	})
 }
 
 func xcodeOpenArgs() []string {

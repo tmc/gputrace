@@ -40,11 +40,11 @@ func runCloseTrace(cmd *cobra.Command, args []string) error {
 	}
 	title := axString(windowAX, "AXTitle")
 	if traceFile != "" {
-		fmt.Printf("Closing window for: %s\n", traceFile)
+		fmt.Fprintf(xcodeProfileStatusWriter(), "Closing window for: %s\n", traceFile)
 	} else if title != "" {
-		fmt.Printf("Closing window: %s\n", title)
+		fmt.Fprintf(xcodeProfileStatusWriter(), "Closing window: %s\n", title)
 	} else {
-		fmt.Println("Closing trace window")
+		fmt.Fprintln(xcodeProfileStatusWriter(), "Closing trace window")
 	}
 
 	// Close via AX close button
@@ -57,8 +57,11 @@ func runCloseTrace(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to click close button: %w", err)
 	}
 
-	fmt.Println("Done")
-	return nil
+	fmt.Fprintln(xcodeProfileStatusWriter(), "Done")
+	return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+		Action: "close",
+		Target: traceFile,
+	})
 }
 
 // findCloseButton finds the close button in a window.
