@@ -8,11 +8,71 @@ import (
 	"testing"
 )
 
-func TestParseAPICallList(t *testing.T) {
-	tracePath := "/tmp/test_standalone.gputrace"
-	if _, err := os.Stat(tracePath); os.IsNotExist(err) {
-		t.Skipf("Test trace file not found: %s", tracePath)
+const (
+	apiCallTraceEnv    = "GPUTRACE_API_CALL_TRACE"
+	apiCallExpectedEnv = "GPUTRACE_API_CALL_EXPECTED"
+)
+
+func apiCallTracePathFromEnv(t *testing.T) string {
+	t.Helper()
+
+	tracePath, ok := os.LookupEnv(apiCallTraceEnv)
+	if !ok {
+		t.Skipf("set %s to run API-call integration tests", apiCallTraceEnv)
 	}
+	validateAPICallTracePath(t, tracePath)
+	return tracePath
+}
+
+func apiCallGoldenPathsFromEnv(t *testing.T) (string, string) {
+	t.Helper()
+
+	tracePath, traceSet := os.LookupEnv(apiCallTraceEnv)
+	expectedPath, expectedSet := os.LookupEnv(apiCallExpectedEnv)
+	if !traceSet || !expectedSet {
+		t.Skipf("set %s and %s to run API-call golden tests", apiCallTraceEnv, apiCallExpectedEnv)
+	}
+
+	validateAPICallTracePath(t, tracePath)
+	validateAPICallExpectedPath(t, expectedPath)
+	return tracePath, expectedPath
+}
+
+func validateAPICallTracePath(t *testing.T, tracePath string) {
+	t.Helper()
+
+	if tracePath == "" {
+		t.Fatalf("%s is set but empty", apiCallTraceEnv)
+	}
+	info, err := os.Stat(tracePath)
+	if err != nil {
+		t.Fatalf("%s=%q is invalid: %v", apiCallTraceEnv, tracePath, err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("%s=%q is invalid: expected .gputrace directory", apiCallTraceEnv, tracePath)
+	}
+	if filepath.Ext(tracePath) != ".gputrace" {
+		t.Fatalf("%s=%q is invalid: expected .gputrace directory", apiCallTraceEnv, tracePath)
+	}
+}
+
+func validateAPICallExpectedPath(t *testing.T, expectedPath string) {
+	t.Helper()
+
+	if expectedPath == "" {
+		t.Fatalf("%s is set but empty", apiCallExpectedEnv)
+	}
+	info, err := os.Stat(expectedPath)
+	if err != nil {
+		t.Fatalf("%s=%q is invalid: %v", apiCallExpectedEnv, expectedPath, err)
+	}
+	if info.IsDir() {
+		t.Fatalf("%s=%q is invalid: expected file", apiCallExpectedEnv, expectedPath)
+	}
+}
+
+func TestParseAPICallList(t *testing.T) {
+	tracePath := apiCallTracePathFromEnv(t)
 
 	trace := &Trace{
 		Path: tracePath,
@@ -927,10 +987,7 @@ func TestParseBufferBindings(t *testing.T) {
 }
 
 func TestFormatAPICallList(t *testing.T) {
-	tracePath := "/tmp/test_standalone.gputrace"
-	if _, err := os.Stat(tracePath); os.IsNotExist(err) {
-		t.Skipf("Test trace file not found: %s", tracePath)
-	}
+	tracePath := apiCallTracePathFromEnv(t)
 
 	trace := &Trace{
 		Path: tracePath,

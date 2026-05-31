@@ -7,14 +7,16 @@ import (
 )
 
 func TestDumpOutputMatchesExpected(t *testing.T) {
+	tracePath, expectedPath := apiCallGoldenPathsFromEnv(t)
+
 	trace := &Trace{
-		Path: "/tmp/test_standalone.gputrace",
+		Path: tracePath,
 	}
 
 	// Read expected output
-	expected, err := os.ReadFile("/tmp/expected_dump.txt")
+	expected, err := os.ReadFile(expectedPath)
 	if err != nil {
-		t.Skipf("Expected output file not found: %v", err)
+		t.Fatalf("read %s=%q: %v", apiCallExpectedEnv, expectedPath, err)
 	}
 
 	// Generate actual output
