@@ -480,15 +480,32 @@ func TestParseInitCalls_AddResidencySet(t *testing.T) {
 	// #9 [Stream 0 addResidencySet:0xafd018000]
 }
 
-// TestParseInitCalls_Fence tests parsing of fence creation
-func TestParseInitCalls_Fence(t *testing.T) {
-	t.Skip("TODO: Implement fence creation parsing")
+func TestParseInitCalls_FenceLabelFailsClosed(t *testing.T) {
+	offset := 0x40
+	fenceTableAddr := uint64(0x0afd024930)
+	csRecords := []FunctionRecord{
+		{
+			CSAddress: fenceTableAddr,
+			Label:     "fences",
+			Offset:    int64(offset),
+		},
+	}
 
-	// TODO: Need to identify the binary pattern for fence objects
-	// Format should be: "0x<address> = [Device newFence]"
-	//
-	// From Xcode reference:
-	// #15 0xafd024930 = [Device newFence]
+	// Device-resource archaeology has shown CS labels such as "fences". That
+	// label alone identifies a resource table, not an MTLFence creation record.
+	calls, _, err := parseInitCalls(nil, 0, csRecords, make(map[uint64]string))
+	if err != nil {
+		t.Fatalf("parseInitCalls failed: %v", err)
+	}
+
+	for _, call := range calls {
+		if call.Type == "newFence" {
+			t.Fatalf("unexpected newFence call from resource label: %#v", call)
+		}
+		if call.Type == "newFunction" && call.Address == fenceTableAddr {
+			t.Fatalf("fence resource label was misclassified as a function: %#v", call)
+		}
+	}
 }
 
 // TestParseInitCalls_Ordering tests that calls are sorted by offset
