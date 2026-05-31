@@ -10,14 +10,13 @@ import (
 	"testing"
 )
 
-func TestParseTimelineFile(t *testing.T) {
-	// Test with real trace data if available
-	testDir := "/tmp/bench_traces/BenchmarkQwen25_MLP_Go-perfdata.gputrace/BenchmarkQwen25_MLP_Go_.gputrace.gpuprofiler_raw"
-	testFile := filepath.Join(testDir, "Timeline_f_0.raw")
+const (
+	timelineRawEnv = "GPUTRACE_COUNTER_TIMELINE_RAW"
+	timelineDirEnv = "GPUTRACE_COUNTER_TIMELINE_DIR"
+)
 
-	if _, err := os.Stat(testFile); os.IsNotExist(err) {
-		t.Skip("Test trace not available:", testFile)
-	}
+func TestParseTimelineFileIntegration(t *testing.T) {
+	testFile := requireTimelineEnvPath(t, timelineRawEnv, false)
 
 	td, err := ParseTimelineFile(testFile)
 	if err != nil {
@@ -49,12 +48,8 @@ func TestParseTimelineFile(t *testing.T) {
 	}
 }
 
-func TestParseTimelineFilesFromDir(t *testing.T) {
-	testDir := "/tmp/bench_traces/BenchmarkQwen25_MLP_Go-perfdata.gputrace/BenchmarkQwen25_MLP_Go_.gputrace.gpuprofiler_raw"
-
-	if _, err := os.Stat(testDir); os.IsNotExist(err) {
-		t.Skip("Test trace directory not available:", testDir)
-	}
+func TestParseTimelineFilesFromDirIntegration(t *testing.T) {
+	testDir := requireTimelineEnvPath(t, timelineDirEnv, true)
 
 	timelines, err := ParseTimelineFilesFromDir(testDir)
 	if err != nil {
@@ -79,6 +74,27 @@ func TestParseTimelineFilesFromDir(t *testing.T) {
 		t.Logf("  File %d: %d entries, %d kicks, magic=0x%x",
 			td.FileIndex, td.Header.EntryCount, len(td.KickTraces), td.Header.Magic)
 	}
+}
+
+func requireTimelineEnvPath(t *testing.T, envName string, wantDir bool) string {
+	t.Helper()
+
+	path := os.Getenv(envName)
+	if path == "" {
+		t.Skipf("set %s to run this Timeline_f raw integration test", envName)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("%s=%q is not accessible: %v", envName, path, err)
+	}
+	if wantDir && !info.IsDir() {
+		t.Fatalf("%s=%q is not a directory", envName, path)
+	}
+	if !wantDir && info.IsDir() {
+		t.Fatalf("%s=%q is a directory, want Timeline_f_*.raw file", envName, path)
+	}
+	return path
 }
 
 func TestTimelineHeaderSize(t *testing.T) {
