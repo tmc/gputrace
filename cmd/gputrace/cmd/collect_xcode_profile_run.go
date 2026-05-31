@@ -665,7 +665,7 @@ func clickReplayButton(windowAX uintptr) error {
 				return fmt.Errorf("failed to click Replay button: %w (and retry failed to find button)", err)
 			}
 		}
-		fmt.Println("    Clicked Replay button successfully")
+		fmt.Fprintln(os.Stderr, "    Clicked Replay button successfully")
 		return nil
 	}
 
@@ -676,7 +676,7 @@ func clickReplayButton(windowAX uintptr) error {
 		if err := axPressWithFallbackWindow(profileBtn, windowAX); err != nil {
 			return fmt.Errorf("failed to click Profile button: %w", err)
 		}
-		fmt.Println("    Clicked Profile button successfully")
+		fmt.Fprintln(os.Stderr, "    Clicked Profile button successfully")
 		return nil
 	}
 
@@ -687,7 +687,7 @@ func clickReplayButton(windowAX uintptr) error {
 		if err := axPressWithFallbackWindow(captureBtn, windowAX); err != nil {
 			return fmt.Errorf("failed to click Capture GPU workload button: %w", err)
 		}
-		fmt.Println("    Clicked Capture GPU workload button successfully")
+		fmt.Fprintln(os.Stderr, "    Clicked Capture GPU workload button successfully")
 		return nil
 	}
 
@@ -706,7 +706,7 @@ func clickReplayButton(windowAX uintptr) error {
 			if err := axPressWithFallbackWindow(replayBtn, windowAX); err != nil {
 				return fmt.Errorf("failed to click Replay button: %w", err)
 			}
-			fmt.Println("    Clicked Replay button successfully")
+			fmt.Fprintln(os.Stderr, "    Clicked Replay button successfully")
 			return nil
 		}
 		captureBtn = findButtonInAllWindows("Capture GPU workload")
@@ -714,7 +714,7 @@ func clickReplayButton(windowAX uintptr) error {
 			if err := axPressWithFallbackWindow(captureBtn, windowAX); err != nil {
 				return fmt.Errorf("failed to click Capture GPU workload button: %w", err)
 			}
-			fmt.Println("    Clicked Capture GPU workload button successfully")
+			fmt.Fprintln(os.Stderr, "    Clicked Capture GPU workload button successfully")
 			return nil
 		}
 		if i > 0 && i%5 == 0 {
@@ -1012,7 +1012,7 @@ func waitForReplayComplete(appAX uintptr, traceFileName string, initialWindowAX 
 
 		// Only print if status changed
 		if status != lastStatus {
-			fmt.Printf("    Profiling... (%.0fs, status: %s)\n", elapsed, status)
+			fmt.Fprintf(os.Stderr, "    Profiling... (%.0fs, status: %s)\n", elapsed, status)
 			lastStatus = status
 		}
 		time.Sleep(2 * time.Second)
