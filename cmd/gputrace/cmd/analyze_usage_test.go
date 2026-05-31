@@ -71,3 +71,38 @@ func TestAnalyzeUsageEventUseIsRead(t *testing.T) {
 		t.Fatalf("EventUse counts = reads:%d writes:%d, want reads:2 writes:0", kernel.Reads, kernel.Writes)
 	}
 }
+
+func TestAnalyzeUsageFormat(t *testing.T) {
+	tests := []struct {
+		name    string
+		format  string
+		wantErr string
+	}{
+		{name: "text", format: "text"},
+		{name: "dot", format: "dot"},
+		{name: "json", format: "json"},
+		{name: "unknown", format: "yaml", wantErr: `unknown analyze-usage format "yaml"`},
+		{name: "empty", wantErr: `unknown analyze-usage format ""`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := normalizeAnalyzeFormat(tt.format)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("normalizeAnalyzeFormat returned nil error, want %q", tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("error %q does not contain %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("normalizeAnalyzeFormat returned error: %v", err)
+			}
+			if got != tt.format {
+				t.Fatalf("normalizeAnalyzeFormat(%q) = %q, want %q", tt.format, got, tt.format)
+			}
+		})
+	}
+}
