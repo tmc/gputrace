@@ -223,45 +223,9 @@ func generateSourceLinesPprof(tracePath string, searchPaths []string) error {
 		log.Printf("Warning: failed to index trace shader sources: %v", err)
 	}
 
-	// Get timing data - try multiple sources in order of preference
-	var timings []*export.EncoderTiming
-
-	// 1. Try real profiler timing from .gpuprofiler_raw (most accurate)
-	profilerTimings, _, profilerErr := gputrace.ExtractEncoderTimingsFromProfiler(trace)
-	if profilerErr == nil && len(profilerTimings) > 0 {
-		if verbose {
-			fmt.Printf("Using real profiler timing data (%d encoders)\n", len(profilerTimings))
-		}
-		var currentTimeNs uint64
-		for _, pt := range profilerTimings {
-			durationNs := uint64(pt.DurationMicros) * 1000 // Convert µs to ns
-			label := pt.Label
-			if label == "" {
-				label = fmt.Sprintf("encoder_%d", pt.Index)
-			}
-			timings = append(timings, &export.EncoderTiming{
-				Label:          label,
-				DurationNs:     durationNs,
-				StartTimestamp: currentTimeNs,
-			})
-			currentTimeNs += durationNs
-		}
-	} else {
-		// 2. Try timing.ExtractTimingData (from encoder labels)
-		extracted, err := timing.ExtractTimingData(trace)
-		if err == nil && len(extracted) > 0 {
-			if verbose {
-				fmt.Printf("Using encoder label timing data (%d encoders)\n", len(extracted))
-			}
-			timings = extracted
-		} else {
-			// 3. Fall back to synthetic timing
-			if verbose {
-				fmt.Printf("Using synthetic timing data (no real profiler data available)\n")
-			}
-			timings = timing.GenerateSyntheticTiming(trace)
-		}
-	}
+	timingSelection := selectSourceLineTimings(trace)
+	fmt.Print(formatSourceLineTimingNotice(timingSelection.source, len(timingSelection.timings)))
+	timings := timingSelection.timings
 	timings = appendSourceMappedEncoderTimings(trace, timings, mapper)
 
 	// Generate pprof with source lines
@@ -299,6 +263,81 @@ func generateSourceLinesPprof(tracePath string, searchPaths []string) error {
 	fmt.Printf("  (pprof) list <kernel_name>\n")
 
 	return nil
+}
+
+type sourceLineTimingSource string
+
+const (
+	sourceLineTimingProfiler      sourceLineTimingSource = "profiler"
+	sourceLineTimingEncoderLabels sourceLineTimingSource = "encoder_labels"
+	sourceLineTimingSynthetic     sourceLineTimingSource = "synthetic"
+)
+
+type sourceLineTimingSelection struct {
+	timings []*export.EncoderTiming
+	source  sourceLineTimingSource
+}
+
+func selectSourceLineTimings(trace *gputrace.Trace) sourceLineTimingSelection {
+	profilerTimings, _, profilerErr := gputrace.ExtractEncoderTimingsFromProfiler(trace)
+	if profilerErr == nil && len(profilerTimings) > 0 {
+		return sourceLineTimingSelection{
+			timings: sourceLineProfilerTimings(profilerTimings),
+			source:  sourceLineTimingProfiler,
+		}
+	}
+
+	extracted, err := timing.ExtractTimingData(trace)
+	if err == nil && len(extracted) > 0 {
+		return sourceLineTimingSelection{
+			timings: extracted,
+			source:  sourceLineTimingEncoderLabels,
+		}
+	}
+
+	return sourceLineTimingSelection{
+		timings: timing.GenerateSyntheticTiming(trace),
+		source:  sourceLineTimingSynthetic,
+	}
+}
+
+func sourceLineProfilerTimings(profilerTimings []gputrace.EncoderTimingInfo) []*export.EncoderTiming {
+	timings := make([]*export.EncoderTiming, 0, len(profilerTimings))
+	var currentTimeNs uint64
+	for _, pt := range profilerTimings {
+		durationNs := uint64(pt.DurationMicros) * 1000 // Convert us to ns.
+		label := pt.Label
+		if label == "" {
+			label = fmt.Sprintf("encoder_%d", pt.Index)
+		}
+		timings = append(timings, &export.EncoderTiming{
+			Label:          label,
+			DurationNs:     durationNs,
+			StartTimestamp: currentTimeNs,
+		})
+		currentTimeNs += durationNs
+	}
+	return timings
+}
+
+func formatSourceLineTimingNotice(source sourceLineTimingSource, count int) string {
+	switch source {
+	case sourceLineTimingProfiler:
+		return fmt.Sprintf("Timing source: profiler .gpuprofiler_raw data (%s)\n", formatTimingRows(count))
+	case sourceLineTimingEncoderLabels:
+		return fmt.Sprintf("Timing source: encoder label timing data (%s)\n", formatTimingRows(count))
+	case sourceLineTimingSynthetic:
+		return fmt.Sprintf("Timing source: synthetic fallback (%s; no real profiler or encoder label timing found)\n", formatTimingRows(count))
+	default:
+		return fmt.Sprintf("Timing source: unknown (%s)\n", formatTimingRows(count))
+	}
+}
+
+func formatTimingRows(count int) string {
+	if count == 1 {
+		return "1 encoder"
+	}
+	return fmt.Sprintf("%d encoders", count)
 }
 
 func appendSourceMappedEncoderTimings(trace *gputrace.Trace, timings []*export.EncoderTiming, mapper *gputrace.ShaderSourceMapper) []*export.EncoderTiming {
