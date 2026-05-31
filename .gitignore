@@ -20,6 +20,8 @@ source_mapping
 
 # Large trace files
 testdata/traces/*.tar.gz
+testdata/traces/generated-*
+testdata/traces/local-*
 
 # Go workspace files
 go.work

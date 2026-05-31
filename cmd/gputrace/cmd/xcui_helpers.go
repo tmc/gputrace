@@ -20,7 +20,7 @@ func debugCheckExportMenu(app uintptr) error {
 
 	// Click File to populate children (often needed for dynamic menus)
 	if err := axAction(fileMenu, "AXPress"); err != nil {
-		fmt.Printf("    Debug: Failed to open File menu: %v\n", err)
+		verboseLog("debugCheckExportMenu: failed to open File menu: %v", err)
 	}
 
 	// Find Export item
@@ -30,16 +30,16 @@ func debugCheckExportMenu(app uintptr) error {
 	})
 
 	if exportItem == 0 {
-		fmt.Printf("    Debug: Export item NOT found in File menu\n")
+		verboseLog("debugCheckExportMenu: Export item not found in File menu")
 		// Dump all items
 		children := axChildren(fileMenu)
 		for _, child := range children {
-			fmt.Printf("      - %s (Enabled: %v)\n", axString(child, "AXTitle"), IsElementEnabled(child))
+			verboseLog("debugCheckExportMenu: menu item %q enabled=%v", axString(child, "AXTitle"), IsElementEnabled(child))
 			cfRelease(child)
 		}
 		return nil
 	}
 
-	fmt.Printf("    Debug: Export item found. Enabled: %v\n", IsElementEnabled(exportItem))
+	verboseLog("debugCheckExportMenu: Export item found, enabled=%v", IsElementEnabled(exportItem))
 	return nil
 }

@@ -43,10 +43,13 @@ func runCheckStatus(cmd *cobra.Command, args []string) error {
 	if len(args) > 0 {
 		traceFile = args[0]
 	}
+	debug := statusDebugEnabled(checkStatusDebug)
 
 	// Note: setupMacgo and checkPermissions are called by PersistentPreRunE
 
-	fmt.Fprintln(os.Stderr, "[check-status] finding Xcode app...")
+	if debug {
+		fmt.Fprintln(os.Stderr, "[check-status] finding Xcode app...")
+	}
 	appAX, err := FindXcodeApp()
 	if err != nil {
 		if collectProfileJSON {
@@ -54,10 +57,14 @@ func runCheckStatus(cmd *cobra.Command, args []string) error {
 		}
 		return fmt.Errorf("Xcode not running: %w", err)
 	}
-	fmt.Fprintln(os.Stderr, "[check-status] found Xcode app")
+	if debug {
+		fmt.Fprintln(os.Stderr, "[check-status] found Xcode app")
+	}
 	defer cfRelease(appAX)
 
-	fmt.Fprintf(os.Stderr, "[check-status] finding target window (trace=%q)...\n", traceFile)
+	if debug {
+		fmt.Fprintf(os.Stderr, "[check-status] finding target window (trace=%q)...\n", traceFile)
+	}
 	windowAX, err := findTargetWindow(appAX, traceFile)
 	if err != nil {
 		if collectProfileJSON {
@@ -65,20 +72,30 @@ func runCheckStatus(cmd *cobra.Command, args []string) error {
 		}
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "[check-status] got window: %v (title=%q)\n", windowAX, axString(windowAX, "AXTitle"))
+	if debug {
+		fmt.Fprintf(os.Stderr, "[check-status] got window: %v (title=%q)\n", windowAX, axString(windowAX, "AXTitle"))
+	}
 
 	if collectProfileJSON {
-		fmt.Fprintln(os.Stderr, "[check-status] getting status output (JSON)...")
-		output := getStatusOutput(windowAX, checkStatusDebug)
+		if debug {
+			fmt.Fprintln(os.Stderr, "[check-status] getting status output (JSON)...")
+		}
+		output := getStatusOutput(windowAX, debug)
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(output)
 	}
 
-	fmt.Fprintln(os.Stderr, "[check-status] getting profiling status...")
-	status := getProfilingStatusWithDebug(windowAX, checkStatusDebug)
+	if debug {
+		fmt.Fprintln(os.Stderr, "[check-status] getting profiling status...")
+	}
+	status := getProfilingStatusWithDebug(windowAX, debug)
 	fmt.Println(status)
 	return nil
+}
+
+func statusDebugEnabled(debug bool) bool {
+	return debug || collectProfileDebug || collectProfileVerbose
 }
 
 // getStatusOutput returns a structured status output for JSON.
@@ -122,6 +139,7 @@ func getCurrentTab(window uintptr) string {
 }
 
 func getProfilingStatusWithDebug(window uintptr, debug bool) string {
+	debug = statusDebugEnabled(debug)
 	var hasProfiling, hasReplay, hasProfile, hasPerfNotAvailable bool
 	var replayEnabled, profileEnabled bool
 
@@ -144,7 +162,7 @@ func getProfilingStatusWithDebug(window uintptr, debug bool) string {
 
 		// Print progress every 2 seconds
 		now := time.Now()
-		if now.Sub(lastProgress) >= progressInterval {
+		if debug && now.Sub(lastProgress) >= progressInterval {
 			elapsed := now.Sub(startTime).Seconds()
 			fmt.Fprintf(os.Stderr, "[check-status] %.1fs: visited=%d queue=%d buttons=%d texts=%d profiling=%v replay=%v profile=%v\n",
 				elapsed, visited, len(queue), buttonsFound, textsFound, hasProfiling, hasReplay, hasProfile)
@@ -163,13 +181,13 @@ func getProfilingStatusWithDebug(window uintptr, debug bool) string {
 			if strings.Contains(value, "Profiling GPU Trace") {
 				hasProfiling = true
 				if debug {
-					fmt.Printf("[DEBUG] Found profiling indicator: %q\n", value)
+					fmt.Fprintf(os.Stderr, "[DEBUG] Found profiling indicator: %q\n", value)
 				}
 			}
 			if strings.Contains(value, "Performance data not available") {
 				hasPerfNotAvailable = true
 				if debug {
-					fmt.Println("[DEBUG] Found 'Performance data not available' text")
+					fmt.Fprintln(os.Stderr, "[DEBUG] Found 'Performance data not available' text")
 				}
 			}
 		}
@@ -186,13 +204,13 @@ func getProfilingStatusWithDebug(window uintptr, debug bool) string {
 				hasReplay = true
 				replayEnabled = IsElementEnabled(el)
 				if debug {
-					fmt.Printf("[DEBUG] Found Replay button (enabled=%v)\n", replayEnabled)
+					fmt.Fprintf(os.Stderr, "[DEBUG] Found Replay button (enabled=%v)\n", replayEnabled)
 				}
 			case "Profile":
 				hasProfile = true
 				profileEnabled = IsElementEnabled(el)
 				if debug {
-					fmt.Printf("[DEBUG] Found Profile button (enabled=%v)\n", profileEnabled)
+					fmt.Fprintf(os.Stderr, "[DEBUG] Found Profile button (enabled=%v)\n", profileEnabled)
 				}
 			}
 		}
@@ -202,18 +220,20 @@ func getProfilingStatusWithDebug(window uintptr, debug bool) string {
 	}
 
 	// Final progress summary
-	elapsed := time.Since(startTime).Seconds()
-	fmt.Fprintf(os.Stderr, "[check-status] done: %.1fs visited=%d buttons=%d texts=%d profiling=%v replay=%v profile=%v\n",
-		elapsed, visited, buttonsFound, textsFound, hasProfiling, hasReplay, hasProfile)
+	if debug {
+		elapsed := time.Since(startTime).Seconds()
+		fmt.Fprintf(os.Stderr, "[check-status] done: %.1fs visited=%d buttons=%d texts=%d profiling=%v replay=%v profile=%v\n",
+			elapsed, visited, buttonsFound, textsFound, hasProfiling, hasReplay, hasProfile)
+	}
 
 	if debug {
-		fmt.Printf("[DEBUG] BFS: visited=%d, hasProfiling=%v, hasReplay=%v, hasProfile=%v, hasPerfNotAvailable=%v\n", visited, hasProfiling, hasReplay, hasProfile, hasPerfNotAvailable)
+		fmt.Fprintf(os.Stderr, "[DEBUG] BFS: visited=%d, hasProfiling=%v, hasReplay=%v, hasProfile=%v, hasPerfNotAvailable=%v\n", visited, hasProfiling, hasReplay, hasProfile, hasPerfNotAvailable)
 	}
 
 	// Check if "Profiling GPU Trace..." text is visible
 	if hasProfiling {
 		if debug {
-			fmt.Println("[DEBUG] Profiling indicator found, returning 'running'")
+			fmt.Fprintln(os.Stderr, "[DEBUG] Profiling indicator found, returning 'running'")
 		}
 		return "running"
 	}
@@ -230,7 +250,7 @@ func getProfilingStatusWithDebug(window uintptr, debug bool) string {
 	// "Performance data not available" means trace loaded but not profiled
 	if hasPerfNotAvailable {
 		if debug {
-			fmt.Println("[DEBUG] Performance data not available, returning 'replay-ready'")
+			fmt.Fprintln(os.Stderr, "[DEBUG] Performance data not available, returning 'replay-ready'")
 		}
 		return "replay-ready"
 	}
@@ -270,30 +290,30 @@ func hasShowPerformanceDebug(window uintptr, debug bool) bool {
 	editorArea := findGroupByTitleDebug(window, "editor area", 100, debug)
 	if editorArea == 0 {
 		if debug {
-			fmt.Println("[DEBUG] editor area not found (visited 100)")
+			fmt.Fprintln(os.Stderr, "[DEBUG] editor area not found (visited 100)")
 		}
 		return false
 	}
 	if debug {
-		fmt.Println("[DEBUG] Found editor area")
+		fmt.Fprintln(os.Stderr, "[DEBUG] Found editor area")
 	}
 
 	// Find "Summary" group within editor area
 	summary := findGroupByTitle(editorArea, "Summary", 500)
 	if summary == 0 {
 		if debug {
-			fmt.Println("[DEBUG] Summary not found in editor area (visited 500)")
+			fmt.Fprintln(os.Stderr, "[DEBUG] Summary not found in editor area (visited 500)")
 		}
 		return false
 	}
 	if debug {
-		fmt.Println("[DEBUG] Found Summary")
+		fmt.Fprintln(os.Stderr, "[DEBUG] Found Summary")
 	}
 
 	// Look for Show Performance within Summary subtree
 	btn := findButtonBFS(summary, "Show Performance", 500)
 	if debug {
-		fmt.Printf("[DEBUG] Show Performance button: %v\n", btn != 0)
+		fmt.Fprintf(os.Stderr, "[DEBUG] Show Performance button: %v\n", btn != 0)
 	}
 	return btn != 0
 }

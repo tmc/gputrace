@@ -100,14 +100,18 @@ See [docs/TRACE_DIFF_WORKFLOW.md](./docs/TRACE_DIFF_WORKFLOW.md) for the full wo
 go test ./...
 ```
 
-The repository includes a small canonical fixture set under `testdata/traces`:
+The repository includes small canonical fixtures under `testdata/traces`:
 
 - `01-single-encoder` for basic parsing and diff smoke tests
-- `06-six-encoders` for multi-encoder parsing and shader/debug coverage
+- `02-two-encoders`, `03-three-encoders`, `04-four-encoders`, and
+  `06-six-encoders` for multi-encoder parsing
+- `known-invocations-*`, `low-alu-*`, `high-alu-*`, `low-occupancy-*`, and
+  `high-occupancy-*` for focused counter and shader-metric scenarios
 
 Some success paths require capabilities that are not shipped in the small in-repo fixtures:
 
-- `profiler` requires traces with `.gpuprofiler_raw`
+- `profiler` and perf-counter validation require traces with `.gpuprofiler_raw`
+  and Xcode `Counters.csv` exports
 - `shader-source` requires traces with source attribution data
 
 See [docs/TESTING.md](./docs/TESTING.md) for opt-in integration test
@@ -118,6 +122,7 @@ environment variables and fixture handling.
 Detailed format and workflow documentation lives in `docs/`:
 
 - [README.md](./docs/README.md) -- docs index
+- [ENVIRONMENT.md](./docs/ENVIRONMENT.md) -- environment variables
 - [TESTING.md](./docs/TESTING.md) -- test fixtures and opt-in integration tests
 - [TRACE_DIFF_WORKFLOW.md](./docs/TRACE_DIFF_WORKFLOW.md) -- trace diff workflow and output interpretation
 - [STREAMDATA_FORMAT.md](./docs/STREAMDATA_FORMAT.md) -- streamData plist format

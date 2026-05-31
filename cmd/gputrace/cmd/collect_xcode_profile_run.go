@@ -1121,8 +1121,10 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 		if freshApp, err := FindXcodeApp(); err == nil && freshApp != 0 {
 			appAX = freshApp
 		}
-		if err := debugCheckExportMenu(appAX); err != nil {
-			fmt.Printf("    Debug: Export menu check failed: %v\n", err)
+		if collectProfileDebug {
+			if err := debugCheckExportMenu(appAX); err != nil {
+				fmt.Fprintf(os.Stderr, "    Debug: Export menu check failed: %v\n", err)
+			}
 		}
 		if err := ClickMenuItem(appAX, []string{"File", "Export..."}); err != nil {
 			return fmt.Errorf("failed to click Export menu: %w", err)
@@ -1162,12 +1164,13 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 	}
 
 	if !sheetFound {
-		// Debug: list what windows exist
-		windows := GetAllWindows(freshApp)
-		fmt.Printf("    Debug: Found %d windows\n", len(windows))
-		for i, w := range windows {
-			title := axString(w, "AXTitle")
-			fmt.Printf("    Debug: Window %d: %q\n", i+1, title)
+		if collectProfileDebug {
+			windows := GetAllWindows(freshApp)
+			fmt.Fprintf(os.Stderr, "    Debug: Found %d windows\n", len(windows))
+			for i, w := range windows {
+				title := axString(w, "AXTitle")
+				fmt.Fprintf(os.Stderr, "    Debug: Window %d: %q\n", i+1, title)
+			}
 		}
 		return fmt.Errorf("export sheet did not appear (Save button not found)")
 	}
