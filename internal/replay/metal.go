@@ -4,6 +4,7 @@
 package replay
 
 import (
+	"errors"
 	"fmt"
 	"unsafe"
 
@@ -11,6 +12,12 @@ import (
 	"github.com/tmc/apple/objc"
 	"github.com/tmc/gputrace/internal/mtlb"
 )
+
+// ErrICBExecutionUnsupported is returned when a replay plan contains an
+// indirect command buffer execution. The current replay state does not
+// reconstruct MTLIndirectCommandBuffer objects from traces, so Metal replay
+// rejects these plans before issuing any GPU work.
+var ErrICBExecutionUnsupported = errors.New("metal replay does not support indirect command buffer execution")
 
 // MetalReplayEngine extends ReplayEngine with actual Metal execution capabilities.
 type MetalReplayEngine struct {
@@ -251,6 +258,12 @@ func (mre *MetalReplayEngine) ExecuteReplayPlan(plan *ReplayPlan) (*MetalReplayR
 		DispatchesRun: 0,
 	}
 
+	if err := validateReplayPlanForMetalExecution(plan); err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("validate replay plan: %v", err)
+		return result, err
+	}
+
 	// Restore buffers and functions first
 	if err := mre.RestoreBuffersToMetal(); err != nil {
 		result.Success = false
@@ -311,6 +324,22 @@ func (mre *MetalReplayEngine) ExecuteReplayPlan(plan *ReplayPlan) (*MetalReplayR
 	return result, nil
 }
 
+func validateReplayPlanForMetalExecution(plan *ReplayPlan) error {
+	for _, cmd := range plan.Commands {
+		if cmd.Type != "execute_icb" {
+			continue
+		}
+		return fmt.Errorf("%w: sequence=%d encoder=%d icb=0x%x count=%d",
+			ErrICBExecutionUnsupported,
+			cmd.SequenceNum,
+			cmd.EncoderIndex,
+			cmd.ICBAddr,
+			cmd.ICBCount,
+		)
+	}
+	return nil
+}
+
 // encodeCommand encodes a single replay command into a Metal compute encoder.
 func (mre *MetalReplayEngine) encodeCommand(encoder *MetalComputeEncoderHandle, cmd ReplayCommand) error {
 	switch cmd.Type {
@@ -366,8 +395,13 @@ func (mre *MetalReplayEngine) encodeCommand(encoder *MetalComputeEncoderHandle, 
 		encoder.Dispatch(gridX, gridY, gridZ, threadgroupX, threadgroupY, threadgroupZ)
 
 	case "execute_icb":
-		// Indirect command buffer execution not yet supported
-		return fmt.Errorf("ICB execution not yet implemented")
+		return fmt.Errorf("%w: sequence=%d encoder=%d icb=0x%x count=%d",
+			ErrICBExecutionUnsupported,
+			cmd.SequenceNum,
+			cmd.EncoderIndex,
+			cmd.ICBAddr,
+			cmd.ICBCount,
+		)
 
 	default:
 		return fmt.Errorf("unknown command type: %s", cmd.Type)
