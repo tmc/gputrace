@@ -715,7 +715,7 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 
 	// Apply shift if we found any events
 	if foundAny && globalMinTs > 0 {
-		fmt.Printf("Normalizing timeline: shifting by -%d µs\n", globalMinTs)
+		fmt.Fprintf(os.Stderr, "Normalizing timeline: shifting by -%d µs\n", globalMinTs)
 		for i := range timeline.Events {
 			ev := &timeline.Events[i]
 			if ev.Phase == "M" {
@@ -2467,7 +2467,7 @@ func buildTimelineFromProfilerData(tracePath string, stats *counter.StreamDataSt
 
 	// Apply shift if we found any events
 	if foundAny && globalMinTs > 0 {
-		fmt.Printf("Normalizing timeline: shifting by -%d µs\n", globalMinTs)
+		fmt.Fprintf(os.Stderr, "Normalizing timeline: shifting by -%d µs\n", globalMinTs)
 		for i := range timeline.Events {
 			ev := &timeline.Events[i]
 			if ev.Phase == "M" {
