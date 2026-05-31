@@ -20,6 +20,12 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Test all packages
+        run: go test ./...
+
+      - name: Verify non-Darwin compile path
+        run: GOOS=linux GOARCH=amd64 go test -exec=true ./...
+
       - name: Verify CLI and internal tests
         run: |
           go test -race ./cmd/gputrace/cmd -count=1
@@ -27,4 +33,3 @@ jobs:
 
       - name: Verify release build path
         run: go build ./cmd/gputrace
-
