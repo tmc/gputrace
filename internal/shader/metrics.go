@@ -22,12 +22,14 @@ type ShaderMetrics struct {
 	Index   int    `json:"index"`
 
 	// Execution Statistics
-	InvocationCount int     `json:"invocation_count"`  // Number of times this shader was dispatched
-	TotalDurationNs uint64  `json:"total_duration_ns"` // Total execution time across all invocations
-	AvgDurationNs   uint64  `json:"avg_duration_ns"`   // Average execution time per invocation
-	MinDurationNs   uint64  `json:"min_duration_ns"`   // Fastest invocation
-	MaxDurationNs   uint64  `json:"max_duration_ns"`   // Slowest invocation
-	PercentOfTotal  float64 `json:"percent_of_total"`  // Percentage of total GPU time
+	InvocationCount int     `json:"invocation_count"`             // Number of times this shader was dispatched
+	TotalDurationNs uint64  `json:"total_duration_ns"`            // Total duration across all invocations; see TimingSource
+	AvgDurationNs   uint64  `json:"avg_duration_ns"`              // Average duration per invocation
+	MinDurationNs   uint64  `json:"min_duration_ns"`              // Fastest invocation, when known
+	MaxDurationNs   uint64  `json:"max_duration_ns"`              // Slowest invocation, when known
+	PercentOfTotal  float64 `json:"percent_of_total"`             // Percentage of total GPU time
+	TimingSource    string  `json:"timing_source,omitempty"`      // Source used for duration fields
+	TimingApprox    bool    `json:"timing_approximate,omitempty"` // True when timing is heuristic or synthetic
 
 	// Thread Configuration
 	ThreadgroupsX    uint64 `json:"threadgroups_x"`      // Threadgroups in X dimension
@@ -72,6 +74,13 @@ type ShaderMetrics struct {
 	AllocatedRegisters     int `json:"allocated_registers"`      // Allocated register count
 	SpilledBytes           int `json:"spilled_bytes"`            // Bytes spilled to memory
 }
+
+const (
+	timingSourceStreamDataDispatch = "streamData gpuCommandInfoData dispatch durations"
+	timingSourceCaptureHeuristic   = "capture timestamp heuristic"
+	timingSourceSyntheticKernel    = "synthetic kernel-name estimate"
+	timingSourceSyntheticThread    = "synthetic thread-count estimate"
+)
 
 // ShaderMetricsReport aggregates metrics for all shaders in a trace.
 type ShaderMetricsReport struct {
@@ -135,7 +144,8 @@ func ExtractShaderMetrics(t *trace.Trace) (*ShaderMetricsReport, error) {
 		return nil, fmt.Errorf("populate thread metrics: %w", err)
 	}
 
-	// Estimate timing information
+	// Populate timing information. Profiler streamData gives per-dispatch
+	// durations; other sources are marked approximate on the metric.
 	if err := estimateTimingMetrics(t, metricsMap); err != nil {
 		return nil, fmt.Errorf("estimate timing metrics: %w", err)
 	}
@@ -321,50 +331,23 @@ func populateThreadMetrics(t *trace.Trace, metricsMap map[string]*ShaderMetrics)
 	return nil
 }
 
-// estimateTimingMetrics uses the timing extractor to populate duration information.
+// estimateTimingMetrics uses the best available source to populate duration information.
 func estimateTimingMetrics(t *trace.Trace, metricsMap map[string]*ShaderMetrics) error {
-	// TODO: Use proper timing extraction when available
-	// For now, extract timing data directly
-	timings, err := timing.ExtractTimingData(t)
-	if err != nil {
-		// Fall back to synthetic timing if extraction fails
-		timings = timing.GenerateSyntheticTiming(t)
+	// Prefer profiler streamData dispatch timing when present. Those durations
+	// come from Xcode's gpuCommandInfoData records instead of capture-layout
+	// timestamp guesses or synthetic estimates.
+	streamDataApplied, _ := populateStreamDataTimingMetrics(t, metricsMap)
+
+	if streamDataApplied {
+		dropMetricsWithoutTiming(metricsMap)
+	} else {
+		populateFallbackTimingMetrics(t, metricsMap)
 	}
 
-	// Map timings to metrics
-	timingMap := make(map[string]*timing.EncoderTiming)
-	for _, timing := range timings {
-		timingMap[timing.Label] = timing
-	}
 	// Try to load counter data from CSV for weighted cost calculation
 	counterData, csvErr := loadCounterData(t)
-	if csvErr != nil {
-		// Silently continue without counter data
-	} else if counterData != nil {
-	}
 
 	for name, metrics := range metricsMap {
-		if timing, exists := timingMap[name]; exists {
-			// Use actual timing if available
-			durationPerInvocation := timing.DurationNs
-			if metrics.InvocationCount > 1 {
-				durationPerInvocation = timing.DurationNs / uint64(metrics.InvocationCount)
-			}
-
-			metrics.TotalDurationNs = timing.DurationNs
-			metrics.AvgDurationNs = durationPerInvocation
-			metrics.MinDurationNs = durationPerInvocation // Simplified
-			metrics.MaxDurationNs = durationPerInvocation // Simplified
-
-		} else {
-			// Estimate based on thread count and typical compute patterns
-			estimatedNs := estimateShaderDuration(metrics)
-			metrics.TotalDurationNs = estimatedNs * uint64(metrics.InvocationCount)
-			metrics.AvgDurationNs = estimatedNs
-			metrics.MinDurationNs = estimatedNs
-			metrics.MaxDurationNs = estimatedNs
-		}
-
 		// Apply counter data if available (regardless of whether timing is actual or estimated)
 		if csvErr == nil && counterData != nil {
 			applyCounterDataToMetrics(metrics, name, counterData)
@@ -372,6 +355,209 @@ func estimateTimingMetrics(t *trace.Trace, metricsMap map[string]*ShaderMetrics)
 	}
 
 	return nil
+}
+
+func populateStreamDataTimingMetrics(t *trace.Trace, metricsMap map[string]*ShaderMetrics) (bool, error) {
+	stats, err := counter.ExtractPipelineStatsFromTraceStreamData(t)
+	if err != nil {
+		return false, err
+	}
+	return applyStreamDataDispatchTiming(stats, metricsMap), nil
+}
+
+type shaderDispatchTiming struct {
+	count    int
+	totalNs  uint64
+	minNs    uint64
+	maxNs    uint64
+	pipeline *counter.PipelineStats
+}
+
+func applyStreamDataDispatchTiming(stats *counter.StreamDataStats, metricsMap map[string]*ShaderMetrics) bool {
+	if stats == nil || len(stats.Dispatches) == 0 {
+		return false
+	}
+
+	pipelinesByName := make(map[string]*counter.PipelineStats)
+	pipelinesByIndex := make(map[int]*counter.PipelineStats)
+	for i := range stats.Pipelines {
+		p := &stats.Pipelines[i]
+		pipelinesByIndex[i] = p
+		if p.FunctionName != "" {
+			pipelinesByName[p.FunctionName] = p
+		}
+	}
+
+	aggregates := make(map[string]*shaderDispatchTiming)
+	for _, dispatch := range stats.Dispatches {
+		if dispatch.DurationUs < 0 {
+			continue
+		}
+		name := dispatch.DisplayName()
+		if name == "" {
+			continue
+		}
+
+		agg := aggregates[name]
+		if agg == nil {
+			agg = &shaderDispatchTiming{
+				minNs:    ^uint64(0),
+				pipeline: pipelinesByName[name],
+			}
+			if agg.pipeline == nil {
+				agg.pipeline = pipelinesByIndex[dispatch.PipelineIndex]
+			}
+			aggregates[name] = agg
+		}
+
+		durationNs := uint64(dispatch.DurationUs) * 1000
+		agg.count++
+		agg.totalNs += durationNs
+		if durationNs < agg.minNs {
+			agg.minNs = durationNs
+		}
+		if durationNs > agg.maxNs {
+			agg.maxNs = durationNs
+		}
+	}
+
+	if len(aggregates) == 0 {
+		return false
+	}
+
+	for name, agg := range aggregates {
+		metrics := findOrCreateShaderMetrics(metricsMap, name, agg.pipeline)
+		if agg.count > 0 {
+			metrics.InvocationCount = agg.count
+			metrics.TotalDurationNs = agg.totalNs
+			metrics.AvgDurationNs = agg.totalNs / uint64(agg.count)
+			metrics.MinDurationNs = agg.minNs
+			metrics.MaxDurationNs = agg.maxNs
+			metrics.TimingSource = timingSourceStreamDataDispatch
+			metrics.TimingApprox = false
+		}
+		if agg.pipeline != nil {
+			applyPipelineStatsToMetrics(metrics, agg.pipeline)
+		}
+	}
+
+	return true
+}
+
+func dropMetricsWithoutTiming(metricsMap map[string]*ShaderMetrics) {
+	for name, metrics := range metricsMap {
+		if metrics.TimingSource == "" {
+			delete(metricsMap, name)
+		}
+	}
+}
+
+func populateFallbackTimingMetrics(t *trace.Trace, metricsMap map[string]*ShaderMetrics) {
+	timings, source, approximate := extractFallbackTimings(t)
+	timingMap := make(map[string]*timing.EncoderTiming)
+	for _, timing := range timings {
+		timingMap[timing.Label] = timing
+	}
+
+	for name, metrics := range metricsMap {
+		if metrics.TimingSource != "" {
+			continue
+		}
+
+		if timing, exists := timingMap[name]; exists {
+			durationPerInvocation := timing.DurationNs
+			if metrics.InvocationCount > 1 {
+				durationPerInvocation = timing.DurationNs / uint64(metrics.InvocationCount)
+			}
+
+			metrics.TotalDurationNs = timing.DurationNs
+			metrics.AvgDurationNs = durationPerInvocation
+			metrics.MinDurationNs = durationPerInvocation
+			metrics.MaxDurationNs = durationPerInvocation
+			metrics.TimingSource = source
+			metrics.TimingApprox = approximate
+			continue
+		}
+
+		estimatedNs := estimateShaderDuration(metrics)
+		metrics.TotalDurationNs = estimatedNs * uint64(metrics.InvocationCount)
+		metrics.AvgDurationNs = estimatedNs
+		metrics.MinDurationNs = estimatedNs
+		metrics.MaxDurationNs = estimatedNs
+		metrics.TimingSource = timingSourceSyntheticThread
+		metrics.TimingApprox = true
+	}
+}
+
+func extractFallbackTimings(t *trace.Trace) ([]*timing.EncoderTiming, string, bool) {
+	timings, err := timing.ExtractTimingData(t)
+	if err == nil && len(timings) > 0 {
+		return timings, timingSourceCaptureHeuristic, true
+	}
+
+	timings = timing.GenerateSyntheticTiming(t)
+	if len(timings) > 0 {
+		return timings, timingSourceSyntheticKernel, true
+	}
+
+	return nil, "", true
+}
+
+func findOrCreateShaderMetrics(metricsMap map[string]*ShaderMetrics, name string, pipeline *counter.PipelineStats) *ShaderMetrics {
+	if metrics, ok := findShaderMetricsByName(metricsMap, name); ok {
+		return metrics
+	}
+
+	metrics := &ShaderMetrics{
+		Name:              name,
+		Index:             len(metricsMap),
+		MinDurationNs:     ^uint64(0),
+		Bottlenecks:       make([]string, 0),
+		OptimizationHints: make([]string, 0),
+	}
+	if pipeline != nil {
+		applyPipelineStatsToMetrics(metrics, pipeline)
+	}
+	metricsMap[name] = metrics
+	return metrics
+}
+
+func findShaderMetricsByName(metricsMap map[string]*ShaderMetrics, name string) (*ShaderMetrics, bool) {
+	if metrics, exists := metricsMap[name]; exists {
+		return metrics, true
+	}
+
+	normalizedName := normalizeForMatching(name)
+	for metricName, metrics := range metricsMap {
+		normalizedMetricName := normalizeForMatching(metricName)
+		if normalizedMetricName == normalizedName {
+			return metrics, true
+		}
+		if hasNormalizedSuffix(normalizedMetricName, normalizedName) ||
+			hasNormalizedSuffix(normalizedName, normalizedMetricName) {
+			return metrics, true
+		}
+	}
+
+	return nil, false
+}
+
+func hasNormalizedSuffix(s, suffix string) bool {
+	return len(s) > len(suffix) && s[len(s)-len(suffix):] == suffix
+}
+
+func applyPipelineStatsToMetrics(metrics *ShaderMetrics, p *counter.PipelineStats) {
+	metrics.Address = p.PipelineAddress
+	metrics.InstructionCount = p.InstructionCount
+	metrics.ALUInstructionCount = p.ALUInstructionCount
+	metrics.FP32InstructionCount = p.FP32InstructionCount
+	metrics.FP16InstructionCount = p.FP16InstructionCount
+	metrics.INT32InstructionCount = p.INT32InstructionCount
+	metrics.INT16InstructionCount = p.INT16InstructionCount
+	metrics.BranchInstructionCount = p.BranchInstructionCount
+	metrics.ThreadgroupMemory = p.ThreadgroupMemory
+	metrics.AllocatedRegisters = p.TemporaryRegisterCount
+	metrics.SpilledBytes = p.SpilledBytes
 }
 
 // estimateShaderDuration provides a rough duration estimate based on thread configuration.
@@ -651,6 +837,13 @@ func formatDetailedShaderMetrics(metrics *ShaderMetrics) string {
 	out += fmt.Sprintf("  Total Time:     %.2f ms (%.1f%% of total)\n",
 		float64(metrics.TotalDurationNs)/1e6, metrics.PercentOfTotal)
 	out += fmt.Sprintf("  Avg Duration:   %.1f µs\n", float64(metrics.AvgDurationNs)/1000.0)
+	if metrics.TimingSource != "" {
+		source := metrics.TimingSource
+		if metrics.TimingApprox {
+			source += " (approximate)"
+		}
+		out += fmt.Sprintf("  Timing Source:  %s\n", source)
+	}
 
 	if metrics.TotalThreadgroups > 0 {
 		out += fmt.Sprintf("  Thread Config:  %d threadgroups (%dx%dx%d)\n",
