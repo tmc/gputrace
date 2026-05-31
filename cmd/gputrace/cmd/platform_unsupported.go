@@ -142,7 +142,11 @@ func addDarwinOnlyXcodeProfileCommands() {
 		{"xcode-export-memory [trace_file]", "Export memory report from Xcode's Performance view", cobra.MaximumNArgs(1), false, func(cmd *cobra.Command) {
 			cmd.Flags().BoolP("force", "f", false, "Replace existing file if it exists")
 		}},
-		{"vertex-output <trace.gputrace>", "Extract vertex shader output from Xcode GPU debugger", cobra.ExactArgs(1), false, nil},
+		{"vertex-output <trace.gputrace>", "Extract vertex shader output from Xcode GPU debugger", cobra.ExactArgs(1), false, func(cmd *cobra.Command) {
+			cmd.Flags().Int("draw", 21, "Draw call number to inspect")
+			cmd.Flags().StringP("output", "o", "", "Output file path (default: stdout)")
+			cmd.Flags().String("format", "text", "Output format: text, json")
+		}},
 		{"list-windows [trace_file]", "List Xcode windows", cobra.MaximumNArgs(1), true, nil},
 		{"list-tabs [trace_file]", "List available tabs in the trace viewer", cobra.MaximumNArgs(1), true, nil},
 		{"list-menus [menu-name]", "List menu bar items and their contents", cobra.MaximumNArgs(1), true, nil},
