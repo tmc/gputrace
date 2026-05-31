@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"time"
 
@@ -210,7 +211,7 @@ func (tme *TimingMetricsExtractor) Extract() (*TimingMetrics, error) {
 	// Extract command buffer timings
 	if err := tme.extractCommandBufferTimings(metrics); err != nil {
 		// Non-fatal - command buffer timing is optional
-		fmt.Printf("Warning: could not extract command buffer timing: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Warning: could not extract command buffer timing: %v\n", err)
 	}
 
 	return metrics, nil

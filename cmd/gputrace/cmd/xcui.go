@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"math"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -755,7 +756,7 @@ func axChildren(ax uintptr) []uintptr {
 		// are expected for certain UI elements; return empty slice silently.
 		// Print debug info for API disabled error
 		if ret == -25211 && collectProfileDebug {
-			fmt.Printf("[DEBUG] axChildren: AXError %d (API disabled - no Accessibility permission)\n", ret)
+			fmt.Fprintf(os.Stderr, "[DEBUG] axChildren: AXError %d (API disabled - no Accessibility permission)\n", ret)
 		}
 		return nil
 	}
@@ -1224,14 +1225,14 @@ func FindAllTextFields(root uintptr, maxVisit int) []uintptr {
 // DebugTextFields prints all text fields found in the window for debugging.
 func DebugTextFields(root uintptr) {
 	fields := FindAllTextFields(root, 500)
-	fmt.Printf("    [DEBUG] Found %d text fields/comboboxes:\n", len(fields))
+	fmt.Fprintf(os.Stderr, "    [DEBUG] Found %d text fields/comboboxes:\n", len(fields))
 	for i, f := range fields {
 		role := axString(f, "AXRole")
 		title := axString(f, "AXTitle")
 		desc := axString(f, "AXDescription")
 		value := axString(f, "AXValue")
 		identifier := axString(f, "AXIdentifier")
-		fmt.Printf("      %d. role=%s title=%q desc=%q id=%q value=%q\n",
+		fmt.Fprintf(os.Stderr, "      %d. role=%s title=%q desc=%q id=%q value=%q\n",
 			i+1, role, title, desc, identifier, truncate(value, 50))
 	}
 }

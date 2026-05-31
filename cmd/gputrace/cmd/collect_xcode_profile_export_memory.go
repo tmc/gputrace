@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -120,7 +121,7 @@ func runXcodeExportMemory(cmd *cobra.Command, args []string) error {
 	var menuErr error
 	for _, menuName := range menuNames {
 		if collectProfileDebug {
-			fmt.Printf("Trying menu: Editor > %s\n", menuName)
+			fmt.Fprintf(os.Stderr, "Trying menu: Editor > %s\n", menuName)
 		}
 		if err := ClickMenuItem(appAX, []string{"Editor", menuName}); err == nil {
 			menuErr = nil

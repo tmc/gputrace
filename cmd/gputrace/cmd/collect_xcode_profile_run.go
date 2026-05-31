@@ -1121,7 +1121,7 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 		if freshApp, err := FindXcodeApp(); err == nil && freshApp != 0 {
 			appAX = freshApp
 		}
-		if collectProfileDebug {
+		if collectProfileDebug || collectProfileVerbose {
 			if err := debugCheckExportMenu(appAX); err != nil {
 				fmt.Fprintf(os.Stderr, "    Debug: Export menu check failed: %v\n", err)
 			}
@@ -1274,7 +1274,7 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 		if err := axSetValue(saveNameField, outputName); err != nil {
 			fmt.Printf("    Warning: SetValue failed: %v (using default filename)\n", err)
 		} else if collectProfileDebug {
-			fmt.Printf("    [DEBUG] Set filename via AX (saveAsNameTextField)\n")
+			fmt.Fprintln(os.Stderr, "    [DEBUG] Set filename via AX (saveAsNameTextField)")
 		}
 	} else {
 		fmt.Println("    Warning: saveAsNameTextField not found (using default filename)")

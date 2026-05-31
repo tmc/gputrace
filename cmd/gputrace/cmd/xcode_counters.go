@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -18,7 +19,7 @@ var (
 )
 
 var xcodeCountersCmd = &cobra.Command{
-	Use:   "xcode-counters <trace.gputrace>",
+	Use:    "xcode-counters <trace.gputrace>",
 	Short:  "Display performance counters from Xcode Counters.csv",
 	Hidden: true,
 	Long: `Display hardware performance counters from Xcode Counters.csv file.
@@ -194,50 +195,39 @@ func printXcodeMetrics(csvData *gputrace.XcodeCounterData) error {
 }
 
 func printXcodeJSON(csvData *gputrace.XcodeCounterData) error {
-	// Simple JSON output
-	fmt.Println("{")
-	fmt.Printf("  \"encoders\": %d,\n", len(csvData.Encoders))
-	fmt.Printf("  \"metrics\": %d,\n", len(csvData.Metrics))
-	fmt.Println("  \"data\": [")
-
+	output := xcodeCountersJSONOutput{
+		Encoders: len(csvData.Encoders),
+		Metrics:  len(csvData.Metrics),
+		Data:     make([]xcodeCountersJSONEncoder, 0, len(csvData.Encoders)),
+	}
 	for i := range csvData.Encoders {
 		enc := &csvData.Encoders[i]
-		fmt.Println("    {")
-		fmt.Printf("      \"index\": %d,\n", enc.Index)
-		fmt.Printf("      \"function_index\": %d,\n", enc.FunctionIndex)
-		fmt.Printf("      \"command_buffer\": \"%s\",\n", enc.CommandBufferLabel)
-		fmt.Printf("      \"encoder_label\": \"%s\",\n", enc.EncoderLabel)
-		fmt.Println("      \"counters\": {")
-
-		// Sort keys for consistent output
-		names := make([]string, 0, len(enc.Counters))
-		for name := range enc.Counters {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-
-		for j, name := range names {
-			val := enc.Counters[name]
-			if j < len(names)-1 {
-				fmt.Printf("        \"%s\": %.2f,\n", name, val)
-			} else {
-				fmt.Printf("        \"%s\": %.2f\n", name, val)
-			}
-		}
-
-		if i < len(csvData.Encoders)-1 {
-			fmt.Println("      }")
-			fmt.Println("    },")
-		} else {
-			fmt.Println("      }")
-			fmt.Println("    }")
-		}
+		output.Data = append(output.Data, xcodeCountersJSONEncoder{
+			Index:          enc.Index,
+			FunctionIndex:  enc.FunctionIndex,
+			CommandBuffer:  enc.CommandBufferLabel,
+			EncoderLabel:   enc.EncoderLabel,
+			CounterMetrics: enc.Counters,
+		})
 	}
 
-	fmt.Println("  ]")
-	fmt.Println("}")
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(output)
+}
 
-	return nil
+type xcodeCountersJSONOutput struct {
+	Encoders int                        `json:"encoders"`
+	Metrics  int                        `json:"metrics"`
+	Data     []xcodeCountersJSONEncoder `json:"data"`
+}
+
+type xcodeCountersJSONEncoder struct {
+	Index          int                `json:"index"`
+	FunctionIndex  int                `json:"function_index"`
+	CommandBuffer  string             `json:"command_buffer"`
+	EncoderLabel   string             `json:"encoder_label"`
+	CounterMetrics map[string]float64 `json:"counters"`
 }
 
 func filterTopEncoders(csvData *gputrace.XcodeCounterData, metricName string, top int) []gputrace.XcodeEncoderCounters {

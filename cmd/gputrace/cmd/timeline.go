@@ -100,7 +100,7 @@ func runTimeline(cmd *cobra.Command, args []string) error {
 			}
 		}
 		if sampleCount > 0 {
-			fmt.Printf("✓ Enhanced with %d GPRWCNTR samples\n", sampleCount)
+			fmt.Fprintf(os.Stderr, "✓ Enhanced with %d GPRWCNTR samples\n", sampleCount)
 		}
 	}
 
@@ -127,23 +127,30 @@ func runTimeline(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("unknown format: %s (supported: chrome, perfetto, html, json, text)", timelineFormat)
 	}
 
-	fmt.Printf("✓ Timeline written to: %s\n", timelineOutput)
-	if timelineFormat == "chrome" {
-		fmt.Println("\nView in Chrome:")
-		fmt.Println("  1. Open chrome://tracing")
-		fmt.Println("  2. Click 'Load' and select", timelineOutput)
-		fmt.Println("  3. Use WASD to navigate, mouse wheel to zoom")
-	} else if timelineFormat == "perfetto" {
-		fmt.Println("\nView in Perfetto:")
-		fmt.Println("  1. Open https://ui.perfetto.dev")
-		fmt.Println("  2. Drag and drop", timelineOutput, "onto the page")
-		fmt.Println("  3. Use WASD to navigate, mouse wheel to zoom")
-	} else if timelineFormat == "html" {
-		fmt.Println("\nView timeline:")
-		fmt.Printf("  open %s\n", timelineOutput)
-	}
-
+	printTimelineExportStatus(timelineOutput, timelineFormat, false)
 	return nil
+}
+
+func printTimelineExportStatus(output, format string, profilerOnly bool) {
+	suffix := ""
+	if profilerOnly {
+		suffix = " (profiler-only mode)"
+	}
+	fmt.Fprintf(os.Stderr, "✓ Timeline written to: %s%s\n", output, suffix)
+	if format == "chrome" {
+		fmt.Fprintln(os.Stderr, "\nView in Chrome:")
+		fmt.Fprintln(os.Stderr, "  1. Open chrome://tracing")
+		fmt.Fprintln(os.Stderr, "  2. Click 'Load' and select", output)
+		fmt.Fprintln(os.Stderr, "  3. Use WASD to navigate, mouse wheel to zoom")
+	} else if format == "perfetto" {
+		fmt.Fprintln(os.Stderr, "\nView in Perfetto:")
+		fmt.Fprintln(os.Stderr, "  1. Open https://ui.perfetto.dev")
+		fmt.Fprintln(os.Stderr, "  2. Drag and drop", output, "onto the page")
+		fmt.Fprintln(os.Stderr, "  3. Use WASD to navigate, mouse wheel to zoom")
+	} else if format == "html" {
+		fmt.Fprintln(os.Stderr, "\nView timeline:")
+		fmt.Fprintf(os.Stderr, "  open %s\n", output)
+	}
 }
 
 // exportTextTimeline prints the timeline to stdout in a hierarchical format.
@@ -2278,21 +2285,7 @@ func runTimelineFromProfiler(tracePath string) error {
 		return fmt.Errorf("unknown format: %s (supported: chrome, perfetto, html, json, text)", timelineFormat)
 	}
 
-	fmt.Printf("✓ Timeline written to: %s (profiler-only mode)\n", timelineOutput)
-	if timelineFormat == "chrome" {
-		fmt.Println("\nView in Chrome:")
-		fmt.Println("  1. Open chrome://tracing")
-		fmt.Println("  2. Click 'Load' and select", timelineOutput)
-		fmt.Println("  3. Use WASD to navigate, mouse wheel to zoom")
-	} else if timelineFormat == "perfetto" {
-		fmt.Println("\nView in Perfetto:")
-		fmt.Println("  1. Open https://ui.perfetto.dev")
-		fmt.Println("  2. Drag and drop", timelineOutput, "onto the page")
-		fmt.Println("  3. Use WASD to navigate, mouse wheel to zoom")
-	} else if timelineFormat == "html" {
-		fmt.Println("\nView timeline:")
-		fmt.Printf("  open %s\n", timelineOutput)
-	}
+	printTimelineExportStatus(timelineOutput, timelineFormat, true)
 
 	return nil
 }
