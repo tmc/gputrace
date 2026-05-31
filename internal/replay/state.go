@@ -102,16 +102,11 @@ func (rs *ReplayState) DiscoverBuffers() ([]ReplayBufferInfo, error) {
 			continue
 		}
 
-		// Extract buffer address from filename
-		// Format: MTLBuffer-<id>-<index> or MTLBuffer-<hex_addr>
-		// For now, we'll use a placeholder address based on filename
-		// In reality, we need to correlate with addresses in capture file
-
 		bufInfo := ReplayBufferInfo{
 			Name:     name,
 			Filename: fullPath,
 			Size:     uint64(stat.Size()),
-			Address:  0, // Will be populated by correlating with capture data
+			Address:  0, // Unknown until CorrelateBufferAddresses finds capture metadata.
 		}
 
 		// Read buffer contents
