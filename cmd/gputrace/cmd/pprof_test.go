@@ -24,7 +24,7 @@ func TestPprofCmd(t *testing.T) {
 
 	// Check if trace exists
 	if _, err := os.Stat(tracePath); os.IsNotExist(err) {
-		t.Skipf("skipping test, trace file not found: %s. Run 'make fetch-testdata' to fetch test assets.", tracePath)
+		t.Skipf("skipping test, trace file not found: %s. See docs/TESTING.md for fixture setup.", tracePath)
 	}
 
 	tests := []struct {
@@ -94,7 +94,7 @@ func TestPprofSourceLinesDisclosesSyntheticTimingFallback(t *testing.T) {
 	tracePath := "../../../testdata/traces/01-single-encoder/01-single-encoder-run1.gputrace"
 
 	if _, err := os.Stat(tracePath); os.IsNotExist(err) {
-		t.Skipf("skipping test, trace file not found: %s. Run 'make fetch-testdata' to fetch test assets.", tracePath)
+		t.Skipf("skipping test, trace file not found: %s. See docs/TESTING.md for fixture setup.", tracePath)
 	}
 
 	resetPprofTestFlags()

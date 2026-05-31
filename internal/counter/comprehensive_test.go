@@ -13,7 +13,7 @@ func TestDeterminism(t *testing.T) {
 	tracePath := filepath.Join("..", "..", "testdata", "traces", "01-single-encoder", "01-single-encoder-run1-perf.gputrace")
 
 	if _, err := os.Stat(tracePath); os.IsNotExist(err) {
-		t.Skipf("skipping test, trace file not found: %s. Run 'make fetch-testdata' to fetch test assets.", tracePath)
+		t.Skipf("skipping test, trace file not found: %s. See docs/TESTING.md for fixture setup.", tracePath)
 	}
 
 	tr, err := trace.Open(tracePath)
@@ -128,7 +128,7 @@ func TestComprehensiveMetrics(t *testing.T) {
 	tracePath := filepath.Join("..", "..", "testdata", "traces", "06-six-encoders", "06-six-encoders-run1-perf.gputrace")
 
 	if _, err := os.Stat(tracePath); os.IsNotExist(err) {
-		t.Skipf("skipping test, trace file not found: %s. Run 'make fetch-testdata' to fetch test assets.", tracePath)
+		t.Skipf("skipping test, trace file not found: %s. See docs/TESTING.md for fixture setup.", tracePath)
 	}
 
 	tr, err := trace.Open(tracePath)
@@ -248,7 +248,7 @@ func TestCSVRoundTrip(t *testing.T) {
 	tracePath := filepath.Join("..", "..", "testdata", "traces", "06-six-encoders", "06-six-encoders-run1-perf.gputrace")
 
 	if _, err := os.Stat(tracePath); os.IsNotExist(err) {
-		t.Skipf("skipping test, trace file not found: %s. Run 'make fetch-testdata' to fetch test assets.", tracePath)
+		t.Skipf("skipping test, trace file not found: %s. See docs/TESTING.md for fixture setup.", tracePath)
 	}
 
 	tr, err := trace.Open(tracePath)
@@ -352,7 +352,7 @@ func TestMetricValueRanges(t *testing.T) {
 	tracePath := filepath.Join("..", "..", "testdata", "traces", "06-six-encoders", "06-six-encoders-run1-perf.gputrace")
 
 	if _, err := os.Stat(tracePath); os.IsNotExist(err) {
-		t.Skipf("skipping test, trace file not found: %s. Run 'make fetch-testdata' to fetch test assets.", tracePath)
+		t.Skipf("skipping test, trace file not found: %s. See docs/TESTING.md for fixture setup.", tracePath)
 	}
 
 	tr, err := trace.Open(tracePath)
