@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -98,30 +99,20 @@ func runTiming(cmd *cobra.Command, args []string) error {
 
 	// Export JSON if requested
 	if timingJSON != "" {
-		f, err := os.Create(timingJSON)
-		if err != nil {
-			return fmt.Errorf("failed to create JSON file: %w", err)
+		if err := writeTimingOutput(timingJSON, "JSON", func(w io.Writer) error {
+			return gputrace.ExportTimingMetricsJSON(w, metrics)
+		}); err != nil {
+			return err
 		}
-		defer f.Close()
-
-		if err := gputrace.ExportTimingMetricsJSON(f, metrics); err != nil {
-			return fmt.Errorf("failed to write JSON: %w", err)
-		}
-		fmt.Fprintf(os.Stderr, "Exported JSON to %s\n", timingJSON)
 	}
 
 	// Export CSV if requested
 	if timingCSV != "" {
-		f, err := os.Create(timingCSV)
-		if err != nil {
-			return fmt.Errorf("failed to create CSV file: %w", err)
+		if err := writeTimingOutput(timingCSV, "CSV", func(w io.Writer) error {
+			return gputrace.ExportTimingMetricsCSV(w, metrics)
+		}); err != nil {
+			return err
 		}
-		defer f.Close()
-
-		if err := gputrace.ExportTimingMetricsCSV(f, metrics); err != nil {
-			return fmt.Errorf("failed to write CSV: %w", err)
-		}
-		fmt.Fprintf(os.Stderr, "Exported CSV to %s\n", timingCSV)
 	}
 
 	// Compare traces if requested
@@ -202,56 +193,66 @@ func runTimingFromProfiler(tracePath string) error {
 
 	// Export JSON if requested
 	if timingJSON != "" {
-		f, err := os.Create(timingJSON)
-		if err != nil {
-			return fmt.Errorf("failed to create JSON file: %w", err)
+		if err := writeTimingOutput(timingJSON, "JSON", func(w io.Writer) error {
+			return gputrace.ExportTimingMetricsJSON(w, metrics)
+		}); err != nil {
+			return err
 		}
-		defer f.Close()
-
-		if err := gputrace.ExportTimingMetricsJSON(f, metrics); err != nil {
-			return fmt.Errorf("failed to write JSON: %w", err)
-		}
-		fmt.Fprintf(os.Stderr, "Exported JSON to %s\n", timingJSON)
 	}
 
 	// Export CSV if requested
 	if timingCSV != "" {
-		f, err := os.Create(timingCSV)
-		if err != nil {
-			return fmt.Errorf("failed to create CSV file: %w", err)
+		if err := writeTimingOutput(timingCSV, "CSV", func(w io.Writer) error {
+			return gputrace.ExportTimingMetricsCSV(w, metrics)
+		}); err != nil {
+			return err
 		}
-		defer f.Close()
-
-		if err := gputrace.ExportTimingMetricsCSV(f, metrics); err != nil {
-			return fmt.Errorf("failed to write CSV: %w", err)
-		}
-		fmt.Fprintf(os.Stderr, "Exported CSV to %s\n", timingCSV)
 	}
 
 	return nil
 }
 
+func writeTimingOutput(path, format string, write func(io.Writer) error) error {
+	w, closeOutput, err := createCommandOutput(path)
+	if err != nil {
+		return fmt.Errorf("failed to create %s file: %w", format, err)
+	}
+	if err := write(w); err != nil {
+		if closeOutput != nil {
+			_ = closeOutput()
+		}
+		return fmt.Errorf("failed to write %s: %w", format, err)
+	}
+	if closeOutput != nil {
+		if err := closeOutput(); err != nil {
+			return fmt.Errorf("failed to close %s file: %w", format, err)
+		}
+	}
+	fmt.Fprintf(os.Stderr, "Exported %s to %s\n", format, path)
+	return nil
+}
+
 func timingReportWriter() *os.File {
-	if timingOutputPathIsStdout(timingJSON) || timingOutputPathIsStdout(timingCSV) {
+	if timingExportWritesStdout(timingJSON) || timingExportWritesStdout(timingCSV) {
 		return os.Stderr
 	}
 	return os.Stdout
 }
 
-func timingOutputPathIsStdout(path string) bool {
-	return path == "/dev/stdout"
+func timingExportWritesStdout(path string) bool {
+	return path != "" && commandOutputPathIsStdout(path)
 }
 
 func validateTimingOutputPaths() error {
 	stdoutExports := 0
-	if timingOutputPathIsStdout(timingJSON) {
+	if timingExportWritesStdout(timingJSON) {
 		stdoutExports++
 	}
-	if timingOutputPathIsStdout(timingCSV) {
+	if timingExportWritesStdout(timingCSV) {
 		stdoutExports++
 	}
 	if stdoutExports > 1 {
-		return fmt.Errorf("only one timing export can write to /dev/stdout")
+		return fmt.Errorf("only one timing export can write to stdout")
 	}
 	return nil
 }
