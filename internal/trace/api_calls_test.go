@@ -490,16 +490,54 @@ func TestParseInitCalls_RequestResidencyRejectsUnknownCt(t *testing.T) {
 	}
 }
 
-// TestParseInitCalls_AddResidencySet tests parsing of addResidencySet calls
-func TestParseInitCalls_AddResidencySet(t *testing.T) {
-	t.Skip("TODO: Implement addResidencySet parsing")
+func TestParseInitCalls_AddResidencySetFailsClosed(t *testing.T) {
+	data := make([]byte, 0x100)
 
-	// TODO: Need to identify the binary pattern for addResidencySet calls
-	// These appear on command queues
-	// Format should be: "[<queue_name> addResidencySet:0x<address>]"
-	//
-	// From Xcode reference:
-	// #9 [Stream 0 addResidencySet:0xafd018000]
+	const (
+		queueAddr        = 0x106da64d0
+		residencySetAddr = 0x0afd018000
+	)
+
+	offset := 0x20
+	copy(data[offset:], []byte("CS\x00\x00"))
+	binary.LittleEndian.PutUint64(data[offset+4:], queueAddr)
+	copy(data[offset+0x0c:], []byte("Stream 0\x00"))
+
+	offset = 0x50
+	copy(data[offset:], []byte("CUt\x00"))
+	binary.LittleEndian.PutUint64(data[offset+4:], residencySetAddr)
+
+	offset = 0x80
+	copy(data[offset:], []byte("Ct\x00\x00"))
+	binary.LittleEndian.PutUint64(data[offset+4:], residencySetAddr)
+
+	calls, _, err := parseInitCalls(data, 0, nil, make(map[uint64]string))
+	if err != nil {
+		t.Fatalf("parseInitCalls failed: %v", err)
+	}
+
+	var foundQueue, foundResidency, foundRequest bool
+	for _, call := range calls {
+		switch call.Type {
+		case "newCommandQueue":
+			foundQueue = true
+		case "newResidencySet":
+			foundResidency = true
+		case "requestResidency":
+			foundRequest = true
+		case "addResidencySet":
+			t.Fatalf("parsed addResidencySet from unsupported record evidence: %#v", call)
+		}
+	}
+	if !foundQueue {
+		t.Fatal("expected command queue fixture to parse")
+	}
+	if !foundResidency {
+		t.Fatal("expected residency set fixture to parse")
+	}
+	if !foundRequest {
+		t.Fatal("expected requestResidency fixture to parse")
+	}
 }
 
 func TestParseInitCalls_FenceLabelFailsClosed(t *testing.T) {
