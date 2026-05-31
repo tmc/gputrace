@@ -7,8 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/tmc/gputrace/internal/trace"
 )
 
 // TestFindLimiterOffsets scans binary data systematically to locate exact CSV limiter values.
@@ -16,10 +14,7 @@ import (
 func TestFindLimiterOffsets(t *testing.T) {
 	tracePath := filepath.Join("..", "..", "testdata", "traces", "01-single-encoder", "01-single-encoder-run1-perf.gputrace")
 
-	tr, err := trace.Open(tracePath)
-	if err != nil {
-		t.Skipf("Trace not available: %v", err)
-	}
+	tr := openPerfTraceOrSkip(t, tracePath)
 	defer tr.Close()
 
 	// Expected limiter values from CSV (01-single-encoder-run1 Counters.csv)
@@ -102,10 +97,7 @@ func TestFindLimiterOffsets(t *testing.T) {
 func TestScanMetadataRecords(t *testing.T) {
 	tracePath := filepath.Join("..", "..", "testdata", "traces", "01-single-encoder", "01-single-encoder-run1-perf.gputrace")
 
-	tr, err := trace.Open(tracePath)
-	if err != nil {
-		t.Skipf("Trace not available: %v", err)
-	}
+	tr := openPerfTraceOrSkip(t, tracePath)
 	defer tr.Close()
 
 	expectedLimiters := map[string]float32{

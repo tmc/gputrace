@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
-
-	"github.com/tmc/gputrace/internal/trace"
 )
 
 // TestSimpleProfilingExtraction tests a simple approach: just find the limiter values
@@ -17,10 +15,7 @@ import (
 func TestSimpleProfilingExtraction(t *testing.T) {
 	tracePath := filepath.Join("..", "..", "testdata", "traces", "01-single-encoder", "01-single-encoder-run1-perf.gputrace")
 
-	tr, err := trace.Open(tracePath)
-	if err != nil {
-		t.Skipf("Trace not available: %v", err)
-	}
+	tr := openPerfTraceOrSkip(t, tracePath)
 	defer tr.Close()
 
 	// Read CSV expected values

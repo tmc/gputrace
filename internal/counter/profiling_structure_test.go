@@ -7,18 +7,13 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/tmc/gputrace/internal/trace"
 )
 
 // TestExamineLimiterContext examines data surrounding known limiter offsets.
 func TestExamineLimiterContext(t *testing.T) {
 	tracePath := filepath.Join("..", "..", "testdata", "traces", "01-single-encoder", "01-single-encoder-run1-perf.gputrace")
 
-	tr, err := trace.Open(tracePath)
-	if err != nil {
-		t.Skipf("Trace not available: %v", err)
-	}
+	tr := openPerfTraceOrSkip(t, tracePath)
 	defer tr.Close()
 
 	entries, err := os.ReadDir(tr.Path)
@@ -146,10 +141,7 @@ func TestExamineLimiterContext(t *testing.T) {
 func TestIdentifyProfilingRecordSize(t *testing.T) {
 	tracePath := filepath.Join("..", "..", "testdata", "traces", "01-single-encoder", "01-single-encoder-run1-perf.gputrace")
 
-	tr, err := trace.Open(tracePath)
-	if err != nil {
-		t.Skipf("Trace not available: %v", err)
-	}
+	tr := openPerfTraceOrSkip(t, tracePath)
 	defer tr.Close()
 
 	entries, err := os.ReadDir(tr.Path)

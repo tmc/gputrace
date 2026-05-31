@@ -3,18 +3,13 @@ package counter
 import (
 	"path/filepath"
 	"testing"
-
-	"github.com/tmc/gputrace/internal/trace"
 )
 
 // TestLimiterExtractionSingleEncoder tests limiter extraction on a simple single-encoder trace.
 func TestLimiterExtractionSingleEncoder(t *testing.T) {
 	tracePath := filepath.Join("..", "..", "testdata", "traces", "01-single-encoder", "01-single-encoder-run1-perf.gputrace")
 
-	tr, err := trace.Open(tracePath)
-	if err != nil {
-		t.Skipf("Trace not available: %v", err)
-	}
+	tr := openPerfTraceOrSkip(t, tracePath)
 	defer tr.Close()
 
 	// Parse performance counters
@@ -74,10 +69,7 @@ func TestLimiterExtractionSingleEncoder(t *testing.T) {
 func TestLimiterExtractionSixEncoders(t *testing.T) {
 	tracePath := filepath.Join("..", "..", "testdata", "traces", "06-six-encoders", "06-six-encoders-run1-perf.gputrace")
 
-	tr, err := trace.Open(tracePath)
-	if err != nil {
-		t.Skipf("Trace not available: %v", err)
-	}
+	tr := openPerfTraceOrSkip(t, tracePath)
 	defer tr.Close()
 
 	// Parse performance counters
@@ -113,10 +105,7 @@ func TestLimiterExtractionSixEncoders(t *testing.T) {
 func TestLimiterCSVExport(t *testing.T) {
 	tracePath := filepath.Join("..", "..", "testdata", "traces", "06-six-encoders", "06-six-encoders-run1-perf.gputrace")
 
-	tr, err := trace.Open(tracePath)
-	if err != nil {
-		t.Skipf("Trace not available: %v", err)
-	}
+	tr := openPerfTraceOrSkip(t, tracePath)
 	defer tr.Close()
 
 	// Export CSV
@@ -152,10 +141,7 @@ func TestLimiterCSVExport(t *testing.T) {
 func TestLimiterValueRanges(t *testing.T) {
 	tracePath := filepath.Join("..", "..", "testdata", "traces", "06-six-encoders", "06-six-encoders-run1-perf.gputrace")
 
-	tr, err := trace.Open(tracePath)
-	if err != nil {
-		t.Skipf("Trace not available: %v", err)
-	}
+	tr := openPerfTraceOrSkip(t, tracePath)
 	defer tr.Close()
 
 	stats, err := ParsePerfCounters(tr)
