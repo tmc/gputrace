@@ -73,14 +73,43 @@ func ParseXcodeCountersCSV(t *trace.Trace, csvPath string) (*XcodeCounterData, e
 		return nil, fmt.Errorf("read header: %w", err)
 	}
 
-	// Parse header to get metric names
-	// Format: Index, Encoder FunctionIndex, CommandBuffer Label, Encoder Label, <empty>, <metric1>, <metric2>, ...
+	// Parse header to get metadata and metric column positions.
 	if len(headers) < 5 {
 		return nil, fmt.Errorf("invalid header: expected at least 5 columns, got %d", len(headers))
 	}
+	colIdx := make(map[string]int)
+	for i, header := range headers {
+		colIdx[header] = i
+	}
+	requiredCols := []string{
+		"Index",
+		"Encoder FunctionIndex",
+		"CommandBuffer Label",
+		"Encoder Label",
+	}
+	for _, col := range requiredCols {
+		if _, ok := colIdx[col]; !ok {
+			return nil, fmt.Errorf("missing required column: %s", col)
+		}
+	}
 
-	// Metrics start at column 5 (index 5)
-	metricNames := headers[5:]
+	metadataCols := map[string]bool{
+		"":                      true,
+		"Index":                 true,
+		"Encoder FunctionIndex": true,
+		"CommandBuffer Label":   true,
+		"Debug Group":           true,
+		"Encoder Label":         true,
+	}
+	metricNames := make([]string, 0, len(headers))
+	metricCols := make([]int, 0, len(headers))
+	for i, header := range headers {
+		if metadataCols[header] {
+			continue
+		}
+		metricNames = append(metricNames, header)
+		metricCols = append(metricCols, i)
+	}
 
 	data := &XcodeCounterData{
 		Encoders: make([]XcodeEncoderCounters, 0),
@@ -102,25 +131,25 @@ func ParseXcodeCountersCSV(t *trace.Trace, csvPath string) (*XcodeCounterData, e
 			Counters: make(map[string]float64),
 		}
 
-		// Parse index (column 0)
-		if idx, err := strconv.Atoi(row[0]); err == nil {
+		// Parse index
+		if idx, err := strconv.Atoi(csvColumn(row, colIdx["Index"])); err == nil {
 			encoder.Index = idx
 		}
 
-		// Parse function index (column 1)
-		if fidx, err := strconv.Atoi(row[1]); err == nil {
+		// Parse function index
+		if fidx, err := strconv.Atoi(csvColumn(row, colIdx["Encoder FunctionIndex"])); err == nil {
 			encoder.FunctionIndex = fidx
 		}
 
-		// Parse labels (columns 2-3)
-		encoder.CommandBufferLabel = row[2]
-		encoder.EncoderLabel = row[3]
+		// Parse labels
+		encoder.CommandBufferLabel = csvColumn(row, colIdx["CommandBuffer Label"])
+		encoder.EncoderLabel = csvColumn(row, colIdx["Encoder Label"])
 
-		// Parse counter values (columns 5+)
-		for i, metricName := range metricNames {
-			colIdx := 5 + i
+		// Parse counter values
+		for i, colIdx := range metricCols {
 			if colIdx < len(row) && row[colIdx] != "" {
 				if val, err := strconv.ParseFloat(row[colIdx], 64); err == nil {
+					metricName := metricNames[i]
 					encoder.Counters[metricName] = val
 				}
 			}
@@ -130,4 +159,11 @@ func ParseXcodeCountersCSV(t *trace.Trace, csvPath string) (*XcodeCounterData, e
 	}
 
 	return data, nil
+}
+
+func csvColumn(row []string, col int) string {
+	if col < 0 || col >= len(row) {
+		return ""
+	}
+	return row[col]
 }
