@@ -94,6 +94,32 @@ func TestWriteXcodeProfileActionOutputPlainNoop(t *testing.T) {
 	}
 }
 
+func TestRejectXcodeProfileJSON(t *testing.T) {
+	oldJSON := collectProfileJSON
+	t.Cleanup(func() {
+		collectProfileJSON = oldJSON
+	})
+
+	collectProfileJSON = false
+	if err := rejectXcodeProfileJSON("debug-file-browser"); err != nil {
+		t.Fatalf("rejectXcodeProfileJSON plain mode = %v, want nil", err)
+	}
+
+	collectProfileJSON = true
+	out, err := captureStdout(t, func() error {
+		return rejectXcodeProfileJSON("debug-file-browser")
+	})
+	if err == nil {
+		t.Fatal("rejectXcodeProfileJSON JSON mode returned nil error")
+	}
+	if !strings.Contains(err.Error(), "debug-file-browser does not support --json") {
+		t.Fatalf("error = %q, want unsupported JSON context", err)
+	}
+	if out != "" {
+		t.Fatalf("stdout = %q, want empty", out)
+	}
+}
+
 func TestResolveXcodeProfileTraceOutputPathRejectsStdout(t *testing.T) {
 	for _, path := range []string{"-", "/dev/stdout"} {
 		t.Run(path, func(t *testing.T) {

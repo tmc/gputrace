@@ -39,7 +39,15 @@ Examples:
 	collectXcodeProfileCmd.AddCommand(openExportCmd)
 }
 
+func rejectXcodeProfileJSON(command string) error {
+	if !collectProfileJSON {
+		return nil
+	}
+	return fmt.Errorf("%s does not support --json", command)
+}
+
 func runExport(cmd *cobra.Command, args []string) error {
+	status := xcodeProfileStatusWriter()
 	var outputPath string
 	if len(args) > 0 {
 		var err error
@@ -65,9 +73,9 @@ func runExport(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("Xcode window not found: %w", err)
 	}
 
+	doc := axString(windowAX, "AXDocument")
 	// If no output path specified, try to infer from window document
 	if outputPath == "" {
-		doc := axString(windowAX, "AXDocument")
 		if doc == "" {
 			return fmt.Errorf("output path not specified and could not be inferred from Xcode window (AXDocument empty)")
 		}
@@ -78,11 +86,10 @@ func runExport(cmd *cobra.Command, args []string) error {
 		}
 		base := strings.TrimSuffix(doc, ext)
 		outputPath = base + "-perfdata" + ext
-		fmt.Printf("Inferred output path: %s\n", outputPath)
+		fmt.Fprintf(status, "Inferred output path: %s\n", outputPath)
 	}
 
-	fmt.Printf("Exporting trace to: %s\n", outputPath)
-	doc := axString(windowAX, "AXDocument")
+	fmt.Fprintf(status, "Exporting trace to: %s\n", outputPath)
 	if doc != "" {
 		verboseLog("runExport: window AXDocument=%q", doc)
 	}
@@ -91,12 +98,19 @@ func runExport(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("export failed: %w", err)
 	}
 
+	warning := ""
 	if _, err := os.Stat(outputPath); err == nil {
-		fmt.Printf(Colorize("Exported to: %s\n", ColorGreen), outputPath)
+		fmt.Fprintf(status, Colorize("Exported to: %s\n", ColorGreen), outputPath)
 	} else {
-		fmt.Print(Colorize("Note: Output file not found at expected location.\n", ColorYellow))
+		warning = "output file not found at expected location"
+		fmt.Fprint(status, Colorize("Note: Output file not found at expected location.\n", ColorYellow))
 	}
-	return nil
+	return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+		Action:  "export",
+		Target:  doc,
+		Output:  outputPath,
+		Warning: warning,
+	})
 }
 
 // isExportDialogOpen checks if an export/save dialog is already open on the window.
@@ -106,6 +120,7 @@ func isExportDialogOpen(window uintptr) bool {
 }
 
 func runOpenExport(cmd *cobra.Command, args []string) error {
+	status := xcodeProfileStatusWriter()
 	var outputPath string
 	if len(args) > 0 {
 		var err error
@@ -129,30 +144,45 @@ func runOpenExport(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("window not found: %w", err)
 	}
+	target := axString(windowAX, "AXDocument")
+	var outputFilename string
+	var warning string
+	if outputPath != "" {
+		outputFilename = filepath.Base(outputPath)
+	}
+	writeOutput := func() error {
+		return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+			Action:          "open-export",
+			Target:          target,
+			Output:          outputFilename,
+			RequestedOutput: outputPath,
+			Warning:         warning,
+		})
+	}
 
 	// Check if export dialog is already open
 	if isExportDialogOpen(windowAX) {
-		fmt.Println("Export dialog already open")
+		fmt.Fprintln(status, "Export dialog already open")
 	} else {
-		fmt.Println("Opening export dialog...")
+		fmt.Fprintln(status, "Opening export dialog...")
 
 		// Try clicking Export button in Summary panel first
 		exportBtn := FindExportButton(windowAX)
 		if exportBtn != 0 {
-			fmt.Println("  Found Export button in Summary panel")
+			fmt.Fprintln(status, "  Found Export button in Summary panel")
 			if err := axAction(exportBtn, "AXPress"); err != nil {
 				return fmt.Errorf("failed to click Export button: %w", err)
 			}
 		} else {
 			// Fall back to menu
-			fmt.Println("  Using File > Export menu...")
+			fmt.Fprintln(status, "  Using File > Export menu...")
 			if err := ClickMenuItem(appAX, []string{"File", "Export..."}); err != nil {
 				return fmt.Errorf("failed to click Export menu: %w", err)
 			}
 		}
 
 		// Wait for dialog to appear
-		fmt.Println("  Waiting for export sheet...")
+		fmt.Fprintln(status, "  Waiting for export sheet...")
 		sheetFound := false
 		for i := 0; i < 30; i++ {
 			saveBtn := findButtonBFS(windowAX, "Save", 500) // Export sheet is shallow
@@ -167,13 +197,13 @@ func runOpenExport(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("export dialog did not appear")
 		}
 
-		fmt.Println("  Export dialog opened")
+		fmt.Fprintln(status, "  Export dialog opened")
 
 		// Check "Embed performance data" checkbox if not already checked
 		embedCheckbox := findCheckboxByName(windowAX, "Embed performance data")
 		if embedCheckbox != 0 {
 			if !IsCheckboxChecked(embedCheckbox) {
-				fmt.Println("  Enabling 'Embed performance data'")
+				fmt.Fprintln(status, "  Enabling 'Embed performance data'")
 				axAction(embedCheckbox, "AXPress")
 				time.Sleep(300 * time.Millisecond)
 			}
@@ -184,26 +214,29 @@ func runOpenExport(cmd *cobra.Command, args []string) error {
 	// Use findTargetWindow to get the trace window, not just any window
 	freshWindow, err := findTargetWindow(appAX, "")
 	if err != nil || freshWindow == 0 {
-		fmt.Println("  Warning: could not get window reference")
-		fmt.Print(Colorize("Export dialog ready. Use Save button to complete export.\n", ColorGreen))
-		return nil
+		warning = "could not get window reference"
+		fmt.Fprintln(status, "  Warning: could not get window reference")
+		fmt.Fprint(status, Colorize("Export dialog ready. Use Save button to complete export.\n", ColorGreen))
+		return writeOutput()
+	}
+	if doc := axString(freshWindow, "AXDocument"); doc != "" {
+		target = doc
 	}
 
 	saveNameField := FindSaveAsTextField(freshWindow)
 	if saveNameField == 0 {
-		fmt.Println("  Warning: Save As field not found")
-		fmt.Print(Colorize("Export dialog ready. Use Save button to complete export.\n", ColorGreen))
-		return nil
+		warning = "save as field not found"
+		fmt.Fprintln(status, "  Warning: Save As field not found")
+		fmt.Fprint(status, Colorize("Export dialog ready. Use Save button to complete export.\n", ColorGreen))
+		return writeOutput()
 	}
 
-	var outputFilename string
 	if outputPath != "" {
 		// User specified path - use just the basename
 		// (folder navigation via Cmd+Shift+G isn't reliable, so we only set the filename)
-		outputFilename = filepath.Base(outputPath)
 		dir := filepath.Dir(outputPath)
 		if dir != "." && dir != "/" {
-			fmt.Printf("  Note: Navigate to %s manually (folder navigation not yet supported)\n", dir)
+			fmt.Fprintf(status, "  Note: Navigate to %s manually (folder navigation not yet supported)\n", dir)
 		}
 	} else {
 		// Generate -perfdata suffix from current filename
@@ -225,9 +258,10 @@ func runOpenExport(cmd *cobra.Command, args []string) error {
 		// Re-find the save field after navigation
 		saveNameField = FindSaveAsTextField(freshWindow)
 		if saveNameField != 0 {
-			fmt.Printf("  Setting filename: %s\n", outputFilename)
+			fmt.Fprintf(status, "  Setting filename: %s\n", outputFilename)
 			if err := axSetValue(saveNameField, outputFilename); err != nil {
-				fmt.Printf("  Warning: could not set filename: %v\n", err)
+				warning = fmt.Sprintf("could not set filename: %v", err)
+				fmt.Fprintf(status, "  Warning: could not set filename: %v\n", err)
 			}
 			// Focus out of the field to commit the value (Tab key)
 			time.Sleep(200 * time.Millisecond)
@@ -237,8 +271,8 @@ func runOpenExport(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	fmt.Print(Colorize("Export dialog ready. Use Save button to complete export.\n", ColorGreen))
-	return nil
+	fmt.Fprint(status, Colorize("Export dialog ready. Use Save button to complete export.\n", ColorGreen))
+	return writeOutput()
 }
 
 func init() {
@@ -252,6 +286,7 @@ func init() {
 }
 
 func runClickSave(cmd *cobra.Command, args []string) error {
+	status := xcodeProfileStatusWriter()
 	if err := setupMacgo(); err != nil {
 		return err
 	}
@@ -266,6 +301,7 @@ func runClickSave(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("window not found: %w", err)
 	}
+	target := axString(windowAX, "AXDocument")
 
 	if !isExportDialogOpen(windowAX) {
 		return fmt.Errorf("export dialog not open")
@@ -277,21 +313,26 @@ func runClickSave(cmd *cobra.Command, args []string) error {
 	}
 
 	// Get the filename being saved
+	filename := ""
 	saveField := FindSaveAsTextField(windowAX)
 	if saveField != 0 {
-		filename := axString(saveField, "AXValue")
-		fmt.Printf("Saving: %s\n", filename)
+		filename = axString(saveField, "AXValue")
+		fmt.Fprintf(status, "Saving: %s\n", filename)
 	}
 
-	fmt.Println("Clicking Save...")
+	fmt.Fprintln(status, "Clicking Save...")
 	if err := axAction(saveBtn, "AXPress"); err != nil {
 		return fmt.Errorf("failed to click Save: %w", err)
 	}
 
 	// Wait briefly for save to complete
 	time.Sleep(2 * time.Second)
-	fmt.Println("Export initiated")
-	return nil
+	fmt.Fprintln(status, "Export initiated")
+	return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+		Action: "click-save",
+		Target: target,
+		Output: filename,
+	})
 }
 
 func init() {
@@ -314,6 +355,10 @@ func init() {
 }
 
 func runSendKey(cmd *cobra.Command, args []string) error {
+	if err := rejectXcodeProfileJSON("send-key"); err != nil {
+		return err
+	}
+	status := xcodeProfileStatusWriter()
 	if err := setupMacgo(); err != nil {
 		return err
 	}
@@ -321,7 +366,7 @@ func runSendKey(cmd *cobra.Command, args []string) error {
 	key := args[0]
 
 	// Activate Xcode first
-	fmt.Println("Activating Xcode...")
+	fmt.Fprintln(status, "Activating Xcode...")
 	if err := ActivateXcode(); err != nil {
 		return fmt.Errorf("failed to activate Xcode: %w", err)
 	}
@@ -329,17 +374,17 @@ func runSendKey(cmd *cobra.Command, args []string) error {
 
 	switch key {
 	case "cmd-shift-g":
-		fmt.Println("Sending Cmd+Shift+G...")
+		fmt.Fprintln(status, "Sending Cmd+Shift+G...")
 		if err := sendCmdShiftG(); err != nil {
 			return fmt.Errorf("failed to send Cmd+Shift+G: %w", err)
 		}
 	case "escape":
-		fmt.Println("Sending Escape...")
+		fmt.Fprintln(status, "Sending Escape...")
 		if err := sendEscape(); err != nil {
 			return fmt.Errorf("failed to send Escape: %w", err)
 		}
 	case "return":
-		fmt.Println("Sending Return...")
+		fmt.Fprintln(status, "Sending Return...")
 		if err := sendReturn(); err != nil {
 			return fmt.Errorf("failed to send Return: %w", err)
 		}
@@ -347,11 +392,15 @@ func runSendKey(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("unknown key: %s (supported: cmd-shift-g, escape, return)", key)
 	}
 
-	fmt.Println("Key sent")
+	fmt.Fprintln(status, "Key sent")
 	return nil
 }
 
 func runCheckGoToFolder(cmd *cobra.Command, args []string) error {
+	if err := rejectXcodeProfileJSON("check-goto-folder"); err != nil {
+		return err
+	}
+	status := xcodeProfileStatusWriter()
 	if err := setupMacgo(); err != nil {
 		return err
 	}
@@ -370,36 +419,36 @@ func runCheckGoToFolder(cmd *cobra.Command, args []string) error {
 	// Look for "Go" button which indicates Go to Folder dialog
 	goBtn := findButtonBFS(windowAX, "Go", 1000)
 	if goBtn != 0 {
-		fmt.Println("Go to Folder dialog: OPEN")
+		fmt.Fprintln(status, "Go to Folder dialog: OPEN")
 		// Try to find the path text field
 		pathField := FindPathTextField(windowAX)
 		if pathField != 0 {
 			val := axString(pathField, "AXValue")
-			fmt.Printf("  Path field value: %q\n", val)
+			fmt.Fprintf(status, "  Path field value: %q\n", val)
 		}
 	} else {
-		fmt.Println("Go to Folder dialog: NOT OPEN")
+		fmt.Fprintln(status, "Go to Folder dialog: NOT OPEN")
 	}
 
 	// Also check for Save button to see overall dialog state
 	saveBtn := findButtonBFS(windowAX, "Save", 500) // Export sheet is shallow
 	if saveBtn != 0 {
-		fmt.Println("Export dialog: OPEN")
+		fmt.Fprintln(status, "Export dialog: OPEN")
 		// Check if Save is enabled
 		enabled := IsElementEnabled(saveBtn)
-		fmt.Printf("  Save button enabled: %v\n", enabled)
+		fmt.Fprintf(status, "  Save button enabled: %v\n", enabled)
 		// Show the save-as field value
 		saveField := FindSaveAsTextField(windowAX)
 		if saveField != 0 {
 			val := axString(saveField, "AXValue")
-			fmt.Printf("  Filename: %q\n", val)
+			fmt.Fprintf(status, "  Filename: %q\n", val)
 		} else {
-			fmt.Println("  Filename field: NOT FOUND")
+			fmt.Fprintln(status, "  Filename field: NOT FOUND")
 		}
 		// Look for disclosure triangle or path control
 		disclosure := findButtonBFS(windowAX, "disclosure", 500)
 		if disclosure != 0 {
-			fmt.Println("  Has disclosure button")
+			fmt.Fprintln(status, "  Has disclosure button")
 		}
 		// Look for popup buttons (e.g., "Where" location selector)
 		popup := findElement(windowAX, func(el uintptr) bool {
@@ -409,10 +458,10 @@ func runCheckGoToFolder(cmd *cobra.Command, args []string) error {
 		if popup != 0 {
 			val := axString(popup, "AXValue")
 			desc := axString(popup, "AXDescription")
-			fmt.Printf("  Popup button: value=%q desc=%q\n", val, desc)
+			fmt.Fprintf(status, "  Popup button: value=%q desc=%q\n", val, desc)
 		}
 	} else {
-		fmt.Println("Export dialog: NOT OPEN")
+		fmt.Fprintln(status, "Export dialog: NOT OPEN")
 	}
 
 	return nil
@@ -429,6 +478,10 @@ func init() {
 }
 
 func runDebugFileBrowser(cmd *cobra.Command, args []string) error {
+	if err := rejectXcodeProfileJSON("debug-file-browser"); err != nil {
+		return err
+	}
+	status := xcodeProfileStatusWriter()
 	if err := setupMacgo(); err != nil {
 		return err
 	}
@@ -448,8 +501,8 @@ func runDebugFileBrowser(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("export dialog not open - use 'gputrace xp open-export' first")
 	}
 
-	fmt.Println("Scanning file browser elements...")
-	fmt.Println()
+	fmt.Fprintln(status, "Scanning file browser elements...")
+	fmt.Fprintln(status)
 
 	// Look for browser/table/outline elements that might contain the file list
 	count := 0
@@ -469,26 +522,26 @@ func runDebugFileBrowser(cmd *cobra.Command, args []string) error {
 			// Only print if there's some content
 			if title != "" || value != "" || desc != "" || identifier != "" {
 				count++
-				fmt.Printf("[%d] Role=%s\n", count, role)
+				fmt.Fprintf(status, "[%d] Role=%s\n", count, role)
 				if title != "" {
-					fmt.Printf("    Title: %q\n", title)
+					fmt.Fprintf(status, "    Title: %q\n", title)
 				}
 				if value != "" {
-					fmt.Printf("    Value: %q\n", value)
+					fmt.Fprintf(status, "    Value: %q\n", value)
 				}
 				if desc != "" {
-					fmt.Printf("    Desc: %q\n", desc)
+					fmt.Fprintf(status, "    Desc: %q\n", desc)
 				}
 				if identifier != "" {
-					fmt.Printf("    ID: %q\n", identifier)
+					fmt.Fprintf(status, "    ID: %q\n", identifier)
 				}
-				fmt.Println()
+				fmt.Fprintln(status)
 			}
 		}
 		return false // Continue searching
 	})
 
-	fmt.Printf("Found %d elements with content\n", count)
+	fmt.Fprintf(status, "Found %d elements with content\n", count)
 	return nil
 }
 
@@ -521,6 +574,7 @@ func init() {
 }
 
 func runSetExportPath(cmd *cobra.Command, args []string) error {
+	status := xcodeProfileStatusWriter()
 	absPath := args[0]
 	if !filepath.IsAbs(absPath) {
 		return fmt.Errorf("path must be absolute: %s", absPath)
@@ -540,6 +594,7 @@ func runSetExportPath(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("window not found: %w", err)
 	}
+	target := axString(windowAX, "AXDocument")
 
 	// Check export dialog is open
 	if !isExportDialogOpen(windowAX) {
@@ -553,7 +608,7 @@ func runSetExportPath(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("save-as field not found")
 	}
 
-	fmt.Printf("Setting export path: %s\n", absPath)
+	fmt.Fprintf(status, "Setting export path: %s\n", absPath)
 	if err := axSetValue(saveField, absPath); err != nil {
 		return fmt.Errorf("failed to set path: %w", err)
 	}
@@ -571,15 +626,21 @@ func runSetExportPath(cmd *cobra.Command, args []string) error {
 	dir := filepath.Dir(absPath)
 	base := filepath.Base(absPath)
 
-	fmt.Printf("  Directory: %s\n", dir)
-	fmt.Printf("  Filename: %s\n", base)
-	fmt.Println("  Note: Xcode export dialog doesn't support Cmd+Shift+G")
-	fmt.Println("  If directory navigation is needed, set filename only and navigate manually")
+	fmt.Fprintf(status, "  Directory: %s\n", dir)
+	fmt.Fprintf(status, "  Filename: %s\n", base)
+	fmt.Fprintln(status, "  Note: Xcode export dialog doesn't support Cmd+Shift+G")
+	fmt.Fprintln(status, "  If directory navigation is needed, set filename only and navigate manually")
 
-	return nil
+	return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+		Action:          "set-export-path",
+		Target:          target,
+		Output:          absPath,
+		RequestedOutput: absPath,
+	})
 }
 
 func runSetExportFilename(cmd *cobra.Command, args []string) error {
+	status := xcodeProfileStatusWriter()
 	filename := args[0]
 
 	if err := setupMacgo(); err != nil {
@@ -596,6 +657,7 @@ func runSetExportFilename(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("window not found: %w", err)
 	}
+	target := axString(windowAX, "AXDocument")
 
 	if !isExportDialogOpen(windowAX) {
 		return fmt.Errorf("export dialog not open")
@@ -606,23 +668,31 @@ func runSetExportFilename(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("save-as field not found")
 	}
 
-	fmt.Printf("Setting filename: %s\n", filename)
+	fmt.Fprintf(status, "Setting filename: %s\n", filename)
 	if err := axSetValue(saveField, filename); err != nil {
 		return fmt.Errorf("failed to set filename: %w", err)
 	}
 
-	fmt.Println("Filename set")
-	return nil
+	fmt.Fprintln(status, "Filename set")
+	return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+		Action: "set-export-filename",
+		Target: target,
+		Output: filename,
+	})
 }
 
 func runSendEnter(cmd *cobra.Command, args []string) error {
 	// No setupMacgo needed - we just use AppleScript
+	status := xcodeProfileStatusWriter()
 
-	fmt.Println("Sending Enter to Xcode...")
+	fmt.Fprintln(status, "Sending Enter to Xcode...")
 	if err := sendReturn(); err != nil {
 		return fmt.Errorf("failed to send Enter: %w", err)
 	}
 
-	fmt.Println("Enter sent")
-	return nil
+	fmt.Fprintln(status, "Enter sent")
+	return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+		Action: "send-enter",
+		Target: "xcode",
+	})
 }
