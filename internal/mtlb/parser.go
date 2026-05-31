@@ -27,9 +27,11 @@ type MTLBFile struct {
 
 // MTLBFunction represents a function in the library.
 type MTLBFunction struct {
-	Name string
-	// We'll add more fields as we reverse engineer them
-	// Offset and Size might be available
+	Name      string
+	NameOff   uint64
+	Offset    uint64
+	Size      uint64
+	SizeKnown bool
 }
 
 // ParseMTLB parses the given data as an MTLB file.
@@ -60,17 +62,125 @@ func ParseMTLB(data []byte) (*MTLBFile, error) {
 }
 
 // ListFunctions returns a list of function names found in the MTLB file.
-// This is a best-effort implementation based on the user's description
-// that function names appear as null-terminated strings.
-// ListFunctions returns a list of function names found in the MTLB file.
-// It scans the file for "NAMED" tags which precede function names.
 func (m *MTLBFile) ListFunctions() ([]string, error) {
-	var functions []string
+	metadata, err := m.ListFunctionMetadata()
+	if err != nil {
+		return nil, err
+	}
+
+	functions := make([]string, 0, len(metadata))
+	for _, fn := range metadata {
+		functions = append(functions, fn.Name)
+	}
+	return functions, nil
+}
+
+// ListFunctionMetadata returns function names and any per-function metadata the
+// parser can prove from tagged MTLB function-table entries.
+func (m *MTLBFile) ListFunctionMetadata() ([]MTLBFunction, error) {
+	if functions, ok := m.parseTaggedFunctionTable(); ok {
+		return functions, nil
+	}
+
+	return m.scanLegacyFunctionNames(), nil
+}
+
+func (m *MTLBFile) parseTaggedFunctionTable() ([]MTLBFunction, bool) {
+	if m.Header.FunctionTable > uint64(len(m.Data)) || uint64(len(m.Data))-m.Header.FunctionTable < 8 {
+		return nil, false
+	}
+
+	start := int(m.Header.FunctionTable)
+	count := binary.LittleEndian.Uint32(m.Data[start : start+4])
+	entrySize := binary.LittleEndian.Uint32(m.Data[start+4 : start+8])
+	if count == 0 {
+		return nil, true
+	}
+	if count > uint32(len(m.Data)) || entrySize < 4 {
+		return nil, false
+	}
+
+	functions := make([]MTLBFunction, 0, count)
+	entryStart := start + 8
+	for i := uint32(0); i < count; i++ {
+		size := int(entrySize)
+		if size <= 0 || entryStart+size > len(m.Data) {
+			return nil, false
+		}
+
+		entry := m.Data[entryStart : entryStart+size]
+		fn, ok := parseTaggedFunctionEntry(entry, uint64(entryStart))
+		if !ok {
+			return nil, false
+		}
+		functions = append(functions, fn)
+
+		if i+1 < count {
+			if len(entry) < 4 {
+				return nil, false
+			}
+			entrySize = binary.LittleEndian.Uint32(entry[len(entry)-4:])
+			if entrySize < 4 {
+				return nil, false
+			}
+		}
+		entryStart += size
+	}
+
+	return functions, true
+}
+
+func parseTaggedFunctionEntry(entry []byte, base uint64) (MTLBFunction, bool) {
+	var fn MTLBFunction
+	for pos := 0; pos+4 <= len(entry); {
+		tag := string(entry[pos : pos+4])
+		pos += 4
+		if tag == "ENDT" {
+			return fn, fn.Name != ""
+		}
+		if pos+2 > len(entry) {
+			return MTLBFunction{}, false
+		}
+		payloadLen := int(binary.LittleEndian.Uint16(entry[pos : pos+2]))
+		pos += 2
+		if payloadLen < 0 || pos+payloadLen > len(entry) {
+			return MTLBFunction{}, false
+		}
+
+		payload := entry[pos : pos+payloadLen]
+		payloadOff := base + uint64(pos)
+		switch tag {
+		case "NAME":
+			if end := bytes.IndexByte(payload, 0); end >= 0 {
+				fn.Name = string(payload[:end])
+			} else {
+				fn.Name = string(payload)
+			}
+			fn.NameOff = payloadOff
+		case "OFFT":
+			if len(payload) >= 8 {
+				fn.Offset = binary.LittleEndian.Uint64(payload[:8])
+			}
+		case "MDSZ":
+			if len(payload) >= 8 {
+				fn.Size = binary.LittleEndian.Uint64(payload[:8])
+				fn.SizeKnown = fn.Size > 0
+			}
+		}
+
+		pos += payloadLen
+	}
+
+	return MTLBFunction{}, false
+}
+
+func (m *MTLBFile) scanLegacyFunctionNames() []MTLBFunction {
+	var functions []MTLBFunction
 
 	// Start scanning from FunctionTable offset
 	start := m.Header.FunctionTable
 	if start >= uint64(len(m.Data)) {
-		return nil, nil
+		return nil
 	}
 
 	data := m.Data[start:]
@@ -114,12 +224,15 @@ func (m *MTLBFile) ListFunctions() ([]string, error) {
 		// Extract name
 		name := string(data[nameStart : nameStart+nameEnd])
 		if len(name) > 0 {
-			functions = append(functions, name)
+			functions = append(functions, MTLBFunction{
+				Name:    name,
+				NameOff: start + uint64(nameStart),
+			})
 		}
 
 		// Advance index
 		idx = nameStart + nameEnd + 1
 	}
 
-	return functions, nil
+	return functions
 }
