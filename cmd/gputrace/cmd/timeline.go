@@ -63,7 +63,7 @@ Examples:
 func init() {
 	rootCmd.AddCommand(timelineCmd)
 
-	timelineCmd.Flags().StringVarP(&timelineOutput, "output", "o", "timeline.json", "Output file path")
+	timelineCmd.Flags().StringVarP(&timelineOutput, "output", "o", "", "Output file path (default: stdout for text, timeline.json otherwise)")
 	timelineCmd.Flags().StringVar(&timelineFormat, "format", "text", "Output format: chrome, perfetto, html, json, text")
 }
 
@@ -105,31 +105,43 @@ func runTimeline(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	outputPath := timelineOutputPath(timelineFormat, timelineOutput)
+
 	// Export based on format
 	switch timelineFormat {
 	case "chrome", "perfetto":
-		if err := exportChromeTracing(timeline, timelineOutput); err != nil {
+		if err := exportChromeTracing(timeline, outputPath); err != nil {
 			return fmt.Errorf("failed to export Chrome/Perfetto tracing: %w", err)
 		}
 	case "html":
-		if err := exportHTML(timeline, timelineOutput); err != nil {
+		if err := exportHTML(timeline, outputPath); err != nil {
 			return fmt.Errorf("failed to export HTML: %w", err)
 		}
 	case "json":
-		if err := exportTimelineJSON(timeline, timelineOutput); err != nil {
+		if err := exportTimelineJSON(timeline, outputPath); err != nil {
 			return fmt.Errorf("failed to export JSON: %w", err)
 		}
 	case "text":
-		if err := exportTextTimeline(timeline); err != nil {
+		if err := exportTextTimeline(timeline, outputPath); err != nil {
 			return fmt.Errorf("failed to export text: %w", err)
+		}
+		if outputPath != "" && !commandOutputPathIsStdout(outputPath) {
+			printTimelineExportStatus(outputPath, timelineFormat, false)
 		}
 		return nil
 	default:
 		return fmt.Errorf("unknown format: %s (supported: chrome, perfetto, html, json, text)", timelineFormat)
 	}
 
-	printTimelineExportStatus(timelineOutput, timelineFormat, false)
+	printTimelineExportStatus(outputPath, timelineFormat, false)
 	return nil
+}
+
+func timelineOutputPath(format, output string) string {
+	if output != "" || format == "text" {
+		return output
+	}
+	return "timeline.json"
 }
 
 func printTimelineExportStatus(output, format string, profilerOnly bool) {
@@ -154,10 +166,18 @@ func printTimelineExportStatus(output, format string, profilerOnly bool) {
 	}
 }
 
-// exportTextTimeline prints the timeline to stdout in a hierarchical format.
-func exportTextTimeline(timeline *Timeline) error {
+// exportTextTimeline writes the timeline in a hierarchical text format.
+func exportTextTimeline(timeline *Timeline, outputPath string) error {
+	w, closeOutput, err := createCommandOutput(outputPath)
+	if err != nil {
+		return err
+	}
+	if closeOutput != nil {
+		defer closeOutput()
+	}
+
 	if len(timeline.Encoders) == 0 && len(timeline.Events) == 0 {
-		fmt.Println("No timeline data available.")
+		fmt.Fprintln(w, "No timeline data available.")
 		return nil
 	}
 
@@ -166,7 +186,7 @@ func exportTextTimeline(timeline *Timeline) error {
 		if timeline.Timing.EncoderTimingApproximate {
 			sourceKind = "approximate"
 		}
-		fmt.Printf("Timing source: %s (%s)\n", timeline.Timing.EncoderTimingSource, sourceKind)
+		fmt.Fprintf(w, "Timing source: %s (%s)\n", timeline.Timing.EncoderTimingSource, sourceKind)
 	}
 
 	// Find command buffer events
@@ -201,9 +221,9 @@ func exportTextTimeline(timeline *Timeline) error {
 		// Show duration if available (from APSTimelineData)
 		if cb.Duration > 0 {
 			cbDurationMs := float64(cb.Duration) / 1000.0 // Duration is in µs, convert to ms
-			fmt.Printf("%s [%.1fms, duration=%.2fms]\n", cb.Name, cbStart, cbDurationMs)
+			fmt.Fprintf(w, "%s [%.1fms, duration=%.2fms]\n", cb.Name, cbStart, cbDurationMs)
 		} else {
-			fmt.Printf("%s [%.1fms]\n", cb.Name, cbStart)
+			fmt.Fprintf(w, "%s [%.1fms]\n", cb.Name, cbStart)
 		}
 
 		cbIndex, ok := cb.Args["index"].(int)
@@ -252,11 +272,11 @@ func exportTextTimeline(timeline *Timeline) error {
 				for _, k := range encoderKernels {
 					kStartMs := float64(k.StartTime-firstTimestamp) / 1e6
 					kDurationMs := float64(k.Duration) / 1e6
-					fmt.Printf("  %s %.2fms: %s (%.2fms) - %s\n",
+					fmt.Fprintf(w, "  %s %.2fms: %s (%.2fms) - %s\n",
 						prefix, kStartMs, k.Name, kDurationMs, label)
 				}
 			} else {
-				fmt.Printf("  %s %.2fms: %s (%.2fms) - %s\n", prefix, startMs, label, durationMs, "Encoder")
+				fmt.Fprintf(w, "  %s %.2fms: %s (%.2fms) - %s\n", prefix, startMs, label, durationMs, "Encoder")
 			}
 		}
 	}
@@ -2271,30 +2291,35 @@ func runTimelineFromProfiler(tracePath string) error {
 	// Build timeline from profiler data
 	timeline := buildTimelineFromProfilerData(tracePath, stats)
 
+	outputPath := timelineOutputPath(timelineFormat, timelineOutput)
+
 	// Export based on format
 	switch timelineFormat {
 	case "chrome", "perfetto":
-		if err := exportChromeTracing(timeline, timelineOutput); err != nil {
+		if err := exportChromeTracing(timeline, outputPath); err != nil {
 			return fmt.Errorf("failed to export Chrome/Perfetto tracing: %w", err)
 		}
 	case "html":
-		if err := exportHTML(timeline, timelineOutput); err != nil {
+		if err := exportHTML(timeline, outputPath); err != nil {
 			return fmt.Errorf("failed to export HTML: %w", err)
 		}
 	case "json":
-		if err := exportTimelineJSON(timeline, timelineOutput); err != nil {
+		if err := exportTimelineJSON(timeline, outputPath); err != nil {
 			return fmt.Errorf("failed to export JSON: %w", err)
 		}
 	case "text":
-		if err := exportTextTimeline(timeline); err != nil {
+		if err := exportTextTimeline(timeline, outputPath); err != nil {
 			return fmt.Errorf("failed to export text: %w", err)
+		}
+		if outputPath != "" && !commandOutputPathIsStdout(outputPath) {
+			printTimelineExportStatus(outputPath, timelineFormat, true)
 		}
 		return nil
 	default:
 		return fmt.Errorf("unknown format: %s (supported: chrome, perfetto, html, json, text)", timelineFormat)
 	}
 
-	printTimelineExportStatus(timelineOutput, timelineFormat, true)
+	printTimelineExportStatus(outputPath, timelineFormat, true)
 
 	return nil
 }

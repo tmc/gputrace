@@ -156,6 +156,43 @@ func TestExportChromeTracingStdoutWritesCleanJSON(t *testing.T) {
 	}
 }
 
+func TestTimelineOutputPath(t *testing.T) {
+	tests := []struct {
+		name   string
+		format string
+		output string
+		want   string
+	}{
+		{name: "text default", format: "text", want: ""},
+		{name: "json default", format: "json", want: "timeline.json"},
+		{name: "chrome default", format: "chrome", want: "timeline.json"},
+		{name: "text explicit file", format: "text", output: "timeline.txt", want: "timeline.txt"},
+		{name: "json stdout", format: "json", output: "/dev/stdout", want: "/dev/stdout"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := timelineOutputPath(tt.format, tt.output); got != tt.want {
+				t.Fatalf("timelineOutputPath(%q, %q) = %q, want %q", tt.format, tt.output, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExportTextTimelineWritesOutputFile(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "timeline.txt")
+	if err := exportTextTimeline(&Timeline{}, out); err != nil {
+		t.Fatalf("exportTextTimeline: %v", err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	if got, want := string(data), "No timeline data available.\n"; got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
+
 func TestGenerateTimelineAnnotatesSyntheticTimingSource(t *testing.T) {
 	tr := &gputrace.Trace{
 		Path:        timelineTimingSourceTraceDir(t),

@@ -95,4 +95,14 @@ func TestTimelineFormatHelpIncludesPerfetto(t *testing.T) {
 	if !strings.Contains(timelineCmd.Long, "timeline trace.gputrace --format chrome -o timeline.json") {
 		t.Fatalf("timeline file-output example should include explicit non-text format:\n%s", timelineCmd.Long)
 	}
+	outputFlag := timelineCmd.Flags().Lookup("output")
+	if outputFlag == nil {
+		t.Fatal("timeline output flag not found")
+	}
+	if outputFlag.DefValue != "" {
+		t.Fatalf("timeline output default = %q, want empty", outputFlag.DefValue)
+	}
+	if !strings.Contains(outputFlag.Usage, "stdout for text") {
+		t.Fatalf("timeline output help does not describe format-specific default: %s", outputFlag.Usage)
+	}
 }

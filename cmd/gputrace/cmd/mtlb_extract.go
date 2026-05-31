@@ -106,7 +106,7 @@ func mtlbExtractStatusWriter(outputPath string) *os.File {
 }
 
 func mtlbExtractOutputPathIsStdout(path string) bool {
-	return path == "/dev/stdout"
+	return path == "-" || path == "/dev/stdout"
 }
 
 func copyFile(src, dst string) (err error) {
