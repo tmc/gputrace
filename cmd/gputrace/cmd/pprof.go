@@ -44,7 +44,7 @@ Example workflow:
   MTL_CAPTURE_ENABLED=1 go test -bench=BenchmarkForwardPass$ -benchtime=1x
 
   # 2. Convert to pprof (automatically handles anonymous traces)
-  gputrace pprof /tmp/forward_pass_*.gputrace -all -prefix gpu_analysis
+  gputrace pprof /tmp/forward_pass_*.gputrace --all --prefix gpu_analysis
 
   # 3. Analyze with pprof
   go tool pprof -top gpu_analysis.gpu.pprof
