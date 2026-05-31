@@ -336,6 +336,7 @@ func init() {
 		Args:   unsupportedXcodeProfileJSONArgs("send-key", cobra.ExactArgs(1)),
 		RunE:   runSendKey,
 	}
+	documentUnsupportedXcodeProfileJSON(sendKeyCmd)
 	collectXcodeProfileCmd.AddCommand(sendKeyCmd)
 
 	checkGoToFolderCmd := &cobra.Command{
@@ -345,6 +346,7 @@ func init() {
 		Args:   unsupportedXcodeProfileJSONArgs("check-goto-folder", cobra.NoArgs),
 		RunE:   runCheckGoToFolder,
 	}
+	documentUnsupportedXcodeProfileJSON(checkGoToFolderCmd)
 	collectXcodeProfileCmd.AddCommand(checkGoToFolderCmd)
 }
 
@@ -463,6 +465,7 @@ func init() {
 		Args:   unsupportedXcodeProfileJSONArgs("debug-file-browser", cobra.NoArgs),
 		RunE:   runDebugFileBrowser,
 	}
+	documentUnsupportedXcodeProfileJSON(debugFileBrowserCmd)
 	collectXcodeProfileCmd.AddCommand(debugFileBrowserCmd)
 }
 

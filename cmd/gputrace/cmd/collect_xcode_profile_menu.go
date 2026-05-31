@@ -21,6 +21,7 @@ Examples:
 		Args: unsupportedXcodeProfileJSONArgs("list-menus", cobra.MaximumNArgs(1)),
 		RunE: runListMenus,
 	}
+	documentUnsupportedXcodeProfileJSON(listMenusCmd)
 	collectXcodeProfileCmd.AddCommand(listMenusCmd)
 
 	clickMenuCmd := &cobra.Command{
@@ -35,6 +36,7 @@ Examples:
 		Args: unsupportedXcodeProfileJSONArgs("click-menu", cobra.ExactArgs(2)),
 		RunE: runClickMenu,
 	}
+	documentUnsupportedXcodeProfileJSON(clickMenuCmd)
 	collectXcodeProfileCmd.AddCommand(clickMenuCmd)
 }
 
