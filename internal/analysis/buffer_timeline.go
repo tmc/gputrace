@@ -57,6 +57,8 @@ func ExtractBufferTimeline(t *trace.Trace) (*BufferTimelineAnalysis, error) {
 		return nil, fmt.Errorf("parse MTSP records: %w", err)
 	}
 
+	bufferSizes := extractTraceBufferSizeMetadata(t, records)
+
 	// Track current encoder ID (increments on CS records)
 	encoderID := 0
 
@@ -97,6 +99,9 @@ func ExtractBufferTimeline(t *trace.Trace) (*BufferTimelineAnalysis, error) {
 						EncoderIDs:    []int{},
 						AccessIndices: []int{},
 						IsActive:      true,
+					}
+					if sizeMetadata, ok := bufferSizes[bufferAddr]; ok {
+						lifecycle.Size = sizeMetadata.Size
 					}
 					analysis.BufferEvents[bufferAddr] = lifecycle
 					analysis.TotalAllocations++
