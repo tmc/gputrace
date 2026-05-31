@@ -1355,7 +1355,7 @@ func CaptureWindowToFile(windowAX uintptr, outputPath string) error {
 		)
 	}
 	if image == 0 {
-		return fmt.Errorf("CGWindowListCreateImage returned null (windowID=%d) - check Screen Recording permission in System Preferences > Privacy & Security", windowID)
+		return fmt.Errorf("CGWindowListCreateImage returned null (windowID=%d) - check Screen Recording permission in System Settings > Privacy & Security", windowID)
 	}
 	defer cgImageRelease(image)
 

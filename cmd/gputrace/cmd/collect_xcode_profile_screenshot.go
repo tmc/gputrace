@@ -26,7 +26,7 @@ If no output path is specified, saves to /tmp/xcode-screenshot-<timestamp>.png
 
 Use --no-prompt to trigger a TCC database entry for Screen Recording permission
 without prompting the user. This is useful for pre-registering the app so permission
-can be granted later via System Preferences or MDM.
+can be granted later via System Settings > Privacy & Security or MDM.
 
 Examples:
   gputrace xp screenshot
@@ -82,7 +82,8 @@ func runScreenshot(cmd *cobra.Command, args []string) error {
 		title = "Xcode"
 	}
 
-	fmt.Printf("Capturing screenshot of: %s\n", title)
+	status := xcodeProfileStatusWriter()
+	fmt.Fprintf(status, "Capturing screenshot of: %s\n", title)
 
 	// Capture using CoreGraphics (captures by window ID, doesn't need window in front)
 	if err := CaptureWindowToFile(windowAX, outputPath); err != nil {
@@ -94,8 +95,12 @@ func runScreenshot(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("screenshot file not created")
 	}
 
-	fmt.Printf("Screenshot saved to: %s\n", outputPath)
-	return nil
+	fmt.Fprintf(status, "Screenshot saved to: %s\n", outputPath)
+	return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+		Action: "screenshot",
+		Target: traceFile,
+		Output: outputPath,
+	})
 }
 
 func resolveScreenshotOutputPath(output string, now time.Time) (string, error) {
@@ -130,9 +135,11 @@ func triggerScreenRecordingTCC() error {
 	}
 
 	if hasPermission {
-		fmt.Println("Screen Recording permission: granted")
+		fmt.Fprintln(xcodeProfileStatusWriter(), "Screen Recording permission: granted")
 	} else {
-		fmt.Println("Screen Recording permission: not granted (TCC entry triggered)")
+		fmt.Fprintln(xcodeProfileStatusWriter(), "Screen Recording permission: not granted (TCC entry triggered)")
 	}
-	return nil
+	return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+		Action: "screenshot-no-prompt",
+	})
 }

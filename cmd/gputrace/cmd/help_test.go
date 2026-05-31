@@ -106,3 +106,19 @@ func TestTimelineFormatHelpIncludesPerfetto(t *testing.T) {
 		t.Fatalf("timeline output help does not describe format-specific default: %s", outputFlag.Usage)
 	}
 }
+
+func TestGraphHelpMatchesDefaultType(t *testing.T) {
+	flag := graphCmd.Flags().Lookup("type")
+	if flag == nil {
+		t.Fatal("graph type flag not found")
+	}
+	if flag.DefValue != "hierarchy" {
+		t.Fatalf("graph type default = %q, want hierarchy", flag.DefValue)
+	}
+	if !strings.Contains(graphCmd.Long, "hierarchy: Command buffer") || !strings.Contains(graphCmd.Long, "(default)") {
+		t.Fatalf("graph long help does not mark hierarchy as default:\n%s", graphCmd.Long)
+	}
+	if strings.Contains(graphCmd.Long, "flow: Execution flow (temporal order) - default") {
+		t.Fatalf("graph long help still marks flow as default:\n%s", graphCmd.Long)
+	}
+}

@@ -27,7 +27,7 @@ gputrace profiler trace.gputrace
 gputrace pprof trace.gputrace -o trace.pb
 go tool pprof -http=:8080 trace.pb
 
-# Export Chrome/Perfetto timeline
+# View text timeline or export Chrome/Perfetto timeline
 gputrace timeline trace.gputrace --format perfetto -o trace.json
 
 # Compare two traces
@@ -53,7 +53,7 @@ gputrace diff A.gputrace B.gputrace --explain
 | **Buffer Analysis** | `buffers` | Buffer listing and properties |
 | | `buffer-access` | Buffer access patterns |
 | | `buffer-timeline` | Buffer allocation timeline |
-| **Visualization** | `timeline` | Chrome/Perfetto timeline export |
+| **Visualization** | `timeline` | Text timeline and Chrome/Perfetto export |
 | | `graph` | Graph visualization |
 | | `tree` | Execution tree view |
 | | `diff` | Compare two traces |

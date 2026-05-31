@@ -41,7 +41,7 @@ Buffer Analysis:
   buffer-timeline  - Buffer allocation timeline
 
 Visualization & Export:
-  timeline         - Chrome/Perfetto timeline export
+  timeline         - Text timeline and Chrome/Perfetto export
   graph            - Graph visualization
   tree             - Execution tree view
   diff             - Compare two traces
