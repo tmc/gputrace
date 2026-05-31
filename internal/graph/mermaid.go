@@ -48,6 +48,14 @@ func (g *MermaidGenerator) generateHierarchy(t *trace.Trace, config *Config) (st
 		return "", fmt.Errorf("parse encoders: %w", err)
 	}
 
+	var shaderMetrics map[string]*ShaderInfo
+	if config.ShowTiming {
+		shaderMetrics, err = getShaderMetrics(t)
+		if err != nil {
+			return "", fmt.Errorf("extract shader metrics: %w", err)
+		}
+	}
+
 	// Root node
 	sb.WriteString("  trace([GPU Trace])\n")
 
@@ -73,6 +81,11 @@ func (g *MermaidGenerator) generateHierarchy(t *trace.Trace, config *Config) (st
 			if label == "" {
 				label = fmt.Sprintf("Encoder %d", encoder.Index)
 			}
+			if config.ShowTiming && shaderMetrics != nil {
+				if metrics, ok := shaderMetrics[encoder.Label]; ok {
+					label += fmt.Sprintf("<br/>Duration: %.2fms", float64(metrics.Duration)/1e6)
+				}
+			}
 			sb.WriteString(fmt.Sprintf("  %s[%s]\n", encID, label))
 			sb.WriteString(fmt.Sprintf("  %s --> %s\n", cbID, encID))
 		}
@@ -83,10 +96,19 @@ func (g *MermaidGenerator) generateHierarchy(t *trace.Trace, config *Config) (st
 	for _, encoder := range encoders {
 		if encoder.Label != "" {
 			// Extract shader name from encoder label
-			shaderName := g.extractShaderName(encoder.Label)
+			shaderName := extractShaderName(encoder.Label)
 			if shaderName != "" && !shaderNodes[shaderName] {
 				shaderID := fmt.Sprintf("shader_%s", sanitizeID(shaderName))
-				sb.WriteString(fmt.Sprintf("  %s{{%s}}\n", shaderID, shaderName))
+				label := shaderName
+				if config.ShowTiming && shaderMetrics != nil {
+					if metrics, ok := shaderMetrics[shaderName]; ok {
+						label += fmt.Sprintf("<br/>Exec: %d times", metrics.ExecutionCount)
+						if metrics.ExecutionCount > 0 {
+							label += fmt.Sprintf("<br/>Avg: %.2fms", float64(metrics.Duration)/float64(metrics.ExecutionCount)/1e6)
+						}
+					}
+				}
+				sb.WriteString(fmt.Sprintf("  %s{{%s}}\n", shaderID, label))
 				shaderNodes[shaderName] = true
 			}
 		}
@@ -95,7 +117,7 @@ func (g *MermaidGenerator) generateHierarchy(t *trace.Trace, config *Config) (st
 	// Add edges from encoders to shaders
 	for _, encoder := range encoders {
 		if encoder.Label != "" {
-			shaderName := g.extractShaderName(encoder.Label)
+			shaderName := extractShaderName(encoder.Label)
 			if shaderName != "" {
 				encID := fmt.Sprintf("enc%d", encoder.Index)
 				shaderID := fmt.Sprintf("shader_%s", sanitizeID(shaderName))
@@ -208,8 +230,54 @@ func (g *MermaidGenerator) generateFlow(t *trace.Trace, config *Config) (string,
 
 // generateResources creates a resource usage Mermaid graph.
 func (g *MermaidGenerator) generateResources(t *trace.Trace, config *Config) (string, error) {
-	// TODO: Implement resource graph
-	return "", fmt.Errorf("resource graph type not yet implemented")
+	accesses, resources, err := collectResourceAccesses(t)
+	if err != nil {
+		return "", err
+	}
+	if len(accesses) == 0 {
+		return "", fmt.Errorf("no resource usage events found")
+	}
+
+	var sb strings.Builder
+	sb.WriteString("graph LR\n")
+
+	encoderSeen := make(map[int]bool)
+	for _, access := range accesses {
+		if encoderSeen[access.EncoderIndex] {
+			continue
+		}
+		encoderSeen[access.EncoderIndex] = true
+		label := access.EncoderLabel
+		if label == "" {
+			label = fmt.Sprintf("Encoder %d", access.EncoderIndex)
+		}
+		sb.WriteString(fmt.Sprintf("  enc%d[\"%s\"]\n", access.EncoderIndex, mermaidLabel(label)))
+	}
+
+	for _, resource := range resources {
+		label := fmt.Sprintf("%s<br/>0x%x", resource.Name, resource.Address)
+		if config.ShowMemory {
+			label += fmt.Sprintf("<br/>%d accesses", resource.Uses)
+		}
+		sb.WriteString(fmt.Sprintf("  %s[(\"%s\")]\n", resourceNodeID(resource.Address), mermaidLabel(label)))
+	}
+
+	sb.WriteString("\n  %% Resource usage\n")
+	for _, access := range accesses {
+		sb.WriteString(fmt.Sprintf("  enc%d -->|%s| %s\n",
+			access.EncoderIndex, mermaidLabel(access.Usage), resourceNodeID(access.Address)))
+	}
+
+	sb.WriteString("\n  classDef encoder fill:#FFFFE0,stroke:#666\n")
+	sb.WriteString("  classDef resource fill:#ADD8E6,stroke:#666\n")
+	for index := range encoderSeen {
+		sb.WriteString(fmt.Sprintf("  class enc%d encoder\n", index))
+	}
+	for _, resource := range resources {
+		sb.WriteString(fmt.Sprintf("  class %s resource\n", resourceNodeID(resource.Address)))
+	}
+
+	return sb.String(), nil
 }
 
 // groupEncodersByCommandBuffer groups encoders by their command buffer index (same as DOT).
@@ -238,14 +306,8 @@ func (g *MermaidGenerator) groupEncodersByCommandBuffer(t *trace.Trace, encoders
 	return result
 }
 
-// extractShaderName extracts the shader name from an encoder label (same as DOT).
-func (g *MermaidGenerator) extractShaderName(encoderLabel string) string {
-	parts := strings.Split(encoderLabel, "_")
-	if len(parts) >= 3 && parts[0] == "Encoder" {
-		return strings.Join(parts[2:], "_")
-	}
-	if encoderLabel != "" && !strings.HasPrefix(encoderLabel, "0x") {
-		return encoderLabel
-	}
-	return ""
+func mermaidLabel(s string) string {
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	s = strings.ReplaceAll(s, "\n", "<br/>")
+	return s
 }

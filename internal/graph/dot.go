@@ -56,7 +56,11 @@ func (g *DOTGenerator) generateHierarchy(t *trace.Trace, config *Config) (string
 	// Get shader metrics if timing is requested
 	var shaderMetrics map[string]*ShaderInfo
 	if config.ShowTiming {
-		shaderMetrics, _ = g.getShaderMetrics(t)
+		var err error
+		shaderMetrics, err = getShaderMetrics(t)
+		if err != nil {
+			return "", fmt.Errorf("extract shader metrics: %w", err)
+		}
 	}
 
 	// Add command buffers
@@ -101,7 +105,7 @@ func (g *DOTGenerator) generateHierarchy(t *trace.Trace, config *Config) (string
 	for _, encoder := range encoders {
 		if encoder.Label != "" {
 			// Extract shader name from encoder label (e.g., "Encoder_1_simple_add" -> "simple_add")
-			shaderName := g.extractShaderName(encoder.Label)
+			shaderName := extractShaderName(encoder.Label)
 			if shaderName != "" && !shaderNodes[shaderName] {
 				shaderID := fmt.Sprintf("shader_%s", sanitizeID(shaderName))
 				label := shaderName
@@ -122,7 +126,7 @@ func (g *DOTGenerator) generateHierarchy(t *trace.Trace, config *Config) (string
 	sb.WriteString("  // Encoder -> Shader connections\n")
 	for _, encoder := range encoders {
 		if encoder.Label != "" {
-			shaderName := g.extractShaderName(encoder.Label)
+			shaderName := extractShaderName(encoder.Label)
 			if shaderName != "" {
 				encID := fmt.Sprintf("enc%d", encoder.Index)
 				shaderID := fmt.Sprintf("shader_%s", sanitizeID(shaderName))
@@ -231,27 +235,54 @@ func (g *DOTGenerator) generateFlow(t *trace.Trace, config *Config) (string, err
 
 // generateResources creates a resource usage graph.
 func (g *DOTGenerator) generateResources(t *trace.Trace, config *Config) (string, error) {
-	// TODO: Implement resource graph showing buffer allocations and usage
-	return "", fmt.Errorf("resource graph type not yet implemented")
-}
+	accesses, resources, err := collectResourceAccesses(t)
+	if err != nil {
+		return "", err
+	}
+	if len(accesses) == 0 {
+		return "", fmt.Errorf("no resource usage events found")
+	}
 
-// ShaderInfo holds information about a shader for visualization.
-type ShaderInfo struct {
-	Name           string
-	ExecutionCount int
-	Duration       int64 // nanoseconds
-}
+	var sb strings.Builder
+	sb.WriteString("digraph GPUTraceResources {\n")
+	sb.WriteString("  rankdir=LR;\n")
+	sb.WriteString("  node [shape=box, style=rounded];\n\n")
 
-// getShaderMetrics attempts to extract shader timing metrics from the trace.
-func (g *DOTGenerator) getShaderMetrics(t *trace.Trace) (map[string]*ShaderInfo, error) {
-	// This is a simplified version - you might want to integrate with the actual
-	// shader metrics extraction from the shader package
-	metrics := make(map[string]*ShaderInfo)
+	encoderSeen := make(map[int]bool)
+	sb.WriteString("  // Encoders\n")
+	for _, access := range accesses {
+		if encoderSeen[access.EncoderIndex] {
+			continue
+		}
+		encoderSeen[access.EncoderIndex] = true
+		label := access.EncoderLabel
+		if label == "" {
+			label = fmt.Sprintf("Encoder %d", access.EncoderIndex)
+		}
+		sb.WriteString(fmt.Sprintf("  enc%d [label=\"%s\", style=filled, fillcolor=lightyellow];\n",
+			access.EncoderIndex, dotLabel(label)))
+	}
+	sb.WriteString("\n")
 
-	// For now, return empty metrics
-	// TODO: Integrate with shader.ExtractShaderMetrics or similar
+	sb.WriteString("  // Resources\n")
+	for _, resource := range resources {
+		label := fmt.Sprintf("%s\\n0x%x", resource.Name, resource.Address)
+		if config.ShowMemory {
+			label += fmt.Sprintf("\\n%d accesses", resource.Uses)
+		}
+		sb.WriteString(fmt.Sprintf("  %s [label=\"%s\", shape=cylinder, style=filled, fillcolor=lightblue];\n",
+			resourceNodeID(resource.Address), dotLabel(label)))
+	}
+	sb.WriteString("\n")
 
-	return metrics, nil
+	sb.WriteString("  // Resource usage\n")
+	for _, access := range accesses {
+		sb.WriteString(fmt.Sprintf("  enc%d -> %s [label=\"%s\"];\n",
+			access.EncoderIndex, resourceNodeID(access.Address), dotLabel(access.Usage)))
+	}
+
+	sb.WriteString("}\n")
+	return sb.String(), nil
 }
 
 // groupEncodersByCommandBuffer groups encoders by their command buffer index.
@@ -284,22 +315,6 @@ func (g *DOTGenerator) groupEncodersByCommandBuffer(t *trace.Trace, encoders []*
 	}
 
 	return result
-}
-
-// extractShaderName extracts the shader name from an encoder label.
-// Example: "Encoder_1_simple_add" -> "simple_add"
-func (g *DOTGenerator) extractShaderName(encoderLabel string) string {
-	// Try to extract shader name from patterns like "Encoder_N_shader_name"
-	parts := strings.Split(encoderLabel, "_")
-	if len(parts) >= 3 && parts[0] == "Encoder" {
-		// Join remaining parts after "Encoder_N_"
-		return strings.Join(parts[2:], "_")
-	}
-	// If no pattern match, return the label itself if it looks like a shader name
-	if encoderLabel != "" && !strings.HasPrefix(encoderLabel, "0x") {
-		return encoderLabel
-	}
-	return ""
 }
 
 // sanitizeID sanitizes a string to be used as a DOT node ID.
