@@ -37,7 +37,7 @@ reinstall: build
 	if grep -q '"all_granted": true' $$tmp; then \
 		echo "✓ Permissions OK"; \
 	else \
-		echo "⚠ Accessibility permission not granted — run 'make setup-permissions' or approve in System Settings"; \
+		echo "⚠ Required permissions not fully granted — run 'make setup-permissions' or approve in System Settings"; \
 	fi; \
 	rm -f $$tmp
 
@@ -82,10 +82,10 @@ setup-permissions: sign-bundle
 	$(AXPERMS_BIN) -enable gputrace.app 2>/dev/null | grep -v "macgo:" || true
 	@sleep 2
 	@echo "Step 6: Verifying permissions..."
-	@if gputrace xp check-permissions --no-prompt --json | grep -q '"accessibility": true'; then \
-		echo "✓ Accessibility OK"; \
+	@if gputrace xp check-permissions --no-prompt --json | grep -q '"all_granted": true'; then \
+		echo "✓ Permissions OK"; \
 	else \
-		echo "✗ Accessibility permission may need manual intervention"; \
+		echo "✗ Required permissions may need manual intervention"; \
 		exit 1; \
 	fi
 

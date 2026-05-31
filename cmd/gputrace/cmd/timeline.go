@@ -41,7 +41,7 @@ Examples:
   gputrace timeline trace.gputrace -o timeline.html --format html
 
   # Generate Chrome tracing format
-  gputrace timeline trace.gputrace -o timeline.json
+  gputrace timeline trace.gputrace --format chrome -o timeline.json
 
   # View in Chrome
   # 1. Open chrome://tracing in Chrome
