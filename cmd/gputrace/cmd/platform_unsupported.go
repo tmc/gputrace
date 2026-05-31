@@ -62,7 +62,9 @@ This command is only supported on darwin.
 Subcommands:
   show      Click the Show Performance button
   status    Check if performance data is available
-  counters  Select the Counters tab`,
+  summary   Extract visible summary statistics
+  counters  Select the Counters tab
+  memory    Extract memory usage info when visible`,
 	RunE: darwinOnlyRun,
 }
 
@@ -111,30 +113,100 @@ func addDarwinOnlyXcodeProfileCommands() {
 		use   string
 		short string
 		args  cobra.PositionalArgs
+		hide  bool
+		flags func(*cobra.Command)
 	}{
-		{"run <trace_file>", "Run full automation (open, replay, export)", cobra.ExactArgs(1)},
-		{"open <trace_file>", "Open a trace file in Xcode", cobra.ExactArgs(1)},
-		{"close [trace_file]", "Close the trace window", cobra.MaximumNArgs(1)},
-		{"export [output_path]", "Export the trace from Xcode", cobra.MaximumNArgs(1)},
-		{"run-profile", "Start profiling in Xcode", cobra.NoArgs},
-		{"wait-profile", "Wait for profiling to complete", cobra.NoArgs},
-		{"check-status", "Check profiling status", cobra.NoArgs},
-		{"check-permissions", "Check required permissions", cobra.NoArgs},
-		{"select-tab <tab>", "Select a tab by name", cobra.ExactArgs(1)},
-		{"show-performance", "Click Show Performance button", cobra.NoArgs},
-		{"show-summary", "Select Summary tab", cobra.NoArgs},
-		{"show-counters", "Select Counters tab", cobra.NoArgs},
-		{"show-memory", "Select Memory tab", cobra.NoArgs},
-		{"show-dependencies", "Click Show Dependencies button", cobra.NoArgs},
-		{"xcode-export-counters [output.csv]", "Export GPU counters from Performance view to CSV", cobra.MaximumNArgs(1)},
-		{"xcode-export-memory [output]", "Export memory report from Performance view", cobra.MaximumNArgs(1)},
-		{"vertex-output <trace.gputrace>", "Extract vertex shader output from Xcode GPU debugger", cobra.ExactArgs(1)},
+		{"run <trace_file>", "Run full automation (open, replay, export)", cobra.ExactArgs(1), false, func(cmd *cobra.Command) {
+			cmd.Flags().StringP("output", "o", "", "Output path for the exported trace")
+		}},
+		{"open <trace_file>", "Open a trace file in Xcode", cobra.ExactArgs(1), false, func(cmd *cobra.Command) {
+			cmd.Flags().Bool("foreground", false, "Bring Xcode to foreground (default: open in background)")
+		}},
+		{"close [trace_file]", "Close the trace window", cobra.MaximumNArgs(1), false, nil},
+		{"export [output_path]", "Export the trace from Xcode", cobra.MaximumNArgs(1), false, nil},
+		{"run-profile [trace_file]", "Start profiling in Xcode", cobra.MaximumNArgs(1), false, nil},
+		{"wait-profile [trace_file]", "Wait for profiling to complete", cobra.MaximumNArgs(1), false, nil},
+		{"check-status [trace_file]", "Check profiling status", cobra.MaximumNArgs(1), false, func(cmd *cobra.Command) {
+			cmd.Flags().Bool("debug", false, "Print debug info")
+		}},
+		{"check-permissions", "Check required permissions", cobra.NoArgs, false, nil},
+		{"select-tab <tab_name>", "Select a tab in the trace viewer", cobra.ExactArgs(1), false, nil},
+		{"show-performance", "Click the Show Performance button", cobra.NoArgs, false, nil},
+		{"show-summary", "Select the Summary tab", cobra.NoArgs, false, nil},
+		{"show-counters", "Select the Counters tab", cobra.NoArgs, false, nil},
+		{"show-memory", "Click the Show Memory button", cobra.NoArgs, false, nil},
+		{"show-dependencies", "Click the Show Dependencies button", cobra.NoArgs, false, nil},
+		{"xcode-export-counters [trace_file]", "Export GPU counters from Xcode's Performance view to CSV", cobra.MaximumNArgs(1), false, func(cmd *cobra.Command) {
+			cmd.Flags().BoolP("force", "f", false, "Replace existing file if it exists")
+		}},
+		{"xcode-export-memory [trace_file]", "Export memory report from Xcode's Performance view", cobra.MaximumNArgs(1), false, func(cmd *cobra.Command) {
+			cmd.Flags().BoolP("force", "f", false, "Replace existing file if it exists")
+		}},
+		{"vertex-output <trace.gputrace>", "Extract vertex shader output from Xcode GPU debugger", cobra.ExactArgs(1), false, nil},
+		{"list-windows [trace_file]", "List Xcode windows", cobra.MaximumNArgs(1), true, nil},
+		{"list-tabs [trace_file]", "List available tabs in the trace viewer", cobra.MaximumNArgs(1), true, nil},
+		{"list-menus [menu-name]", "List menu bar items and their contents", cobra.MaximumNArgs(1), true, nil},
+		{"click-menu <menu> <item>", "Click a menu item", cobra.ExactArgs(2), true, nil},
+		{"list-buttons", "List buttons using XCUIAutomation and AX", cobra.NoArgs, true, nil},
+		{"click-button <name>", "Click a button by name in any Xcode window/dialog", cobra.ExactArgs(1), true, nil},
+		{"click-cancel", "Click Cancel button in any Xcode dialog", cobra.NoArgs, true, nil},
+		{"click-replace", "Click Replace button in any Xcode dialog", cobra.NoArgs, true, nil},
+		{"open-export [output_path]", "Open the export dialog and set the output path", cobra.MaximumNArgs(1), true, nil},
+		{"click-save", "Click the Save button in an open export dialog", cobra.NoArgs, true, nil},
+		{"send-key <key>", "Send a keyboard shortcut (for debugging)", cobra.ExactArgs(1), true, nil},
+		{"check-goto-folder", "Check if Go to Folder dialog is open", cobra.NoArgs, true, nil},
+		{"debug-file-browser", "Debug: list file browser elements in export dialog", cobra.NoArgs, true, nil},
+		{"set-export-path <absolute_path>", "Set the export path (note: directory navigation limited)", cobra.ExactArgs(1), true, nil},
+		{"set-export-filename <filename>", "Set the export filename (recommended)", cobra.ExactArgs(1), true, nil},
+		{"send-enter", "Send Enter key to Xcode", cobra.NoArgs, true, nil},
+		{"screenshot [trace_file]", "Capture a screenshot of the Xcode window", cobra.MaximumNArgs(1), true, func(cmd *cobra.Command) {
+			cmd.Flags().StringP("output", "o", "", "Output path for screenshot")
+			cmd.Flags().Bool("no-prompt", false, "Trigger TCC entry without prompting")
+		}},
+		{"debug-tree [trace_file]", "Print UI tree to find key elements", cobra.MaximumNArgs(1), true, func(cmd *cobra.Command) {
+			cmd.Flags().BoolP("verbose", "v", false, "Print verbose progress info")
+		}},
+		{"ensure-checked <checkbox_title>", "Ensure a checkbox is checked", cobra.ExactArgs(1), true, func(cmd *cobra.Command) {
+			cmd.Flags().String("trace", "", "Target window by trace filename")
+		}},
+		{"toggle-checkbox <checkbox_title>", "Toggle a checkbox", cobra.ExactArgs(1), true, func(cmd *cobra.Command) {
+			cmd.Flags().String("trace", "", "Target window by trace filename")
+		}},
 	}
 	for _, c := range commands {
-		collectXcodeProfileCmd.AddCommand(&cobra.Command{
+		cmd := &cobra.Command{
+			Use:    c.use,
+			Short:  c.short,
+			Hidden: c.hide,
+			Args:   c.args,
+			RunE:   darwinOnlyRun,
+		}
+		if c.flags != nil {
+			c.flags(cmd)
+		}
+		collectXcodeProfileCmd.AddCommand(cmd)
+	}
+
+	navigatorCmd := &cobra.Command{
+		Use:    "navigator",
+		Short:  "Navigate to different sections in the Debug navigator",
+		Hidden: true,
+		RunE:   darwinOnlyRun,
+	}
+	collectXcodeProfileCmd.AddCommand(navigatorCmd)
+	for _, c := range []struct {
+		use   string
+		short string
+	}{
+		{"summary", "Select Summary in navigator"},
+		{"dependencies", "Select Dependencies in navigator"},
+		{"performance", "Select Performance in navigator"},
+		{"memory", "Select Memory in navigator"},
+	} {
+		navigatorCmd.AddCommand(&cobra.Command{
 			Use:   c.use,
 			Short: c.short,
-			Args:  c.args,
+			Args:  cobra.NoArgs,
 			RunE:  darwinOnlyRun,
 		})
 	}
@@ -144,24 +216,28 @@ func addDarwinOnlyPerformanceCommands() {
 	commands := []struct {
 		use   string
 		short string
+		hide  bool
 	}{
-		{"show", "Click the Show Performance button"},
-		{"status", "Check if performance data is available"},
-		{"overview", "Select the Overview tab"},
-		{"timeline", "Select the Timeline tab"},
-		{"shaders", "Select the Shaders tab"},
-		{"counters", "Select the Counters tab"},
-		{"cost-graph", "Select the Cost Graph tab"},
-		{"heat-map", "Select the Heat Map tab"},
-		{"encoders", "Select the Encoders tab"},
-		{"cost", "Select the Cost tab"},
+		{"show", "Click the Show Performance button", false},
+		{"status", "Check if performance data is available", false},
+		{"overview", "Select the Overview tab", false},
+		{"timeline", "Select the Timeline tab", false},
+		{"shaders", "Select the Shaders tab", false},
+		{"counters", "Select the Counters tab", false},
+		{"cost-graph", "Select the Cost Graph tab", false},
+		{"heat-map", "Select the Heat Map tab", false},
+		{"encoders", "Select the Encoders tab", false},
+		{"cost", "Select the Cost tab", false},
+		{"summary", "Extract summary statistics", true},
+		{"memory", "Extract memory usage info", true},
 	}
 	for _, c := range commands {
 		performanceCmd.AddCommand(&cobra.Command{
-			Use:   c.use,
-			Short: c.short,
-			Args:  cobra.NoArgs,
-			RunE:  darwinOnlyRun,
+			Use:    c.use,
+			Short:  c.short,
+			Hidden: c.hide,
+			Args:   cobra.NoArgs,
+			RunE:   darwinOnlyRun,
 		})
 	}
 }
