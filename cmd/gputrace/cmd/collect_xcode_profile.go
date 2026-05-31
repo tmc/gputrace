@@ -231,10 +231,10 @@ func isProfilingRunning() (bool, string) {
 	return false, ""
 }
 
-// verboseLog prints a message if verbose mode is enabled.
+// verboseLog prints a diagnostic if verbose mode is enabled.
 func verboseLog(format string, args ...interface{}) {
 	if collectProfileVerbose || collectProfileDebug {
-		fmt.Printf("[verbose] "+format+"\n", args...)
+		fmt.Fprintf(os.Stderr, "[verbose] "+format+"\n", args...)
 	}
 }
 
