@@ -50,6 +50,10 @@ func init() {
 }
 
 func runDumpRecords(cmd *cobra.Command, args []string) error {
+	if err := validateDumpRecordsFlags(dumpRecordsOffset, dumpRecordsLimit); err != nil {
+		return err
+	}
+
 	tracePath := args[0]
 
 	var t *trace.Trace
@@ -104,6 +108,16 @@ func runDumpRecords(cmd *cobra.Command, args []string) error {
 		count++
 	}
 
+	return nil
+}
+
+func validateDumpRecordsFlags(offset, limit int) error {
+	if offset < 0 {
+		return fmt.Errorf("--offset must be >= 0")
+	}
+	if limit < -1 {
+		return fmt.Errorf("--limit must be >= -1")
+	}
 	return nil
 }
 
