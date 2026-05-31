@@ -556,7 +556,8 @@ diff <(head -2 reference.csv) <(head -2 our.csv)
 ### Code
 - `internal/counter/counter.go` - Main implementation
 - `cmd/gputrace/cmd/export_counters.go` - CSV export command
-- `testdata/traces/06-six-encoders/` - Test data with ground truth CSV
+- `testdata/traces/06-six-encoders/` - Non-perf trace fixture; profiler
+  raw files and Xcode CSV exports are private/local validation inputs
 
 ### Documentation
 - [PERFCOUNTERS_STATUS.md](./PERFCOUNTERS_STATUS.md) - Infrastructure status
@@ -565,7 +566,11 @@ diff <(head -2 reference.csv) <(head -2 our.csv)
 
 ## Conclusion
 
-This document provides the most comprehensive mapping to date of all 58 non-zero performance metrics from GPU profiler counter files to CSV output. While exact byte offsets are known for only one field (Kernel Invocations at 0x0064), the heuristic float32 range search approach successfully extracts the majority of metrics with high accuracy.
+This document provides the most comprehensive mapping to date of candidate
+performance metrics from GPU profiler counter files to CSV output. Exact byte
+offsets are known for only one field (Kernel Invocations at 0x0064); heuristic
+float32 range searches should remain candidate extraction until validated
+against local profiler raw files and Xcode CSV exports.
 
 **Next Steps:**
 1. Validate extraction accuracy against more test traces

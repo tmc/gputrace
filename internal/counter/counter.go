@@ -165,10 +165,11 @@ func ParsePerfCounters(t *trace.Trace) (*PerfCounterStats, error) {
 	metricsMap := make(map[uint64]*ShaderHardwareMetrics)
 
 	// Parse each counter file
+	var parseErrors []string
 	for _, file := range files {
 		fileStats, metrics, err := parseCounterFileWithMetrics(file)
 		if err != nil {
-			// Log but continue with other files
+			parseErrors = append(parseErrors, fmt.Sprintf("%s: %v", filepath.Base(file), err))
 			continue
 		}
 
@@ -195,6 +196,12 @@ func ParsePerfCounters(t *trace.Trace) (*PerfCounterStats, error) {
 				}
 			}
 		}
+	}
+	if stats.FilesProcessed == 0 {
+		if len(parseErrors) > 0 {
+			return nil, fmt.Errorf("no valid performance counter records in %s: %s", perfDir, strings.Join(parseErrors, "; "))
+		}
+		return nil, fmt.Errorf("no valid performance counter records in %s", perfDir)
 	}
 
 	// Convert map to slice
@@ -270,6 +277,9 @@ func parseCounterFileWithMetrics(path string) (*counterFileStats, []*ShaderHardw
 	// Find all records starting with 0x4E marker
 	recordStarts := findRecordBoundaries(data)
 	stats.TotalRecords = len(recordStarts)
+	if len(recordStarts) == 0 {
+		return nil, nil, fmt.Errorf("no counter record markers found")
+	}
 
 	// Parse all records
 	records := make([]*CounterRecord, 0, len(recordStarts))
@@ -291,6 +301,9 @@ func parseCounterFileWithMetrics(path string) (*counterFileStats, []*ShaderHardw
 		if record != nil {
 			records = append(records, record)
 		}
+	}
+	if len(records) == 0 {
+		return nil, nil, fmt.Errorf("no valid counter records found")
 	}
 
 	// Group records by encoder
