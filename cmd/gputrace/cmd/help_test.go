@@ -57,6 +57,38 @@ func TestTimingHelpDocumentsTimingSources(t *testing.T) {
 	}
 }
 
+func TestReplayCountersHelpUsesRegisteredBoolFlagSpelling(t *testing.T) {
+	help := replayCountersCmd.Long
+	if !strings.Contains(help, "--dispatch-boundaries=false") {
+		t.Fatalf("replay-counters help does not show registered false spelling:\n%s", help)
+	}
+	if strings.Contains(help, "--no-dispatch-boundaries") {
+		t.Fatalf("replay-counters help still contains invalid --no-dispatch-boundaries spelling:\n%s", help)
+	}
+	if replayCountersCmd.Flags().Lookup("dispatch-boundaries") == nil {
+		t.Fatal("replay-counters dispatch-boundaries flag not registered")
+	}
+}
+
+func TestXcodeProfileExportUsageShowsOptionalOutputPath(t *testing.T) {
+	exportCmd, _, err := collectXcodeProfileCmd.Find([]string{"export"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exportCmd == nil || exportCmd.Name() != "export" {
+		t.Fatalf("xcode-profile export command not found: %#v", exportCmd)
+	}
+	if exportCmd.Use != "export [output_path]" {
+		t.Fatalf("xcode-profile export usage = %q, want %q", exportCmd.Use, "export [output_path]")
+	}
+	if err := exportCmd.Args(exportCmd, nil); err != nil {
+		t.Fatalf("xcode-profile export should accept zero args: %v", err)
+	}
+	if err := exportCmd.Args(exportCmd, []string{"out.gputrace"}); err != nil {
+		t.Fatalf("xcode-profile export should accept one arg: %v", err)
+	}
+}
+
 func TestTimingProfilerHelpMarksLegacyApproximateFallbacks(t *testing.T) {
 	help := timingProfilerCmd.Long
 	for _, want := range []string{
