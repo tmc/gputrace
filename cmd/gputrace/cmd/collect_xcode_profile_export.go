@@ -12,7 +12,7 @@ import (
 
 func init() {
 	exportCmd := &cobra.Command{
-		Use:   "export <output_path>",
+		Use:   "export [output_path]",
 		Short: "Export the trace from Xcode",
 		Long: `Triggers File > Export in Xcode and saves to the specified path.
 If no path is specified, it defaults to the trace file path with -perfdata suffix, inferred from the Xcode window.`,

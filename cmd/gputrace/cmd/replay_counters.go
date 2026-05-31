@@ -74,7 +74,7 @@ Examples:
   gputrace replay-counters trace.gputrace --simulate
 
   # Sample only at encoder boundaries (lower overhead)
-  gputrace replay-counters trace.gputrace --simulate --encoder-boundaries --no-dispatch-boundaries
+  gputrace replay-counters trace.gputrace --simulate --encoder-boundaries --dispatch-boundaries=false
 
   # Enable specific counter sets
   gputrace replay-counters trace.gputrace --simulate --counter-sets timestamp,stage_utilization
