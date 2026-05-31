@@ -25,6 +25,9 @@ func init() {
 }
 
 func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
+	cleanupCancel := StartAutomationCancelListener(true)
+	defer cleanupCancel()
+
 	inputPath, err := filepath.Abs(args[0])
 	if err != nil {
 		return fmt.Errorf("invalid input path: %w", err)
@@ -58,7 +61,7 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Input:  %s\n", inputPath)
 	fmt.Printf("  Output: %s\n", outputPath)
 
-	ctx, cancel := context.WithTimeout(context.Background(), collectProfileTimeout)
+	ctx, cancel := context.WithTimeout(automationCtx, collectProfileTimeout)
 	defer cancel()
 
 	// Validate trace bundle before opening in Xcode
