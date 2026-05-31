@@ -20,11 +20,17 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Vet Metal-tagged packages
+        run: go vet -tags metal ./...
+
       - name: Test all packages
         run: go test ./...
 
       - name: Verify non-Darwin compile path
         run: GOOS=linux GOARCH=amd64 go test -exec=true ./...
+
+      - name: Test Metal-tagged packages
+        run: go test -tags metal ./...
 
       - name: Verify CLI and internal tests
         run: |
