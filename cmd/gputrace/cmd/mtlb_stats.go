@@ -13,7 +13,7 @@ import (
 )
 
 var mtlbStatsCmd = &cobra.Command{
-	Use:   "stats [trace]",
+	Use:   "stats <trace>",
 	Short: "Analyze MTLB composition",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {

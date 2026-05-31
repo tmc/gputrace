@@ -18,7 +18,7 @@ var (
 )
 
 var mtlbExportFunctionsCmd = &cobra.Command{
-	Use:   "export-functions [trace]",
+	Use:   "export-functions <trace>",
 	Short: "Export function list to various formats",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
