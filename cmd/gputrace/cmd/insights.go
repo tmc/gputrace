@@ -3,7 +3,8 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
-	"os"
+	"io"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -88,36 +89,49 @@ func runInsights(cmd *cobra.Command, args []string) error {
 
 	// Output based on format
 	if insightsJSON {
-		encoder := json.NewEncoder(os.Stdout)
-		encoder.SetIndent("", "  ")
-		if err := encoder.Encode(report); err != nil {
-			return fmt.Errorf("failed to encode JSON: %w", err)
-		}
-		return nil
+		return writeInsightsJSON(cmd.OutOrStdout(), report)
 	}
 
 	// Print formatted report
-	fmt.Print(gputrace.FormatInsightsReport(report))
+	return writeInsightsText(cmd.OutOrStdout(), report)
+}
+
+func writeInsightsJSON(w io.Writer, report *gputrace.InsightsReport) error {
+	encoder := json.NewEncoder(w)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(report); err != nil {
+		return fmt.Errorf("encode insights json: %w", err)
+	}
+	return nil
+}
+
+func writeInsightsText(w io.Writer, report *gputrace.InsightsReport) error {
+	var out strings.Builder
+
+	out.WriteString(gputrace.FormatInsightsReport(report))
 
 	// Print summary at the end
 	if len(report.Insights) == 0 {
-		fmt.Println("✓ No performance issues detected!")
+		out.WriteString("✓ No performance issues detected!\n")
 	} else {
-		fmt.Println("\n=== Summary ===")
+		out.WriteString("\n=== Summary ===\n")
 		if report.CriticalCount > 0 {
-			fmt.Printf("⚠️  %d CRITICAL issues require immediate attention\n", report.CriticalCount)
+			fmt.Fprintf(&out, "⚠️  %d CRITICAL issues require immediate attention\n", report.CriticalCount)
 		}
 		if report.HighCount > 0 {
-			fmt.Printf("⚠️  %d HIGH priority optimizations recommended\n", report.HighCount)
+			fmt.Fprintf(&out, "⚠️  %d HIGH priority optimizations recommended\n", report.HighCount)
 		}
 		if report.MediumCount > 0 {
-			fmt.Printf("ℹ️  %d MEDIUM priority suggestions available\n", report.MediumCount)
+			fmt.Fprintf(&out, "ℹ️  %d MEDIUM priority suggestions available\n", report.MediumCount)
 		}
 		if report.LowCount > 0 {
-			fmt.Printf("ℹ️  %d LOW priority observations noted\n", report.LowCount)
+			fmt.Fprintf(&out, "ℹ️  %d LOW priority observations noted\n", report.LowCount)
 		}
 	}
 
+	if _, err := io.WriteString(w, out.String()); err != nil {
+		return fmt.Errorf("write insights report: %w", err)
+	}
 	return nil
 }
 
