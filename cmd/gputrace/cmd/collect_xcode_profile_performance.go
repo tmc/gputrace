@@ -82,7 +82,7 @@ Subcommands:
   show      Click the "Show Performance" button to reveal performance data
   status    Check if performance data is available
   summary   Extract visible summary statistics
-  counters  Extract GPU counter values (planned)
+  counters  Select the Counters tab
   memory    Extract memory usage info when visible
 
 Example:
