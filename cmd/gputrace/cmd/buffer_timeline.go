@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 
 	"github.com/spf13/cobra"
 
@@ -91,7 +93,10 @@ func runBufferTimeline(cmd *cobra.Command, args []string) error {
 	case "chrome":
 		return fmt.Errorf("chrome trace format not yet implemented")
 	case "json":
-		return fmt.Errorf("json export not yet implemented")
+		output, err = formatBufferTimelineJSON(timeline)
+		if err != nil {
+			return fmt.Errorf("format json: %w", err)
+		}
 	default:
 		return fmt.Errorf("unknown format: %s (valid: ascii, summary, chrome, json)", bufferTimelineFormat)
 	}
@@ -103,4 +108,70 @@ func runBufferTimeline(cmd *cobra.Command, args []string) error {
 
 	fmt.Print(output)
 	return nil
+}
+
+type bufferTimelineJSON struct {
+	TotalBuffers     int                        `json:"total_buffers"`
+	PeakMemoryBytes  uint64                     `json:"peak_memory_bytes"`
+	PeakMemoryMB     float64                    `json:"peak_memory_mb"`
+	TotalAllocations int                        `json:"total_allocations"`
+	AverageLifetime  float64                    `json:"average_lifetime_records"`
+	MinRecordIndex   int                        `json:"min_record_index"`
+	MaxRecordIndex   int                        `json:"max_record_index"`
+	Buffers          []bufferTimelineJSONBuffer `json:"buffers"`
+}
+
+type bufferTimelineJSONBuffer struct {
+	Address         string `json:"address"`
+	FirstSeen       int    `json:"first_seen_record"`
+	LastSeen        int    `json:"last_seen_record"`
+	LifetimeRecords int    `json:"lifetime_records"`
+	AccessCount     int    `json:"access_count"`
+	EncoderIDs      []int  `json:"encoder_ids"`
+	AccessIndices   []int  `json:"access_indices"`
+	IsActive        bool   `json:"is_active"`
+	SizeBytes       uint64 `json:"size_bytes,omitempty"`
+}
+
+func formatBufferTimelineJSON(timeline *gputrace.BufferTimelineAnalysis) (string, error) {
+	doc := bufferTimelineJSON{
+		TotalBuffers:     timeline.TotalBuffers,
+		PeakMemoryBytes:  timeline.PeakMemoryBytes,
+		PeakMemoryMB:     timeline.PeakMemoryMB,
+		TotalAllocations: timeline.TotalAllocations,
+		AverageLifetime:  timeline.AverageLifetime,
+		MinRecordIndex:   timeline.MinRecordIndex,
+		MaxRecordIndex:   timeline.MaxRecordIndex,
+	}
+
+	lifecycles := make([]*gputrace.BufferLifecycle, 0, len(timeline.BufferEvents))
+	for _, lifecycle := range timeline.BufferEvents {
+		lifecycles = append(lifecycles, lifecycle)
+	}
+	sort.Slice(lifecycles, func(i, j int) bool {
+		if lifecycles[i].FirstSeen != lifecycles[j].FirstSeen {
+			return lifecycles[i].FirstSeen < lifecycles[j].FirstSeen
+		}
+		return lifecycles[i].Address < lifecycles[j].Address
+	})
+
+	for _, lifecycle := range lifecycles {
+		doc.Buffers = append(doc.Buffers, bufferTimelineJSONBuffer{
+			Address:         fmt.Sprintf("0x%016x", lifecycle.Address),
+			FirstSeen:       lifecycle.FirstSeen,
+			LastSeen:        lifecycle.LastSeen,
+			LifetimeRecords: lifecycle.LastSeen - lifecycle.FirstSeen,
+			AccessCount:     lifecycle.AccessCount,
+			EncoderIDs:      append([]int(nil), lifecycle.EncoderIDs...),
+			AccessIndices:   append([]int(nil), lifecycle.AccessIndices...),
+			IsActive:        lifecycle.IsActive,
+			SizeBytes:       lifecycle.Size,
+		})
+	}
+
+	data, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(data) + "\n", nil
 }
