@@ -152,6 +152,30 @@ func TestPprofStdoutContainsOnlyProfile(t *testing.T) {
 	}
 }
 
+func TestPprofDashStdoutContainsOnlyProfile(t *testing.T) {
+	tracePath := "../../../testdata/traces/01-single-encoder/01-single-encoder-run1.gputrace"
+
+	if _, err := os.Stat(tracePath); os.IsNotExist(err) {
+		t.Skipf("skipping test, trace file not found: %s. See docs/TESTING.md for fixture setup.", tracePath)
+	}
+
+	resetPprofTestFlags()
+	t.Cleanup(resetPprofTestFlags)
+
+	rootCmd.SetArgs([]string{"pprof", tracePath, "-o", "-"})
+
+	stdout, err := captureStdout(t, rootCmd.Execute)
+	if err != nil {
+		t.Fatalf("command failed: %v", err)
+	}
+	if strings.Contains(stdout, "GPU profile written") {
+		t.Fatalf("stdout contains status text:\n%s", stdout)
+	}
+	if _, err := profile.Parse(bytes.NewReader([]byte(stdout))); err != nil {
+		t.Fatalf("stdout is not a clean pprof profile: %v", err)
+	}
+}
+
 func TestPprofSourceLinesStdoutContainsOnlyProfile(t *testing.T) {
 	tracePath := "../../../testdata/traces/01-single-encoder/01-single-encoder-run1.gputrace"
 
@@ -191,6 +215,7 @@ func TestPprofStatusWriterUsesStderrForStdoutOutput(t *testing.T) {
 	}{
 		{name: "file", path: "gpu.pprof", want: os.Stdout},
 		{name: "stdout", path: "/dev/stdout", want: os.Stderr},
+		{name: "dash", path: "-", want: os.Stderr},
 	}
 
 	for _, tt := range tests {

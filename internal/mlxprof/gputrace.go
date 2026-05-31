@@ -525,7 +525,7 @@ func (p *GPUTraceProfiler) writeProfile(prof *profile.Profile, path string) erro
 }
 
 func createOutput(path string) (io.Writer, func() error, error) {
-	if path == "/dev/stdout" {
+	if path == "-" || path == "/dev/stdout" {
 		return os.Stdout, nil, nil
 	}
 

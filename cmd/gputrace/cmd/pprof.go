@@ -222,7 +222,7 @@ func pprofStatusWriter(outputPath string) *os.File {
 }
 
 func pprofOutputPathIsStdout(path string) bool {
-	return path == "/dev/stdout"
+	return path == "-" || path == "/dev/stdout"
 }
 
 // generateSourceLinesPprof generates a pprof profile with per-source-line samples.
