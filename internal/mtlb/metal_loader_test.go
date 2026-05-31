@@ -7,17 +7,36 @@ import (
 	"testing"
 )
 
-func TestMetalLoader(t *testing.T) {
-	mtlbPath := "/tmp/mlx-lm-generate_tokens_8_to_9.gputrace/671438C4BF69309E"
+const mtlbTestFileEnv = "GPUTRACE_MTLB_TEST_FILE"
 
-	if _, err := os.Stat(mtlbPath); os.IsNotExist(err) {
-		t.Skipf("MTLB test file not found: %s", mtlbPath)
+func loadMTLBTestData(tb testing.TB) []byte {
+	tb.Helper()
+
+	mtlbPath := os.Getenv(mtlbTestFileEnv)
+	if mtlbPath == "" {
+		tb.Skipf("set %s to run MTLB Metal fixture tests", mtlbTestFileEnv)
+	}
+
+	info, err := os.Stat(mtlbPath)
+	if os.IsNotExist(err) {
+		tb.Skipf("MTLB test file not found: %s", mtlbPath)
+	}
+	if err != nil {
+		tb.Fatalf("failed to stat MTLB test file %s: %v", mtlbPath, err)
+	}
+	if info.IsDir() {
+		tb.Fatalf("MTLB test file path is a directory: %s", mtlbPath)
 	}
 
 	data, err := os.ReadFile(mtlbPath)
 	if err != nil {
-		t.Fatalf("Failed to read MTLB file: %v", err)
+		tb.Fatalf("failed to read MTLB test file %s: %v", mtlbPath, err)
 	}
+	return data
+}
+
+func TestMetalLoader(t *testing.T) {
+	data := loadMTLBTestData(t)
 
 	lib, err := LoadMTLBWithMetal(data)
 	if err != nil {
@@ -43,12 +62,7 @@ func TestMetalLoader(t *testing.T) {
 }
 
 func BenchmarkParserListFunctions(b *testing.B) {
-	mtlbPath := "/tmp/mlx-lm-generate_tokens_8_to_9.gputrace/671438C4BF69309E"
-
-	data, err := os.ReadFile(mtlbPath)
-	if err != nil {
-		b.Skip("MTLB test file not found")
-	}
+	data := loadMTLBTestData(b)
 
 	mtlb, err := ParseMTLB(data)
 	if err != nil {
@@ -62,12 +76,7 @@ func BenchmarkParserListFunctions(b *testing.B) {
 }
 
 func BenchmarkMetalLoaderFunctionNames(b *testing.B) {
-	mtlbPath := "/tmp/mlx-lm-generate_tokens_8_to_9.gputrace/671438C4BF69309E"
-
-	data, err := os.ReadFile(mtlbPath)
-	if err != nil {
-		b.Skip("MTLB test file not found")
-	}
+	data := loadMTLBTestData(b)
 
 	lib, err := LoadMTLBWithMetal(data)
 	if err != nil {
@@ -81,12 +90,7 @@ func BenchmarkMetalLoaderFunctionNames(b *testing.B) {
 }
 
 func BenchmarkMetalLoaderLoad(b *testing.B) {
-	mtlbPath := "/tmp/mlx-lm-generate_tokens_8_to_9.gputrace/671438C4BF69309E"
-
-	data, err := os.ReadFile(mtlbPath)
-	if err != nil {
-		b.Skip("MTLB test file not found")
-	}
+	data := loadMTLBTestData(b)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
