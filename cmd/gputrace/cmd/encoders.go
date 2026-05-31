@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 
 	"github.com/spf13/cobra"
 
@@ -28,6 +29,11 @@ Examples:
   gputrace encoders trace.gputrace -v`,
 	Args: cobra.ExactArgs(1),
 	RunE: runEncoders,
+}
+
+type encodersCommandBufferSummary struct {
+	index        int
+	encoderCount int
 }
 
 func init() {
@@ -58,49 +64,79 @@ func runEncoders(cmd *cobra.Command, args []string) error {
 	}
 
 	if encodersJSON {
-		type encoderJSON struct {
-			Index   int    `json:"index"`
-			Label   string `json:"label"`
-			Address string `json:"address"`
-		}
-		out := make([]encoderJSON, len(encoders))
-		for i, enc := range encoders {
-			out[i] = encoderJSON{
-				Index:   enc.Index,
-				Label:   enc.Label,
-				Address: fmt.Sprintf("0x%x", enc.Address),
-			}
-		}
-		data, err := json.MarshalIndent(out, "", "  ")
-		if err != nil {
-			return fmt.Errorf("failed to marshal json: %w", err)
-		}
-		fmt.Println(string(data))
-		return nil
+		return writeEncodersJSON(cmd.OutOrStdout(), encoders)
 	}
 
-	// Compact output: one line per encoder
-	fmt.Printf("%d encoders:\n", len(encoders))
-	for _, encoder := range encoders {
-		if encoder.Label != "" {
-			fmt.Printf("  %3d: %s\n", encoder.Index, encoder.Label)
-		} else {
-			fmt.Printf("  %3d: (unlabeled) 0x%x\n", encoder.Index, encoder.Address)
-		}
-	}
-
-	// Show per-command-buffer breakdown if verbose
+	commandBufferCount := 0
+	var commandBuffers []encodersCommandBufferSummary
 	if encodersVerbose {
-		commandBuffers, err := trace.ParseCommandBuffers()
-		if err == nil && len(commandBuffers) > 0 {
-			fmt.Printf("\n%d command buffers (%.1f encoders/buffer avg)\n",
-				len(commandBuffers), float64(len(encoders))/float64(len(commandBuffers)))
-			for _, cb := range commandBuffers {
+		cbs, err := trace.ParseCommandBuffers()
+		if err == nil && len(cbs) > 0 {
+			commandBufferCount = len(cbs)
+			for _, cb := range cbs {
 				dcb, err := gputrace.ParseDetailedCommandBuffer(trace, cb.Index)
 				if err != nil {
 					continue
 				}
-				fmt.Printf("  CB %d: %d encoders\n", cb.Index, len(dcb.Encoders))
+				commandBuffers = append(commandBuffers, encodersCommandBufferSummary{
+					index:        cb.Index,
+					encoderCount: len(dcb.Encoders),
+				})
+			}
+		}
+	}
+
+	return writeEncodersText(cmd.OutOrStdout(), encoders, commandBufferCount, commandBuffers)
+}
+
+func writeEncodersJSON(w io.Writer, encoders []*gputrace.ComputeEncoder) error {
+	type encoderJSON struct {
+		Index   int    `json:"index"`
+		Label   string `json:"label"`
+		Address string `json:"address"`
+	}
+	out := make([]encoderJSON, len(encoders))
+	for i, enc := range encoders {
+		out[i] = encoderJSON{
+			Index:   enc.Index,
+			Label:   enc.Label,
+			Address: fmt.Sprintf("0x%x", enc.Address),
+		}
+	}
+	data, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal json: %w", err)
+	}
+	if _, err := fmt.Fprintln(w, string(data)); err != nil {
+		return fmt.Errorf("write encoders json: %w", err)
+	}
+	return nil
+}
+
+func writeEncodersText(w io.Writer, encoders []*gputrace.ComputeEncoder, commandBufferCount int, commandBuffers []encodersCommandBufferSummary) error {
+	if _, err := fmt.Fprintf(w, "%d encoders:\n", len(encoders)); err != nil {
+		return fmt.Errorf("write encoders: %w", err)
+	}
+	for _, encoder := range encoders {
+		var err error
+		if encoder.Label != "" {
+			_, err = fmt.Fprintf(w, "  %3d: %s\n", encoder.Index, encoder.Label)
+		} else {
+			_, err = fmt.Fprintf(w, "  %3d: (unlabeled) 0x%x\n", encoder.Index, encoder.Address)
+		}
+		if err != nil {
+			return fmt.Errorf("write encoders: %w", err)
+		}
+	}
+
+	if commandBufferCount > 0 {
+		if _, err := fmt.Fprintf(w, "\n%d command buffers (%.1f encoders/buffer avg)\n",
+			commandBufferCount, float64(len(encoders))/float64(commandBufferCount)); err != nil {
+			return fmt.Errorf("write encoders: %w", err)
+		}
+		for _, cb := range commandBuffers {
+			if _, err := fmt.Fprintf(w, "  CB %d: %d encoders\n", cb.index, cb.encoderCount); err != nil {
+				return fmt.Errorf("write encoders: %w", err)
 			}
 		}
 	}
