@@ -1121,7 +1121,7 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 		if freshApp, err := FindXcodeApp(); err == nil && freshApp != 0 {
 			appAX = freshApp
 		}
-		if collectProfileDebug {
+		if collectProfileDebug || collectProfileVerbose {
 			if err := debugCheckExportMenu(appAX); err != nil {
 				fmt.Fprintf(os.Stderr, "    Debug: Export menu check failed: %v\n", err)
 			}
