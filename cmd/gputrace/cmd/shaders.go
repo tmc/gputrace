@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -111,15 +112,30 @@ func runShadersNoCost(tracePath string) error {
 		return fmt.Errorf("extract shader metrics: %w", err)
 	}
 
-	// Print hint and shaders without cost
+	return writeShadersNoCost(report, tracePath)
+}
+
+func writeShadersNoCost(report *gputrace.ShaderMetricsReport, tracePath string) error {
 	fmt.Fprintf(os.Stderr, "No profiler data. To get Cost %%, run:\n")
 	fmt.Fprintf(os.Stderr, "  gputrace xp run %s -o profiled.gputrace\n\n", tracePath)
 
-	fmt.Printf("Cost      Name\n")
-	for _, shader := range report.Shaders {
-		fmt.Printf("    ?     %s\n", shader.Name)
+	switch shadersFormat {
+	case "csv":
+		return gputrace.ExportShaderMetricsCSV(os.Stdout, report)
+	case "json":
+		return gputrace.ExportShaderMetricsJSON(os.Stdout, report)
+	case "text":
+		return formatShadersNoCostText(os.Stdout, report)
+	default:
+		return fmt.Errorf("invalid format: %s (must be text, csv, or json)", shadersFormat)
 	}
+}
 
+func formatShadersNoCostText(w io.Writer, report *gputrace.ShaderMetricsReport) error {
+	fmt.Fprintf(w, "Cost      Name\n")
+	for _, shader := range report.Shaders {
+		fmt.Fprintf(w, "    ?     %s\n", shader.Name)
+	}
 	return nil
 }
 
