@@ -262,41 +262,57 @@ func TestParseInitCalls_SharedEvent(t *testing.T) {
 
 // TestParseInitCalls_CommandQueue tests parsing of command queue creation (CS records)
 func TestParseInitCalls_CommandQueue(t *testing.T) {
-	t.Skip("TODO: Implement command queue parsing from CS records")
-
 	// Create a minimal capture with a CS record for "Stream 0"
 	data := make([]byte, 0x1000)
 
 	// Write CS marker at offset 0x830
 	offset := 0x830
+	queueAddr := uint64(0x106da64d0)
 	copy(data[offset:], []byte("CS\x00\x00"))
-	binary.LittleEndian.PutUint64(data[offset+4:], 0x106da64d0) // queue address
-	copy(data[offset+0x0C:], []byte("Stream 0\x00"))            // label
+	binary.LittleEndian.PutUint64(data[offset+4:], queueAddr) // queue address
+	copy(data[offset+0x0C:], []byte("Stream 0\x00"))          // label
 
 	calls, _, err := parseInitCalls(data, 0, nil, make(map[uint64]string))
 	if err != nil {
 		t.Fatalf("parseInitCalls failed: %v", err)
 	}
 
-	// TODO: Should find command queue creation and setLabel calls
-	// Expected: "Stream 0 = [Device newCommandQueue]"
-	// Expected: "[Stream 0 setLabel:\"Stream 0\"]"
-	foundQueue := false
-	foundLabel := false
-	for _, call := range calls {
-		if call.Type == "newCommandQueue" {
-			foundQueue = true
-		}
-		if call.Type == "setLabel" {
-			foundLabel = true
-		}
+	if len(calls) != 2 {
+		t.Fatalf("Expected 2 init calls, got %d: %#v", len(calls), calls)
 	}
 
-	if !foundQueue {
-		t.Error("Expected to find command queue creation call")
+	queueCall := calls[0]
+	if queueCall.Type != "newCommandQueue" {
+		t.Fatalf("First call type = %q, want newCommandQueue", queueCall.Type)
 	}
-	if !foundLabel {
-		t.Error("Expected to find setLabel call")
+	if queueCall.Address != queueAddr {
+		t.Fatalf("Queue address = 0x%x, want 0x%x", queueCall.Address, queueAddr)
+	}
+	if queueCall.Label != "Stream 0" {
+		t.Fatalf("Queue label = %q, want Stream 0", queueCall.Label)
+	}
+	if queueCall.Info != "Stream 0 = [Device newCommandQueue]" {
+		t.Fatalf("Queue info = %q", queueCall.Info)
+	}
+	if queueCall.Offset != int64(offset) {
+		t.Fatalf("Queue offset = 0x%x, want 0x%x", queueCall.Offset, offset)
+	}
+
+	labelCall := calls[1]
+	if labelCall.Type != "setLabel" {
+		t.Fatalf("Second call type = %q, want setLabel", labelCall.Type)
+	}
+	if labelCall.Address != queueAddr {
+		t.Fatalf("Label address = 0x%x, want 0x%x", labelCall.Address, queueAddr)
+	}
+	if labelCall.Label != "Stream 0" {
+		t.Fatalf("Label call label = %q, want Stream 0", labelCall.Label)
+	}
+	if labelCall.Info != "[Stream 0 setLabel:\"Stream 0\"]" {
+		t.Fatalf("Label info = %q", labelCall.Info)
+	}
+	if labelCall.Offset != int64(offset+1) {
+		t.Fatalf("Label offset = 0x%x, want 0x%x", labelCall.Offset, offset+1)
 	}
 }
 

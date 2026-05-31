@@ -155,6 +155,20 @@ func parseInitCalls(data []byte, startCallNum int, csRecords []FunctionRecord, l
 	var calls []InitCall
 	callNum := startCallNum
 
+	if csRecords == nil {
+		parsedRecords, parsedLabels := parseCSRecordsFromInit(data)
+		csRecords = parsedRecords
+		if labelMap == nil {
+			labelMap = parsedLabels
+		} else {
+			for addr, label := range parsedLabels {
+				if _, exists := labelMap[addr]; !exists {
+					labelMap[addr] = label
+				}
+			}
+		}
+	}
+
 	// Pattern: "C\x00\x00\x00" records with various types
 	// We'll parse different record types and sort them by offset
 
@@ -336,6 +350,16 @@ func parseInitCalls(data []byte, startCallNum int, csRecords []FunctionRecord, l
 				Address:    addr,
 				Info:       fmt.Sprintf("%s = [Device newCommandQueue]", name),
 				Label:      name,
+				Offset:     record.Offset,
+			})
+			callNum++
+			calls = append(calls, InitCall{
+				CallNumber: callNum,
+				Type:       "setLabel",
+				Address:    addr,
+				Info:       fmt.Sprintf("[%s setLabel:\"%s\"]", name, name),
+				Label:      name,
+				Offset:     record.Offset + 1,
 			})
 			callNum++
 		} else if strings.Contains(strings.ToLower(name), "_") || (name[0] >= 'a' && name[0] <= 'z') {
