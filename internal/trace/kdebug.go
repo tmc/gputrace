@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 )
 
 // KDebugEvent represents a kernel debug trace event.
@@ -180,6 +181,11 @@ type GPUExecutionInterval struct {
 	EncoderID       uint64
 }
 
+type gpuExecutionKey struct {
+	commandBufferID uint64
+	encoderID       uint64
+}
+
 // Duration returns the GPU execution duration in nanoseconds.
 func (interval *GPUExecutionInterval) Duration() uint64 {
 	if interval.StartEvent == nil || interval.EndEvent == nil {
@@ -191,21 +197,25 @@ func (interval *GPUExecutionInterval) Duration() uint64 {
 // CorrelateGPUExecution correlates submission, start, and end events into intervals.
 func CorrelateGPUExecution(events []*KDebugEvent) []*GPUExecutionInterval {
 	// Build maps for quick lookup
-	submissions := make(map[uint64]*KDebugEvent) // command buffer ID -> submission event
-	starts := make(map[uint64]*KDebugEvent)      // command buffer ID -> start event
-	ends := make(map[uint64]*KDebugEvent)        // command buffer ID -> end event
+	submissions := make(map[uint64]*KDebugEvent)     // command buffer ID -> submission event
+	starts := make(map[gpuExecutionKey]*KDebugEvent) // command buffer and encoder -> start event
+	ends := make(map[gpuExecutionKey]*KDebugEvent)   // command buffer and encoder -> end event
 
 	// First pass: categorize events
 	for _, event := range events {
 		// Command buffer ID is typically in Args[0]
 		cbID := event.Args[0]
+		key := gpuExecutionKey{
+			commandBufferID: cbID,
+			encoderID:       event.Args[1],
+		}
 
 		if event.IsGPUSubmission() {
 			submissions[cbID] = event
 		} else if event.IsGPUExecutionStart() {
-			starts[cbID] = event
+			starts[key] = event
 		} else if event.IsGPUExecutionEnd() {
-			ends[cbID] = event
+			ends[key] = event
 		}
 	}
 
@@ -213,27 +223,45 @@ func CorrelateGPUExecution(events []*KDebugEvent) []*GPUExecutionInterval {
 	var intervals []*GPUExecutionInterval
 
 	// Match end events with starts and submissions
-	for cbID, endEvent := range ends {
+	for key, endEvent := range ends {
 		interval := &GPUExecutionInterval{
-			CommandBufferID: cbID,
+			CommandBufferID: key.commandBufferID,
+			EncoderID:       key.encoderID,
 			EndEvent:        endEvent,
 		}
 
-		if startEvent, ok := starts[cbID]; ok {
+		if startEvent, ok := starts[key]; ok {
 			interval.StartEvent = startEvent
 		}
 
-		if submissionEvent, ok := submissions[cbID]; ok {
+		if submissionEvent, ok := submissions[key.commandBufferID]; ok {
 			interval.SubmissionEvent = submissionEvent
-		}
-
-		// Encoder ID might be in Args[1]
-		if interval.EndEvent != nil {
-			interval.EncoderID = interval.EndEvent.Args[1]
 		}
 
 		intervals = append(intervals, interval)
 	}
 
+	sort.Slice(intervals, func(i, j int) bool {
+		iTs := intervalTimestamp(intervals[i])
+		jTs := intervalTimestamp(intervals[j])
+		if iTs != jTs {
+			return iTs < jTs
+		}
+		if intervals[i].CommandBufferID != intervals[j].CommandBufferID {
+			return intervals[i].CommandBufferID < intervals[j].CommandBufferID
+		}
+		return intervals[i].EncoderID < intervals[j].EncoderID
+	})
+
 	return intervals
+}
+
+func intervalTimestamp(interval *GPUExecutionInterval) uint64 {
+	if interval.StartEvent != nil {
+		return interval.StartEvent.Timestamp
+	}
+	if interval.EndEvent != nil {
+		return interval.EndEvent.Timestamp
+	}
+	return 0
 }
