@@ -12,24 +12,28 @@ import (
 var timingProfilerJSON bool
 
 var timingProfilerCmd = &cobra.Command{
-	Use:   "timing-profiler <trace.gputrace>",
-	Short:  "Extract timing from .gpuprofiler_raw performance counter files",
+	Use:    "timing-profiler <trace.gputrace>",
+	Short:  "Inspect legacy .gpuprofiler_raw timing fallbacks",
 	Hidden: true,
-	Long: `Extract GPU timing data from .gpuprofiler_raw hardware performance counters.
+	Long: `Inspect legacy GPU timing fallbacks for profiled traces.
 
-This command parses the binary performance counter files that Xcode Instruments
-creates when profiling GPU workloads. These files contain the same data that
-Instruments uses to calculate shader cost percentages.
+Prefer "gputrace timing" for current timing output. The primary supported
+profiled timing source is .gpuprofiler_raw/streamData, including APSTimelineData
+ReplayerGPUTime, command-buffer timestamps, and encoder/dispatch offsets.
+
+This hidden command uses older fallback paths:
+  - kdebug GPU execution events when present
+  - counter-file limiter heuristics when kdebug timing is unavailable
+
+Counter files alone are not direct shader timing; limiter-based values are
+approximate and should be treated as relative visualization data.
 
 Requirements:
   - Trace must have a .gpuprofiler_raw directory
-  - This directory is created when capturing with Xcode Instruments profiling enabled
-
-The timing data extracted from performance counters is the most accurate available,
-as it comes directly from GPU hardware measurements.
+  - Use "gputrace timing" to read streamData/APSTimelineData timing when present
 
 Examples:
-  # Extract timing from profiled trace
+  # Inspect legacy fallback timing for a profiled trace
   gputrace timing-profiler trace.gputrace
 
   # Show detailed breakdown
@@ -65,30 +69,30 @@ func runTimingProfiler(cmd *cobra.Command, args []string) error {
 	if !trace.HasPerfCounters() {
 		return fmt.Errorf(`trace does not have .gpuprofiler_raw directory
 
-This trace was not captured with hardware performance counters enabled.
+This trace does not include an exported profiler data directory.
 
-To capture traces with performance counters:
+To capture traces with streamData/APSTimelineData timing:
   1. Open the trace in Xcode Instruments
-  2. Click the "Profile" button to enable hardware profiling
-  3. Xcode will create a .gpuprofiler_raw directory with counter data
+  2. Click the "Profile" button
+  3. Export/save the profiled trace with its .gpuprofiler_raw directory
 
 Alternatively, use one of the other timing extraction methods:
-  - kdebug events (most accurate for live capture)
-  - synthetic timing (for visualization only)`)
+  - kdebug/signpost events when present (approximate capture fallback)
+  - synthetic timing (approximate visualization fallback)`)
 	}
 
 	// Create profiler raw timing extractor
 	extractor := gputrace.NewTimingExtractorProfilerRaw(trace)
 
 	// Extract timing
-	fmt.Println("Extracting timing from .gpuprofiler_raw files...")
+	fmt.Println("Inspecting legacy .gpuprofiler_raw timing fallbacks...")
 	timings, err := extractor.ExtractTimingFromProfilerRaw()
 	if err != nil {
 		return fmt.Errorf("failed to extract timing: %w", err)
 	}
 
 	if len(timings) == 0 {
-		return fmt.Errorf("no timing data found in performance counter files")
+		return fmt.Errorf("no timing data found in .gpuprofiler_raw fallback sources")
 	}
 
 	if timingProfilerJSON {

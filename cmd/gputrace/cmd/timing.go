@@ -22,8 +22,8 @@ var (
 
 var timingCmd = &cobra.Command{
 	Use:   "timing <trace.gputrace>",
-	Short: "Extract and export comprehensive timing metrics from GPU traces",
-	Long: `Extract comprehensive timing metrics including per-kernel execution times,
+	Short: "Extract and export GPU timing metrics from traces",
+	Long: `Extract GPU timing metrics including per-kernel execution times,
 command buffer timings, and statistical analysis.
 
 This command extracts timing data from GPU traces and provides:
@@ -43,8 +43,15 @@ Examples:
   # Compare two traces for regressions
   gputrace timing -compare baseline.gputrace current.gputrace
 
-Note: Timing data depends on trace capture method. Traces without profiling
-      data will use synthetic/estimated timing for visualization.`,
+Timing source priority:
+  - Profiled exports: .gpuprofiler_raw/streamData with APSTimelineData
+    ReplayerGPUTime, command-buffer timestamps, and encoder/dispatch offsets
+  - Capture fallback: kdebug/signpost-derived timing when present
+  - Last resort: synthetic timing for visualization only
+
+Capture fallbacks and synthetic timing are approximate. Hardware counter files
+alone are not treated as direct shader timing unless correlated through a
+supported timing source such as streamData/APSTimelineData.`,
 	Args: cobra.ExactArgs(1),
 	RunE: runTiming,
 }
@@ -166,7 +173,7 @@ func runTimingFromProfiler(tracePath string) error {
 	}
 
 	if profilerDir == "" {
-		fmt.Fprintf(os.Stderr, "Hint: To generate performance data, run:\n")
+		fmt.Fprintf(os.Stderr, "Hint: To generate profiled timing data with streamData/APSTimelineData, run:\n")
 		fmt.Fprintf(os.Stderr, "  gputrace xcode-profile run %s\n\n", tracePath)
 		return fmt.Errorf("no .gpuprofiler_raw directory found in %s (and unsorted-capture is missing)", tracePath)
 	}
