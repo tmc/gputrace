@@ -113,6 +113,18 @@ func TestFormatBufferTimelineChrome(t *testing.T) {
 	}
 }
 
+func TestWriteBufferTimelineOutputStdout(t *testing.T) {
+	out, err := captureStdout(t, func() error {
+		return writeBufferTimelineOutput("/dev/stdout", "{\"total_buffers\":0}\n")
+	})
+	if err != nil {
+		t.Fatalf("writeBufferTimelineOutput: %v", err)
+	}
+	if got, want := out, "{\"total_buffers\":0}\n"; got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+}
+
 func testBufferTimelineAnalysis() *gputrace.BufferTimelineAnalysis {
 	return &gputrace.BufferTimelineAnalysis{
 		BufferEvents: map[uint64]*gputrace.BufferLifecycle{
