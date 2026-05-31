@@ -59,6 +59,41 @@ func TestTimingHelpDocumentsTimingSources(t *testing.T) {
 	}
 }
 
+func TestHelpExamplesUseRegisteredLongFlagSpelling(t *testing.T) {
+	checks := []struct {
+		name  string
+		help  string
+		wants []string
+		stale []string
+	}{
+		{
+			name:  "pprof",
+			help:  pprofCmd.Long,
+			wants: []string{"--all", "--prefix"},
+			stale: []string{" -all ", " -prefix "},
+		},
+		{
+			name:  "timing",
+			help:  timingCmd.Long,
+			wants: []string{"--json", "--csv", "--compare"},
+			stale: []string{" -json ", " -csv ", " -compare "},
+		},
+	}
+
+	for _, check := range checks {
+		for _, want := range check.wants {
+			if !strings.Contains(check.help, want) {
+				t.Fatalf("%s help does not contain %q:\n%s", check.name, want, check.help)
+			}
+		}
+		for _, stale := range check.stale {
+			if strings.Contains(check.help, stale) {
+				t.Fatalf("%s help still contains stale flag spelling %q:\n%s", check.name, stale, check.help)
+			}
+		}
+	}
+}
+
 func TestReplayCountersHelpUsesRegisteredBoolFlagSpelling(t *testing.T) {
 	help := replayCountersCmd.Long
 	if !strings.Contains(help, "--dispatch-boundaries=false") {

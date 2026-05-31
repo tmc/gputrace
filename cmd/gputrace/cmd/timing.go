@@ -39,10 +39,10 @@ Examples:
   gputrace timing trace.gputrace
 
   # Export to JSON and CSV
-  gputrace timing -json timing.json -csv timing.csv trace.gputrace
+  gputrace timing --json timing.json --csv timing.csv trace.gputrace
 
   # Compare two traces for regressions
-  gputrace timing -compare baseline.gputrace current.gputrace
+  gputrace timing --compare baseline.gputrace current.gputrace
 
 Timing source priority:
   - Profiled exports: .gpuprofiler_raw/streamData with APSTimelineData
