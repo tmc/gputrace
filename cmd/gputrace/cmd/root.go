@@ -50,10 +50,13 @@ Visualization & Export:
 Capture & Automation:
   capture          - Capture GPU trace from a command
   xcode-profile    - Xcode GPU profiler automation
+  xcode-bindings   - Inspect private Xcode GTShaderProfiler bindings
+  xcode-parity     - Audit Xcode metric parity for a trace
 
 Utilities:
   mtlb             - Metal Library Binary inspection
   clear-buffers    - Zero out buffers to reduce trace size
+  version          - Print gputrace build version
 
 For more information about a specific command:
   gputrace [command] --help`,

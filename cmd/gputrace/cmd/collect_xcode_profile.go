@@ -117,6 +117,7 @@ Navigation:
 Data Export:
   xcode-export-counters  Export GPU counters from Performance view to CSV
   xcode-export-memory    Export memory report from Performance view
+  vertex-output          Extract vertex shader output from Xcode GPU debugger
   performance            Performance data commands
 
 Example:

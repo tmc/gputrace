@@ -122,6 +122,36 @@ func TestRootAndReadmeDoNotListMissingServe(t *testing.T) {
 	}
 }
 
+func TestManualListsIncludeVisibleCommands(t *testing.T) {
+	readmePath := filepath.Join("..", "..", "..", "README.md")
+	readme, err := os.ReadFile(readmePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	checks := []struct {
+		name       string
+		rootDesc   string
+		readmeDesc string
+	}{
+		{"version", "Print gputrace build version", "Print build version"},
+		{"xcode-bindings", "Inspect private Xcode GTShaderProfiler bindings", "Inspect private Xcode GTShaderProfiler bindings"},
+		{"xcode-parity", "Audit Xcode metric parity for a trace", "Audit Xcode metric parity for a trace"},
+	}
+	for _, check := range checks {
+		cmd := visibleSubcommand(rootCmd, check.name)
+		if cmd == nil {
+			t.Fatalf("%s command is not visible", check.name)
+		}
+		if !manualHelpLists(rootCmd.Long, check.name, check.rootDesc) {
+			t.Fatalf("root help does not list %s:\n%s", check.name, rootCmd.Long)
+		}
+		if !strings.Contains(string(readme), "| | `"+check.name+"` | "+check.readmeDesc+" |") {
+			t.Fatalf("README does not list %s:\n%s", check.name, readme)
+		}
+	}
+}
+
 func TestHelpDoesNotReferenceMissingRelatedCommands(t *testing.T) {
 	checks := []struct {
 		name string
@@ -146,6 +176,16 @@ func TestHelpDoesNotReferenceMissingRelatedCommands(t *testing.T) {
 		if !strings.Contains(replayCountersCmd.Long, want) {
 			t.Fatalf("replay-counters help does not contain existing related command %q:\n%s", want, replayCountersCmd.Long)
 		}
+	}
+}
+
+func TestXcodeProfileHelpListsVertexOutput(t *testing.T) {
+	cmd := visibleSubcommand(collectXcodeProfileCmd, "vertex-output")
+	if cmd == nil {
+		t.Fatal("xcode-profile vertex-output command is not visible")
+	}
+	if !manualHelpLists(collectXcodeProfileCmd.Long, "vertex-output", cmd.Short) {
+		t.Fatalf("xcode-profile help does not list vertex-output:\n%s", collectXcodeProfileCmd.Long)
 	}
 }
 
@@ -250,4 +290,23 @@ func TestGraphHelpMatchesDefaultType(t *testing.T) {
 	if strings.Contains(graphCmd.Long, "flow: Execution flow (temporal order) - default") {
 		t.Fatalf("graph long help still marks flow as default:\n%s", graphCmd.Long)
 	}
+}
+
+func visibleSubcommand(command *cobra.Command, name string) *cobra.Command {
+	for _, sub := range command.Commands() {
+		if sub.Name() == name && !sub.Hidden {
+			return sub
+		}
+	}
+	return nil
+}
+
+func manualHelpLists(help, name, desc string) bool {
+	for _, line := range strings.Split(help, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == name && strings.Contains(line, desc) {
+			return true
+		}
+	}
+	return false
 }
