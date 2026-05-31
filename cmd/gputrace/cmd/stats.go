@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
@@ -56,7 +57,7 @@ func runStats(cmd *cobra.Command, args []string) error {
 	trace, err := gputrace.Open(tracePath)
 	if err != nil {
 		if findProfilerDir(tracePath) != "" {
-			return runStatsFromProfiler(tracePath)
+			return runStatsFromProfiler(cmd.OutOrStdout(), tracePath)
 		}
 		return fmt.Errorf("failed to open trace: %w", err)
 	}
@@ -69,7 +70,7 @@ func runStats(cmd *cobra.Command, args []string) error {
 
 	// Handle JSON output
 	if statsJSON {
-		return outputStatsJSON(statistics, trace, statsVerbose)
+		return outputStatsJSON(cmd.OutOrStdout(), statistics, trace, statsVerbose)
 	}
 
 	// Quick one-liner summary
@@ -335,7 +336,7 @@ type profilerStatsJSON struct {
 	TimingSource          string  `json:"timing_source"`
 }
 
-func runStatsFromProfiler(tracePath string) error {
+func runStatsFromProfiler(w io.Writer, tracePath string) error {
 	profilerDir, streamStats, err := loadProfilerStats(tracePath)
 	if err != nil {
 		return err
@@ -365,12 +366,7 @@ func runStatsFromProfiler(tracePath string) error {
 			ProfilerDir:  profilerDir,
 			Statistics:   stats,
 		}
-		jsonData, err := json.MarshalIndent(output, "", "  ")
-		if err != nil {
-			return fmt.Errorf("failed to marshal JSON: %w", err)
-		}
-		fmt.Println(string(jsonData))
-		return nil
+		return writeStatsJSON(w, output)
 	}
 
 	parts := []string{
@@ -476,7 +472,7 @@ type TimingJSON struct {
 }
 
 // outputStatsJSON outputs statistics in JSON format.
-func outputStatsJSON(stats *gputrace.TraceStatistics, trace *gputrace.Trace, verbose bool) error {
+func outputStatsJSON(w io.Writer, stats *gputrace.TraceStatistics, trace *gputrace.Trace, verbose bool) error {
 	s := &StatsJSON{
 		BufferUsageBytes: stats.BufferUsageBytes,
 		BufferUsageGB:    stats.BufferUsageGB,
@@ -548,13 +544,15 @@ func outputStatsJSON(stats *gputrace.TraceStatistics, trace *gputrace.Trace, ver
 		output.Verbose = verboseData
 	}
 
-	// Marshal to JSON with indentation
-	jsonData, err := json.MarshalIndent(output, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal JSON: %w", err)
-	}
+	return writeStatsJSON(w, output)
+}
 
-	fmt.Println(string(jsonData))
+func writeStatsJSON(w io.Writer, output any) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(output); err != nil {
+		return fmt.Errorf("marshal json: %w", err)
+	}
 	return nil
 }
 
