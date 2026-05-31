@@ -35,7 +35,7 @@ type mtlbFunctionSize struct {
 const maxFunctionSizeForDisplay = uint64(1<<63 - 1)
 
 var mtlbFunctionsCmd = &cobra.Command{
-	Use:   "functions [trace]",
+	Use:   "functions <trace>",
 	Short: "List all functions in MTLB files",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {

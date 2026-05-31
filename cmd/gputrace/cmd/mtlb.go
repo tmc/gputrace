@@ -10,7 +10,7 @@ import (
 )
 
 var mtlbCmd = &cobra.Command{
-	Use:   "mtlb [trace-path/mtlb-file]",
+	Use:   "mtlb <trace-path/mtlb-file>",
 	Short: "Inspect and analyze Metal Library Binary (MTLB) files",
 	Long: `Inspect and analyze Metal Library Binary (MTLB) files.
 

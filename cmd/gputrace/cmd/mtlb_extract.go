@@ -18,7 +18,7 @@ var (
 )
 
 var mtlbExtractCmd = &cobra.Command{
-	Use:   "extract [trace]",
+	Use:   "extract <trace>",
 	Short: "Extract MTLB to standalone .metallib file",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {

@@ -10,7 +10,7 @@ import (
 )
 
 var mtlbListCmd = &cobra.Command{
-	Use:   "list [trace]",
+	Use:   "list <trace>",
 	Short: "List all Metal Library files in a trace",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {

@@ -19,7 +19,7 @@ var (
 )
 
 var dumpRecordsCmd = &cobra.Command{
-	Use:   "dump-records [trace-path]",
+	Use:    "dump-records <trace-path>",
 	Short:  "Dump raw MTSP records from a GPU trace",
 	Hidden: true,
 	Long: `Dumps raw MTSP records from a GPU trace file for low-level analysis.

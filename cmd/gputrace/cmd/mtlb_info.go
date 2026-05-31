@@ -9,7 +9,7 @@ import (
 )
 
 var mtlbInfoCmd = &cobra.Command{
-	Use:   "info [trace]",
+	Use:   "info <trace>",
 	Short: "Show MTLB header and metadata",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
