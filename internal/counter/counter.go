@@ -669,8 +669,8 @@ func groupRecordsByEncoder(records []*CounterRecord) []*EncoderGroup {
 // aggregateEncoderMetrics aggregates metrics from sample records within an encoder group.
 //
 // Aggregation rules (gputrace-76):
-//   - Deterministic metrics (Kernel Invocations, Registers): Use FIRST/REPRESENTATIVE value (not sum)
-//     These are constant across samples for the same encoder
+//   - Deterministic metrics (Kernel Invocations): Use FIRST/REPRESENTATIVE
+//     value (not sum). These are constant across samples for the same encoder.
 //   - Timing metrics (ALU Utilization, Occupancy): AVERAGE across samples
 //     These vary with time/load
 //   - Counter metrics (Memory Bytes): SUM across samples

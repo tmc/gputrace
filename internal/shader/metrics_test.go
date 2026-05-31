@@ -1,7 +1,9 @@
 package shader
 
 import (
+	"bytes"
 	"encoding/binary"
+	"strings"
 	"testing"
 
 	"github.com/tmc/gputrace/internal/counter"
@@ -81,6 +83,96 @@ func TestApplyStreamDataDispatchTimingAggregatesDurations(t *testing.T) {
 	if got, want := simple.Address, uint64(0xdef); got != want {
 		t.Fatalf("simple Address = %#x, want %#x", got, want)
 	}
+}
+
+func TestApplyHardwareMetricsCarriesHighRegister(t *testing.T) {
+	metrics := &ShaderMetrics{}
+	applyHardwareMetrics(metrics, &counter.ShaderHardwareMetrics{
+		AllocatedRegs: 32,
+		HighRegister:  19,
+		SpilledBytes:  8,
+	})
+
+	if got, want := metrics.AllocatedRegisters, 32; got != want {
+		t.Fatalf("AllocatedRegisters = %d, want %d", got, want)
+	}
+	if got, want := metrics.HighRegister, 19; got != want {
+		t.Fatalf("HighRegister = %d, want %d", got, want)
+	}
+	if got, want := metrics.SpilledBytes, 8; got != want {
+		t.Fatalf("SpilledBytes = %d, want %d", got, want)
+	}
+}
+
+func TestFormatShadersXcodeStyleDoesNotDeriveHighRegister(t *testing.T) {
+	report := &ShaderMetricsReport{
+		Shaders: []*ShaderMetrics{
+			{
+				Name:               "kernel",
+				PercentOfTotal:     12.5,
+				Address:            0xabc,
+				TotalThreadgroups:  64,
+				AllocatedRegisters: 32,
+				SpilledBytes:       16,
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := FormatShadersXcodeStyle(&buf, report, nil, false); err != nil {
+		t.Fatal(err)
+	}
+
+	fields := xcodeStyleDataFields(t, buf.String())
+	if got, want := fields[len(fields)-3], "32"; got != want {
+		t.Fatalf("register field = %q, want %q in:\n%s", got, want, buf.String())
+	}
+	if got, want := fields[len(fields)-2], "?"; got != want {
+		t.Fatalf("high register field = %q, want %q in:\n%s", got, want, buf.String())
+	}
+	if got, want := fields[len(fields)-1], "16B"; got != want {
+		t.Fatalf("spilled field = %q, want %q in:\n%s", got, want, buf.String())
+	}
+}
+
+func TestFormatShadersXcodeStyleShowsSourceBackedHighRegister(t *testing.T) {
+	report := &ShaderMetricsReport{
+		Shaders: []*ShaderMetrics{
+			{
+				Name:               "kernel",
+				PercentOfTotal:     12.5,
+				Address:            0xabc,
+				TotalThreadgroups:  64,
+				AllocatedRegisters: 32,
+				HighRegister:       19,
+				SpilledBytes:       16,
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := FormatShadersXcodeStyle(&buf, report, nil, false); err != nil {
+		t.Fatal(err)
+	}
+
+	fields := xcodeStyleDataFields(t, buf.String())
+	if got, want := fields[len(fields)-2], "19"; got != want {
+		t.Fatalf("high register field = %q, want %q in:\n%s", got, want, buf.String())
+	}
+}
+
+func xcodeStyleDataFields(t *testing.T, output string) []string {
+	t.Helper()
+
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	if len(lines) < 3 {
+		t.Fatalf("expected header, separator, and data row in:\n%s", output)
+	}
+	fields := strings.Fields(lines[2])
+	if len(fields) < 8 {
+		t.Fatalf("expected at least 8 data fields, got %d in row %q", len(fields), lines[2])
+	}
+	return fields
 }
 
 func TestPopulateFallbackTimingMetricsMarksCaptureHeuristic(t *testing.T) {

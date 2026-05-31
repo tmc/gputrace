@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -22,5 +23,11 @@ func walkCommands(t *testing.T, command *cobra.Command) {
 
 	for _, sub := range command.Commands() {
 		walkCommands(t, sub)
+	}
+}
+
+func TestShadersHelpMarksHighRegisterSourceBacked(t *testing.T) {
+	if !strings.Contains(shadersCmd.Long, "High Register, shown only when source-backed") {
+		t.Fatalf("shaders help should not imply high register is always available:\n%s", shadersCmd.Long)
 	}
 }

@@ -33,7 +33,7 @@ Use --all for full Xcode Instruments format with additional columns:
   - Pipeline State address
   - # SIMD Groups (SIMD wavefronts dispatched)
   - # Allocated Registers
-  - High Register (peak register usage)
+  - High Register, shown only when source-backed
   - Spilled Bytes (register spills to memory)
 
 Examples:
