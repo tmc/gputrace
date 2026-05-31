@@ -64,7 +64,7 @@ swift run trace-generator 01-single-encoder
 ### List Available Scenarios
 
 ```bash
-.build/release/trace-generator
+.build/release/trace-generator list
 ```
 
 ## Capturing Traces
@@ -92,9 +92,9 @@ open -a Instruments
 #    - Save as CSV
 
 # 5. Organize:
-mkdir -p ../../traces/01-single-encoder
-mv ~/Downloads/trace-generator.gputrace ../../traces/01-single-encoder/
-mv ~/Downloads/counters.csv ../../traces/01-single-encoder/
+mkdir -p ../traces/01-single-encoder
+mv ~/Downloads/trace-generator.gputrace ../traces/01-single-encoder/
+mv ~/Downloads/counters.csv ../traces/01-single-encoder/
 ```
 
 ### Method 2: Command Line (Experimental)
@@ -105,7 +105,7 @@ xcrun xctrace record \
     --template 'GPU Counters' \
     --launch .build/release/trace-generator \
     --launch-arg 01-single-encoder \
-    --output ../../traces/01-single-encoder.trace
+    --output ../traces/01-single-encoder.trace
 
 # Convert to .gputrace if needed
 ```
@@ -113,32 +113,20 @@ xcrun xctrace record \
 ### Method 3: Automated Batch Capture
 
 ```bash
-# Create capture script
-cat > capture-all.sh << 'EOF'
-#!/bin/bash
-scenarios=(
-    "01-single-encoder"
-    "02-two-encoders"
-    "03-three-encoders"
-    "04-four-encoders"
-    "06-six-encoders"
-    "known-invocations-1000"
-    "known-invocations-10000"
-    "low-alu-simple-add"
-    "high-alu-complex-math"
-    "low-occupancy-high-registers"
-    "high-occupancy-low-registers"
-)
+# Capture one scenario with programmatic Metal capture.
+make run-capture SCENARIO=01-single-encoder
 
-for scenario in "${scenarios[@]}"; do
-    echo "Capturing: $scenario"
-    # TODO: Automate Instruments capture
-    # For now, manual capture required
-done
-EOF
+# Capture every scenario. By default this writes to
+# ../traces/generated-YYYYMMDD-HHMMSS/ so checked-in fixtures are not replaced.
+make capture-all RUNS=3
 
-chmod +x capture-all.sh
+# Choose an explicit local output directory when needed.
+make capture-all RUNS=1 CAPTURE_DIR=../traces/local-smoke
 ```
+
+The automated targets set `MTL_CAPTURE_ENABLED=1` and pass an output `.gputrace`
+path to the generator. They create `.gputrace` packages; use Instruments when
+you also need to export GPU counter CSV files.
 
 ## Expected Output
 
@@ -173,7 +161,7 @@ Description: Known invocations: exactly 1000 (10 threadgroups × 100 threads)
 
 ## Directory Structure
 
-After capturing all traces:
+After manual capture organization or a single `make run-capture`:
 
 ```
 testdata/
@@ -198,6 +186,9 @@ testdata/
     ├── low-occupancy-high-registers/
     └── high-occupancy-low-registers/
 ```
+
+Batch captures created with `make capture-all` are grouped under
+`testdata/traces/generated-YYYYMMDD-HHMMSS/` by default.
 
 ## Analysis Workflow
 
@@ -312,7 +303,10 @@ swift build -c release
 # 2. Test run
 .build/release/trace-generator 01-single-encoder
 
-# 3. Capture with Instruments (manual)
+# 3. Capture with programmatic Metal capture
+make run-capture SCENARIO=01-single-encoder
+
+#    Or capture with Instruments (manual)
 #    GPU Counters template
 #    Select executable: .build/release/trace-generator
 #    Arguments: 01-single-encoder

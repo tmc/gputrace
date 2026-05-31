@@ -503,7 +503,7 @@ print("==================")
 print()
 
 let args = CommandLine.arguments
-if args.count < 2 {
+func printUsage() {
     print("Usage: trace-generator <scenario> [output-path]")
     print()
     print("Arguments:")
@@ -520,9 +520,18 @@ if args.count < 2 {
     print("  # With programmatic capture")
     print("  trace-generator 01-single-encoder output.gputrace")
     print()
-    print("  # Or use capture script:")
-    print("  ./capture.sh 01-single-encoder")
+    print("  # Or use the Makefile target:")
+    print("  make run-capture SCENARIO=01-single-encoder")
+}
+
+if args.count < 2 {
+    printUsage()
     exit(1)
+}
+
+if ["list", "--list", "-l"].contains(args[1]) {
+    printUsage()
+    exit(0)
 }
 
 guard let generator = TraceGenerator() else {
@@ -558,7 +567,7 @@ if outputPath == nil {
     print("✓ Scenario completed (no trace captured)")
     print()
     print("To capture trace:")
-    print("  ./capture.sh \(scenarioArg)")
+    print("  make run-capture SCENARIO=\(scenarioArg)")
     print("  # or")
-    print("  trace-generator \(scenarioArg) output.gputrace")
+    print("  MTL_CAPTURE_ENABLED=1 trace-generator \(scenarioArg) output.gputrace")
 }
