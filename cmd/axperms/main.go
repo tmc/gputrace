@@ -330,23 +330,25 @@ func setupMacgo(debug, devMode bool) {
 		os.Setenv("MACGO_DEV_MODE", "1")
 	}
 
-	cfg := &macgo.Config{
+	if err := macgo.Start(macgoConfig(devMode)); err != nil {
+		fmt.Fprintf(os.Stderr, "macgo setup failed: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func macgoConfig(devMode bool) *macgo.Config {
+	return &macgo.Config{
 		AppName:  "axperms",
 		BundleID: "com.github.tmc.gputrace.axperms",
 		Permissions: []macgo.Permission{
 			macgo.Accessibility,
 		},
 		AdHocSign: true,
-		DevMode:   true, // TODO: make this configurable via flag
+		DevMode:   devMode,
 		UIMode:    macgo.UIModeAccessory,
 		Info: map[string]interface{}{
 			"NSAccessibilityUsageDescription": "axperms needs Accessibility access to test and manage permissions.",
 		},
-	}
-
-	if err := macgo.Start(cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "macgo setup failed: %v\n", err)
-		os.Exit(1)
 	}
 }
 
