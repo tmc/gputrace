@@ -84,7 +84,7 @@ func runExport(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Exporting trace to: %s\n", outputPath)
 	doc := axString(windowAX, "AXDocument")
 	if doc != "" {
-		fmt.Printf("DEBUG: Found Window. AXDocument: %q\n", doc)
+		verboseLog("runExport: window AXDocument=%q", doc)
 	}
 
 	if err := exportTrace(appAX, windowAX, outputPath); err != nil {
@@ -319,7 +319,7 @@ func runSendKey(cmd *cobra.Command, args []string) error {
 	}
 
 	key := args[0]
-	
+
 	// Activate Xcode first
 	fmt.Println("Activating Xcode...")
 	if err := ActivateXcode(); err != nil {
@@ -458,8 +458,8 @@ func runDebugFileBrowser(cmd *cobra.Command, args []string) error {
 
 		// Look for elements that might be file list items
 		if role == "AXCell" || role == "AXRow" || role == "AXOutlineRow" ||
-		   role == "AXStaticText" || role == "AXTextField" || role == "AXGroup" ||
-		   role == "AXBrowser" || role == "AXTable" || role == "AXOutline" {
+			role == "AXStaticText" || role == "AXTextField" || role == "AXGroup" ||
+			role == "AXBrowser" || role == "AXTable" || role == "AXOutline" {
 
 			title := axString(el, "AXTitle")
 			value := axString(el, "AXValue")
