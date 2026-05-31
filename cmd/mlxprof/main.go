@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -10,6 +11,8 @@ import (
 	"github.com/tmc/gputrace/internal/export"
 	"github.com/tmc/gputrace/internal/trace"
 )
+
+const defaultCaptureGPUTrace = "trace.gputrace"
 
 func main() {
 	if err := run(); err != nil {
@@ -32,7 +35,7 @@ func run() error {
 		if len(args) == 0 {
 			return fmt.Errorf("no command specified to run")
 		}
-		return runCapture(args, *output)
+		return runCapture(args, *cpuProfile, *output)
 	}
 
 	if *gpuTrace == "" {
@@ -42,28 +45,112 @@ func run() error {
 	return mergeProfiles(*cpuProfile, *gpuTrace, *output)
 }
 
-func runCapture(args []string, output string) error {
-	// 1. Setup Environment
-	cmd := exec.Command(args[0], args[1:]...)
-	cmd.Env = os.Environ()
-	cmd.Env = append(cmd.Env, "MTL_CAPTURE_ENABLED=1")
-	cmd.Env = append(cmd.Env, "GPUPROFILER_TRACE_DESTINATION=trace.gputrace")
+type captureConfig struct {
+	args       []string
+	cpuProfile string
+	gpuTrace   string
+	output     string
+}
 
-	// 2. Run
-	fmt.Printf("Running: %v\n", args)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+type captureDeps struct {
+	run      func(args []string, env []string) error
+	validate func(cpuPath, gpuPath string) error
+	merge    func(cpuPath, gpuPath, outputPath string) error
+}
 
-	if err := cmd.Run(); err != nil {
+func runCapture(args []string, cpuProfile, output string) error {
+	return runCaptureWithDeps(captureConfig{
+		args:       args,
+		cpuProfile: cpuProfile,
+		gpuTrace:   defaultCaptureGPUTrace,
+		output:     output,
+	}, captureDeps{
+		run:      runCaptureCommand,
+		validate: validateCaptureOutputs,
+		merge:    mergeProfiles,
+	})
+}
+
+func runCaptureWithDeps(cfg captureConfig, deps captureDeps) error {
+	if len(cfg.args) == 0 {
+		return fmt.Errorf("no command specified to run")
+	}
+	if cfg.cpuProfile == "" {
+		return fmt.Errorf("cpu profile path required")
+	}
+	if cfg.gpuTrace == "" {
+		return fmt.Errorf("gpu trace path required")
+	}
+
+	fmt.Printf("Running: %v\n", cfg.args)
+
+	env := append(os.Environ(), captureEnv(cfg.gpuTrace)...)
+	if err := deps.run(cfg.args, env); err != nil {
 		return fmt.Errorf("command execution failed: %w", err)
 	}
 
-	// 3. Post-process
-	// Assume the app wrote cpu.pprof itself (for now) via standard runtime/pprof
-	// TODO: Inject a wrapper or use a signal to trigger pprof?
-	// For this prototype, we assume the user app writes cpu.pprof.
+	// mlxprof cannot force an arbitrary child process to emit Go runtime/pprof
+	// data. Treat the expected profile as a required capture artifact and fail
+	// before merging if the child did not produce it.
+	if err := deps.validate(cfg.cpuProfile, cfg.gpuTrace); err != nil {
+		return err
+	}
 
-	return mergeProfiles("cpu.pprof", "trace.gputrace", output)
+	return deps.merge(cfg.cpuProfile, cfg.gpuTrace, cfg.output)
+}
+
+func captureEnv(gpuTrace string) []string {
+	return []string{
+		"MTL_CAPTURE_ENABLED=1",
+		"GPUPROFILER_TRACE_DESTINATION=" + gpuTrace,
+	}
+}
+
+func runCaptureCommand(args []string, env []string) error {
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Env = env
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	return cmd.Run()
+}
+
+func validateCaptureOutputs(cpuPath, gpuPath string) error {
+	if err := validateCPUProfile(cpuPath); err != nil {
+		return err
+	}
+	return validateGPUTrace(gpuPath)
+}
+
+func validateCPUProfile(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("cpu profile %q was not produced by command; configure the target to write runtime/pprof data or pass -cpu with the generated path", path)
+		}
+		return fmt.Errorf("stat cpu profile %q: %w", path, err)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("cpu profile %q is a directory", path)
+	}
+	if info.Size() == 0 {
+		return fmt.Errorf("cpu profile %q is empty", path)
+	}
+	return nil
+}
+
+func validateGPUTrace(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("gpu trace %q was not produced by command", path)
+		}
+		return fmt.Errorf("stat gpu trace %q: %w", path, err)
+	}
+	if !info.IsDir() && info.Size() == 0 {
+		return fmt.Errorf("gpu trace %q is empty", path)
+	}
+	return nil
 }
 
 func mergeProfiles(cpuPath, gpuPath, outputPath string) error {
