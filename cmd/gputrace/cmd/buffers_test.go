@@ -23,7 +23,7 @@ func TestValidateBuffersOptionsAcceptsKnownValues(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := validateBuffersOptions(tt.format, tt.sort, tt.minSize, "", "not-used")
+			got, err := validateBuffersOptions(tt.format, tt.sort, tt.minSize, "", -1, "not-used")
 			if err != nil {
 				t.Fatalf("validateBuffersOptions: %v", err)
 			}
@@ -43,7 +43,7 @@ func TestValidateBuffersOptionsAcceptsKnownValues(t *testing.T) {
 func TestValidateBuffersOptionsAcceptsInspectFormats(t *testing.T) {
 	for _, format := range []string{"hex", "float32", "int32", "uint32", "float16"} {
 		t.Run(format, func(t *testing.T) {
-			got, err := validateBuffersOptions("table", "size", "", "MTLBuffer-1-0", format)
+			got, err := validateBuffersOptions("table", "size", "", "MTLBuffer-1-0", 256, format)
 			if err != nil {
 				t.Fatalf("validateBuffersOptions: %v", err)
 			}
@@ -79,7 +79,7 @@ func TestValidateBuffersOptionsRejectsInvalidInspectFormat(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := validateBuffersOptions("table", "size", "", "MTLBuffer-1-0", tt.format)
+			_, err := validateBuffersOptions("table", "size", "", "MTLBuffer-1-0", 256, tt.format)
 			if err == nil {
 				t.Fatal("validateBuffersOptions succeeded, want error")
 			}
@@ -96,6 +96,7 @@ func TestRunBuffersValidatesOptionsBeforeTraceIO(t *testing.T) {
 		format        string
 		sort          string
 		inspect       string
+		inspectBytes  int
 		inspectFormat string
 		want          string
 	}{
@@ -103,6 +104,7 @@ func TestRunBuffersValidatesOptionsBeforeTraceIO(t *testing.T) {
 			name:          "invalid format",
 			format:        "xml",
 			sort:          "size",
+			inspectBytes:  256,
 			inspectFormat: "hex",
 			want:          `invalid buffers format "xml" (must be table, json, or csv)`,
 		},
@@ -110,6 +112,7 @@ func TestRunBuffersValidatesOptionsBeforeTraceIO(t *testing.T) {
 			name:          "invalid sort",
 			format:        "table",
 			sort:          "created",
+			inspectBytes:  256,
 			inspectFormat: "hex",
 			want:          `invalid buffers sort "created" (must be size, id, or name)`,
 		},
@@ -118,6 +121,7 @@ func TestRunBuffersValidatesOptionsBeforeTraceIO(t *testing.T) {
 			format:        "table",
 			sort:          "size",
 			inspect:       "MTLBuffer-1-0",
+			inspectBytes:  256,
 			inspectFormat: "raw",
 			want:          `invalid inspect format "raw" (must be hex, float32, int32, uint32, or float16)`,
 		},
@@ -129,17 +133,20 @@ func TestRunBuffersValidatesOptionsBeforeTraceIO(t *testing.T) {
 			oldSort := buffersSort
 			oldMinSize := buffersMinSize
 			oldInspect := buffersInspect
+			oldInspectBytes := buffersInspectBytes
 			oldInspectFormat := buffersInspectFormat
 			buffersFormat = tt.format
 			buffersSort = tt.sort
 			buffersMinSize = ""
 			buffersInspect = tt.inspect
+			buffersInspectBytes = tt.inspectBytes
 			buffersInspectFormat = tt.inspectFormat
 			t.Cleanup(func() {
 				buffersFormat = oldFormat
 				buffersSort = oldSort
 				buffersMinSize = oldMinSize
 				buffersInspect = oldInspect
+				buffersInspectBytes = oldInspectBytes
 				buffersInspectFormat = oldInspectFormat
 			})
 
@@ -150,6 +157,50 @@ func TestRunBuffersValidatesOptionsBeforeTraceIO(t *testing.T) {
 			}
 			if err.Error() != tt.want {
 				t.Fatalf("error = %q, want %q", err.Error(), tt.want)
+			}
+		})
+	}
+}
+
+func TestRunBuffersRejectsInspectBytesBeforeTraceIO(t *testing.T) {
+	tests := []struct {
+		name  string
+		bytes int
+	}{
+		{name: "negative", bytes: -1},
+		{name: "zero", bytes: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			oldFormat := buffersFormat
+			oldSort := buffersSort
+			oldMinSize := buffersMinSize
+			oldInspect := buffersInspect
+			oldInspectBytes := buffersInspectBytes
+			oldInspectFormat := buffersInspectFormat
+			buffersFormat = "table"
+			buffersSort = "size"
+			buffersMinSize = ""
+			buffersInspect = "MTLBuffer-1-0"
+			buffersInspectBytes = tt.bytes
+			buffersInspectFormat = "hex"
+			t.Cleanup(func() {
+				buffersFormat = oldFormat
+				buffersSort = oldSort
+				buffersMinSize = oldMinSize
+				buffersInspect = oldInspect
+				buffersInspectBytes = oldInspectBytes
+				buffersInspectFormat = oldInspectFormat
+			})
+
+			missingTrace := filepath.Join(t.TempDir(), "missing.gputrace")
+			err := runBuffers(nil, []string{missingTrace})
+			if err == nil {
+				t.Fatal("runBuffers succeeded, want error")
+			}
+			if err.Error() != "inspect bytes must be greater than zero" {
+				t.Fatalf("error = %q, want %q", err.Error(), "inspect bytes must be greater than zero")
 			}
 		})
 	}

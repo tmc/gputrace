@@ -62,7 +62,7 @@ func init() {
 }
 
 func runBuffers(cmd *cobra.Command, args []string) error {
-	opts, err := validateBuffersOptions(buffersFormat, buffersSort, buffersMinSize, buffersInspect, buffersInspectFormat)
+	opts, err := validateBuffersOptions(buffersFormat, buffersSort, buffersMinSize, buffersInspect, buffersInspectBytes, buffersInspectFormat)
 	if err != nil {
 		return err
 	}
@@ -82,7 +82,7 @@ func runBuffers(cmd *cobra.Command, args []string) error {
 
 	// If --inspect is specified, handle buffer inspection
 	if buffersInspect != "" {
-		return inspectBuffer(tracePath, buffersInspect, buffersInspectBytes, opts.inspectFormat)
+		return inspectBuffer(tracePath, buffersInspect, opts.inspectBytes, opts.inspectFormat)
 	}
 
 	// Extract buffer information
@@ -120,10 +120,11 @@ type buffersOptions struct {
 	format        string
 	sort          string
 	minSize       uint64
+	inspectBytes  int
 	inspectFormat string
 }
 
-func validateBuffersOptions(format, sortBy, minSize, inspect, inspectFormat string) (buffersOptions, error) {
+func validateBuffersOptions(format, sortBy, minSize, inspect string, inspectBytes int, inspectFormat string) (buffersOptions, error) {
 	format, err := normalizeBuffersFormat(format)
 	if err != nil {
 		return buffersOptions{}, err
@@ -141,6 +142,9 @@ func validateBuffersOptions(format, sortBy, minSize, inspect, inspectFormat stri
 		}
 	}
 	if inspect != "" {
+		if inspectBytes <= 0 {
+			return buffersOptions{}, fmt.Errorf("inspect bytes must be greater than zero")
+		}
 		inspectFormat, err = normalizeBuffersInspectFormat(inspectFormat)
 		if err != nil {
 			return buffersOptions{}, err
@@ -151,6 +155,7 @@ func validateBuffersOptions(format, sortBy, minSize, inspect, inspectFormat stri
 		format:        format,
 		sort:          sortBy,
 		minSize:       minBytes,
+		inspectBytes:  inspectBytes,
 		inspectFormat: inspectFormat,
 	}, nil
 }
