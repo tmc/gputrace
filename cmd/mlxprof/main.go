@@ -36,7 +36,7 @@ func run() error {
 		if len(args) == 0 {
 			return fmt.Errorf("no command specified to run")
 		}
-		return runCapture(args, *cpuProfile, *output)
+		return runCapture(args, *cpuProfile, *gpuTrace, *output)
 	}
 
 	if *gpuTrace == "" {
@@ -59,17 +59,24 @@ type captureDeps struct {
 	merge    func(cpuPath, gpuPath, outputPath string) error
 }
 
-func runCapture(args []string, cpuProfile, output string) error {
+func runCapture(args []string, cpuProfile, gpuTrace, output string) error {
 	return runCaptureWithDeps(captureConfig{
 		args:       args,
 		cpuProfile: cpuProfile,
-		gpuTrace:   defaultCaptureGPUTrace,
+		gpuTrace:   captureGPUTracePath(gpuTrace),
 		output:     output,
 	}, captureDeps{
 		run:      runCaptureCommand,
 		validate: validateCaptureOutputs,
 		merge:    mergeProfiles,
 	})
+}
+
+func captureGPUTracePath(path string) string {
+	if path != "" {
+		return path
+	}
+	return defaultCaptureGPUTrace
 }
 
 func runCaptureWithDeps(cfg captureConfig, deps captureDeps) error {

@@ -2,12 +2,42 @@ package main
 
 import (
 	"errors"
+	"flag"
+	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestRunCaptureModeUsesGPUFlag(t *testing.T) {
+	tmpDir := t.TempDir()
+	gpuPath := filepath.Join(tmpDir, "custom.gputrace")
+
+	err := runForCaptureEnvTest(t, gpuPath,
+		"-run",
+		"-gpu", gpuPath,
+		"-cpu", filepath.Join(tmpDir, "cpu.pprof"),
+		"-o", filepath.Join(tmpDir, "merged.pprof"),
+		os.Args[0], "-test.run=TestRunCaptureHelperProcess",
+	)
+	assertCaptureHelperExit(t, err)
+}
+
+func TestRunCaptureModeDefaultsGPUTrace(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	err := runForCaptureEnvTest(t, defaultCaptureGPUTrace,
+		"-run",
+		"-cpu", filepath.Join(tmpDir, "cpu.pprof"),
+		"-o", filepath.Join(tmpDir, "merged.pprof"),
+		os.Args[0], "-test.run=TestRunCaptureHelperProcess",
+	)
+	assertCaptureHelperExit(t, err)
+}
 
 func TestRunCaptureWithDepsValidatesAndMergesArtifacts(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -210,4 +240,56 @@ func containsEnv(env []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func runForCaptureEnvTest(t *testing.T, wantGPU string, args ...string) error {
+	t.Helper()
+
+	t.Setenv("MLXPROF_CAPTURE_HELPER", "1")
+	t.Setenv("MLXPROF_CAPTURE_HELPER_WANT_GPU", wantGPU)
+
+	oldArgs := os.Args
+	oldFlags := flag.CommandLine
+	t.Cleanup(func() {
+		os.Args = oldArgs
+		flag.CommandLine = oldFlags
+	})
+
+	flags := flag.NewFlagSet("mlxprof", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	flag.CommandLine = flags
+	os.Args = append([]string{"mlxprof"}, args...)
+
+	return run()
+}
+
+func assertCaptureHelperExit(t *testing.T, err error) {
+	t.Helper()
+
+	if err == nil {
+		t.Fatal("expected helper command failure")
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("error = %v, want exec exit error", err)
+	}
+	if code := exitErr.ExitCode(); code != 7 {
+		t.Fatalf("helper exit code = %d, want 7; error = %v", code, err)
+	}
+}
+
+func TestRunCaptureHelperProcess(t *testing.T) {
+	if os.Getenv("MLXPROF_CAPTURE_HELPER") != "1" {
+		return
+	}
+
+	if got, want := os.Getenv("GPUPROFILER_TRACE_DESTINATION"), os.Getenv("MLXPROF_CAPTURE_HELPER_WANT_GPU"); got != want {
+		fmt.Fprintf(os.Stderr, "gpu trace destination = %q, want %q\n", got, want)
+		os.Exit(42)
+	}
+	if got := os.Getenv("MTL_CAPTURE_ENABLED"); got != "1" {
+		fmt.Fprintf(os.Stderr, "MTL_CAPTURE_ENABLED = %q, want 1\n", got)
+		os.Exit(43)
+	}
+	os.Exit(7)
 }
