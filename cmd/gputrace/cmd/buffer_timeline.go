@@ -3,7 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
-	"os"
+	"io"
 	"sort"
 
 	"github.com/spf13/cobra"
@@ -104,13 +104,19 @@ func runBufferTimeline(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("unknown format: %s (valid: ascii, summary, chrome, json)", bufferTimelineFormat)
 	}
 
-	// Output to file or stdout
-	if bufferTimelineOutput != "" {
-		return os.WriteFile(bufferTimelineOutput, []byte(output), 0644)
-	}
+	return writeBufferTimelineOutput(bufferTimelineOutput, output)
+}
 
-	fmt.Print(output)
-	return nil
+func writeBufferTimelineOutput(outputPath, output string) error {
+	writer, closeOutput, err := createCommandOutput(outputPath)
+	if err != nil {
+		return err
+	}
+	if closeOutput != nil {
+		defer closeOutput()
+	}
+	_, err = io.WriteString(writer, output)
+	return err
 }
 
 type bufferTimelineJSON struct {

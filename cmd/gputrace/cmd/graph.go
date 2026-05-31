@@ -2,7 +2,7 @@ package cmd
 
 import (
 	"fmt"
-	"os"
+	"io"
 
 	"github.com/spf13/cobra"
 
@@ -89,15 +89,35 @@ func runGraph(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to generate graph: %w", err)
 	}
 
-	// Write output
-	if graphOutput != "" {
-		if err := os.WriteFile(graphOutput, []byte(output), 0644); err != nil {
+	return writeGraphOutput(cmd, graphOutput, output)
+}
+
+func writeGraphOutput(cmd *cobra.Command, outputPath, output string) error {
+	if outputPath == "" {
+		if _, err := io.WriteString(cmd.OutOrStdout(), output); err != nil {
 			return fmt.Errorf("failed to write output: %w", err)
 		}
-		fmt.Fprintf(cmd.OutOrStderr(), "Graph written to %s\n", graphOutput)
-	} else {
-		fmt.Fprint(cmd.OutOrStdout(), output)
+		return nil
 	}
 
+	writer, closeOutput, err := createCommandOutput(outputPath)
+	if err != nil {
+		return fmt.Errorf("failed to create output: %w", err)
+	}
+
+	if _, err := io.WriteString(writer, output); err != nil {
+		if closeOutput != nil {
+			_ = closeOutput()
+		}
+		return fmt.Errorf("failed to write output: %w", err)
+	}
+	if closeOutput != nil {
+		if err := closeOutput(); err != nil {
+			return fmt.Errorf("failed to close output: %w", err)
+		}
+	}
+	if !commandOutputPathIsStdout(outputPath) {
+		fmt.Fprintf(cmd.ErrOrStderr(), "Graph written to %s\n", outputPath)
+	}
 	return nil
 }

@@ -57,6 +57,7 @@ func init() {
 
 func runClickButton(cmd *cobra.Command, args []string) error {
 	buttonName := args[0]
+	status := xcodeProfileStatusWriter()
 
 	if err := setupMacgo(); err != nil {
 		return err
@@ -155,12 +156,15 @@ func runClickButton(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	fmt.Printf("Clicking button: %s\n", buttonName)
+	fmt.Fprintf(status, "Clicking button: %s\n", buttonName)
 	if err := axPressWithFallback(btn); err != nil {
 		return fmt.Errorf("failed to click: %w", err)
 	}
-	fmt.Println("Done")
-	return nil
+	fmt.Fprintln(status, "Done")
+	return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+		Action: "click_button",
+		Target: buttonName,
+	})
 }
 
 // containsElement checks if a window/element contains a specific element via BFS.

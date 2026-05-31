@@ -146,6 +146,7 @@ Example:
 
 func runSelectTab(cmd *cobra.Command, args []string) error {
 	tabName := args[0]
+	status := xcodeProfileStatusWriter()
 
 	if err := setupMacgo(); err != nil {
 		return err
@@ -166,34 +167,46 @@ func runSelectTab(cmd *cobra.Command, args []string) error {
 	// Find and click the tab
 	tab := findTabByName(windowAX, tabName)
 	if tab != 0 {
-		fmt.Printf("Selecting tab: %s\n", tabName)
+		fmt.Fprintf(status, "Selecting tab: %s\n", tabName)
 		if err := axAction(tab, "AXPress"); err != nil {
 			return fmt.Errorf("failed to click tab: %w", err)
 		}
-		fmt.Println("Done")
-		return nil
+		fmt.Fprintln(status, "Done")
+		return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+			Action: "select_tab",
+			Target: tabName,
+			Method: "tab",
+		})
 	}
 
 	// Try as an outline row (navigator items like Summary, Dependencies, etc.)
 	row := findOutlineRowByName(windowAX, tabName)
 	if row != 0 {
-		fmt.Printf("Selecting navigator item: %s\n", tabName)
+		fmt.Fprintf(status, "Selecting navigator item: %s\n", tabName)
 		if err := axAction(row, "AXPress"); err != nil {
 			return fmt.Errorf("failed to select: %w", err)
 		}
-		fmt.Println("Done")
-		return nil
+		fmt.Fprintln(status, "Done")
+		return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+			Action: "select_tab",
+			Target: tabName,
+			Method: "navigator",
+		})
 	}
 
 	// Try as a button (some tabs appear as buttons)
 	btn := findButtonByNameInsensitive(windowAX, tabName)
 	if btn != 0 {
-		fmt.Printf("Selecting: %s\n", tabName)
+		fmt.Fprintf(status, "Selecting: %s\n", tabName)
 		if err := axAction(btn, "AXPress"); err != nil {
 			return fmt.Errorf("failed to click: %w", err)
 		}
-		fmt.Println("Done")
-		return nil
+		fmt.Fprintln(status, "Done")
+		return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+			Action: "select_tab",
+			Target: tabName,
+			Method: "button",
+		})
 	}
 
 	return fmt.Errorf("tab %q not found", tabName)
@@ -201,6 +214,8 @@ func runSelectTab(cmd *cobra.Command, args []string) error {
 
 // runSelectNavigatorItem selects an item in the Debug navigator by name.
 func runSelectNavigatorItem(name string) error {
+	status := xcodeProfileStatusWriter()
+
 	if err := setupMacgo(); err != nil {
 		return err
 	}
@@ -249,33 +264,49 @@ func runSelectNavigatorItem(name string) error {
 		}
 	}
 
-	fmt.Printf("Selecting navigator item: %s\n", displayName)
+	fmt.Fprintf(status, "Selecting navigator item: %s\n", displayName)
 
 	// Try AXOpen first (double-click to open)
 	if err := axAction(targetEl, "AXOpen"); err == nil {
-		fmt.Println("Done")
-		return nil
+		fmt.Fprintln(status, "Done")
+		return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+			Action: "select_navigator",
+			Target: displayName,
+			Method: "AXOpen",
+		})
 	}
 
 	// Try AXPress
 	if err := axAction(targetEl, "AXPress"); err == nil {
-		fmt.Println("Done")
-		return nil
+		fmt.Fprintln(status, "Done")
+		return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+			Action: "select_navigator",
+			Target: displayName,
+			Method: "AXPress",
+		})
 	}
 
 	// Try setting AXSelected on the element, then double-click
 	if selectElement(targetEl) {
 		// Also try double-click via CGEvent
 		if err := doubleClickElement(targetEl); err == nil {
-			fmt.Println("Done")
-			return nil
+			fmt.Fprintln(status, "Done")
+			return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+				Action: "select_navigator",
+				Target: displayName,
+				Method: "select_double_click",
+			})
 		}
 	}
 
 	// Last resort: just double-click on the element
 	if err := doubleClickElement(targetEl); err == nil {
-		fmt.Println("Done")
-		return nil
+		fmt.Fprintln(status, "Done")
+		return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+			Action: "select_navigator",
+			Target: displayName,
+			Method: "double_click",
+		})
 	}
 
 	return fmt.Errorf("could not select %s (element found but selection failed)", displayName)
@@ -422,6 +453,8 @@ func runListTabs(cmd *cobra.Command, args []string) error {
 }
 
 func runShowPerformance(cmd *cobra.Command, args []string) error {
+	status := xcodeProfileStatusWriter()
+
 	if err := setupMacgo(); err != nil {
 		return err
 	}
@@ -447,12 +480,14 @@ func runShowPerformance(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("Show Performance button is disabled")
 	}
 
-	fmt.Println("Clicking Show Performance...")
+	fmt.Fprintln(status, "Clicking Show Performance...")
 	if err := axAction(btn, "AXPress"); err != nil {
 		return fmt.Errorf("failed to click: %w", err)
 	}
-	fmt.Println("Done")
-	return nil
+	fmt.Fprintln(status, "Done")
+	return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+		Action: "show_performance",
+	})
 }
 
 // findTabByName finds a tab (AXRadioButton in tab group) by name.
