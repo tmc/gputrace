@@ -18,6 +18,8 @@ type TimingMetrics struct {
 	TotalDuration       time.Duration `json:"total_duration"`
 	TotalEncoders       int           `json:"total_encoders"`
 	TotalCommandBuffers int           `json:"total_command_buffers"`
+	TimingSource        TimingSource  `json:"timing_source"`
+	TimingApproximate   bool          `json:"timing_approximate"`
 
 	// Per-Kernel Metrics
 	KernelTimings []*KernelTiming `json:"kernel_timings"`
@@ -31,6 +33,20 @@ type TimingMetrics struct {
 	// Trace Metadata
 	TracePath   string    `json:"trace_path"`
 	CaptureTime time.Time `json:"capture_time,omitempty"`
+}
+
+// TimingSource identifies how encoder timing values were produced.
+type TimingSource string
+
+const (
+	TimingSourceProfiler  TimingSource = "profiler"
+	TimingSourceExtracted TimingSource = "extracted"
+	TimingSourceSynthetic TimingSource = "synthetic"
+)
+
+// IsApproximate reports whether the source is heuristic or synthetic rather than measured profiler data.
+func (source TimingSource) IsApproximate() bool {
+	return source != TimingSourceProfiler
 }
 
 // KernelTiming represents timing data for a specific kernel/shader.
@@ -94,10 +110,12 @@ func (tme *TimingMetricsExtractor) Extract() (*TimingMetrics, error) {
 
 	// Extract encoder timings - try profiler timing first (most accurate), then heuristic, then synthetic
 	var encoderTimings []*EncoderTiming
+	timingSource := TimingSourceSynthetic
 
 	// 1. Try real profiler timing from .gpuprofiler_raw (most accurate)
 	profilerTimings, _, profilerErr := counter.ExtractEncoderTimingsFromProfiler(tme.trace)
 	if profilerErr == nil && len(profilerTimings) > 0 {
+		timingSource = TimingSourceProfiler
 		var currentTimeNs uint64
 		for _, pt := range profilerTimings {
 			durationNs := uint64(pt.DurationMicros) * 1000 // Convert µs to ns
@@ -120,13 +138,18 @@ func (tme *TimingMetricsExtractor) Extract() (*TimingMetrics, error) {
 	if len(encoderTimings) == 0 {
 		var err error
 		encoderTimings, err = ExtractTimingData(tme.trace)
-		if err != nil || len(encoderTimings) == 0 {
+		if err == nil && len(encoderTimings) > 0 {
+			timingSource = TimingSourceExtracted
+		} else {
 			// 3. Last resort: synthetic timing
 			encoderTimings = GenerateSyntheticTiming(tme.trace)
+			timingSource = TimingSourceSynthetic
 		}
 	}
 	metrics.EncoderTimings = encoderTimings
 	metrics.TotalEncoders = len(encoderTimings)
+	metrics.TimingSource = timingSource
+	metrics.TimingApproximate = timingSource.IsApproximate()
 
 	// Aggregate by kernel name
 	kernelMap := make(map[string]*KernelTiming)
@@ -285,6 +308,13 @@ func FormatTimingMetrics(metrics *TimingMetrics) string {
 	out += "=== GPU Timing Metrics ===\n\n"
 	out += fmt.Sprintf("Trace: %s\n", metrics.TracePath)
 	out += fmt.Sprintf("Total Duration: %v (%.2f ms)\n", metrics.TotalDuration, float64(metrics.TotalDuration)/float64(time.Millisecond))
+	if metrics.TimingSource != "" {
+		sourceKind := "measured"
+		if metrics.TimingApproximate {
+			sourceKind = "approximate"
+		}
+		out += fmt.Sprintf("Timing Source: %s (%s)\n", metrics.TimingSource, sourceKind)
+	}
 	out += fmt.Sprintf("Command Buffers: %d\n", metrics.TotalCommandBuffers)
 	out += fmt.Sprintf("Encoders: %d\n", metrics.TotalEncoders)
 	out += fmt.Sprintf("Unique Kernels: %d\n\n", len(metrics.KernelTimings))
