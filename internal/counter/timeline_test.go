@@ -185,6 +185,51 @@ func TestParseTimelineFileReportsUnsupportedCompressedPayload(t *testing.T) {
 	}
 }
 
+func TestTimelineCompressionHeaderDetectionRequiresCompleteHeaders(t *testing.T) {
+	tests := []struct {
+		name     string
+		payload  []byte
+		wantZlib bool
+		wantLZ4  bool
+	}{
+		{
+			name:     "truncated zlib cmf only",
+			payload:  []byte{0x78},
+			wantZlib: false,
+			wantLZ4:  false,
+		},
+		{
+			name:     "valid zlib header",
+			payload:  []byte{0x78, 0x5e},
+			wantZlib: true,
+			wantLZ4:  false,
+		},
+		{
+			name:     "truncated lz4 frame magic",
+			payload:  []byte{0x04, 0x22, 0x4d},
+			wantZlib: false,
+			wantLZ4:  false,
+		},
+		{
+			name:     "valid lz4 frame magic",
+			payload:  []byte{0x04, 0x22, 0x4d, 0x18},
+			wantZlib: false,
+			wantLZ4:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hasZlibHeader(tt.payload); got != tt.wantZlib {
+				t.Fatalf("hasZlibHeader(% x) = %v, want %v", tt.payload, got, tt.wantZlib)
+			}
+			if got := hasLZ4FrameHeader(tt.payload); got != tt.wantLZ4 {
+				t.Fatalf("hasLZ4FrameHeader(% x) = %v, want %v", tt.payload, got, tt.wantLZ4)
+			}
+		})
+	}
+}
+
 func TestParseTimelineFileInvalidDataOffsetDoesNotScanSparseIndex(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "Timeline_f_2.raw")
