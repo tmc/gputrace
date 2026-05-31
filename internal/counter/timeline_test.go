@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -125,6 +126,89 @@ func TestParseTimelineFileCountsSparseIndexOnly(t *testing.T) {
 	}
 	if td.RawFormatStatus == "" {
 		t.Fatal("RawFormatStatus is empty")
+	}
+	if !strings.Contains(td.RawFormatStatus, "data section encoding unknown") {
+		t.Fatalf("RawFormatStatus = %q, want unknown encoding detail", td.RawFormatStatus)
+	}
+}
+
+func TestParseTimelineFileReportsUnsupportedCompressedPayload(t *testing.T) {
+	tests := []struct {
+		name   string
+		prefix []byte
+		want   string
+	}{
+		{
+			name:   "zlib",
+			prefix: []byte{0x78, 0x5e, 0xed},
+			want:   "zlib header",
+		},
+		{
+			name:   "lz4",
+			prefix: []byte{0x04, 0x22, 0x4d, 0x18},
+			want:   "lz4 frame header",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "Timeline_f_1.raw")
+			dataOffset := TimelineHeaderSize + 256
+			data := make([]byte, dataOffset+len(tt.prefix)+8)
+			binary.LittleEndian.PutUint64(data[0:8], TimelineMagic)
+			binary.LittleEndian.PutUint64(data[32:40], uint64(dataOffset))
+			data[TimelineHeaderSize+23] = 1
+			copy(data[dataOffset:], tt.prefix)
+
+			if err := os.WriteFile(path, data, 0666); err != nil {
+				t.Fatal(err)
+			}
+
+			td, err := ParseTimelineFile(path)
+			if err != nil {
+				t.Fatalf("ParseTimelineFile failed: %v", err)
+			}
+			if td.ValidChunks != 1 {
+				t.Fatalf("ValidChunks = %d, want 1", td.ValidChunks)
+			}
+			if len(td.KickTraces) != 0 || len(td.DrawTraces) != 0 {
+				t.Fatalf("raw chunk parser produced heuristic records: kicks=%d draws=%d", len(td.KickTraces), len(td.DrawTraces))
+			}
+			if !strings.Contains(td.RawFormatStatus, tt.want) {
+				t.Fatalf("RawFormatStatus = %q, want %q", td.RawFormatStatus, tt.want)
+			}
+			if !strings.Contains(td.RawFormatStatus, "decompression unsupported") {
+				t.Fatalf("RawFormatStatus = %q, want fail-closed decompression detail", td.RawFormatStatus)
+			}
+		})
+	}
+}
+
+func TestParseTimelineFileInvalidDataOffsetDoesNotScanSparseIndex(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "Timeline_f_2.raw")
+	data := make([]byte, TimelineHeaderSize+256)
+	binary.LittleEndian.PutUint64(data[0:8], TimelineMagic)
+	binary.LittleEndian.PutUint64(data[32:40], uint64(len(data)+256))
+	data[TimelineHeaderSize+17] = 1
+
+	if err := os.WriteFile(path, data, 0666); err != nil {
+		t.Fatal(err)
+	}
+
+	td, err := ParseTimelineFile(path)
+	if err != nil {
+		t.Fatalf("ParseTimelineFile failed: %v", err)
+	}
+	if td.ChunkCount != 0 {
+		t.Fatalf("ChunkCount = %d, want 0 for invalid data offset", td.ChunkCount)
+	}
+	if td.ValidChunks != 0 {
+		t.Fatalf("ValidChunks = %d, want 0 for invalid data offset", td.ValidChunks)
+	}
+	if !strings.Contains(td.RawFormatStatus, "invalid data offset") || !strings.Contains(td.RawFormatStatus, "beyond file size") {
+		t.Fatalf("RawFormatStatus = %q, want invalid offset detail", td.RawFormatStatus)
 	}
 }
 
