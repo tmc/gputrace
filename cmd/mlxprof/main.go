@@ -82,6 +82,9 @@ func runCaptureWithDeps(cfg captureConfig, deps captureDeps) error {
 	if cfg.gpuTrace == "" {
 		return fmt.Errorf("gpu trace path required")
 	}
+	if profileOutputPathIsStdout(cfg.output) {
+		return fmt.Errorf("capture mode output cannot be stdout; use -o with a file path")
+	}
 
 	fmt.Fprintf(os.Stderr, "Running: %v\n", cfg.args)
 
