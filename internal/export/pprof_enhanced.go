@@ -422,7 +422,7 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 	realTimings, totalTimeUs, realTimingErr := counter.ExtractEncoderTimingsFromProfiler(t)
 	useRealTiming := realTimingErr == nil && len(realTimings) > 0
 	if useRealTiming {
-		fmt.Printf("Using real GPU timing: %d encoders, %.2f ms total\n",
+		fmt.Fprintf(os.Stderr, "Using real GPU timing: %d encoders, %.2f ms total\n",
 			len(realTimings), float64(totalTimeUs)/1000)
 	}
 
@@ -433,7 +433,7 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 	if useDispatchTiming {
 		counter.CorrelateDispatchSamples(streamStats)
 		executionCosts = applyProfilingExecutionCosts(streamStats, t.Path)
-		fmt.Printf("Using dispatch timing: %d dispatches, %d pipelines\n",
+		fmt.Fprintf(os.Stderr, "Using dispatch timing: %d dispatches, %d pipelines\n",
 			len(streamStats.Dispatches), len(streamStats.Pipelines))
 	}
 
@@ -588,7 +588,7 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 		return s
 	}
 
-	fmt.Printf("Pprof: Found %d debug group mappings\n", len(t.EncoderDebugGroups))
+	fmt.Fprintf(os.Stderr, "Pprof: Found %d debug group mappings\n", len(t.EncoderDebugGroups))
 
 	// Build Command Buffer Nodes
 	cbs, _ := t.ParseCommandBuffers()
@@ -653,14 +653,14 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 	// Pre-calculate metrics map for O(1) lookup
 	metricsMap := make(map[uint64]*counter.ShaderHardwareMetrics)
 	if stats != nil {
-		fmt.Printf("Building metrics map from %d stats entries\n", len(stats.ShaderMetrics))
+		fmt.Fprintf(os.Stderr, "Building metrics map from %d stats entries\n", len(stats.ShaderMetrics))
 		for i := range stats.ShaderMetrics {
 			m := &stats.ShaderMetrics[i]
 			metricsMap[m.PipelineState] = m
 		}
-		fmt.Printf("Metrics map built with %d entries\n", len(metricsMap))
+		fmt.Fprintf(os.Stderr, "Metrics map built with %d entries\n", len(metricsMap))
 	} else {
-		fmt.Println("No stats provided to ToPprofWithMetrics")
+		fmt.Fprintln(os.Stderr, "No stats provided to ToPprofWithMetrics")
 	}
 
 	matches := 0
@@ -983,7 +983,7 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 		}
 	}
 	if stats != nil {
-		fmt.Printf("Total hardware metric matches: %d/%d encoders\n", matches, len(encoders))
+		fmt.Fprintf(os.Stderr, "Total hardware metric matches: %d/%d encoders\n", matches, len(encoders))
 	}
 
 	// Add dispatch samples with real timing from streamData if available
@@ -1099,7 +1099,7 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 				NumLabel: dispNumLabels,
 			})
 		}
-		fmt.Printf("Added %d dispatch samples with real timing from streamData\n", len(streamStats.Dispatches))
+		fmt.Fprintf(os.Stderr, "Added %d dispatch samples with real timing from streamData\n", len(streamStats.Dispatches))
 
 		// Add encoder profile samples from GPRWCNTR ShaderProfilerData
 		if streamStats.Timeline != nil && len(streamStats.Timeline.EncoderProfiles) > 0 {
@@ -1156,7 +1156,7 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 					NumLabel: epNumLabels,
 				})
 			}
-			fmt.Printf("Added %d encoder profile samples from GPRWCNTR\n", len(streamStats.Timeline.EncoderProfiles))
+			fmt.Fprintf(os.Stderr, "Added %d encoder profile samples from GPRWCNTR\n", len(streamStats.Timeline.EncoderProfiles))
 		}
 	}
 

@@ -89,7 +89,7 @@ func runPprof(cmd *cobra.Command, args []string) error {
 	}
 
 	if verbose {
-		fmt.Printf("Loading GPU trace: %s\n", tracePath)
+		fmt.Fprintf(pprofCurrentStatusWriter(), "Loading GPU trace: %s\n", tracePath)
 	}
 
 	// If stats-only mode, show profiler summary
@@ -135,8 +135,9 @@ func runPprof(cmd *cobra.Command, args []string) error {
 
 	// Show summary if verbose
 	if verbose {
-		prof.PrintSummary()
-		fmt.Println()
+		status := pprofCurrentStatusWriter()
+		prof.FprintSummary(status)
+		fmt.Fprintln(status)
 	}
 
 	// Determine output paths
@@ -180,7 +181,7 @@ func runPprof(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("failed to write text report: %w", err)
 		}
 
-		fmt.Printf("✅ Text report written to: %s\n", outputPath)
+		fmt.Fprintf(pprofStatusWriter(outputPath), "✅ Text report written to: %s\n", outputPath)
 
 	} else {
 		// Generate single pprof file
@@ -189,20 +190,39 @@ func runPprof(cmd *cobra.Command, args []string) error {
 			outputPath = outputPrefix + ".pprof"
 		}
 
+		status := pprofStatusWriter(outputPath)
 		if verbose {
-			fmt.Printf("Writing pprof to: %s\n", outputPath)
+			fmt.Fprintf(status, "Writing pprof to: %s\n", outputPath)
 		}
 
 		if err := prof.WriteGPUProfile(outputPath); err != nil {
 			return fmt.Errorf("failed to write pprof: %w", err)
 		}
 
-		fmt.Printf("✅ GPU profile written to: %s\n", outputPath)
-		fmt.Printf("\nView with: go tool pprof -top %s\n", outputPath)
-		fmt.Printf("Or:        go tool pprof -http=:8080 %s\n", outputPath)
+		fmt.Fprintf(status, "✅ GPU profile written to: %s\n", outputPath)
+		fmt.Fprintf(status, "\nView with: go tool pprof -top %s\n", outputPath)
+		fmt.Fprintf(status, "Or:        go tool pprof -http=:8080 %s\n", outputPath)
 	}
 
 	return nil
+}
+
+func pprofCurrentStatusWriter() *os.File {
+	if !all && pprofOutputPathIsStdout(output) {
+		return os.Stderr
+	}
+	return os.Stdout
+}
+
+func pprofStatusWriter(outputPath string) *os.File {
+	if pprofOutputPathIsStdout(outputPath) {
+		return os.Stderr
+	}
+	return os.Stdout
+}
+
+func pprofOutputPathIsStdout(path string) bool {
+	return path == "/dev/stdout"
 }
 
 // generateSourceLinesPprof generates a pprof profile with per-source-line samples.
@@ -223,17 +243,6 @@ func generateSourceLinesPprof(tracePath string, searchPaths []string) error {
 		log.Printf("Warning: failed to index trace shader sources: %v", err)
 	}
 
-	timingSelection := selectSourceLineTimings(trace)
-	fmt.Print(formatSourceLineTimingNotice(timingSelection.source, len(timingSelection.timings)))
-	timings := timingSelection.timings
-	timings = appendSourceMappedEncoderTimings(trace, timings, mapper)
-
-	// Generate pprof with source lines
-	prof, err := export.ToPprofWithSourceLines(trace, timings, mapper)
-	if err != nil {
-		return fmt.Errorf("failed to generate source-lines pprof: %w", err)
-	}
-
 	// Determine output path
 	baseName := filepath.Base(tracePath)
 	if ext := filepath.Ext(baseName); ext != "" {
@@ -243,24 +252,40 @@ func generateSourceLinesPprof(tracePath string, searchPaths []string) error {
 	if outputPath == "" {
 		outputPath = baseName + ".source.pprof"
 	}
+	status := pprofStatusWriter(outputPath)
+
+	timingSelection := selectSourceLineTimings(trace)
+	fmt.Fprint(status, formatSourceLineTimingNotice(timingSelection.source, len(timingSelection.timings)))
+	timings := timingSelection.timings
+	timings = appendSourceMappedEncoderTimings(trace, timings, mapper)
+
+	// Generate pprof with source lines
+	prof, err := export.ToPprofWithSourceLines(trace, timings, mapper)
+	if err != nil {
+		return fmt.Errorf("failed to generate source-lines pprof: %w", err)
+	}
 
 	// Write profile
-	f, err := os.Create(outputPath)
-	if err != nil {
-		return fmt.Errorf("failed to create output file: %w", err)
+	w := os.Stdout
+	if !pprofOutputPathIsStdout(outputPath) {
+		f, err := os.Create(outputPath)
+		if err != nil {
+			return fmt.Errorf("failed to create output file: %w", err)
+		}
+		defer f.Close()
+		w = f
 	}
-	defer f.Close()
 
-	if err := prof.Write(f); err != nil {
+	if err := prof.Write(w); err != nil {
 		return fmt.Errorf("failed to write pprof: %w", err)
 	}
 
-	fmt.Printf("✅ Source-lines pprof written to: %s\n", outputPath)
-	fmt.Printf("\nView per-line costs with:\n")
-	fmt.Printf("  go tool pprof -list <kernel_name> %s\n", outputPath)
-	fmt.Printf("\nOr interactive mode:\n")
-	fmt.Printf("  go tool pprof %s\n", outputPath)
-	fmt.Printf("  (pprof) list <kernel_name>\n")
+	fmt.Fprintf(status, "✅ Source-lines pprof written to: %s\n", outputPath)
+	fmt.Fprintf(status, "\nView per-line costs with:\n")
+	fmt.Fprintf(status, "  go tool pprof -list <kernel_name> %s\n", outputPath)
+	fmt.Fprintf(status, "\nOr interactive mode:\n")
+	fmt.Fprintf(status, "  go tool pprof %s\n", outputPath)
+	fmt.Fprintf(status, "  (pprof) list <kernel_name>\n")
 
 	return nil
 }

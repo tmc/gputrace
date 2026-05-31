@@ -80,7 +80,7 @@ func FromGPUTrace(tracePath string, shaderSearchPaths ...string) (*GPUTraceProfi
 	mapper := gputrace.NewShaderSourceMapper(shaderSearchPaths...)
 	if err := mapper.IndexShaderSources(); err != nil {
 		// Log error but continue - source mapping is optional
-		fmt.Printf("Warning: failed to index shader sources: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Warning: failed to index shader sources: %v\n", err)
 	}
 
 	// Get basename for output files
@@ -93,7 +93,7 @@ func FromGPUTrace(tracePath string, shaderSearchPaths ...string) (*GPUTraceProfi
 	var stats *gputrace.PerfCounterStats
 	if s, err := gputrace.ParsePerfCounters(trace); err == nil {
 		stats = s
-		fmt.Printf("Loaded performance counters with confidence %.2f\n", stats.ConfidenceLevel)
+		fmt.Fprintf(os.Stderr, "Loaded performance counters with confidence %.2f\n", stats.ConfidenceLevel)
 	} else {
 		// Only log if verbose? Or just ignore silently as it's optional.
 		// fmt.Printf("Note: No performance counters: %v\n", err)
@@ -245,34 +245,36 @@ func (p *GPUTraceProfiler) WriteCombinedProfile(path string) error {
 
 // WriteTextReport writes a human-readable text report.
 func (p *GPUTraceProfiler) WriteTextReport(path string) error {
-	f, err := os.Create(path)
+	w, closeOutput, err := createOutput(path)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	if closeOutput != nil {
+		defer closeOutput()
+	}
 
-	fmt.Fprintf(f, "GPU Trace Profile Report\n")
-	fmt.Fprintf(f, "========================\n\n")
-	fmt.Fprintf(f, "Trace: %s\n", p.trace.Path)
-	fmt.Fprintf(f, "Command Queue: %s\n", p.trace.CommandQueueLabel)
-	fmt.Fprintf(f, "Encoders: %d\n", len(p.timings))
-	fmt.Fprintf(f, "Kernel Names: %d\n\n", len(p.trace.KernelNames))
+	fmt.Fprintf(w, "GPU Trace Profile Report\n")
+	fmt.Fprintf(w, "========================\n\n")
+	fmt.Fprintf(w, "Trace: %s\n", p.trace.Path)
+	fmt.Fprintf(w, "Command Queue: %s\n", p.trace.CommandQueueLabel)
+	fmt.Fprintf(w, "Encoders: %d\n", len(p.timings))
+	fmt.Fprintf(w, "Kernel Names: %d\n\n", len(p.trace.KernelNames))
 
-	p.writeTimingSummary(f)
-	fmt.Fprintln(f)
+	p.writeTimingSummary(w)
+	fmt.Fprintln(w)
 
-	fmt.Fprintf(f, "Encoder Breakdown:\n")
-	fmt.Fprintf(f, "%-30s %12s %12s %8s\n", "Label", "Duration (ms)", "Duration (ns)", "Percent")
-	fmt.Fprintf(f, "%s\n", strings.Repeat("-", 80))
+	fmt.Fprintf(w, "Encoder Breakdown:\n")
+	fmt.Fprintf(w, "%-30s %12s %12s %8s\n", "Label", "Duration (ms)", "Duration (ns)", "Percent")
+	fmt.Fprintf(w, "%s\n", strings.Repeat("-", 80))
 	for _, t := range p.timings {
-		fmt.Fprintf(f, "%-30s %12.2f %12d %7.1f%%\n",
+		fmt.Fprintf(w, "%-30s %12.2f %12d %7.1f%%\n",
 			t.Label, t.DurationMs, t.DurationNs, t.Percentage)
 	}
 
 	if len(p.trace.KernelNames) > 0 {
-		fmt.Fprintf(f, "\nKernel Names:\n")
+		fmt.Fprintf(w, "\nKernel Names:\n")
 		for i, name := range p.trace.KernelNames {
-			fmt.Fprintf(f, "  %d. %s\n", i+1, name)
+			fmt.Fprintf(w, "  %d. %s\n", i+1, name)
 		}
 	}
 
@@ -308,22 +310,27 @@ func (p *GPUTraceProfiler) WriteAll(prefix string) error {
 
 // PrintSummary prints a summary of the GPU trace to stdout.
 func (p *GPUTraceProfiler) PrintSummary() {
-	fmt.Printf("GPU Trace Profile Summary\n")
-	fmt.Printf("=========================\n\n")
-	fmt.Printf("Trace: %s\n", p.trace.Path)
-	fmt.Printf("Command Queue: %s\n", p.trace.CommandQueueLabel)
-	fmt.Printf("Encoders: %d\n", len(p.timings))
-	fmt.Printf("Kernels: %d\n\n", len(p.trace.KernelNames))
+	p.FprintSummary(os.Stdout)
+}
 
-	p.writeTimingSummary(os.Stdout)
-	fmt.Println()
+// FprintSummary writes a summary of the GPU trace to w.
+func (p *GPUTraceProfiler) FprintSummary(w io.Writer) {
+	fmt.Fprintf(w, "GPU Trace Profile Summary\n")
+	fmt.Fprintf(w, "=========================\n\n")
+	fmt.Fprintf(w, "Trace: %s\n", p.trace.Path)
+	fmt.Fprintf(w, "Command Queue: %s\n", p.trace.CommandQueueLabel)
+	fmt.Fprintf(w, "Encoders: %d\n", len(p.timings))
+	fmt.Fprintf(w, "Kernels: %d\n\n", len(p.trace.KernelNames))
 
-	fmt.Printf("Top Encoders:\n")
+	p.writeTimingSummary(w)
+	fmt.Fprintln(w)
+
+	fmt.Fprintf(w, "Top Encoders:\n")
 	for i, t := range p.timings {
 		if i >= 10 {
 			break
 		}
-		fmt.Printf("  %2d. %-30s %8.2f ms (%5.1f%%)\n",
+		fmt.Fprintf(w, "  %2d. %-30s %8.2f ms (%5.1f%%)\n",
 			i+1, t.Label, t.DurationMs, t.Percentage)
 	}
 }
@@ -499,21 +506,34 @@ func (p *GPUTraceProfiler) addProfileTimingComments(prof *profile.Profile) {
 
 // writeProfile writes a profile to disk with gzip compression.
 func (p *GPUTraceProfiler) writeProfile(prof *profile.Profile, path string) error {
-	f, err := os.Create(path)
+	w, closeOutput, err := createOutput(path)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	if closeOutput != nil {
+		defer closeOutput()
+	}
 
 	// Use gzip if path ends with .gz
-	var w interface{ Write([]byte) (int, error) } = f
 	if filepath.Ext(path) == ".gz" {
-		gzw := gzip.NewWriter(f)
+		gzw := gzip.NewWriter(w)
 		defer gzw.Close()
 		w = gzw
 	}
 
 	return prof.Write(w)
+}
+
+func createOutput(path string) (io.Writer, func() error, error) {
+	if path == "/dev/stdout" {
+		return os.Stdout, nil, nil
+	}
+
+	f, err := os.Create(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	return f, f.Close, nil
 }
 
 // buildKernelMap creates a mapping from encoder labels to kernel names.

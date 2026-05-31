@@ -92,18 +92,34 @@ var mtlbExtractCmd = &cobra.Command{
 			return fmt.Errorf("failed to extract: %w", err)
 		}
 
-		fmt.Printf("Extracted %s -> %s (%s)\n", targetFile.Name, extractOutput, formatSize(targetFile.Size))
+		fmt.Fprintf(mtlbExtractStatusWriter(extractOutput), "Extracted %s -> %s (%s)\n", targetFile.Name, extractOutput, formatSize(targetFile.Size))
 
 		return nil
 	},
 }
 
-func copyFile(src, dst string) error {
+func mtlbExtractStatusWriter(outputPath string) *os.File {
+	if mtlbExtractOutputPathIsStdout(outputPath) {
+		return os.Stderr
+	}
+	return os.Stdout
+}
+
+func mtlbExtractOutputPathIsStdout(path string) bool {
+	return path == "/dev/stdout"
+}
+
+func copyFile(src, dst string) (err error) {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
+
+	if mtlbExtractOutputPathIsStdout(dst) {
+		_, err = io.Copy(os.Stdout, in)
+		return err
+	}
 
 	out, err := os.Create(dst)
 	if err != nil {
