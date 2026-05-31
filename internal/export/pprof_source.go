@@ -1,6 +1,7 @@
 package export
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/google/pprof/profile"
@@ -36,7 +37,7 @@ func ToPprofWithSource(t *trace.Trace, timings []*EncoderTiming, mapper *ShaderS
 	prof.Comments = []string{
 		"GPU Trace with Metal shader source mapping",
 		"Trace: " + t.Path,
-		"Kernels: " + string(rune(len(t.KernelNames))),
+		fmt.Sprintf("Kernels: %d", len(t.KernelNames)),
 	}
 
 	// Create hierarchy: GPU Trace > Command Queue > Encoders > Kernels
