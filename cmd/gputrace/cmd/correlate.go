@@ -23,7 +23,7 @@ var correlateCmd = &cobra.Command{
 This command combines timing information from the trace with hardware metrics
 from the profiler data (.gpuprofiler_raw), providing a comprehensive view of
 shader performance including:
-  - Execution timing (count, duration, min/max/avg)
+  - Execution timing (count, duration, min/max/avg, source, approximation flag)
   - Hardware metrics (ALU utilization, kernel occupancy)
   - Memory metrics (bandwidth, total cycles)
   - Derived metrics (cycles per invocation, GPU frequency)
@@ -104,6 +104,13 @@ func runCorrelate(cmd *cobra.Command, args []string) error {
 			fmt.Printf("      Total:       %v\n", shader.TotalDuration)
 			fmt.Printf("      Average:     %v\n", shader.AvgDuration)
 			fmt.Printf("      Min/Max:     %v / %v\n", shader.MinDuration, shader.MaxDuration)
+			if shader.TimingSource != "" {
+				source := shader.TimingSource
+				if shader.TimingApprox {
+					source += " (approximate)"
+				}
+				fmt.Printf("      Source:      %s\n", source)
+			}
 
 			if shader.ALUUtilization > 0 {
 				fmt.Printf("    Hardware:\n")
