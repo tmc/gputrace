@@ -269,6 +269,9 @@ func parseInitCalls(data []byte, startCallNum int, csRecords []FunctionRecord, l
 	// +0x08: heap/device address (8 bytes)
 	// +0x10: buffer length (8 bytes)
 	// +0x24: buffer address (8 bytes)
+	// +0x80: "Cuw\x00" companion record
+	// +0x84: buffer address repeated by the companion record (8 bytes)
+	// +0x8c: heap offset from the companion record (4 bytes)
 	cululMarker := []byte("Culul")
 	offset = 0
 	for {
@@ -293,15 +296,15 @@ func parseInitCalls(data []byte, startCallNum int, csRecords []FunctionRecord, l
 				Offset:     int64(absolutePos),
 			})
 
-			// Also emit bufferHeapOffset call
-			// TODO: Parse actual heap offset from Culul record structure
-			calls = append(calls, InitCall{
-				CallNumber: callNum,
-				Type:       "bufferHeapOffset",
-				Address:    bufAddr,
-				Info:       fmt.Sprintf("BufferHeapOffset(0x%x, 0)", bufAddr),
-				Offset:     int64(absolutePos) + 1, // Slightly after newBuffer to maintain order
-			})
+			if heapOffset, ok := parseCululHeapOffset(data, absolutePos, bufAddr); ok {
+				calls = append(calls, InitCall{
+					CallNumber: callNum,
+					Type:       "bufferHeapOffset",
+					Address:    bufAddr,
+					Info:       fmt.Sprintf("BufferHeapOffset(0x%x, %d)", bufAddr, heapOffset),
+					Offset:     int64(absolutePos) + 1, // Slightly after newBuffer to maintain order
+				})
+			}
 		}
 
 		offset += pos + 5
@@ -491,6 +494,27 @@ func parseInitCalls(data []byte, startCallNum int, csRecords []FunctionRecord, l
 	callNum = startCallNum + len(calls)
 
 	return calls, callNum, nil
+}
+
+func parseCululHeapOffset(data []byte, cululPos int, bufAddr uint64) (uint64, bool) {
+	const (
+		cuwOffset         = 0x80
+		cuwAddrOffset     = cuwOffset + 0x04
+		cuwHeapOffset     = cuwOffset + 0x0c
+		cuwHeapOffsetSize = 4
+	)
+
+	if cululPos < 0 || cululPos+cuwHeapOffset+cuwHeapOffsetSize > len(data) {
+		return 0, false
+	}
+	if !bytes.Equal(data[cululPos+cuwOffset:cululPos+cuwOffset+4], []byte("Cuw\x00")) {
+		return 0, false
+	}
+	cuwAddr := binary.LittleEndian.Uint64(data[cululPos+cuwAddrOffset : cululPos+cuwAddrOffset+8])
+	if cuwAddr != bufAddr {
+		return 0, false
+	}
+	return uint64(binary.LittleEndian.Uint32(data[cululPos+cuwHeapOffset : cululPos+cuwHeapOffset+cuwHeapOffsetSize])), true
 }
 
 func isLikelyInitFunctionLabel(name string) bool {

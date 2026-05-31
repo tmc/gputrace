@@ -184,16 +184,11 @@ func TestParseInitCalls_Heap(t *testing.T) {
 // TestParseInitCalls_BufferFromHeap tests parsing of buffer creation from heap (Culul records)
 func TestParseInitCalls_BufferFromHeap(t *testing.T) {
 	// Create a minimal capture with a Culul record
-	// Structure: size(4) + "Culul\x00\x00\x00" + heap_addr(8) + buf_len(8) + ... + buf_addr(8)
 	data := make([]byte, 0x600)
 
 	// Write Culul marker at offset 0x4E0
 	offset := 0x4E0
-	binary.LittleEndian.PutUint32(data[offset-4:], 0x09) // size
-	copy(data[offset:], []byte("Culul\x00\x00\x00"))
-	binary.LittleEndian.PutUint64(data[offset+0x08:], 0x106da56b0) // heap address
-	binary.LittleEndian.PutUint64(data[offset+0x10:], 16)          // buffer length
-	binary.LittleEndian.PutUint64(data[offset+0x24:], 0x106da6190) // buffer address
+	putCululBufferRecord(data, offset, 0x106da56b0, 16, 256, 0x106da6190)
 
 	calls, _, err := parseInitCalls(data, 0, nil, make(map[uint64]string))
 	if err != nil {
@@ -213,9 +208,10 @@ func TestParseInitCalls_BufferFromHeap(t *testing.T) {
 		}
 		if call.Type == "bufferHeapOffset" && call.Address == 0x106da6190 {
 			foundOffset = true
-			// TODO: Parse actual heap offset from binary data
-			// Currently hardcoded to 0, should be parsed from structure
-			// Expected offsets: 0, 256, 512, etc.
+			expected := "BufferHeapOffset(0x106da6190, 256)"
+			if call.Info != expected {
+				t.Errorf("Expected info %s, got %s", expected, call.Info)
+			}
 		}
 	}
 
@@ -225,6 +221,18 @@ func TestParseInitCalls_BufferFromHeap(t *testing.T) {
 	if !foundOffset {
 		t.Error("Expected to find BufferHeapOffset call")
 	}
+}
+
+func putCululBufferRecord(data []byte, offset int, heapAddr, bufLen, heapOffset, bufAddr uint64) {
+	binary.LittleEndian.PutUint32(data[offset-4:], 0x09)
+	copy(data[offset:], []byte("Culul\x00\x00\x00"))
+	binary.LittleEndian.PutUint64(data[offset+0x08:], heapAddr)
+	binary.LittleEndian.PutUint64(data[offset+0x10:], bufLen)
+	binary.LittleEndian.PutUint64(data[offset+0x24:], bufAddr)
+
+	copy(data[offset+0x80:], []byte("Cuw\x00"))
+	binary.LittleEndian.PutUint64(data[offset+0x84:], bufAddr)
+	binary.LittleEndian.PutUint32(data[offset+0x8c:], uint32(heapOffset))
 }
 
 // TestParseInitCalls_SharedEvent tests parsing of shared event creation (Cui records)
@@ -616,18 +624,98 @@ func TestParseInitCalls_Ordering(t *testing.T) {
 
 // TestParseBufferHeapOffset tests parsing actual heap offset values
 func TestParseBufferHeapOffset(t *testing.T) {
-	t.Skip("TODO: Parse actual heap offset values from Culul records")
+	tests := []struct {
+		name       string
+		heapOffset uint64
+		bufAddr    uint64
+		wantInfo   string
+	}{
+		{
+			name:       "zero",
+			heapOffset: 0,
+			bufAddr:    0x106da6190,
+			wantInfo:   "BufferHeapOffset(0x106da6190, 0)",
+		},
+		{
+			name:       "middle allocation",
+			heapOffset: 256,
+			bufAddr:    0xafcdd0000,
+			wantInfo:   "BufferHeapOffset(0xafcdd0000, 256)",
+		},
+		{
+			name:       "later allocation",
+			heapOffset: 512,
+			bufAddr:    0xafcdd1980,
+			wantInfo:   "BufferHeapOffset(0xafcdd1980, 512)",
+		},
+	}
 
-	// TODO: The heap offset (0, 256, 512, etc.) should be parsed from the binary data
-	// Currently hardcoded to 0 in BufferHeapOffset calls
-	// Need to identify which field in the Culul record contains this value
-	//
-	// Expected behavior from Xcode:
-	// #4 BufferHeapOffset(0x106da6190, 0)
-	// #6 BufferHeapOffset(0xafcdd0000, 256)
-	// #12 BufferHeapOffset(0xafcdd1980, 512)
-	//
-	// Culul record structure needs analysis to find offset field
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data := make([]byte, 0x600)
+			putCululBufferRecord(data, 0x100, 0x106da56b0, 16, tt.heapOffset, tt.bufAddr)
+
+			calls, _, err := parseInitCalls(data, 0, nil, make(map[uint64]string))
+			if err != nil {
+				t.Fatalf("parseInitCalls failed: %v", err)
+			}
+
+			found := false
+			for _, call := range calls {
+				if call.Type != "bufferHeapOffset" {
+					continue
+				}
+				found = true
+				if call.Address != tt.bufAddr {
+					t.Fatalf("Address = 0x%x, want 0x%x", call.Address, tt.bufAddr)
+				}
+				if call.Info != tt.wantInfo {
+					t.Fatalf("Info = %q, want %q", call.Info, tt.wantInfo)
+				}
+			}
+			if !found {
+				t.Fatal("Expected BufferHeapOffset call")
+			}
+		})
+	}
+}
+
+func TestParseBufferHeapOffsetRequiresMatchingCuwCompanion(t *testing.T) {
+	tests := []struct {
+		name string
+		edit func([]byte)
+	}{
+		{
+			name: "missing companion",
+			edit: func(data []byte) {
+				copy(data[0x100+0x80:], []byte{0, 0, 0, 0})
+			},
+		},
+		{
+			name: "mismatched buffer address",
+			edit: func(data []byte) {
+				binary.LittleEndian.PutUint64(data[0x100+0x84:], 0xafcdd0000)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data := make([]byte, 0x600)
+			putCululBufferRecord(data, 0x100, 0x106da56b0, 16, 256, 0x106da6190)
+			tt.edit(data)
+
+			calls, _, err := parseInitCalls(data, 0, nil, make(map[uint64]string))
+			if err != nil {
+				t.Fatalf("parseInitCalls failed: %v", err)
+			}
+			for _, call := range calls {
+				if call.Type == "bufferHeapOffset" {
+					t.Fatalf("unexpected BufferHeapOffset call without matching Cuw companion: %#v", call)
+				}
+			}
+		})
+	}
 }
 
 // TestFormatAPICallList_BufferHeapOffset tests formatting of BufferHeapOffset
