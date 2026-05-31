@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -41,5 +42,26 @@ func TestResolveScreenshotOutputPath(t *testing.T) {
 	}
 	if filepath.Base(got) != "trace.png" {
 		t.Fatalf("resolved path = %q, want basename trace.png", got)
+	}
+}
+
+func TestTriggerScreenRecordingTCCJSONOutput(t *testing.T) {
+	oldJSON := collectProfileJSON
+	t.Cleanup(func() {
+		collectProfileJSON = oldJSON
+	})
+	collectProfileJSON = true
+
+	out, err := captureStdout(t, triggerScreenRecordingTCC)
+	if err != nil {
+		t.Fatalf("triggerScreenRecordingTCC: %v", err)
+	}
+
+	var got xcodeProfileActionOutput
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, out)
+	}
+	if !got.Success || got.Action != "screenshot-no-prompt" {
+		t.Fatalf("decoded output = %+v", got)
 	}
 }
