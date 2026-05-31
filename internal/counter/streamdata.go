@@ -1,5 +1,3 @@
-//go:build darwin
-
 // Package counter provides GPU performance counter parsing and mapping.
 // This file parses streamData from .gpuprofiler_raw to extract pipeline metadata.
 
