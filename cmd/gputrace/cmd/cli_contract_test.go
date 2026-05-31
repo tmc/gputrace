@@ -67,6 +67,7 @@ func TestTraceUsageMarksRequiredTraceOperands(t *testing.T) {
 		dumpCmd,
 		dumpRecordsCmd,
 		treeCmd,
+		analyzeUsageCmd,
 	}
 	for _, cmd := range checks {
 		if strings.Contains(cmd.Use, "[trace") {
