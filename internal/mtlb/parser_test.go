@@ -88,6 +88,35 @@ func TestListFunctionMetadataTaggedTable(t *testing.T) {
 	}
 }
 
+func TestListFunctionMetadataFallsBackAfterZeroTaggedCount(t *testing.T) {
+	name := "legacy_after_zero_prefix"
+	payload := append(make([]byte, 8), []byte("NAMED\x00")...)
+	payload = append(payload, []byte(name)...)
+	payload = append(payload, 0)
+
+	data := make([]byte, 48+len(payload))
+	copy(data[0:4], []byte("MTLB"))
+	binary.LittleEndian.PutUint32(data[4:8], 1)
+	binary.LittleEndian.PutUint64(data[16:24], uint64(len(data)))
+	binary.LittleEndian.PutUint64(data[24:32], 48)
+	binary.LittleEndian.PutUint64(data[32:40], 48)
+	binary.LittleEndian.PutUint64(data[40:48], uint64(len(data)))
+	copy(data[48:], payload)
+
+	lib, err := ParseMTLB(data)
+	if err != nil {
+		t.Fatalf("ParseMTLB failed: %v", err)
+	}
+
+	funcs, err := lib.ListFunctions()
+	if err != nil {
+		t.Fatalf("ListFunctions failed: %v", err)
+	}
+	if want := []string{name}; !reflect.DeepEqual(funcs, want) {
+		t.Fatalf("ListFunctions = %v, want %v", funcs, want)
+	}
+}
+
 func buildTaggedMTLBForTest(entries ...[]byte) []byte {
 	tableLen := 8
 	for i := range entries {
