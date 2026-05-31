@@ -89,7 +89,7 @@ Implementation Status:
 
 Related Commands:
   - gputrace profiler: Extract profiler timing data from .gpuprofiler_raw/streamData
-  - gputrace xcode-counters: Display imported Xcode Counters.csv data`,
+  - gputrace xcode-profile xcode-export-counters: Export counters through Xcode`,
 	Args: cobra.ExactArgs(1),
 	RunE: runReplayCounters,
 }

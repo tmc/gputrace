@@ -169,13 +169,23 @@ func TestHelpDoesNotReferenceMissingRelatedCommands(t *testing.T) {
 		}
 	}
 
-	for _, want := range []string{"gputrace profiler", "gputrace xcode-counters"} {
+	for _, want := range []string{"gputrace profiler", "gputrace xcode-profile xcode-export-counters"} {
 		if !strings.Contains(exportCountersCmd.Long, want) {
 			t.Fatalf("export-counters help does not contain existing related command %q:\n%s", want, exportCountersCmd.Long)
 		}
 		if !strings.Contains(replayCountersCmd.Long, want) {
 			t.Fatalf("replay-counters help does not contain existing related command %q:\n%s", want, replayCountersCmd.Long)
 		}
+		if !registeredCommandPath(want) {
+			t.Fatalf("related command path %q is not registered", want)
+		}
+	}
+
+	if strings.Contains(exportCountersCmd.Long, "gputrace xcode-counters") {
+		t.Fatalf("export-counters help still references missing xcode-counters command:\n%s", exportCountersCmd.Long)
+	}
+	if strings.Contains(replayCountersCmd.Long, "gputrace xcode-counters") {
+		t.Fatalf("replay-counters help still references missing xcode-counters command:\n%s", replayCountersCmd.Long)
 	}
 }
 
@@ -322,4 +332,13 @@ func manualHelpLists(help, name, desc string) bool {
 		}
 	}
 	return false
+}
+
+func registeredCommandPath(path string) bool {
+	fields := strings.Fields(path)
+	if len(fields) == 0 || fields[0] != rootCmd.Name() {
+		return false
+	}
+	cmd, remaining, err := rootCmd.Find(fields[1:])
+	return err == nil && cmd != nil && len(remaining) == 0
 }

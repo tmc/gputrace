@@ -71,7 +71,7 @@ Use Cases:
 Related Commands:
   - gputrace timeline: Visual timeline with counter tracks
   - gputrace profiler: Extract profiler timing data
-  - gputrace xcode-counters: Display counters from Xcode Counters.csv`,
+  - gputrace xcode-profile xcode-export-counters: Export counters through Xcode`,
 	Args: cobra.ExactArgs(1),
 	RunE: runExportCounters,
 }
