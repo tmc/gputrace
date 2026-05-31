@@ -1,11 +1,16 @@
 package counter
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 
 	"github.com/tmc/gputrace/internal/trace"
 )
+
+// ErrMetalCounterSamplingUnavailable reports that replay-time Metal counter
+// sampling is not wired to real Metal bindings.
+var ErrMetalCounterSamplingUnavailable = errors.New("metal counter sampling is unavailable without replay-time Metal bindings")
 
 // CounterSamplingConfig configures performance counter collection during replay.
 type CounterSamplingConfig struct {
@@ -41,8 +46,8 @@ func DefaultCounterSamplingConfig() *CounterSamplingConfig {
 	}
 }
 
-// CounterSampleBuffer represents an MTLCounterSampleBuffer.
-// This is a placeholder structure for the Metal API object.
+// CounterSampleBuffer describes an MTLCounterSampleBuffer.
+// The current implementation does not create this Metal object.
 type CounterSampleBuffer struct {
 	// Device reference (MTLDevice in actual Metal implementation)
 	Device any
@@ -241,6 +246,7 @@ type DispatchCounterMetrics struct {
 }
 
 // CounterSampler handles counter sample buffer creation and sampling during replay.
+// It currently fails closed until replay-time Metal counter sampling is implemented.
 type CounterSampler struct {
 	Config  *CounterSamplingConfig
 	Buffers map[string]*CounterSampleBuffer // counter set name -> buffer
@@ -264,56 +270,25 @@ func NewCounterSampler(config *CounterSamplingConfig) *CounterSampler {
 	}
 }
 
-// CreateCounterSampleBuffers creates sample buffers for all enabled counter sets.
-// In a real Metal implementation, this would call device.makeCounterSampleBuffer().
+// CreateCounterSampleBuffers validates the enabled counter sets.
+// It returns ErrMetalCounterSamplingUnavailable because real Metal bindings are
+// not yet connected.
 func (cs *CounterSampler) CreateCounterSampleBuffers(device any, maxSamples int) error {
 	for _, counterSetName := range cs.Config.EnabledCounterSets {
-		// Create counter set (in real implementation, query from device)
 		counterSet := cs.getCounterSet(counterSetName)
 		if counterSet == nil {
 			return fmt.Errorf("unknown counter set: %s", counterSetName)
 		}
-
-		// Create descriptor
-		descriptor := &CounterSampleBufferDescriptor{
-			CounterSet:  counterSet,
-			StorageMode: "shared",
-			SampleCount: maxSamples,
-		}
-
-		// Create buffer (placeholder - real implementation uses Metal API)
-		buffer := &CounterSampleBuffer{
-			Device:         device,
-			CounterSetName: counterSetName,
-			Descriptor:     descriptor,
-			SampleCount:    maxSamples,
-			ResolvedData:   make([]CounterSample, 0, maxSamples),
-		}
-
-		cs.Buffers[counterSetName] = buffer
 	}
 
-	return nil
+	return ErrMetalCounterSamplingUnavailable
 }
 
 // SampleCounters records a counter sample at the current point in execution.
-// In real Metal: encoder.sampleCounters(sampleBuffer, atSampleIndex: index, withBarrier: true)
+// It returns ErrMetalCounterSamplingUnavailable because no Metal encoder call is
+// available yet.
 func (cs *CounterSampler) SampleCounters(encoder any, samplingPoint string, encoderIndex, commandIndex int) error {
-	sampleIndex := cs.NextSampleIndex
-	cs.NextSampleIndex++
-
-	// Create sample placeholder (will be resolved after GPU execution)
-	sample := CounterSample{
-		Index:         sampleIndex,
-		SamplingPoint: samplingPoint,
-		EncoderIndex:  encoderIndex,
-		CommandIndex:  commandIndex,
-		Values:        make(map[string]float64),
-	}
-
-	cs.Samples = append(cs.Samples, sample)
-
-	return nil
+	return ErrMetalCounterSamplingUnavailable
 }
 
 // ResolveCounterSamples resolves all counter samples after GPU execution completes.
@@ -354,10 +329,7 @@ func (cs *CounterSampler) SampleCounters(encoder any, samplingPoint string, enco
 //	    samples[i].Values["timestamp"] = parseUInt64(data, offset: i*8)
 //	}
 func (cs *CounterSampler) ResolveCounterSamples() error {
-	// Framework complete - returns empty samples until Metal bindings added
-	// When Metal API is integrated, this will populate cs.Samples with real counter data
-
-	return nil
+	return ErrMetalCounterSamplingUnavailable
 }
 
 // AggregateEncoderMetrics aggregates counter samples into per-encoder metrics.
