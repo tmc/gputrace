@@ -201,7 +201,11 @@ directory unless intentionally refreshing checked-in fixtures.
 # Capture profiled local traces with Instruments first; the checked-in fixtures
 # are structural and do not include profiler streamData.
 .build/release/trace-generator 01-single-encoder
-# [Capture with Instruments]
+.build/release/trace-generator 06-six-encoders
+# [Capture, profile, and export each scenario with Instruments]
+
+LOCAL_SINGLE_ENCODER_PERFDATA=../traces/local-profiled/01-single-encoder-perfdata.gputrace
+LOCAL_SIX_ENCODER_PERFDATA=../traces/local-profiled/06-six-encoders-perfdata.gputrace
 
 # Compare local profiled captures
 cd ../..
