@@ -4,8 +4,6 @@ import (
 	"math"
 	"path/filepath"
 	"testing"
-
-	"github.com/tmc/gputrace/internal/trace"
 )
 
 // TestValidateALUUtilization validates ALU Utilization extraction against CSV ground truth.
@@ -34,10 +32,7 @@ func TestValidateALUUtilization(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Open trace
-			tr, err := trace.Open(tc.tracePath)
-			if err != nil {
-				t.Skipf("Trace not available: %v", err)
-			}
+			tr := openPerfTraceOrSkip(t, tc.tracePath)
 			defer tr.Close()
 
 			// Parse CSV ground truth
@@ -134,10 +129,7 @@ func TestValidateKernelOccupancy(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Open trace
-			tr, err := trace.Open(tc.tracePath)
-			if err != nil {
-				t.Skipf("Trace not available: %v", err)
-			}
+			tr := openPerfTraceOrSkip(t, tc.tracePath)
 			defer tr.Close()
 
 			// Parse CSV ground truth
@@ -234,10 +226,7 @@ func TestValidateBufferL1Cache(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Open trace
-			tr, err := trace.Open(tc.tracePath)
-			if err != nil {
-				t.Skipf("Trace not available: %v", err)
-			}
+			tr := openPerfTraceOrSkip(t, tc.tracePath)
 			defer tr.Close()
 
 			// Parse CSV ground truth
@@ -348,10 +337,7 @@ func TestValidateBothMetrics(t *testing.T) {
 	csvPath := filepath.Join("..", "..", "testdata", "traces", "06-six-encoders", "06-six-encoders-run1 Counters.csv")
 
 	// Open trace
-	tr, err := trace.Open(tracePath)
-	if err != nil {
-		t.Skipf("Trace not available: %v", err)
-	}
+	tr := openPerfTraceOrSkip(t, tracePath)
 	defer tr.Close()
 
 	// Parse CSV ground truth
@@ -451,10 +437,7 @@ func TestValidateBothMetrics(t *testing.T) {
 func TestDiagnoseCounterFiles(t *testing.T) {
 	tracePath := filepath.Join("..", "..", "testdata", "traces", "06-six-encoders", "06-six-encoders-run1-perf.gputrace")
 
-	tr, err := trace.Open(tracePath)
-	if err != nil {
-		t.Skipf("Trace not available: %v", err)
-	}
+	tr := openPerfTraceOrSkip(t, tracePath)
 	defer tr.Close()
 
 	// Find .gpuprofiler_raw directory
@@ -521,10 +504,7 @@ func TestValidateMemoryBandwidth(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Open trace
-			tr, err := trace.Open(tc.tracePath)
-			if err != nil {
-				t.Skipf("Trace not available: %v", err)
-			}
+			tr := openPerfTraceOrSkip(t, tc.tracePath)
 			defer tr.Close()
 
 			// Parse CSV ground truth
@@ -621,10 +601,7 @@ func TestValidateMemoryBandwidth(t *testing.T) {
 func TestDiagnoseProfilingExtraction(t *testing.T) {
 	tracePath := filepath.Join("..", "..", "testdata", "traces", "06-six-encoders", "06-six-encoders-run1-perf.gputrace")
 
-	tr, err := trace.Open(tracePath)
-	if err != nil {
-		t.Skipf("Trace not available: %v", err)
-	}
+	tr := openPerfTraceOrSkip(t, tracePath)
 	defer tr.Close()
 
 	t.Logf("=== Testing Profiling File Extraction ===\n")

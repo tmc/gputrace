@@ -20,10 +20,10 @@ var (
 )
 
 var replayCountersCmd = &cobra.Command{
-	Use:   "replay-counters <trace.gputrace>",
-	Short:  "Simulate MTLCounterSampleBuffer performance counter collection during replay",
+	Use:    "replay-counters <trace.gputrace>",
+	Short:  "Plan MTLCounterSampleBuffer performance counter collection during replay",
 	Hidden: true,
-	Long: `Simulate Metal performance counter collection during trace replay.
+	Long: `Plan Metal performance counter collection during trace replay.
 
 IMPORTANT: Two Approaches for Performance Counters
 
@@ -45,11 +45,14 @@ Choose based on your needs:
 
 Current Status:
 This command provides the complete framework for MTLCounterSampleBuffer
-integration. It simulates the sampling process and shows:
+integration. Use --simulate to inspect the sampling process and show:
   - Where counter samples would be taken (encoder/dispatch boundaries)
   - Sampling overhead estimates (barrier synchronization cost)
   - Memory requirements for counter buffers
   - Counter aggregation and reporting structure
+
+Real replay-time counter collection currently fails closed until Metal API
+bindings are connected.
 
 When Metal API bindings are added, this will collect real counters:
   - Timestamp counters (GPU cycles)
@@ -58,10 +61,8 @@ When Metal API bindings are added, this will collect real counters:
   - Apple GPU hardware counters (ALU, cache, bandwidth)
 
 Output modes:
-  - plan: Show replay plan with counter sampling simulation (default)
-  - simulate: Show detailed overhead and memory analysis
-  - results: Show simulated counter sampling results
-  - json: Export results as JSON
+  - simulate: Show overhead and memory analysis without Metal bindings
+  - json: Export simulation results as JSON when -o ends in .json
 
 Counter Sets (--counter-sets):
   - timestamp: GPU timestamp in cycles
@@ -75,25 +76,21 @@ Sampling Points (--encoder-boundaries, --dispatch-boundaries):
   - Both enabled by default for complete coverage
 
 Examples:
-  # Simulate counter sampling (default: all counter sets)
-  gputrace replay-counters trace.gputrace
-
   # Show sampling overhead analysis
   gputrace replay-counters trace.gputrace --simulate
 
   # Sample only at encoder boundaries (lower overhead)
-  gputrace replay-counters trace.gputrace --encoder-boundaries --no-dispatch-boundaries
+  gputrace replay-counters trace.gputrace --simulate --encoder-boundaries --no-dispatch-boundaries
 
   # Enable specific counter sets
-  gputrace replay-counters trace.gputrace --counter-sets timestamp,stage_utilization
+  gputrace replay-counters trace.gputrace --simulate --counter-sets timestamp,stage_utilization
 
-  # Export results as JSON
-  gputrace replay-counters trace.gputrace -o counters.json
+  # Export simulation as JSON
+  gputrace replay-counters trace.gputrace --simulate -o counters.json
 
 Implementation Status:
   This command provides the framework for MTLCounterSampleBuffer integration.
   Actual GPU counter collection requires Metal API bindings (CGo/Swift).
-  See docs/PERFCOUNTER_IMPLEMENTATION_RECOMMENDATION.md for details.
 
 Related Commands:
   - gputrace replay: Analyze replay structure
@@ -125,6 +122,10 @@ func runReplayCounters(cmd *cobra.Command, args []string) error {
 	// Verify trace file exists
 	if err := checkTraceFile(tracePath); err != nil {
 		return err
+	}
+
+	if !simulateOnlyFlag {
+		return fmt.Errorf("real replay counter collection is unavailable without replay-time Metal bindings; rerun with --simulate to inspect the sampling plan")
 	}
 
 	// Open trace

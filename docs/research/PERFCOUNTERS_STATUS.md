@@ -418,7 +418,7 @@ if trace.HasPerfCounters() {
 
 ## Summary
 
-**The infrastructure is complete and production-ready.** The framework correctly:
+**The core infrastructure is usable with explicit evidence limits.** The framework correctly:
 - Detects performance counter files
 - Parses record boundaries
 - Extracts pipeline state addresses

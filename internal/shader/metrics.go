@@ -72,6 +72,7 @@ type ShaderMetrics struct {
 	BranchInstructionCount int `json:"branch_instruction_count"` // Branch instruction count
 	ThreadgroupMemory      int `json:"threadgroup_memory"`       // Threadgroup memory usage
 	AllocatedRegisters     int `json:"allocated_registers"`      // Allocated register count
+	HighRegister           int `json:"high_register"`            // Highest live register, when source-backed
 	SpilledBytes           int `json:"spilled_bytes"`            // Bytes spilled to memory
 }
 
@@ -638,6 +639,7 @@ func applyHardwareMetrics(metrics *ShaderMetrics, hw *counter.ShaderHardwareMetr
 	metrics.BranchInstructionCount = hw.BranchInstructionCount
 	metrics.ThreadgroupMemory = hw.ThreadgroupMemory
 	metrics.AllocatedRegisters = hw.AllocatedRegs
+	metrics.HighRegister = hw.HighRegister
 	metrics.SpilledBytes = hw.SpilledBytes
 
 	// Also update ALU utilization if available
@@ -1017,19 +1019,21 @@ func FormatShadersXcodeStyle(w io.Writer, report *ShaderMetricsReport, trace *Tr
 		if metrics.AllocatedRegisters > 0 {
 			// Use real data from PipelineStats (streamData)
 			allocatedRegsStr = fmt.Sprintf("%d", metrics.AllocatedRegisters)
-			highRegStr = fmt.Sprintf("%d", metrics.AllocatedRegisters)
 			spilledBytesStr = formatSpilledBytesShort(metrics.SpilledBytes)
 		} else if showEstimates {
 			// Show estimates
 			allocatedRegs := estimateAllocatedRegisters(metrics)
 			allocatedRegsStr = fmt.Sprintf("%d (est)", allocatedRegs)
-			highRegStr = allocatedRegsStr
 			spilledBytesStr = "0"
 		} else {
 			// Show ? for uncomputed fields
 			allocatedRegsStr = "?"
-			highRegStr = "?"
 			spilledBytesStr = "?"
+		}
+		if metrics.HighRegister > 0 {
+			highRegStr = fmt.Sprintf("%d", metrics.HighRegister)
+		} else {
+			highRegStr = "?"
 		}
 
 		// Print row matching Xcode format
