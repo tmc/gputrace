@@ -44,3 +44,50 @@ func TestEncodeXcodeProfileActionJSON(t *testing.T) {
 		t.Fatalf("decoded output = %+v", got)
 	}
 }
+
+func TestWriteXcodeProfileActionOutputJSON(t *testing.T) {
+	oldJSON := collectProfileJSON
+	t.Cleanup(func() {
+		collectProfileJSON = oldJSON
+	})
+	collectProfileJSON = true
+
+	out, err := captureStdout(t, func() error {
+		return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+			Action: "xcode-export-memory",
+			Target: "trace.gputrace",
+		})
+	})
+	if err != nil {
+		t.Fatalf("writeXcodeProfileActionOutput: %v", err)
+	}
+
+	var got xcodeProfileActionOutput
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, out)
+	}
+	if !got.Success || got.Action != "xcode-export-memory" || got.Target != "trace.gputrace" {
+		t.Fatalf("decoded output = %+v", got)
+	}
+}
+
+func TestWriteXcodeProfileActionOutputPlainNoop(t *testing.T) {
+	oldJSON := collectProfileJSON
+	t.Cleanup(func() {
+		collectProfileJSON = oldJSON
+	})
+	collectProfileJSON = false
+
+	out, err := captureStdout(t, func() error {
+		return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+			Action: "xcode-export-memory",
+			Target: "trace.gputrace",
+		})
+	})
+	if err != nil {
+		t.Fatalf("writeXcodeProfileActionOutput: %v", err)
+	}
+	if out != "" {
+		t.Fatalf("stdout = %q, want empty", out)
+	}
+}

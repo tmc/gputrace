@@ -41,6 +41,7 @@ Example:
 }
 
 func runXcodeExportCounters(cmd *cobra.Command, args []string) error {
+	status := xcodeProfileStatusWriter()
 	traceFile := ""
 	if len(args) > 0 {
 		traceFile = args[0]
@@ -66,7 +67,7 @@ func runXcodeExportCounters(cmd *cobra.Command, args []string) error {
 	defer cfRelease(appAX)
 
 	// Find trace window and navigate to Counters view
-	fmt.Println("Finding trace window and navigating to Counters view...")
+	fmt.Fprintln(status, "Finding trace window and navigating to Counters view...")
 	windowAX, err := findTraceWindowFast(appAX, traceFile)
 	if err != nil {
 		return fmt.Errorf("could not find trace window: %w", err)
@@ -88,7 +89,7 @@ func runXcodeExportCounters(cmd *cobra.Command, args []string) error {
 	// First try to click "Show Performance" if we're in Summary view
 	showPerfBtn := findButtonBFS(editorArea, "Show Performance", 2000)
 	if showPerfBtn != 0 {
-		fmt.Println("Clicking Show Performance...")
+		fmt.Fprintln(status, "Clicking Show Performance...")
 		if err := axAction(showPerfBtn, "AXPress"); err != nil {
 			verboseLog("Failed to click Show Performance: %v", err)
 		} else {
@@ -101,7 +102,7 @@ func runXcodeExportCounters(cmd *cobra.Command, args []string) error {
 	// Try to click Counters tab (search with reasonable limit)
 	countersBtn := findButtonBFS(editorArea, "Counters", 3000)
 	if countersBtn != 0 {
-		fmt.Println("Clicking Counters tab...")
+		fmt.Fprintln(status, "Clicking Counters tab...")
 		if err := axAction(countersBtn, "AXPress"); err != nil {
 			verboseLog("Failed to click Counters: %v", err)
 		} else {
@@ -119,7 +120,7 @@ func runXcodeExportCounters(cmd *cobra.Command, args []string) error {
 	time.Sleep(200 * time.Millisecond)
 
 	// Click Editor > Export GPU Counters menu item via AX
-	fmt.Println("Opening Editor > Export GPU Counters...")
+	fmt.Fprintln(status, "Opening Editor > Export GPU Counters...")
 
 	menuNames := []string{
 		"Export GPU Counters…", // Unicode ellipsis
@@ -158,7 +159,7 @@ func runXcodeExportCounters(cmd *cobra.Command, args []string) error {
 		for _, w := range windows {
 			// Try Save button (export sheet is shallow)
 			if btn := findButtonBFS(w, "Save", 500); btn != 0 {
-				fmt.Println("Clicking Save...")
+				fmt.Fprintln(status, "Clicking Save...")
 				if err := axAction(btn, "AXPress"); err != nil {
 					clickErr = err
 					verboseLog("Save click attempt %d failed: %v", attempt+1, err)
@@ -169,7 +170,7 @@ func runXcodeExportCounters(cmd *cobra.Command, args []string) error {
 			}
 			// Try Export button (export sheet is shallow)
 			if btn := findButtonBFS(w, "Export", 500); btn != 0 {
-				fmt.Println("Clicking Export...")
+				fmt.Fprintln(status, "Clicking Export...")
 				if err := axAction(btn, "AXPress"); err != nil {
 					clickErr = err
 					verboseLog("Export click attempt %d failed: %v", attempt+1, err)
@@ -196,7 +197,7 @@ saveClicked:
 	for _, w := range replaceWindows {
 		if btn := findButtonBFS(w, "Replace", 200); btn != 0 {
 			if exportCountersForce {
-				fmt.Println("File exists, clicking Replace...")
+				fmt.Fprintln(status, "File exists, clicking Replace...")
 				if err := axAction(btn, "AXPress"); err != nil {
 					return fmt.Errorf("failed to click Replace: %w", err)
 				}
@@ -212,8 +213,11 @@ saveClicked:
 	}
 
 	time.Sleep(500 * time.Millisecond)
-	fmt.Println("Export complete")
-	return nil
+	fmt.Fprintln(status, "Export complete")
+	return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+		Action: "xcode-export-counters",
+		Target: traceFile,
+	})
 }
 
 // activateXcodeQuick activates Xcode using osascript with a timeout.
