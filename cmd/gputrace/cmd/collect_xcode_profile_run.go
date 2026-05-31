@@ -57,9 +57,10 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	fmt.Print(Colorize("Collect Profile: Automating Xcode GPU trace...\n", ColorBold))
-	fmt.Printf("  Input:  %s\n", inputPath)
-	fmt.Printf("  Output: %s\n", outputPath)
+	status := xcodeProfileStatusWriter()
+	fmt.Fprint(status, Colorize("Collect Profile: Automating Xcode GPU trace...\n", ColorBold))
+	fmt.Fprintf(status, "  Input:  %s\n", inputPath)
+	fmt.Fprintf(status, "  Output: %s\n", outputPath)
 
 	ctx, cancel := context.WithTimeout(automationCtx, collectProfileTimeout)
 	defer cancel()
@@ -73,7 +74,7 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 	}
 
 	// Step 1: Open File in Xcode
-	fmt.Println("  Step 1: Opening trace in Xcode...")
+	fmt.Fprintln(status, "  Step 1: Opening trace in Xcode...")
 
 	openCmd := exec.CommandContext(ctx, "open", append(xcodeOpenArgs(), inputPath)...)
 	if output, err := openCmd.CombinedOutput(); err != nil {
@@ -91,7 +92,7 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 	}
 
 	// Step 2: Wait for Xcode window via AX
-	fmt.Println("  Step 2: Waiting for Xcode window...")
+	fmt.Fprintln(status, "  Step 2: Waiting for Xcode window...")
 	appAX, err := FindXcodeApp()
 	if err != nil {
 		return fmt.Errorf("Xcode not found via AX: %w", err)
@@ -125,27 +126,27 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 	}
 
 	if alreadyHasPerfData {
-		fmt.Println("  Trace already has performance data, skipping replay...")
+		fmt.Fprintln(status, "  Trace already has performance data, skipping replay...")
 	} else if profilingInProgress {
 		// Profiling already running (e.g., from a prior attempt or --force) — just wait for it
-		fmt.Println("  Profiling already in progress, waiting for completion...")
+		fmt.Fprintln(status, "  Profiling already in progress, waiting for completion...")
 		if err := waitForReplayComplete(appAX, traceFileName, windowAX, collectProfileTimeout); err != nil {
 			return fmt.Errorf("replay wait failed: %w", err)
 		}
-		fmt.Println("    Profiling completed")
+		fmt.Fprintln(status, "    Profiling completed")
 	} else {
 		// Step 3: Start replay
-		fmt.Println("  Step 3: Starting replay...")
+		fmt.Fprintln(status, "  Step 3: Starting replay...")
 		if err := clickReplayButton(windowAX); err != nil {
 			return fmt.Errorf("failed to start replay: %w", err)
 		}
 
 		// Step 4: Wait for replay
-		fmt.Println("  Step 4: Waiting for replay to complete...")
+		fmt.Fprintln(status, "  Step 4: Waiting for replay to complete...")
 		if err := waitForReplayComplete(appAX, traceFileName, windowAX, collectProfileTimeout); err != nil {
 			return fmt.Errorf("replay wait failed: %w", err)
 		}
-		fmt.Println("    Replay completed")
+		fmt.Fprintln(status, "    Replay completed")
 	}
 
 	if err := CheckCancelAndReturn(); err != nil {
@@ -178,7 +179,7 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 	}
 
 	// Export step
-	fmt.Println("  Exporting trace...")
+	fmt.Fprintln(status, "  Exporting trace...")
 	if freshWindow := getPreferredTraceWindow(appAX, traceFileName); freshWindow != 0 {
 		windowAX = freshWindow
 	} else if freshWindow := findTraceWindowByButtons(appAX); freshWindow != 0 {
@@ -226,14 +227,31 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 	if finalPath != outputPath {
 		// Copy from alternate location to expected output path
 		if err := copyPath(finalPath, outputPath); err != nil {
-			fmt.Printf(Colorize("\nNote: File saved to %s (copy to %s failed: %v)\n", ColorYellow), finalPath, outputPath, err)
-		} else {
-			fmt.Printf(Colorize("\nDone! Output saved to: %s (copied from %s)\n", ColorGreen), outputPath, finalPath)
+			warning := fmt.Sprintf("file saved to %s; copy to %s failed: %v", finalPath, outputPath, err)
+			fmt.Fprintf(status, Colorize("\nNote: File saved to %s (copy to %s failed: %v)\n", ColorYellow), finalPath, outputPath, err)
+			return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+				Action:          "run",
+				Input:           inputPath,
+				Output:          finalPath,
+				RequestedOutput: outputPath,
+				Warning:         warning,
+			})
 		}
-		return nil
+		fmt.Fprintf(status, Colorize("\nDone! Output saved to: %s (copied from %s)\n", ColorGreen), outputPath, finalPath)
+		return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+			Action: "run",
+			Input:  inputPath,
+			Output: outputPath,
+			Source: finalPath,
+			Copied: true,
+		})
 	}
-	fmt.Printf(Colorize("\nDone! Output saved to: %s\n", ColorGreen), outputPath)
-	return nil
+	fmt.Fprintf(status, Colorize("\nDone! Output saved to: %s\n", ColorGreen), outputPath)
+	return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+		Action: "run",
+		Input:  inputPath,
+		Output: outputPath,
+	})
 }
 
 // findTraceWindowByButtons finds an Xcode window with trace-related buttons
@@ -733,7 +751,7 @@ func showPerformanceBeforeExport(windowAX uintptr) (bool, error) {
 	if !IsElementEnabled(showPerfBtn) {
 		return false, fmt.Errorf("Show Performance button is disabled")
 	}
-	fmt.Println("  Showing performance data...")
+	fmt.Fprintln(xcodeProfileStatusWriter(), "  Showing performance data...")
 	if err := axPressWithFallbackWindow(showPerfBtn, windowAX); err != nil {
 		time.Sleep(500 * time.Millisecond)
 		showPerfBtn = findShowPerformanceButton(windowAX)
@@ -1105,6 +1123,7 @@ func dumpExportSheetState(windowAX uintptr) {
 }
 
 func exportTrace(appAX, windowAX uintptr, outputPath string) error {
+	status := xcodeProfileStatusWriter()
 	activateXcodeQuick()
 	axAction(windowAX, "AXRaise")
 	time.Sleep(300 * time.Millisecond)
@@ -1112,9 +1131,9 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 	// Try clicking Export button in Summary panel first
 	exportBtn := FindExportButton(windowAX)
 	if exportBtn != 0 {
-		fmt.Println("    Found Export button in Summary panel")
+		fmt.Fprintln(status, "    Found Export button in Summary panel")
 		if err := axPressWithFallback(exportBtn); err != nil {
-			fmt.Printf("    Warning: Failed to click Export button: %v\n", err)
+			fmt.Fprintf(status, "    Warning: Failed to click Export button: %v\n", err)
 		}
 	} else {
 		// Fall back to menu
@@ -1131,7 +1150,7 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 		}
 	}
 
-	fmt.Println("    Waiting for export sheet...")
+	fmt.Fprintln(status, "    Waiting for export sheet...")
 	time.Sleep(500 * time.Millisecond) // Give dialog time to appear
 
 	// Refresh app reference since the UI might have changed
@@ -1175,7 +1194,7 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 		return fmt.Errorf("export sheet did not appear (Save button not found)")
 	}
 
-	fmt.Println("    Export sheet detected")
+	fmt.Fprintln(status, "    Export sheet detected")
 	// Use the window containing the Save button for subsequent operations
 	windowAX = saveWindow
 
@@ -1195,14 +1214,14 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 	if embedCheckbox != 0 {
 		if IsElementEnabled(embedCheckbox) {
 			if !IsCheckboxChecked(embedCheckbox) {
-				fmt.Println("    Enabling 'Embed performance data'")
+				fmt.Fprintln(status, "    Enabling 'Embed performance data'")
 				axPressWithFallback(embedCheckbox)
 				time.Sleep(300 * time.Millisecond)
 				if !IsCheckboxChecked(embedCheckbox) {
 					return fmt.Errorf("failed to enable Embed performance data checkbox")
 				}
 			} else {
-				fmt.Println("    'Embed performance data' already enabled")
+				fmt.Fprintln(status, "    'Embed performance data' already enabled")
 			}
 		} else {
 			return fmt.Errorf("Embed performance data checkbox is disabled; profiler data is not available in Xcode")
@@ -1225,7 +1244,7 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 	navigatedToDir := false
 	remainingPath := ""
 	if outputDir != "" && outputDir != "." {
-		fmt.Printf("    Navigating to directory: %s\n", outputDir)
+		fmt.Fprintf(status, "    Navigating to directory: %s\n", outputDir)
 		// First try via path popup (more reliable than Cmd+Shift+G)
 		var popupErr error
 		remainingPath, popupErr = navigateViaPathPopup(windowAX, outputDir)
@@ -1234,7 +1253,7 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 			// Fall back to Cmd+Shift+G
 			if err := NavigateToFolderInSaveDialog(windowAX, outputDir); err != nil {
 				verboseLog("exportTrace: Cmd+Shift+G navigation failed: %v", err)
-				fmt.Println("    Note: Directory navigation failed, using default location")
+				fmt.Fprintln(status, "    Note: Directory navigation failed, using default location")
 			} else {
 				navigatedToDir = true
 			}
@@ -1251,7 +1270,7 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 	// If there's a remaining path (couldn't fully navigate), try Cmd+Shift+G as final fallback
 	// Note: putting "/" in filename creates ":"-named files due to macOS HFS legacy behavior
 	if remainingPath != "" {
-		fmt.Printf("    Partial navigation, using Cmd+Shift+G to navigate to: %s\n", outputDir)
+		fmt.Fprintf(status, "    Partial navigation, using Cmd+Shift+G to navigate to: %s\n", outputDir)
 		// Ensure directory exists before trying to navigate
 		if err := os.MkdirAll(outputDir, 0755); err != nil {
 			verboseLog("exportTrace: failed to create output directory: %v", err)
@@ -1259,25 +1278,25 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 		// Try Cmd+Shift+G to navigate to full path
 		if err := NavigateToFolderInSaveDialog(windowAX, outputDir); err != nil {
 			verboseLog("exportTrace: Cmd+Shift+G fallback also failed: %v", err)
-			fmt.Printf("    Warning: Could not navigate to %s, file may save to wrong location\n", outputDir)
+			fmt.Fprintf(status, "    Warning: Could not navigate to %s, file may save to wrong location\n", outputDir)
 		} else {
 			navigatedToDir = true
 			remainingPath = ""
-			fmt.Println("    Successfully navigated via Cmd+Shift+G")
+			fmt.Fprintln(status, "    Successfully navigated via Cmd+Shift+G")
 		}
 	}
 
 	// Set just the filename (never include path prefix - macOS converts "/" to ":")
-	fmt.Printf("    Setting filename: %s\n", outputName)
+	fmt.Fprintf(status, "    Setting filename: %s\n", outputName)
 	saveNameField := findInAllWindows(FindSaveAsTextField)
 	if saveNameField != 0 {
 		if err := axSetValue(saveNameField, outputName); err != nil {
-			fmt.Printf("    Warning: SetValue failed: %v (using default filename)\n", err)
+			fmt.Fprintf(status, "    Warning: SetValue failed: %v (using default filename)\n", err)
 		} else if collectProfileDebug {
 			fmt.Fprintln(os.Stderr, "    [DEBUG] Set filename via AX (saveAsNameTextField)")
 		}
 	} else {
-		fmt.Println("    Warning: saveAsNameTextField not found (using default filename)")
+		fmt.Fprintln(status, "    Warning: saveAsNameTextField not found (using default filename)")
 	}
 	time.Sleep(300 * time.Millisecond)
 
@@ -1312,7 +1331,7 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 	}
 
 	// Click Save button
-	fmt.Println("    Saving...")
+	fmt.Fprintln(status, "    Saving...")
 	if err := axPressWithFallback(saveBtn); err != nil {
 		return fmt.Errorf("failed to click Save: %w", err)
 	}
@@ -1321,11 +1340,11 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 		return fmt.Errorf("confirm replace: %w", err)
 	}
 	if replaced {
-		fmt.Println("    Confirmed replacement")
+		fmt.Fprintln(status, "    Confirmed replacement")
 	}
 
 	// Wait for export to complete — GPU trace exports can be large and slow
-	fmt.Println("    Waiting for export to write...")
+	fmt.Fprintln(status, "    Waiting for export to write...")
 	time.Sleep(5 * time.Second)
 
 	// Check if file was saved to expected location
@@ -1637,7 +1656,7 @@ func dismissStartupDialogs() error {
 				// Found startup dialog - click "Reopen" to restore previous windows
 				if reopenBtn != 0 {
 					verboseLog("dismissStartupDialogs: clicking Reopen button")
-					fmt.Println("    Dismissing Xcode startup dialog...")
+					fmt.Fprintln(xcodeProfileStatusWriter(), "    Dismissing Xcode startup dialog...")
 					if err := axPressWithFallback(reopenBtn); err != nil {
 						verboseLog("dismissStartupDialogs: Reopen click failed: %v", err)
 					}
@@ -1647,7 +1666,7 @@ func dismissStartupDialogs() error {
 				// Fall back to "Don't Reopen" if Reopen not found
 				if dontReopenBtn != 0 {
 					verboseLog("dismissStartupDialogs: clicking Don't Reopen button")
-					fmt.Println("    Dismissing Xcode startup dialog...")
+					fmt.Fprintln(xcodeProfileStatusWriter(), "    Dismissing Xcode startup dialog...")
 					if err := axPressWithFallback(dontReopenBtn); err != nil {
 						verboseLog("dismissStartupDialogs: Don't Reopen click failed: %v", err)
 					}

@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -13,6 +15,19 @@ import (
 	"github.com/tmc/gputrace/internal/osa"
 	"github.com/tmc/macgo"
 )
+
+type xcodeProfileActionOutput struct {
+	Success         bool   `json:"success"`
+	Action          string `json:"action"`
+	Target          string `json:"target,omitempty"`
+	Method          string `json:"method,omitempty"`
+	Input           string `json:"input,omitempty"`
+	Output          string `json:"output,omitempty"`
+	Source          string `json:"source,omitempty"`
+	RequestedOutput string `json:"requested_output,omitempty"`
+	Copied          bool   `json:"copied,omitempty"`
+	Warning         string `json:"warning,omitempty"`
+}
 
 // Shared flags for collect-xcode-profile subcommands
 var (
@@ -28,6 +43,27 @@ var (
 	collectProfileForce      bool
 	collectProfilePprof      bool // Enable pprof debug endpoints
 )
+
+func xcodeProfileStatusWriter() io.Writer {
+	if collectProfileJSON {
+		return os.Stderr
+	}
+	return os.Stdout
+}
+
+func encodeXcodeProfileJSON(w io.Writer, v interface{}) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
+}
+
+func writeXcodeProfileActionOutput(output xcodeProfileActionOutput) error {
+	if !collectProfileJSON {
+		return nil
+	}
+	output.Success = true
+	return encodeXcodeProfileJSON(os.Stdout, output)
+}
 
 var collectXcodeProfileCmd = &cobra.Command{
 	Use:     "xcode-profile [trace_file]",
@@ -157,9 +193,10 @@ func acquireProfileLock() (func(), error) {
 		if !running {
 			break
 		}
+		status := xcodeProfileStatusWriter()
 
 		if collectProfileForce {
-			fmt.Printf("Warning: profiling appears to be running in %q, proceeding anyway (--force)\n", windowTitle)
+			fmt.Fprintf(status, "Warning: profiling appears to be running in %q, proceeding anyway (--force)\n", windowTitle)
 			break
 		}
 
@@ -167,7 +204,7 @@ func acquireProfileLock() (func(), error) {
 		// This is common when a trace was already replayed but the window is still open.
 		if firstAttempt {
 			verboseLog("acquireProfileLock: detected stale GPU trace window %q, closing all Xcode windows and retrying", windowTitle)
-			fmt.Printf("  Closing stale Xcode GPU trace window %q...\n", windowTitle)
+			fmt.Fprintf(status, "  Closing stale Xcode GPU trace window %q...\n", windowTitle)
 			closeAllXcodeWindows()
 			time.Sleep(2 * time.Second)
 			firstAttempt = false
@@ -183,7 +220,7 @@ func acquireProfileLock() (func(), error) {
 		}
 
 		// Wait for profiling to complete
-		fmt.Printf("Waiting for profiling to complete in %q (timeout: %v)...\n", windowTitle, collectProfileWait)
+		fmt.Fprintf(status, "Waiting for profiling to complete in %q (timeout: %v)...\n", windowTitle, collectProfileWait)
 		time.Sleep(pollInterval)
 	}
 
