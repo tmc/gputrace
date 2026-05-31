@@ -69,12 +69,7 @@ func runAPICalls(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("parse API calls: %w", err)
 		}
-		data, err := json.MarshalIndent(apiList, "", "  ")
-		if err != nil {
-			return fmt.Errorf("failed to marshal json: %w", err)
-		}
-		fmt.Println(string(data))
-		return nil
+		return writeAPICallsJSON(cmd.OutOrStdout(), apiList)
 	}
 
 	if apiCallsKernelFilter != "" {
@@ -89,6 +84,15 @@ func runAPICalls(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	return nil
+}
+
+func writeAPICallsJSON(w io.Writer, apiList *gputrace.APICallList) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(apiList); err != nil {
+		return fmt.Errorf("marshal json: %w", err)
+	}
 	return nil
 }
 
