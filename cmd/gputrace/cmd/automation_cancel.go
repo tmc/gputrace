@@ -3,8 +3,12 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"os/signal"
+	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -15,31 +19,50 @@ var automationCanceled atomic.Bool
 var automationCtx context.Context
 var automationCancel context.CancelFunc
 
-// StartAutomationCancelListener prepares for cancellation support.
-// If showOverlay is true, shows a transparent overlay (not yet implemented).
-// Returns a cleanup function that should be called when automation is done.
-//
-// TODO: Implement full-screen transparent overlay like iOS's
-// "Automation Running - Hold both volume buttons to stop"
-// For macOS, could use "Hold Escape for 2 seconds to stop" or similar.
+// StartAutomationCancelListener starts a Ctrl+C listener for automation.
 func StartAutomationCancelListener(showOverlay bool) (cleanup func()) {
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	return startAutomationCancelListener(showOverlay, signals, func() {
+		signal.Stop(signals)
+	})
+}
+
+// startAutomationCancelListener prepares for cancellation support.
+// If showOverlay is true, shows a macOS notification with cancel instructions.
+// Returns a cleanup function that should be called when automation is done.
+func startAutomationCancelListener(showOverlay bool, signals <-chan os.Signal, stop func()) (cleanup func()) {
 	// Reset cancel state
 	automationCanceled.Store(false)
 
 	// Create cancellable context
 	automationCtx, automationCancel = context.WithCancel(context.Background())
 
-	// TODO: Show transparent overlay with cancel instructions
-	// For now, this is a no-op placeholder
 	if showOverlay {
-		// Future: create NSWindow overlay at floating level
-		// with message "Automation Running - Hold Escape to stop"
+		_ = ShowAutomationOverlay("Automation running. Press Ctrl+C to cancel.")
 	}
 
-	return func() {
-		if automationCancel != nil {
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-signals:
+			automationCanceled.Store(true)
 			automationCancel()
+		case <-done:
 		}
+	}()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			close(done)
+			if stop != nil {
+				stop()
+			}
+			if automationCancel != nil {
+				automationCancel()
+			}
+		})
 	}
 }
 
