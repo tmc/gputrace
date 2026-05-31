@@ -2,6 +2,7 @@ package counter
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/csv"
 	"os"
 	"path/filepath"
@@ -203,6 +204,67 @@ func TestExportComparison(t *testing.T) {
 	if len(exportedRows)-1 != len(csvData.Encoders) {
 		t.Logf("Note: Exported %d rows vs reference %d encoders", len(exportedRows)-1, len(csvData.Encoders))
 	}
+}
+
+func TestExportCountersCSVWithSummaryCountsMixedRowSources(t *testing.T) {
+	tracePath, perfDir := makeTraceWithPerfDir(t)
+	if err := os.WriteFile(filepath.Join(perfDir, "Counters_f_0.raw"), syntheticCounterRaw(28416), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	tr := &trace.Trace{
+		Path:        tracePath,
+		CaptureData: syntheticCaptureWithComputeEncoders("kernel0", "kernel1", "kernel2"),
+	}
+
+	exporter := NewCountersCSVExporter(tr)
+	var buf bytes.Buffer
+	summary, err := exporter.ExportCountersCSVWithSummary(&buf)
+	if err != nil {
+		t.Fatalf("ExportCountersCSVWithSummary failed: %v", err)
+	}
+
+	if summary.Rows != 3 {
+		t.Fatalf("Rows = %d, want 3", summary.Rows)
+	}
+	if summary.ParsedCounterRows != 1 {
+		t.Fatalf("ParsedCounterRows = %d, want 1", summary.ParsedCounterRows)
+	}
+	if summary.SyntheticFallbackRows != 2 {
+		t.Fatalf("SyntheticFallbackRows = %d, want 2", summary.SyntheticFallbackRows)
+	}
+	if !summary.HasSyntheticFallback() {
+		t.Fatal("HasSyntheticFallback() = false, want true")
+	}
+
+	reader := csv.NewReader(strings.NewReader(buf.String()))
+	rows, err := reader.ReadAll()
+	if err != nil {
+		t.Fatalf("Failed to parse CSV: %v", err)
+	}
+	if len(rows) != 4 {
+		t.Fatalf("CSV rows = %d, want header + 3 data rows", len(rows))
+	}
+	if len(rows[0]) != 247 {
+		t.Fatalf("header columns = %d, want 247", len(rows[0]))
+	}
+	for i, row := range rows[1:] {
+		if len(row) != 247 {
+			t.Fatalf("data row %d columns = %d, want 247", i+1, len(row))
+		}
+	}
+}
+
+func syntheticCaptureWithComputeEncoders(labels ...string) []byte {
+	var data []byte
+	for i, label := range labels {
+		var addr [8]byte
+		binary.LittleEndian.PutUint64(addr[:], uint64(0x1000+i))
+		data = append(data, []byte("CS\x00\x00")...)
+		data = append(data, addr[:]...)
+		data = append(data, label...)
+		data = append(data, 0)
+	}
+	return data
 }
 
 func TestPopulateEncoderMetricsFromPerfCounterStats(t *testing.T) {

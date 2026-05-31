@@ -15,12 +15,31 @@ import (
 
 // GPUTraceProfiler provides comprehensive profiling from .gputrace files.
 type GPUTraceProfiler struct {
-	trace        *gputrace.Trace
-	timings      []*gputrace.EncoderTiming
-	basename     string
-	sourceMapper *gputrace.ShaderSourceMapper
-	stats        *gputrace.PerfCounterStats
-	streamStats  *counter.StreamDataStats
+	trace             *gputrace.Trace
+	timings           []*gputrace.EncoderTiming
+	timingSource      string
+	timingApproximate bool
+	basename          string
+	sourceMapper      *gputrace.ShaderSourceMapper
+	stats             *gputrace.PerfCounterStats
+	streamStats       *counter.StreamDataStats
+}
+
+const (
+	// TimingSourceProfiler indicates timings came from .gpuprofiler_raw streamData.
+	TimingSourceProfiler = "profiler"
+	// TimingSourceExtracted indicates timings came from capture timestamp extraction.
+	TimingSourceExtracted = "extracted"
+	// TimingSourceStore0 indicates timings came from store0 timing extraction.
+	TimingSourceStore0 = "store0"
+	// TimingSourceSynthetic indicates timings were estimated from kernel names.
+	TimingSourceSynthetic = "synthetic"
+)
+
+type gpuTraceTimingSelection struct {
+	timings     []*gputrace.EncoderTiming
+	source      string
+	approximate bool
 }
 
 // FromGPUTrace creates a comprehensive profiler from a .gputrace file.
@@ -52,31 +71,9 @@ func FromGPUTrace(tracePath string, shaderSearchPaths ...string) (*GPUTraceProfi
 
 	streamStats, _ := counter.ExtractPipelineStatsFromTraceStreamData(trace)
 
-	// Extract timing data - try multiple strategies.
-	var timings []*gputrace.EncoderTiming
-
-	// Strategy 1: Use profiler streamData when present. This is what the
-	// Xcode Performance view uses for encoder spans.
-	profilerTimings, totalTimeUs, profilerErr := counter.ExtractEncoderTimingsFromProfiler(trace)
-	if profilerErr == nil && len(profilerTimings) > 0 {
-		timings = encoderTimingsFromProfiler(profilerTimings, totalTimeUs)
-	} else {
-		// Strategy 2: Try standard timing extraction.
-		timings, err = gputrace.ExtractTimingData(trace)
-	}
-	if len(timings) == 0 {
-		// Strategy 3: Try store0 timing extraction (for performance traces).
-		store0Data, store0Err := gputrace.ExtractStore0Timing(trace)
-		if store0Err == nil && len(store0Data.Encoders) > 0 {
-			timings = gputrace.ConvertStore0ToEncoderTimings(trace, store0Data)
-		} else {
-			// Strategy 4: Generate synthetic timing from kernel names.
-			// This provides qualitative analysis even without real timing data.
-			timings = gputrace.GenerateSyntheticTiming(trace)
-			if len(timings) == 0 {
-				return nil, fmt.Errorf("no timing data available (tried standard, store0, and synthetic): %w (store0: %v)", err, store0Err)
-			}
-		}
+	timingSelection, err := selectGPUTraceTimings(trace)
+	if err != nil {
+		return nil, err
 	}
 
 	// Initialize source mapper
@@ -103,13 +100,84 @@ func FromGPUTrace(tracePath string, shaderSearchPaths ...string) (*GPUTraceProfi
 	}
 
 	return &GPUTraceProfiler{
-		trace:        trace,
-		timings:      timings,
-		basename:     basename,
-		sourceMapper: mapper,
-		stats:        stats,
-		streamStats:  streamStats,
+		trace:             trace,
+		timings:           timingSelection.timings,
+		timingSource:      timingSelection.source,
+		timingApproximate: timingSelection.approximate,
+		basename:          basename,
+		sourceMapper:      mapper,
+		stats:             stats,
+		streamStats:       streamStats,
 	}, nil
+}
+
+func selectGPUTraceTimings(trace *gputrace.Trace) (gpuTraceTimingSelection, error) {
+	// Strategy 1: Use profiler streamData when present. This is what the
+	// Xcode Performance view uses for encoder spans.
+	profilerTimings, totalTimeUs, profilerErr := counter.ExtractEncoderTimingsFromProfiler(trace)
+	if profilerErr == nil && len(profilerTimings) > 0 {
+		return gpuTraceTimingSelection{
+			timings: encoderTimingsFromProfiler(profilerTimings, totalTimeUs),
+			source:  TimingSourceProfiler,
+		}, nil
+	}
+
+	// Strategy 2: Try standard timing extraction.
+	timings, timingErr := gputrace.ExtractTimingData(trace)
+	if len(timings) > 0 {
+		return gpuTraceTimingSelection{
+			timings: timings,
+			source:  TimingSourceExtracted,
+		}, nil
+	}
+
+	// Strategy 3: Try store0 timing extraction (for performance traces).
+	store0Data, store0Err := gputrace.ExtractStore0Timing(trace)
+	if store0Err == nil && len(store0Data.Encoders) > 0 {
+		return gpuTraceTimingSelection{
+			timings: gputrace.ConvertStore0ToEncoderTimings(trace, store0Data),
+			source:  TimingSourceStore0,
+		}, nil
+	}
+
+	// Strategy 4: Generate synthetic timing from kernel names. This provides
+	// qualitative analysis even without real timing data.
+	timings = gputrace.GenerateSyntheticTiming(trace)
+	if len(timings) > 0 {
+		return gpuTraceTimingSelection{
+			timings:     timings,
+			source:      TimingSourceSynthetic,
+			approximate: true,
+		}, nil
+	}
+
+	if timingErr == nil {
+		timingErr = fmt.Errorf("standard timing extraction returned no timings")
+	}
+	return gpuTraceTimingSelection{}, fmt.Errorf("no timing data available (tried profiler, standard, store0, and synthetic): %w (profiler: %v, store0: %v)", timingErr, profilerErr, store0Err)
+}
+
+// TimingSource reports which timing strategy populated this profiler's encoder timings.
+func (p *GPUTraceProfiler) TimingSource() string {
+	if p == nil {
+		return ""
+	}
+	return p.timingSource
+}
+
+// TimingsAreApproximate reports whether timings are estimated rather than measured.
+func (p *GPUTraceProfiler) TimingsAreApproximate() bool {
+	return p != nil && p.timingApproximate
+}
+
+func (p *GPUTraceProfiler) timingSourceDisplay() string {
+	if p == nil || p.timingSource == "" {
+		return ""
+	}
+	if p.timingApproximate {
+		return p.timingSource + " (approximate)"
+	}
+	return p.timingSource
 }
 
 func encoderTimingsFromProfiler(in []counter.EncoderTimingInfo, totalTimeUs int) []*gputrace.EncoderTiming {
@@ -267,6 +335,9 @@ func (p *GPUTraceProfiler) writeTimingSummary(w io.Writer) {
 	}
 
 	fmt.Fprintf(w, "Total GPU Time: %.2f ms\n", totalMs)
+	if source := p.timingSourceDisplay(); source != "" {
+		fmt.Fprintf(w, "Timing Source: %s\n", source)
+	}
 	if p.streamStats != nil {
 		if p.streamStats.EffectiveGPUTimeNs != nil {
 			fmt.Fprintf(w, "Effective GPU Time: %.2f ms\n", float64(*p.streamStats.EffectiveGPUTimeNs)/1e6)
@@ -279,8 +350,10 @@ func (p *GPUTraceProfiler) writeTimingSummary(w io.Writer) {
 		if p.streamStats.CommandBufferWallNs > 0 {
 			fmt.Fprintf(w, "CB Wall Time: %.2f ms\n", float64(p.streamStats.CommandBufferWallNs)/1e6)
 		}
-		if p.streamStats.TimingSource != "" {
+		if p.streamStats.TimingSource != "" && p.timingSource == "" {
 			fmt.Fprintf(w, "Timing Source: %s\n", p.streamStats.TimingSource)
+		} else if p.streamStats.TimingSource != "" {
+			fmt.Fprintf(w, "StreamData Timing Source: %s\n", p.streamStats.TimingSource)
 		}
 	}
 }
@@ -393,12 +466,23 @@ func (p *GPUTraceProfiler) buildCombinedProfile() (*profile.Profile, error) {
 }
 
 func (p *GPUTraceProfiler) addProfileTimingComments(prof *profile.Profile) {
-	if prof == nil || p.streamStats == nil {
+	if prof == nil || p == nil {
+		return
+	}
+	if p.timingSource != "" {
+		prof.Comments = append(prof.Comments, "gputrace timing_source: "+p.timingSource)
+		prof.Comments = append(prof.Comments, fmt.Sprintf("gputrace timing_approximate: %t", p.timingApproximate))
+	}
+	if p.streamStats == nil {
 		return
 	}
 	stats := p.streamStats
 	if stats.TimingSource != "" {
-		prof.Comments = append(prof.Comments, "gputrace timing_source: "+stats.TimingSource)
+		if p.timingSource == "" {
+			prof.Comments = append(prof.Comments, "gputrace timing_source: "+stats.TimingSource)
+		} else {
+			prof.Comments = append(prof.Comments, "gputrace stream_timing_source: "+stats.TimingSource)
+		}
 	}
 	if stats.EffectiveGPUTimeNs != nil {
 		prof.Comments = append(prof.Comments, fmt.Sprintf("gputrace effective_gpu_time_ns: %d", *stats.EffectiveGPUTimeNs))

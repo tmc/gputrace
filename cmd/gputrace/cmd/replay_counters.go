@@ -21,47 +21,40 @@ var (
 
 var replayCountersCmd = &cobra.Command{
 	Use:    "replay-counters <trace.gputrace>",
-	Short:  "Plan MTLCounterSampleBuffer performance counter collection during replay",
+	Short:  "Plan MTLCounterSampleBuffer sampling; real collection is disabled",
 	Hidden: true,
-	Long: `Plan Metal performance counter collection during trace replay.
+	Long: `Plan Metal performance counter sampling for trace replay.
 
-IMPORTANT: Two Approaches for Performance Counters
+IMPORTANT: This command is fail-closed for real replay counter collection.
 
-1. THIS COMMAND (replay-counters) - Collect FRESH data via replay:
-   - Re-executes GPU workload from the trace
-   - Inserts MTLCounterSampleBuffer sampling during execution
-   - Collects NEW counter data from actual GPU replay
-   - Uses public Metal API (stable, documented)
-   - Requires Metal bindings (future work)
+Current Behavior:
+  - --simulate builds a sampling plan only
+  - --simulate does not replay GPU work
+  - Running without --simulate fails closed before trace replay or GPU work
+  - No replay-time MTLCounterSampleBuffer collection is attempted
 
-2. ALTERNATIVE (perfcounters) - Parse HISTORICAL data:
-   - Reads existing .gpuprofiler_raw files from Instruments
-   - No GPU execution required
-   - Binary format undocumented (reverse engineering needed)
-
-Choose based on your needs:
-- Want to re-run and profile workload? Use replay-counters (this command)
-- Have existing Instruments data? Use 'gputrace perfcounters'
-
-Current Status:
-This command provides the complete framework for MTLCounterSampleBuffer
-integration. Use --simulate to inspect the sampling process and show:
+Use this command to inspect:
   - Where counter samples would be taken (encoder/dispatch boundaries)
   - Sampling overhead estimates (barrier synchronization cost)
   - Memory requirements for counter buffers
   - Counter aggregation and reporting structure
 
-Real replay-time counter collection currently fails closed until Metal API
-bindings are connected.
+Use perfcounters when you need existing profiler data:
+   - Reads existing .gpuprofiler_raw files from Instruments
+   - No GPU execution required
+   - Binary format undocumented (reverse engineering needed)
 
-When Metal API bindings are added, this will collect real counters:
+Current Status:
+Replay-time counter collection currently fails closed until Metal API bindings
+are connected and the replay path can collect counters safely. The planned
+counter sets are:
   - Timestamp counters (GPU cycles)
   - Stage utilization (vertex/fragment/compute)
   - Statistics (draw/dispatch counts)
   - Apple GPU hardware counters (ALU, cache, bandwidth)
 
 Output modes:
-  - simulate: Show overhead and memory analysis without Metal bindings
+  - simulate: Show overhead and memory analysis without replaying GPU work
   - json: Export simulation results as JSON when -o ends in .json
 
 Counter Sets (--counter-sets):
@@ -89,8 +82,9 @@ Examples:
   gputrace replay-counters trace.gputrace --simulate -o counters.json
 
 Implementation Status:
-  This command provides the framework for MTLCounterSampleBuffer integration.
-  Actual GPU counter collection requires Metal API bindings (CGo/Swift).
+  This command provides only a planning/simulation path today. Actual replay-time
+  GPU counter collection is intentionally unavailable and fails closed before
+  trace replay or GPU work.
 
 Related Commands:
   - gputrace replay: Analyze replay structure

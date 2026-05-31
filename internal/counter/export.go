@@ -19,6 +19,18 @@ type CountersCSVExporter struct {
 	trace *Trace
 }
 
+// CountersCSVExportSummary reports the source of data rows written to Counters.csv.
+type CountersCSVExportSummary struct {
+	Rows                  int // Data rows written, excluding the header.
+	ParsedCounterRows     int // Rows populated from parsed Counters_f_*.raw metrics.
+	SyntheticFallbackRows int // Rows populated from synthetic fallback estimates.
+}
+
+// HasSyntheticFallback reports whether any exported rows used synthetic estimates.
+func (s CountersCSVExportSummary) HasSyntheticFallback() bool {
+	return s.SyntheticFallbackRows > 0
+}
+
 // NewCountersCSVExporter creates a new CSV exporter for the given trace.
 func NewCountersCSVExporter(trace *Trace) *CountersCSVExporter {
 	return &CountersCSVExporter{
@@ -30,12 +42,20 @@ func NewCountersCSVExporter(trace *Trace) *CountersCSVExporter {
 // Attempts to use REAL counter data from .gpuprofiler_raw parsing (gputrace-44).
 // Falls back to synthetic values if binary data unavailable.
 func (e *CountersCSVExporter) ExportCountersCSV(w io.Writer) error {
+	_, err := e.ExportCountersCSVWithSummary(w)
+	return err
+}
+
+// ExportCountersCSVWithSummary generates Counters.csv and returns row source accounting.
+func (e *CountersCSVExporter) ExportCountersCSVWithSummary(w io.Writer) (CountersCSVExportSummary, error) {
 	writer := csv.NewWriter(w)
 	defer writer.Flush()
 
+	var summary CountersCSVExportSummary
+
 	// Write header row
 	if err := writer.Write(getCountersCSVHeader()); err != nil {
-		return fmt.Errorf("write header: %w", err)
+		return summary, fmt.Errorf("write header: %w", err)
 	}
 
 	// Try to get REAL counter data from binary parsing (gputrace-44)
@@ -52,7 +72,7 @@ func (e *CountersCSVExporter) ExportCountersCSV(w io.Writer) error {
 	// Get encoder information
 	computeEncoders, err := e.trace.ParseComputeEncoders()
 	if err != nil {
-		return fmt.Errorf("parse compute encoders: %w", err)
+		return summary, fmt.Errorf("parse compute encoders: %w", err)
 	}
 
 	// Generate rows for each encoder
@@ -72,18 +92,21 @@ func (e *CountersCSVExporter) ExportCountersCSV(w io.Writer) error {
 		if useBinaryData && encIndex < len(encoderMetrics) {
 			// Use REAL binary-parsed counter data
 			row = e.generateCounterRowFromBinaryData(rowIndex, encIndex, commandBufferLabel, encoderLabel, &encoderMetrics[encIndex])
+			summary.ParsedCounterRows++
 		} else {
 			// Fallback to synthetic estimates
 			row = e.generateCounterRowSimple(rowIndex, encIndex, commandBufferLabel, encoderLabel, encoder)
+			summary.SyntheticFallbackRows++
 		}
 
 		if err := writer.Write(row); err != nil {
-			return fmt.Errorf("write row %d: %w", rowIndex, err)
+			return summary, fmt.Errorf("write row %d: %w", rowIndex, err)
 		}
+		summary.Rows++
 		rowIndex++
 	}
 
-	return nil
+	return summary, nil
 }
 
 // generateCounterRowSimple creates a single CSV row with all 247 columns.
