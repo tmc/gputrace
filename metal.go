@@ -7,11 +7,14 @@ import (
 	"github.com/tmc/gputrace/internal/replay"
 )
 
-// Metal Replay Engine types and functions
-
 type (
-	MetalReplayEngine     = replay.MetalReplayEngine
-	MetalReplayResult     = replay.MetalReplayResult
+	// MetalReplayEngine replays trace commands through Metal.
+	MetalReplayEngine = replay.MetalReplayEngine
+
+	// MetalReplayResult reports the result of replaying a trace through Metal.
+	MetalReplayResult = replay.MetalReplayResult
+
+	// MetalValidationResult reports validation results from Metal replay.
 	MetalValidationResult = replay.MetalValidationResult
 )
 
