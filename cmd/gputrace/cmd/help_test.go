@@ -189,6 +189,19 @@ func TestXcodeProfileHelpListsVertexOutput(t *testing.T) {
 	}
 }
 
+func TestXcodeProfileHelpListsShowMemoryAction(t *testing.T) {
+	cmd := visibleSubcommand(collectXcodeProfileCmd, "show-memory")
+	if cmd == nil {
+		t.Fatal("xcode-profile show-memory command is not visible")
+	}
+	if !manualHelpLists(collectXcodeProfileCmd.Long, "show-memory", cmd.Short) {
+		t.Fatalf("xcode-profile help does not describe show-memory as %q:\n%s", cmd.Short, collectXcodeProfileCmd.Long)
+	}
+	if strings.Contains(collectXcodeProfileCmd.Long, "show-memory       Select Memory tab") {
+		t.Fatalf("xcode-profile help still describes show-memory as selecting a tab:\n%s", collectXcodeProfileCmd.Long)
+	}
+}
+
 func TestPerformanceHelpDescribesCountersTab(t *testing.T) {
 	if !strings.Contains(performanceCmd.Long, "counters  Select the Counters tab") {
 		t.Fatalf("performance help should describe counters as tab selection:\n%s", performanceCmd.Long)
