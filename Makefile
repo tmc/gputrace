@@ -6,7 +6,7 @@ AXPERMS_BIN := $(HOME)/go/bin/axperms
 BUNDLE_ID := com.tmc.gputrace
 AXPERMS_BUNDLE_ID := com.github.tmc.gputrace.axperms
 
-.PHONY: all build test vet install clean rebuild test-permissions reset-permissions axperms setup-axperms sign-bundle help
+.PHONY: all build test vet install reinstall clean sign-bundle setup-permissions reset-permissions fullreinstall reset test-permissions axperms setup-axperms help
 
 all: build
 
