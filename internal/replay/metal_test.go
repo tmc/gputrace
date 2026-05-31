@@ -4,6 +4,8 @@
 package replay
 
 import (
+	"errors"
+	"strings"
 	"testing"
 	"unsafe"
 )
@@ -132,6 +134,64 @@ func TestMetalReplayEngineShaderCompilation(t *testing.T) {
 
 	if _, ok := engine.MetalPipelines[testAddr]; !ok {
 		t.Error("Pipeline should be stored in MetalPipelines map")
+	}
+}
+
+func TestMetalReplayEngineRejectsICBPlanBeforeMetalWork(t *testing.T) {
+	engine := &MetalReplayEngine{}
+	plan := &ReplayPlan{
+		TraceePath: "/tmp/icb.gputrace",
+		Commands: []ReplayCommand{
+			{
+				Type:         "execute_icb",
+				SequenceNum:  7,
+				EncoderIndex: 2,
+				ICBAddr:      0xabc,
+				ICBCount:     3,
+			},
+		},
+		Encoders:      []ReplayEncoderInfo{{Index: 2, CommandCount: 1}},
+		ICBExecutions: 1,
+	}
+
+	result, err := engine.ExecuteReplayPlan(plan)
+	if !errors.Is(err, ErrICBExecutionUnsupported) {
+		t.Fatalf("ExecuteReplayPlan error = %v, want ErrICBExecutionUnsupported", err)
+	}
+	if result == nil {
+		t.Fatal("ExecuteReplayPlan result is nil")
+	}
+	if result.Success {
+		t.Fatal("ExecuteReplayPlan reported success for unsupported ICB plan")
+	}
+	if result.EncodersRun != 0 || result.DispatchesRun != 0 {
+		t.Fatalf("executed work = encoders %d dispatches %d, want zero", result.EncodersRun, result.DispatchesRun)
+	}
+
+	for _, want := range []string{"validate replay plan", "sequence=7", "encoder=2", "icb=0xabc", "count=3"} {
+		if !strings.Contains(result.Error, want) {
+			t.Fatalf("result error %q does not contain %q", result.Error, want)
+		}
+	}
+}
+
+func TestMetalReplayEngineEncodeCommandRejectsICB(t *testing.T) {
+	cmd := ReplayCommand{
+		Type:         "execute_icb",
+		SequenceNum:  4,
+		EncoderIndex: 1,
+		ICBAddr:      0xdef,
+		ICBCount:     2,
+	}
+
+	err := (&MetalReplayEngine{}).encodeCommand(nil, cmd)
+	if !errors.Is(err, ErrICBExecutionUnsupported) {
+		t.Fatalf("encodeCommand error = %v, want ErrICBExecutionUnsupported", err)
+	}
+	for _, want := range []string{"sequence=4", "encoder=1", "icb=0xdef", "count=2"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("encodeCommand error %q does not contain %q", err, want)
+		}
 	}
 }
 

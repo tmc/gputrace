@@ -9,7 +9,7 @@ import (
 func TestQueryDeviceCapabilities(t *testing.T) {
 	caps, err := QueryDeviceCapabilities()
 	if err != nil {
-		t.Fatalf("QueryDeviceCapabilities failed: %v", err)
+		t.Skipf("No Metal device: %v", err)
 	}
 
 	t.Logf("Device capabilities:\n%s", caps)
@@ -48,10 +48,10 @@ func TestValidateDispatch(t *testing.T) {
 	}
 
 	tests := []struct {
-		name    string
+		name       string
 		tX, tY, tZ int // threads
 		gX, gY, gZ int // threadgroup
-		wantErr bool
+		wantErr    bool
 	}{
 		{"valid small", 32, 1, 1, 32, 1, 1, false},
 		{"valid 2D", 64, 64, 1, 8, 8, 1, false},
