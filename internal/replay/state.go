@@ -1,10 +1,15 @@
 package replay
 
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+
+	tracepkg "github.com/tmc/gputrace/internal/trace"
 )
 
 // ReplayState holds the reconstructed Metal state for replay.
@@ -124,16 +129,164 @@ func (rs *ReplayState) DiscoverBuffers() ([]ReplayBufferInfo, error) {
 
 // DiscoverFunctions extracts function information from device resources.
 func (rs *ReplayState) DiscoverFunctions() ([]FunctionInfo, error) {
-	// TODO: Implement ParseDeviceResources function
-	var functions []FunctionInfo
+	resources, err := rs.ParseDeviceResources()
+	if err != nil {
+		return nil, err
+	}
+
+	functions := make([]FunctionInfo, 0, len(resources.Functions))
+	for _, fn := range resources.Functions {
+		rs.FunctionNames[fn.Address] = fn.Name
+		functions = append(functions, fn)
+	}
+	sort.Slice(functions, func(i, j int) bool {
+		return functions[i].Address < functions[j].Address
+	})
 	return functions, nil
 }
 
 // DiscoverPipelines extracts pipeline state information from the trace.
 func (rs *ReplayState) DiscoverPipelines() ([]PipelineInfo, error) {
-	// TODO: Implement ParseDeviceResources function
-	var pipelines []PipelineInfo
+	resources, err := rs.ParseDeviceResources()
+	if err != nil {
+		return nil, err
+	}
+
+	pipelines := make([]PipelineInfo, 0, len(resources.Pipelines))
+	for _, pso := range resources.Pipelines {
+		pipelines = append(pipelines, pso)
+	}
+	sort.Slice(pipelines, func(i, j int) bool {
+		return pipelines[i].Address < pipelines[j].Address
+	})
 	return pipelines, nil
+}
+
+// DeviceResourceInfo contains function and pipeline records found in
+// device-resources files. It only includes entries with a parsed address.
+type DeviceResourceInfo struct {
+	Functions map[uint64]FunctionInfo
+	Pipelines map[uint64]PipelineInfo
+}
+
+// ParseDeviceResources extracts the function labels and pipeline links needed
+// for replay. Unknown or partial records are ignored; malformed resource files
+// fail closed with an error.
+func (rs *ReplayState) ParseDeviceResources() (*DeviceResourceInfo, error) {
+	info := &DeviceResourceInfo{
+		Functions: make(map[uint64]FunctionInfo),
+		Pipelines: make(map[uint64]PipelineInfo),
+	}
+	if rs.Trace == nil {
+		return info, nil
+	}
+
+	for addr, name := range rs.Trace.FunctionToName {
+		if addr != 0 && name != "" {
+			info.Functions[addr] = FunctionInfo{Address: addr, Name: name}
+		}
+	}
+
+	for name, data := range rs.Trace.DeviceResources {
+		if len(data) < 4 || string(data[:4]) != tracepkg.MagicMTSP {
+			return nil, fmt.Errorf("parse device resource %s: %w", name, tracepkg.ErrInvalidMagic)
+		}
+		parseDeviceResourceData(info, data)
+	}
+
+	for pipelineAddr, functionName := range rs.Trace.BuildPipelineFunctionMap() {
+		if pipelineAddr == 0 {
+			continue
+		}
+		pso := info.Pipelines[pipelineAddr]
+		pso.Address = pipelineAddr
+		pso.FunctionName = functionName
+		for addr, fn := range info.Functions {
+			if fn.Name == functionName {
+				pso.FunctionAddr = addr
+				break
+			}
+		}
+		info.Pipelines[pipelineAddr] = pso
+	}
+
+	return info, nil
+}
+
+func parseDeviceResourceData(info *DeviceResourceInfo, data []byte) {
+	parseCSFunctions(info, data)
+	parseCttPipelines(info, data)
+}
+
+func parseCSFunctions(info *DeviceResourceInfo, data []byte) {
+	for i := 0; i+20 <= len(data); i++ {
+		if data[i] != 'C' || data[i+1] != 'S' {
+			continue
+		}
+
+		addrOffset := 4
+		if data[i+2] != 0 {
+			addrOffset = 8
+		}
+		if i+addrOffset+8 > len(data) {
+			continue
+		}
+
+		addr := binary.LittleEndian.Uint64(data[i+addrOffset : i+addrOffset+8])
+		labelStart := i + addrOffset + 8
+		labelEnd := labelStart
+		for labelEnd < len(data) && data[labelEnd] != 0 && labelEnd-labelStart < 128 {
+			labelEnd++
+		}
+		if addr == 0 || labelEnd == labelStart {
+			continue
+		}
+
+		name := string(data[labelStart:labelEnd])
+		if !isReplayFunctionName(name) {
+			continue
+		}
+		info.Functions[addr] = FunctionInfo{Address: addr, Name: name}
+	}
+}
+
+func parseCttPipelines(info *DeviceResourceInfo, data []byte) {
+	const cttSize = 0x28
+	offset := 0
+	for {
+		pos := bytes.Index(data[offset:], []byte("Ctt\x00"))
+		if pos == -1 {
+			return
+		}
+		base := offset + pos
+		if base+cttSize <= len(data) {
+			functionAddr := binary.LittleEndian.Uint64(data[base+0x0c : base+0x14])
+			pipelineAddr := binary.LittleEndian.Uint64(data[base+0x20 : base+0x28])
+			if functionAddr != 0 && pipelineAddr != 0 {
+				pso := PipelineInfo{
+					Address:      pipelineAddr,
+					FunctionAddr: functionAddr,
+				}
+				if fn, ok := info.Functions[functionAddr]; ok {
+					pso.FunctionName = fn.Name
+				}
+				info.Pipelines[pipelineAddr] = pso
+			}
+		}
+		offset = base + 4
+	}
+}
+
+func isReplayFunctionName(name string) bool {
+	if name == "" || len(name) > 127 {
+		return false
+	}
+	for _, r := range name {
+		if r < 0x20 || r > 0x7e {
+			return false
+		}
+	}
+	return strings.Contains(name, "_")
 }
 
 // CorrelateBufferAddresses correlates buffer filenames with addresses from the capture file.
