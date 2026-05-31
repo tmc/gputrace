@@ -6,6 +6,20 @@ Run the default suite with:
 go test ./...
 ```
 
+Maintainer validation should also exercise the build-tagged and cross-compiled
+paths that the default suite does not load:
+
+```bash
+go vet ./...
+go vet -tags metal ./...
+go test ./...
+GOOS=linux GOARCH=amd64 go test -exec=true ./...
+go test -tags metal ./...
+go test -race ./cmd/gputrace/cmd -count=1
+go test -race ./internal/... -count=1
+go build ./cmd/gputrace
+```
+
 The default suite uses the small checked-in fixtures under `testdata/traces`
 when they are present and skips fixture-dependent cases when they are not.
 Set `GPUTRACE_REQUIRE_PERF_FIXTURES=1` to make missing optional perf fixtures
