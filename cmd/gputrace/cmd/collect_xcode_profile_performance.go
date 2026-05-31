@@ -161,6 +161,8 @@ func init() {
 }
 
 func runPerformanceShow(cmd *cobra.Command, args []string) error {
+	status := xcodeProfileStatusWriter()
+
 	if err := setupMacgo(); err != nil {
 		return err
 	}
@@ -197,9 +199,7 @@ func runPerformanceShow(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("Show Performance button is disabled")
 	}
 
-	if !collectProfileJSON {
-		fmt.Println("Clicking Show Performance...")
-	}
+	fmt.Fprintln(status, "Clicking Show Performance...")
 
 	if err := axAction(btn, "AXPress"); err != nil {
 		if collectProfileJSON {
@@ -217,7 +217,7 @@ func runPerformanceShow(cmd *cobra.Command, args []string) error {
 		})
 	}
 
-	fmt.Println("Done")
+	fmt.Fprintln(status, "Done")
 	return nil
 }
 
@@ -850,6 +850,8 @@ func normalizeMemoryMetricName(label string) string {
 
 // runPerformanceView clicks the appropriate tab button in the performance view.
 func runPerformanceView(viewName string) error {
+	status := xcodeProfileStatusWriter()
+
 	if err := setupMacgo(); err != nil {
 		return err
 	}
@@ -904,9 +906,7 @@ func runPerformanceView(viewName string) error {
 		return fmt.Errorf("%s button is disabled", buttonName)
 	}
 
-	if !collectProfileJSON {
-		fmt.Printf("Selecting %s view...\n", buttonName)
-	}
+	fmt.Fprintf(status, "Selecting %s view...\n", buttonName)
 
 	if err := axAction(btn, "AXPress"); err != nil {
 		if collectProfileJSON {
@@ -924,6 +924,6 @@ func runPerformanceView(viewName string) error {
 		})
 	}
 
-	fmt.Println("Done")
+	fmt.Fprintln(status, "Done")
 	return nil
 }
