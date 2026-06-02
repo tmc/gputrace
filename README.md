@@ -59,6 +59,8 @@ gputrace diff A.gputrace B.gputrace --explain
 | | `diff` | Compare two traces |
 | | `insights` | Actionable performance insights |
 | **Capture** | `capture` | Capture GPU trace from a command |
+| | `headless-profile` | Headless Metal System Trace capture and public interval JSON export |
+| | `xctrace-profile` | Export Metal tables from a `.trace` bundle |
 | | `xcode-profile` | Xcode GPU profiler automation |
 | **Utilities** | `serve` | Web server for trace browsing |
 | | `mtlb` | Metal Library Binary inspection |
@@ -116,6 +118,7 @@ Detailed format and workflow documentation lives in `docs/`:
 
 - [README.md](./docs/README.md) -- docs index
 - [TRACE_DIFF_WORKFLOW.md](./docs/TRACE_DIFF_WORKFLOW.md) -- trace diff workflow and output interpretation
+- [HEADLESS_METAL_PROFILE.md](./docs/HEADLESS_METAL_PROFILE.md) -- non-GUI Metal profiling and export workflow
 - [STREAMDATA_FORMAT.md](./docs/STREAMDATA_FORMAT.md) -- streamData plist format
 - [trace-format.md](./docs/trace-format.md) -- trace format overview
 

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Headless Metal Profile"
+  short_description: "Run gputrace headless Metal captures"
+  default_prompt: "Use $headless-metal-profile to capture or export Metal GPU timing evidence with gputrace."
+
+policy:
+  allow_implicit_invocation: true

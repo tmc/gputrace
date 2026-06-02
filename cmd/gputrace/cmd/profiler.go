@@ -2,11 +2,13 @@ package cmd
 
 import (
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -16,9 +18,27 @@ import (
 // ProfilerOutputStats extends StreamDataStats with execution cost.
 type ProfilerOutputStats struct {
 	*counter.StreamDataStats
-	ExecutionCost []counter.ExecutionCostByFunction `json:"execution_cost,omitempty"`
+	ExecutionCost   []counter.ExecutionCostByFunction `json:"execution_cost,omitempty"`
+	ShaderPipelines []XctraceShaderPipeline           `json:"shader_pipelines,omitempty"`
 	// TimelineInfo is explicitly included to ensure it appears in JSON output
 	// (StreamDataStats.Timeline is already included via embedding, but this ensures visibility)
+}
+
+// XctraceShaderPipeline is a shader/pipeline catalog row exported by xctrace's
+// metal-shader-profiler-shader-list table. It is not the same payload as
+// streamData pipelinePerformanceStatistics, so keep its provenance explicit.
+type XctraceShaderPipeline struct {
+	Index         int    `json:"index"`
+	ShaderName    string `json:"shader_name,omitempty"`
+	FunctionLabel string `json:"function_label,omitempty"`
+	PSOName       string `json:"pso_name,omitempty"`
+	ID            uint64 `json:"id,omitempty"`
+	PCStart       uint64 `json:"pc_start,omitempty"`
+	PCEnd         uint64 `json:"pc_end,omitempty"`
+	ShaderType    string `json:"shader_type,omitempty"`
+	Process       string `json:"process,omitempty"`
+	GPU           string `json:"gpu,omitempty"`
+	Source        string `json:"source"`
 }
 
 var (
@@ -53,6 +73,104 @@ func init() {
 	profilerCmd.Flags().BoolVar(&profilerJSON, "json", false, "Output in JSON format")
 	profilerCmd.Flags().BoolVar(&profilerLimiters, "limiters", false, "Show performance limiter data from Counter files")
 	profilerCmd.Flags().BoolVar(&profilerKernels, "kernels", false, "Show kernel/function names and per-dispatch details")
+}
+
+func loadXctraceShaderPipelines(profilerDir, processName string) ([]XctraceShaderPipeline, string, error) {
+	candidates := []struct {
+		path   string
+		source string
+	}{
+		{
+			path:   filepath.Join(filepath.Dir(profilerDir), "xctrace_metal-shader-profiler-shader-list.xml"),
+			source: "xctrace_metal-shader-profiler-shader-list",
+		},
+		{
+			path:   filepath.Join(profilerDir, "xctrace_metal-shader-profiler-shader-list.xml"),
+			source: "xctrace_metal-shader-profiler-shader-list",
+		},
+	}
+	var lastErr error
+	for _, candidate := range candidates {
+		pipelines, err := parseXctraceShaderPipelineXML(candidate.path, processName, candidate.source)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		return pipelines, candidate.source, nil
+	}
+	if lastErr != nil {
+		return nil, "", lastErr
+	}
+	return nil, "", nil
+}
+
+func parseXctraceShaderPipelineXML(path, processName, source string) ([]XctraceShaderPipeline, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	decoder := xml.NewDecoder(file)
+	values := map[string]string{}
+	pipelines := []XctraceShaderPipeline{}
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			if err.Error() == "EOF" {
+				break
+			}
+			return nil, err
+		}
+		start, ok := token.(xml.StartElement)
+		if !ok || start.Name.Local != "row" {
+			continue
+		}
+		fields, err := parseXctraceRow(decoder, values)
+		if err != nil {
+			return nil, err
+		}
+		pipeline, ok := xctraceShaderPipelineFromFields(fields, len(pipelines), source)
+		if !ok {
+			continue
+		}
+		if processName != "" && processName != "*" && !strings.Contains(pipeline.Process, processName) {
+			continue
+		}
+		pipelines = append(pipelines, pipeline)
+	}
+	return pipelines, nil
+}
+
+func xctraceShaderPipelineFromFields(fields []string, index int, source string) (XctraceShaderPipeline, bool) {
+	// Schema:
+	// timestamp, name, label, pso-name, id, pc-start, pc-end, shader-type, process, gpu
+	if len(fields) < 10 {
+		return XctraceShaderPipeline{}, false
+	}
+	pipeline := XctraceShaderPipeline{
+		Index:         index,
+		ShaderName:    fields[1],
+		FunctionLabel: fields[2],
+		PSOName:       fields[3],
+		ID:            parseXctraceUint64(fields[4]),
+		PCStart:       parseXctraceUint64(fields[5]),
+		PCEnd:         parseXctraceUint64(fields[6]),
+		ShaderType:    fields[7],
+		Process:       fields[8],
+		GPU:           fields[9],
+		Source:        source,
+	}
+	return pipeline, pipeline.ShaderName != "" || pipeline.PSOName != "" || pipeline.ID != 0
+}
+
+func parseXctraceUint64(s string) uint64 {
+	s = strings.TrimSpace(strings.ReplaceAll(s, "'", ""))
+	if s == "" {
+		return 0
+	}
+	v, _ := strconv.ParseUint(s, 10, 64)
+	return v
 }
 
 func runProfiler(cmd *cobra.Command, args []string) error {
@@ -93,6 +211,11 @@ func runProfiler(cmd *cobra.Command, args []string) error {
 	// Correlate GPRWCNTR samples with dispatches for per-dispatch GPU utilization
 	counter.CorrelateDispatchSamples(stats)
 
+	shaderPipelines, shaderPipelineSource, err := loadXctraceShaderPipelines(profilerDir, "")
+	if err != nil && profilerKernels && !profilerJSON {
+		fmt.Fprintf(os.Stderr, "warning: parse xctrace shader pipeline table: %v\n", err)
+	}
+
 	// Parse execution cost from Profiling_f_*.raw files
 	var execCost []counter.ExecutionCostByFunction
 	if costMetrics, err := counter.ExtractExecutionCostFromDir(profilerDir); err == nil {
@@ -103,6 +226,7 @@ func runProfiler(cmd *cobra.Command, args []string) error {
 		output := ProfilerOutputStats{
 			StreamDataStats: stats,
 			ExecutionCost:   execCost,
+			ShaderPipelines: shaderPipelines,
 		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
@@ -133,10 +257,7 @@ func runProfiler(cmd *cobra.Command, args []string) error {
 	funcCounts := make(map[string]int)
 	funcTime := make(map[string]int)
 	for _, d := range stats.Dispatches {
-		name := d.FunctionName
-		if name == "" {
-			name = fmt.Sprintf("(pipeline_%d)", d.PipelineIndex)
-		}
+		name := dispatchDisplayName(d)
 		funcCounts[name]++
 		funcTime[name] += d.DurationUs
 	}
@@ -170,6 +291,9 @@ func runProfiler(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Compute Encoders:  %s\n", FormatCount(stats.NumEncoders))
 	fmt.Printf("  Dispatch Calls:    %s\n", FormatCount(stats.NumGPUCommands))
 	fmt.Printf("  Unique Pipelines:  %s\n", FormatCount(stats.NumPipelines))
+	if len(shaderPipelines) > 0 {
+		fmt.Printf("  Shader Pipelines:  %s (%s)\n", FormatCount(len(shaderPipelines)), shaderPipelineSource)
+	}
 	fmt.Printf("  Total GPU Time:    %s\n", FormatDuration(totalDispatchTime))
 	if totalThreadgroupMem > 0 {
 		fmt.Printf("  Threadgroup Mem:   %s (max per pipeline)\n", FormatBytes(uint64(totalThreadgroupMem)))
@@ -232,6 +356,24 @@ func runProfiler(cmd *cobra.Command, args []string) error {
 				}
 			}
 		}
+		if len(shaderPipelines) > 0 {
+			fmt.Printf("\n%d xctrace shader %s:\n", len(shaderPipelines), Pluralize(len(shaderPipelines), "pipeline", "pipelines"))
+			limit := len(shaderPipelines)
+			if limit > 100 {
+				limit = 100
+			}
+			for i := 0; i < limit; i++ {
+				p := shaderPipelines[i]
+				name := p.ShaderName
+				if name == "" {
+					name = p.PSOName
+				}
+				fmt.Printf("  [%d] ID=%d PC=0x%x..0x%x %s\n", p.Index, p.ID, p.PCStart, p.PCEnd, name)
+			}
+			if limit < len(shaderPipelines) {
+				fmt.Printf("  ... (%d more)\n", len(shaderPipelines)-limit)
+			}
+		}
 
 		// Encoder timing
 		if len(stats.EncoderTimings) > 0 {
@@ -272,10 +414,10 @@ func runProfiler(cmd *cobra.Command, args []string) error {
 				}
 				if d.SampleCount > 0 {
 					fmt.Printf("  [%2d] %5d µs (%5.2f%%) %3d samp (%.2f/µs) %s\n",
-						d.Index, d.DurationUs, pct, d.SampleCount, d.SamplingDensity, d.FunctionName)
+						d.Index, d.DurationUs, pct, d.SampleCount, d.SamplingDensity, dispatchDisplayName(d))
 				} else {
 					fmt.Printf("  [%2d] %5d µs (%5.2f%%) %s\n",
-						d.Index, d.DurationUs, pct, d.FunctionName)
+						d.Index, d.DurationUs, pct, dispatchDisplayName(d))
 				}
 			}
 		}
@@ -437,6 +579,16 @@ func runProfiler(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+func dispatchDisplayName(d counter.DispatchInfo) string {
+	if d.FunctionName != "" {
+		return d.FunctionName
+	}
+	if d.XctraceLabel != "" {
+		return d.XctraceLabel
+	}
+	return fmt.Sprintf("(pipeline_%d)", d.PipelineIndex)
 }
 
 // limiterMetrics holds extracted performance limiter values per encoder.

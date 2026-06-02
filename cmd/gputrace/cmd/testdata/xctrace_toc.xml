@@ -1,0 +1,14 @@
+<trace-toc>
+  <run number="2">
+    <data>
+      <table schema="metal-gpu-intervals"/>
+      <table schema="cpu-samples"/>
+    </data>
+  </run>
+  <run number="1">
+    <data>
+      <table schema="gpu-counter-value"/>
+      <table schema="metal-gpu-intervals"/>
+    </data>
+  </run>
+</trace-toc>

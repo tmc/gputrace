@@ -14,10 +14,11 @@ import (
 )
 
 var (
-	timingJSON    string
-	timingCSV     string
-	timingCompare string
-	timingTable   bool
+	timingJSON        string
+	timingCSV         string
+	timingCompare     string
+	timingTable       bool
+	timingRequireReal bool
 )
 
 var timingCmd = &cobra.Command{
@@ -43,8 +44,9 @@ Examples:
   # Compare two traces for regressions
   gputrace timing -compare baseline.gputrace current.gputrace
 
-Note: Timing data depends on trace capture method. Traces without profiling
-      data will use synthetic/estimated timing for visualization.`,
+Note: Timing data depends on trace capture method. Use --require-real when the
+      result must come from .gpuprofiler_raw/streamData rather than structural
+      trace data or synthetic estimates.`,
 	Args: cobra.ExactArgs(1),
 	RunE: runTiming,
 }
@@ -56,6 +58,7 @@ func init() {
 	timingCmd.Flags().StringVar(&timingCSV, "csv", "", "Export timing metrics to CSV file")
 	timingCmd.Flags().StringVar(&timingCompare, "compare", "", "Compare with baseline trace for regression detection")
 	timingCmd.Flags().BoolVar(&timingTable, "table", true, "Show human-readable table output")
+	timingCmd.Flags().BoolVar(&timingRequireReal, "require-real", false, "Fail unless .gpuprofiler_raw/streamData is present")
 }
 
 func runTiming(cmd *cobra.Command, args []string) error {
@@ -64,6 +67,11 @@ func runTiming(cmd *cobra.Command, args []string) error {
 	// Verify trace file exists
 	if err := checkTraceFile(tracePath); err != nil {
 		return err
+	}
+	if timingRequireReal {
+		if err := requireUsableProfilerTiming(tracePath); err != nil {
+			return err
+		}
 	}
 
 	// Try to open full trace first
@@ -143,6 +151,24 @@ func runTiming(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+func requireUsableProfilerTiming(tracePath string) error {
+	profilerDir := findProfilerDir(tracePath)
+	if profilerDir == "" {
+		return fmt.Errorf("real timing unavailable: no .gpuprofiler_raw directory found in %s", tracePath)
+	}
+	if _, err := os.Stat(filepath.Join(profilerDir, "streamData")); err != nil {
+		return fmt.Errorf("real timing unavailable: no streamData in %s", profilerDir)
+	}
+	stats, err := counter.ParseStreamData(profilerDir)
+	if err != nil {
+		return fmt.Errorf("real timing unavailable: parse streamData: %w", err)
+	}
+	if len(stats.EncoderTimings) == 0 && len(stats.Dispatches) == 0 && stats.TotalTimeUs == 0 {
+		return fmt.Errorf("real timing unavailable: streamData in %s contains no timing rows", profilerDir)
+	}
+	return nil
+}
+
 // runTimingFromProfiler extracts timing from .gpuprofiler_raw when unsorted-capture is missing.
 func runTimingFromProfiler(tracePath string) error {
 	// Find .gpuprofiler_raw directory
@@ -166,8 +192,6 @@ func runTimingFromProfiler(tracePath string) error {
 	}
 
 	if profilerDir == "" {
-		fmt.Fprintf(os.Stderr, "Hint: To generate performance data, run:\n")
-		fmt.Fprintf(os.Stderr, "  gputrace xcode-profile run %s\n\n", tracePath)
 		return fmt.Errorf("no .gpuprofiler_raw directory found in %s (and unsorted-capture is missing)", tracePath)
 	}
 

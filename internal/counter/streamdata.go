@@ -7,6 +7,7 @@ package counter
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -50,6 +51,11 @@ type DispatchInfo struct {
 	PipelineIndex    int     `json:"pipeline_index"`               // Index into Pipelines array
 	PipelineID       int     `json:"pipeline_id,omitempty"`        // Pipeline ID for execution cost lookup
 	FunctionName     string  `json:"function_name,omitempty"`      // Kernel function name
+	XctraceLabel     string  `json:"xctrace_label,omitempty"`      // Exported xctrace interval label
+	XctraceProcess   string  `json:"xctrace_process,omitempty"`    // Exported xctrace process label
+	CommandBufferID  uint64  `json:"command_buffer_id,omitempty"`  // Exported Metal command-buffer ID
+	EncoderID        uint64  `json:"encoder_id,omitempty"`         // Exported Metal encoder ID
+	Attribution      string  `json:"attribution,omitempty"`        // Attribution source/quality
 	EncoderIndex     int     `json:"encoder_index"`                // Which encoder this dispatch belongs to
 	CumulativeUs     int     `json:"cumulative_us"`                // Cumulative time in microseconds
 	DurationUs       int     `json:"duration_us"`                  // Duration of this dispatch in microseconds
@@ -63,8 +69,13 @@ type DispatchInfo struct {
 
 // EncoderTimingInfo contains timing information for a single encoder from streamData.
 type EncoderTimingInfo struct {
-	Index           int    `json:"index"`             // Encoder index (0-based)
-	Label           string `json:"label,omitempty"`   // Encoder label from trace
+	Index           int    `json:"index"`           // Encoder index (0-based)
+	Label           string `json:"label,omitempty"` // Encoder label from trace
+	XctraceLabel    string `json:"xctrace_label,omitempty"`
+	XctraceProcess  string `json:"xctrace_process,omitempty"`
+	CommandBufferID uint64 `json:"command_buffer_id,omitempty"`
+	EncoderID       uint64 `json:"encoder_id,omitempty"`
+	Attribution     string `json:"attribution,omitempty"`
 	SequenceID      uint64 `json:"sequence_id"`       // Sequence identifier
 	StartTimestamp  uint64 `json:"start_timestamp"`   // Start timestamp (raw)
 	EndOffsetMicros int    `json:"end_offset_micros"` // Cumulative offset in microseconds
@@ -118,6 +129,21 @@ type GPRWCNTRTimestamp struct {
 	Flags     uint32 `json:"flags,omitempty"` // Flags (often 0xFFFFFFFF)
 }
 
+// DerivedCounterSample contains one replay-service derived counter row.
+// Each value is the raw [min,max] or [sample,total] pair emitted by Apple's
+// GTReplayProfileDerivedCounters payload.
+type DerivedCounterSample struct {
+	Values map[string][]uint64 `json:"values"`
+}
+
+// DerivedCounterData contains APSCounterData decoded from streamData.
+type DerivedCounterData struct {
+	NumberOfPasses int                    `json:"number_of_passes"`
+	CounterLists   [][]string             `json:"counter_lists,omitempty"`
+	Counters       []string               `json:"counters,omitempty"`
+	Samples        []DerivedCounterSample `json:"samples,omitempty"`
+}
+
 const (
 	GPRWCNTRMagic      = "GPRWCNTR" // 8-byte magic for encoder profiler data
 	GPRWCNTRRecordSize = 168        // Bytes per GPRWCNTR record
@@ -125,16 +151,30 @@ const (
 
 // StreamDataStats contains all parsed statistics from streamData.
 type StreamDataStats struct {
-	Pipelines       []PipelineStats     `json:"pipelines"`
-	Dispatches      []DispatchInfo      `json:"dispatches"`     // Per-dispatch timing and metadata
-	FunctionNames   []string            `json:"function_names"` // Unique function names from strings array
-	EncoderTimings  []EncoderTimingInfo `json:"encoder_timings"`
-	Timeline        *TimelineInfo       `json:"timeline,omitempty"` // CB timestamps from APSTimelineData
-	APSTimelineData [][]byte            `json:"-"`                  // Raw APSTimelineData blobs (nested plists)
-	NumEncoders     int                 `json:"num_encoders"`
-	NumGPUCommands  int                 `json:"num_gpu_commands"`
-	NumPipelines    int                 `json:"num_pipelines"`
-	TotalTimeUs     int                 `json:"total_time_us"` // Total GPU time in microseconds
+	Pipelines       []PipelineStats      `json:"pipelines"`
+	Dispatches      []DispatchInfo       `json:"dispatches"`     // Per-dispatch timing and metadata
+	FunctionNames   []string             `json:"function_names"` // Unique function names from strings array
+	EncoderTimings  []EncoderTimingInfo  `json:"encoder_timings"`
+	Timeline        *TimelineInfo        `json:"timeline,omitempty"` // CB timestamps from APSTimelineData
+	APSTimelineData [][]byte             `json:"-"`                  // Raw APSTimelineData blobs (nested plists)
+	APSCounterData  [][]byte             `json:"-"`                  // Raw APSCounterData blobs (nested plists)
+	DerivedCounters []DerivedCounterData `json:"derived_counters,omitempty"`
+	NumEncoders     int                  `json:"num_encoders"`
+	NumGPUCommands  int                  `json:"num_gpu_commands"`
+	NumPipelines    int                  `json:"num_pipelines"`
+	TotalTimeUs     int                  `json:"total_time_us"` // Total GPU time in microseconds
+}
+
+// DerivedCounterSampleCount returns the number of parsed derived counter rows.
+func (s *StreamDataStats) DerivedCounterSampleCount() int {
+	if s == nil {
+		return 0
+	}
+	total := 0
+	for _, counters := range s.DerivedCounters {
+		total += len(counters.Samples)
+	}
+	return total
 }
 
 // ParseStreamData parses the streamData plist from a .gpuprofiler_raw directory.
@@ -160,13 +200,20 @@ func ParseStreamData(gpuprofilerDir string, addressToName ...map[uint64]string) 
 		return nil, fmt.Errorf("invalid archive: missing $objects")
 	}
 
-	stats := &StreamDataStats{}
+	stats := &StreamDataStats{
+		Pipelines:      []PipelineStats{},
+		Dispatches:     []DispatchInfo{},
+		FunctionNames:  []string{},
+		EncoderTimings: []EncoderTimingInfo{},
+	}
 
 	// Find pipelinePerformanceStatistics in object 1
 	if len(objects) > 1 {
 		if obj1, ok := objects[1].(map[string]any); ok {
 			// Extract function names from strings array
-			stats.FunctionNames = extractFunctionNames(objects, obj1)
+			if functionNames := extractFunctionNames(objects, obj1); functionNames != nil {
+				stats.FunctionNames = functionNames
+			}
 
 			// Extract pipeline addresses and link to functions
 			pipelineAddrs, pipelineFuncs := extractPipelineInfo(objects, obj1)
@@ -178,7 +225,9 @@ func ParseStreamData(gpuprofilerDir string, addressToName ...map[uint64]string) 
 			}
 
 			if ppsUID, ok := obj1["pipelinePerformanceStatistics"].(plist.UID); ok {
-				stats.Pipelines = extractPipelineStats(objects, int(ppsUID))
+				if pipelines := extractPipelineStats(objects, int(ppsUID)); pipelines != nil {
+					stats.Pipelines = pipelines
+				}
 				stats.NumPipelines = len(stats.Pipelines)
 
 				// Link pipeline addresses and function names
@@ -206,7 +255,9 @@ func ParseStreamData(gpuprofilerDir string, addressToName ...map[uint64]string) 
 				if size := plistUint64(obj1["encoderInfoSize"]); size > 0 {
 					encoderInfoSize = int(size)
 				}
-				stats.EncoderTimings = extractEncoderTimings(objects, int(encoderInfoUID), encoderInfoSize)
+				if encoderTimings := extractEncoderTimings(objects, int(encoderInfoUID), encoderInfoSize); encoderTimings != nil {
+					stats.EncoderTimings = encoderTimings
+				}
 				stats.NumEncoders = len(stats.EncoderTimings)
 
 				// Calculate total time by summing encoder durations
@@ -228,7 +279,9 @@ func ParseStreamData(gpuprofilerDir string, addressToName ...map[uint64]string) 
 					pipelineToName[i] = p.FunctionName
 					pipelineToID[i] = p.PipelineID
 				}
-				stats.Dispatches = extractDispatchInfoWithMap(objects, int(gpuCmdUID), gpuCmdSize, pipelineToName, pipelineToID)
+				if dispatches := extractDispatchInfoWithMap(objects, int(gpuCmdUID), gpuCmdSize, pipelineToName, pipelineToID); dispatches != nil {
+					stats.Dispatches = dispatches
+				}
 				stats.NumGPUCommands = len(stats.Dispatches)
 			}
 
@@ -237,10 +290,96 @@ func ParseStreamData(gpuprofilerDir string, addressToName ...map[uint64]string) 
 			if len(stats.APSTimelineData) > 0 {
 				stats.Timeline = parseAPSTimelineData(stats.APSTimelineData)
 			}
+
+			stats.APSCounterData = extractDataArray(objects, obj1, "APSCounterData")
+			for _, blob := range stats.APSCounterData {
+				if counters, ok := parseDerivedCounterData(blob); ok {
+					stats.DerivedCounters = append(stats.DerivedCounters, counters)
+				}
+			}
+
+			enrichWithXctraceIntervalRows(gpuprofilerDir, stats)
 		}
 	}
 
 	return stats, nil
+}
+
+type xctraceIntervalMetadataRow struct {
+	StartNs         uint64 `json:"start_ns"`
+	DurationNs      uint64 `json:"duration_ns"`
+	Process         string `json:"process"`
+	Label           string `json:"label,omitempty"`
+	CommandBufferID uint64 `json:"command_buffer_id,omitempty"`
+	EncoderID       uint64 `json:"encoder_id,omitempty"`
+}
+
+func enrichWithXctraceIntervalRows(gpuprofilerDir string, stats *StreamDataStats) {
+	if stats == nil {
+		return
+	}
+	rows, source := loadXctraceIntervalRows(gpuprofilerDir)
+	if len(rows) == 0 {
+		return
+	}
+	n := len(rows)
+	if len(stats.Dispatches) < n {
+		n = len(stats.Dispatches)
+	}
+	for i := 0; i < n; i++ {
+		applyXctraceIntervalToDispatch(&stats.Dispatches[i], rows[i], source)
+	}
+	n = len(rows)
+	if len(stats.EncoderTimings) < n {
+		n = len(stats.EncoderTimings)
+	}
+	for i := 0; i < n; i++ {
+		row := rows[i]
+		stats.EncoderTimings[i].XctraceLabel = row.Label
+		stats.EncoderTimings[i].XctraceProcess = row.Process
+		stats.EncoderTimings[i].CommandBufferID = row.CommandBufferID
+		stats.EncoderTimings[i].EncoderID = row.EncoderID
+		stats.EncoderTimings[i].Attribution = source
+		if stats.EncoderTimings[i].Label == "" {
+			stats.EncoderTimings[i].Label = row.Label
+		}
+	}
+}
+
+func applyXctraceIntervalToDispatch(d *DispatchInfo, row xctraceIntervalMetadataRow, source string) {
+	d.XctraceLabel = row.Label
+	d.XctraceProcess = row.Process
+	d.CommandBufferID = row.CommandBufferID
+	d.EncoderID = row.EncoderID
+	d.Attribution = source
+}
+
+func loadXctraceIntervalRows(gpuprofilerDir string) ([]xctraceIntervalMetadataRow, string) {
+	candidates := []struct {
+		path   string
+		source string
+	}{
+		{
+			path:   filepath.Join(gpuprofilerDir, "xctrace-interval-rows.json"),
+			source: "xctrace-interval-rows",
+		},
+		{
+			path:   filepath.Join(filepath.Dir(gpuprofilerDir), "xctrace-streamdata-helper", "rows.json"),
+			source: "xctrace-streamdata-helper-rows",
+		},
+	}
+	for _, candidate := range candidates {
+		data, err := os.ReadFile(candidate.path)
+		if err != nil {
+			continue
+		}
+		var rows []xctraceIntervalMetadataRow
+		if err := json.Unmarshal(data, &rows); err != nil || len(rows) == 0 {
+			continue
+		}
+		return rows, candidate.source
+	}
+	return nil, ""
 }
 
 // extractFunctionNames extracts kernel function names from the strings array.
@@ -727,6 +866,226 @@ func extractDataArray(objects []any, obj1 map[string]any, key string) [][]byte {
 		}
 	}
 	return result
+}
+
+func parseDerivedCounterData(data []byte) (DerivedCounterData, bool) {
+	root, err := decodeNSKeyedArchive(data)
+	if err != nil {
+		return DerivedCounterData{}, false
+	}
+	dict, ok := root.(map[string]any)
+	if !ok {
+		return DerivedCounterData{}, false
+	}
+	if _, ok := dict["AverageSamples"]; !ok {
+		return DerivedCounterData{}, false
+	}
+
+	out := DerivedCounterData{
+		NumberOfPasses: intFromAny(dict["numberOfPasses"]),
+		CounterLists:   stringMatrixFromAny(dict["counterLists"]),
+		Counters:       stringSliceFromAny(dict["counters"]),
+	}
+	names := out.Counters
+	if len(names) == 0 && len(out.CounterLists) > 0 {
+		names = out.CounterLists[0]
+	}
+	rows := findNumericPairRows(dict["AverageSamples"])
+	for _, row := range rows {
+		if len(names) != len(row) {
+			continue
+		}
+		sample := DerivedCounterSample{Values: map[string][]uint64{}}
+		for i, name := range names {
+			sample.Values[name] = row[i]
+		}
+		out.Samples = append(out.Samples, sample)
+	}
+	return out, len(out.Samples) > 0
+}
+
+func decodeNSKeyedArchive(data []byte) (any, error) {
+	var archive map[string]any
+	if _, err := plist.Unmarshal(data, &archive); err != nil {
+		return nil, err
+	}
+	objects, ok := archive["$objects"].([]any)
+	if !ok {
+		return archive, nil
+	}
+	top, ok := archive["$top"].(map[string]any)
+	if !ok {
+		return archive, nil
+	}
+	rootUID, ok := top["root"].(plist.UID)
+	if !ok {
+		return archive, nil
+	}
+	return decodeNSKeyedObject(objects, int(rootUID), map[int]bool{}), nil
+}
+
+func decodeNSKeyedObject(objects []any, idx int, seen map[int]bool) any {
+	if idx < 0 || idx >= len(objects) || idx == 0 {
+		return nil
+	}
+	if seen[idx] {
+		return nil
+	}
+	obj := objects[idx]
+	switch v := obj.(type) {
+	case plist.UID:
+		return decodeNSKeyedObject(objects, int(v), seen)
+	case map[string]any:
+		seen[idx] = true
+		defer delete(seen, idx)
+		if data, ok := v["NS.data"]; ok {
+			return decodeNSKeyedRef(objects, data, seen)
+		}
+		if keys, ok := v["NS.keys"].([]any); ok {
+			vals, _ := v["NS.objects"].([]any)
+			out := map[string]any{}
+			for i, keyRef := range keys {
+				if i >= len(vals) {
+					break
+				}
+				key := fmt.Sprint(decodeNSKeyedRef(objects, keyRef, seen))
+				out[key] = decodeNSKeyedRef(objects, vals[i], seen)
+			}
+			return out
+		}
+		if refs, ok := v["NS.objects"].([]any); ok {
+			out := make([]any, 0, len(refs))
+			for _, ref := range refs {
+				out = append(out, decodeNSKeyedRef(objects, ref, seen))
+			}
+			return out
+		}
+		out := map[string]any{}
+		for key, value := range v {
+			if key == "$class" {
+				continue
+			}
+			out[key] = decodeNSKeyedRef(objects, value, seen)
+		}
+		return out
+	default:
+		return v
+	}
+}
+
+func decodeNSKeyedRef(objects []any, value any, seen map[int]bool) any {
+	if uid, ok := value.(plist.UID); ok {
+		return decodeNSKeyedObject(objects, int(uid), seen)
+	}
+	return value
+}
+
+func intFromAny(v any) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case uint64:
+		return int(n)
+	case uint:
+		return int(n)
+	case float64:
+		return int(n)
+	default:
+		return 0
+	}
+}
+
+func stringSliceFromAny(v any) []string {
+	items, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if s, ok := item.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func stringMatrixFromAny(v any) [][]string {
+	rows, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([][]string, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, stringSliceFromAny(row))
+	}
+	return out
+}
+
+func findNumericPairRows(v any) [][][]uint64 {
+	rows := [][][]uint64{}
+	var walk func(any)
+	walk = func(node any) {
+		items, ok := node.([]any)
+		if !ok || len(items) == 0 {
+			return
+		}
+		row := make([][]uint64, 0, len(items))
+		allPairs := true
+		for _, item := range items {
+			pair, ok := numericPair(item)
+			if !ok {
+				allPairs = false
+				break
+			}
+			row = append(row, pair)
+		}
+		if allPairs {
+			rows = append(rows, row)
+			return
+		}
+		for _, item := range items {
+			walk(item)
+		}
+	}
+	walk(v)
+	return rows
+}
+
+func numericPair(v any) ([]uint64, bool) {
+	items, ok := v.([]any)
+	if !ok || len(items) != 2 {
+		return nil, false
+	}
+	a, okA := uint64FromAny(items[0])
+	b, okB := uint64FromAny(items[1])
+	if !okA || !okB {
+		return nil, false
+	}
+	return []uint64{a, b}, true
+}
+
+func uint64FromAny(v any) (uint64, bool) {
+	switch n := v.(type) {
+	case uint64:
+		return n, true
+	case uint:
+		return uint64(n), true
+	case int:
+		if n >= 0 {
+			return uint64(n), true
+		}
+	case int64:
+		if n >= 0 {
+			return uint64(n), true
+		}
+	case float64:
+		if n >= 0 {
+			return uint64(n), true
+		}
+	}
+	return 0, false
 }
 
 // parseAPSTimelineData parses APSTimelineData blobs for CB timestamps and timebase.
