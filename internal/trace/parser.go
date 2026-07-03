@@ -8,21 +8,10 @@ import (
 
 // EnhancedMetadata contains detailed information from GPU trace.
 type EnhancedMetadata struct {
-	CommandBuffers  []CommandBufferInfo
 	Encoders        []EncoderInfo
 	BufferBindings  []BufferBinding
 	TextureBindings []TextureBinding
 	TotalKernels    int
-}
-
-// CommandBufferInfo represents a Metal command buffer.
-type CommandBufferInfo struct {
-	Index     int
-	Address   uint64
-	Label     string
-	Encoders  int
-	StartTime uint64
-	EndTime   uint64
 }
 
 // EncoderInfo represents a compute encoder.
@@ -69,9 +58,6 @@ type TextureBinding struct {
 func (t *Trace) ExtractEnhancedMetadata() (*EnhancedMetadata, error) {
 	meta := &EnhancedMetadata{}
 
-	// Extract command buffers from capture data
-	meta.CommandBuffers = t.extractCommandBuffers()
-
 	// Extract encoder information
 	meta.Encoders = t.extractEncoders()
 
@@ -87,31 +73,6 @@ func (t *Trace) ExtractEnhancedMetadata() (*EnhancedMetadata, error) {
 	}
 
 	return meta, nil
-}
-
-// extractCommandBuffers finds command buffer records in capture data.
-func (t *Trace) extractCommandBuffers() []CommandBufferInfo {
-	var cmdBuffers []CommandBufferInfo
-
-	// Look for command buffer patterns (MTSP records with certain markers)
-	data := t.CaptureData
-	for i := 0; i < len(data)-100; i++ {
-		// Look for "Culul" marker (command buffer marker observed in traces)
-		if bytes.Contains(data[i:i+20], []byte("Culul")) {
-			cmdBuf := CommandBufferInfo{
-				Index: len(cmdBuffers),
-			}
-
-			// Try to extract address (8 bytes before the marker)
-			if i >= 8 {
-				cmdBuf.Address = binary.LittleEndian.Uint64(data[i-8 : i])
-			}
-
-			cmdBuffers = append(cmdBuffers, cmdBuf)
-		}
-	}
-
-	return cmdBuffers
 }
 
 // extractEncoders finds compute encoder records.
@@ -236,18 +197,6 @@ func (t *Trace) AnalyzeTraceStructure() string {
 	report += fmt.Sprintf("Capture Version: %d\n", t.Metadata.CaptureVersion)
 	report += fmt.Sprintf("Graphics API: %d (1=Metal)\n", t.Metadata.GraphicsAPI)
 	report += fmt.Sprintf("Device ID: %d\n\n", t.Metadata.DeviceID)
-
-	// Command Buffers
-	report += fmt.Sprintf("Command Buffers: %d\n", len(meta.CommandBuffers))
-	for i, cb := range meta.CommandBuffers {
-		if i < 5 { // Show first 5
-			report += fmt.Sprintf("  [%d] Address: 0x%x\n", cb.Index, cb.Address)
-		}
-	}
-	if len(meta.CommandBuffers) > 5 {
-		report += fmt.Sprintf("  ... and %d more\n", len(meta.CommandBuffers)-5)
-	}
-	report += "\n"
 
 	// Encoders
 	report += fmt.Sprintf("Compute Encoders: %d\n", len(meta.Encoders))
