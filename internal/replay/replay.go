@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"github.com/tmc/gputrace/internal/counter"
+	"github.com/tmc/gputrace/internal/fmtutil"
 	"github.com/tmc/gputrace/internal/trace"
 )
 
@@ -403,7 +404,7 @@ func FormatReplayPlan(plan *ReplayPlan) string {
 				label = "(unlabeled)"
 			}
 			output += fmt.Sprintf("  [%2d] %-20s  %3d commands\n",
-				i, truncateString(label, 20), encoder.CommandCount)
+				i, fmtutil.TruncateString(label, 20), encoder.CommandCount)
 		}
 		output += "\n"
 	}
@@ -413,7 +414,7 @@ func FormatReplayPlan(plan *ReplayPlan) string {
 		output += "Command Sequence (first 20):\n"
 		output += fmt.Sprintf("  %-4s %-8s %-20s %-40s\n",
 			"Seq", "Encoder", "Type", "Function/Target")
-		output += "  " + repeatChar('-', 75) + "\n"
+		output += "  " + fmtutil.RepeatChar('-', 75) + "\n"
 
 		count := min(20, len(plan.Commands))
 		for i := 0; i < count; i++ {
@@ -434,7 +435,7 @@ func FormatReplayPlan(plan *ReplayPlan) string {
 				cmd.SequenceNum,
 				cmd.EncoderIndex,
 				cmd.Type,
-				truncateString(target, 40))
+				fmtutil.TruncateString(target, 40))
 		}
 
 		if len(plan.Commands) > 20 {

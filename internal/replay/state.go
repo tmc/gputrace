@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/tmc/gputrace/internal/fmtutil"
 	tracepkg "github.com/tmc/gputrace/internal/trace"
 )
 
@@ -440,8 +441,8 @@ func FormatReplayAnalysis(analysis *ReplayAnalysis) string {
 				addrStr = fmt.Sprintf("0x%x", buf.Address)
 			}
 			output += fmt.Sprintf("  %-30s %12s %18s\n",
-				truncateString(buf.Name, 30),
-				formatBytes(buf.Size),
+				fmtutil.TruncateString(buf.Name, 30),
+				fmtutil.FormatBytes(int64(buf.Size), 2),
 				addrStr)
 		}
 		if len(analysis.Buffers) > 10 {
@@ -460,7 +461,7 @@ func FormatReplayAnalysis(analysis *ReplayAnalysis) string {
 		for i := 0; i < count; i++ {
 			fn := analysis.Functions[i]
 			output += fmt.Sprintf("  %-40s 0x%016x\n",
-				truncateString(fn.Name, 40),
+				fmtutil.TruncateString(fn.Name, 40),
 				fn.Address)
 		}
 		if len(analysis.Functions) > 10 {
@@ -479,7 +480,7 @@ func FormatReplayAnalysis(analysis *ReplayAnalysis) string {
 		for i := 0; i < count; i++ {
 			pso := analysis.Pipelines[i]
 			output += fmt.Sprintf("  %-40s 0x%016x\n",
-				truncateString(pso.FunctionName, 40),
+				fmtutil.TruncateString(pso.FunctionName, 40),
 				pso.Address)
 		}
 		if len(analysis.Pipelines) > 10 {

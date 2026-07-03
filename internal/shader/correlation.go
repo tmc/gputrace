@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/tmc/gputrace/internal/counter"
+	"github.com/tmc/gputrace/internal/fmtutil"
 	"github.com/tmc/gputrace/internal/timing"
 	"github.com/tmc/gputrace/internal/trace"
 )
@@ -387,12 +388,12 @@ func FormatCorrelationReport(report *ShaderCorrelationReport) string {
 	output += "=== Per-Shader Metrics ===\n\n"
 	output += fmt.Sprintf("%-40s %10s %10s %8s %8s %10s\n",
 		"Shader", "Count", "Avg(µs)", "ALU%", "Occ%", "Method")
-	output += repeatChar('-', 95) + "\n"
+	output += fmtutil.RepeatChar('-', 95) + "\n"
 
 	for _, shader := range report.Shaders {
 		avgUs := shader.AvgDuration.Microseconds()
 		output += fmt.Sprintf("%-40s %10d %10d %7.1f%% %7.1f%% %10s\n",
-			truncateString(shader.ShaderName, 40),
+			fmtutil.TruncateString(shader.ShaderName, 40),
 			shader.ExecutionCount,
 			avgUs,
 			shader.ALUUtilization,
@@ -444,19 +445,4 @@ func joinStrings(values []string, sep string) string {
 		out += sep + value
 	}
 	return out
-}
-
-func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen-3] + "..."
-}
-
-func repeatChar(c byte, n int) string {
-	result := make([]byte, n)
-	for i := 0; i < n; i++ {
-		result[i] = c
-	}
-	return string(result)
 }

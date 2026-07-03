@@ -10,6 +10,7 @@ import (
 	"github.com/tmc/apple/foundation"
 	"github.com/tmc/apple/objc"
 	"github.com/tmc/apple/objectivec"
+	"github.com/tmc/gputrace/internal/fmtutil"
 )
 
 // StreamDataSummary is the safely readable GTShaderProfilerStreamData metadata
@@ -428,7 +429,7 @@ func selectedValues(array objc.ID, arrayName, key string) []ValueSummary {
 			Index:       i,
 			Key:         key,
 			Class:       className(value),
-			Description: truncateString(objectivec.Object{ID: value}.Description(), 120),
+			Description: fmtutil.TruncateStringPlain(objectivec.Object{ID: value}.Description(), 120),
 			Keys:        dictionaryKeys(value, 24),
 			Bytes:       dataLength(value),
 			Count:       arrayCount(value),
@@ -447,13 +448,6 @@ func dictionaryObject(id objc.ID, key string) objc.ID {
 		return 0
 	}
 	return objc.Send[objc.ID](id, objc.Sel("objectForKey:"), objc.String(key))
-}
-
-func truncateString(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max]
 }
 
 func filterKeyCounts(keys []KeyCount, needle string) []KeyCount {

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/cobra"
+	"github.com/tmc/gputrace/internal/fmtutil"
 	"github.com/tmc/gputrace/internal/mtlb"
 )
 
@@ -92,7 +93,7 @@ var mtlbExtractCmd = &cobra.Command{
 			return fmt.Errorf("failed to extract: %w", err)
 		}
 
-		fmt.Fprintf(mtlbExtractStatusWriter(extractOutput), "Extracted %s -> %s (%s)\n", targetFile.Name, extractOutput, formatSize(targetFile.Size))
+		fmt.Fprintf(mtlbExtractStatusWriter(extractOutput), "Extracted %s -> %s (%s)\n", targetFile.Name, extractOutput, fmtutil.FormatBytes(targetFile.Size, 1))
 
 		return nil
 	},

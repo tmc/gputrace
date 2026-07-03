@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/tmc/gputrace/internal/fmtutil"
 	"github.com/tmc/gputrace/internal/trace"
 )
 
@@ -363,11 +364,11 @@ func (te *TimingExtractorProfilerRaw) ProfilerRawTimingReport(timings []*Encoder
 	// Show timing breakdown
 	report += "Timing Breakdown:\n"
 	report += fmt.Sprintf("%-40s %12s %8s\n", "Label", "Duration", "Percent")
-	report += fmt.Sprintf("%s\n", repeatChar('-', 65))
+	report += fmt.Sprintf("%s\n", fmtutil.RepeatChar('-', 65))
 
 	for _, t := range sorted {
 		report += fmt.Sprintf("%-40s %9.2f ms %7.1f%%\n",
-			truncateString(t.Label, 40),
+			fmtutil.TruncateString(t.Label, 40),
 			t.DurationMs,
 			t.Percentage)
 	}
