@@ -64,6 +64,20 @@ func RenderText(report Report, by string, showMatches, showUnmatched, showOccurr
 		}
 	}
 
+	if all || sections["pipeline-pairs"] {
+		fmt.Fprintf(&b, "\nBy Pipeline Pairs\n")
+		fmt.Fprintf(&b, "%-44s %-21s %8s %8s %9s %-8s %-8s %-16s %-16s %8s %8s %8s %8s\n", "Function", "Threadgroup", "A(us)", "B(us)", "AbsDelta", "PipeA", "PipeB", "HashA", "HashB", "Instr", "Regs", "Loads", "Stores")
+		for i, p := range report.PipelinePairs {
+			if i >= limit {
+				break
+			}
+			fmt.Fprintf(&b, "%-44s %-21s %8d %8d %9d %-8d %-8d %-16s %-16s %+8d %+8d %+8d %+8d\n",
+				truncate(p.FunctionName, 44), truncate(p.ThreadgroupSig, 21), p.AUs, p.BUs, p.AbsDeltaUs,
+				p.APipelineID, p.BPipelineID, p.APipelineHash, p.BPipelineHash,
+				p.StaticCounterDelta.Instructions, p.StaticCounterDelta.Registers, p.StaticCounterDelta.Loads, p.StaticCounterDelta.Stores)
+		}
+	}
+
 	if all || sections["dispatch"] {
 		fmt.Fprintf(&b, "\nTop Dispatch Outliers\n")
 		fmt.Fprintf(&b, "%-7s %-7s %-7s %-9s %-44s %8s %8s %9s\n", "a_idx", "b_idx", "enc", "pipe(a)", "function", "a_us", "b_us", "delta")
@@ -165,6 +179,14 @@ func RenderCSV(report Report, by string, limit int) (string, error) {
 				break
 			}
 			rows = append(rows, []string{itoa(p.PipelineID), p.FunctionName, itoa(p.DispatchCountA), itoa(p.DispatchCountB), itoa(p.DispatchCountDelta), itoa(p.TotalAUs), itoa(p.TotalBUs), itoa(p.TotalDeltaUs)})
+		}
+	case "pipeline-pairs":
+		rows = append(rows, []string{"function", "threadgroup_sig", "a_us", "b_us", "abs_delta_us", "a_pipeline_id", "b_pipeline_id", "a_pipeline_hash", "b_pipeline_hash", "static_counter_delta_instructions", "static_counter_delta_registers", "static_counter_delta_loads", "static_counter_delta_stores"})
+		for i, p := range report.PipelinePairs {
+			if i >= limit {
+				break
+			}
+			rows = append(rows, []string{p.FunctionName, p.ThreadgroupSig, itoa(p.AUs), itoa(p.BUs), itoa(p.AbsDeltaUs), itoa(p.APipelineID), itoa(p.BPipelineID), p.APipelineHash, p.BPipelineHash, itoa(p.StaticCounterDelta.Instructions), itoa(p.StaticCounterDelta.Registers), itoa(p.StaticCounterDelta.Loads), itoa(p.StaticCounterDelta.Stores)})
 		}
 	case "timeline-windows":
 		rows = append(rows, []string{"encoder_index", "start_source_index_a", "end_source_index_a", "start_source_index_b", "end_source_index_b", "match_count", "total_delta_us", "max_abs_delta_us"})

@@ -102,6 +102,14 @@ func TestDiffOptionsValidate(t *testing.T) {
 			wantErr: "invalid --by value",
 		},
 		{
+			name: "pipeline pairs by value allowed",
+			opts: func() diffOptions {
+				o := base
+				o.By = "pipeline-pairs"
+				return o
+			}(),
+		},
+		{
 			name:    "single positional arg rejected",
 			opts:    base,
 			args:    []string{"left-only.gputrace"},
