@@ -3,20 +3,25 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 
 	"github.com/tmc/gputrace"
 )
 
-var timingProfilerJSON bool
+type timingProfilerOptions struct {
+	json    bool
+	verbose bool
+}
 
-var timingProfilerCmd = &cobra.Command{
-	Use:    "timing-profiler <trace.gputrace>",
-	Short:  "Inspect legacy .gpuprofiler_raw timing fallbacks",
-	Hidden: true,
-	Long: `Inspect legacy GPU timing fallbacks for profiled traces.
+var timingProfilerCmd = newTimingProfilerCommand(&timingProfilerOptions{})
+
+func newTimingProfilerCommand(opts *timingProfilerOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:    "timing-profiler <trace.gputrace>",
+		Short:  "Inspect legacy .gpuprofiler_raw timing fallbacks",
+		Hidden: true,
+		Long: `Inspect legacy GPU timing fallbacks for profiled traces.
 
 Prefer "gputrace timing" for current timing output. The primary supported
 profiled timing source is .gpuprofiler_raw/streamData, including APSTimelineData
@@ -39,19 +44,21 @@ Examples:
 
   # Show detailed breakdown
   gputrace timing-profiler trace.gputrace -v`,
-	Args: cobra.ExactArgs(1),
-	RunE: runTimingProfiler,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runTimingProfiler(cmd, args, opts)
+		},
+	}
+	cmd.Flags().BoolVarP(&opts.verbose, "verbose", "v", false, "Show verbose output")
+	cmd.Flags().BoolVar(&opts.json, "json", false, "Output in JSON format")
+	return cmd
 }
-
-var timingProfilerVerbose bool
 
 func init() {
 	rootCmd.AddCommand(timingProfilerCmd)
-	timingProfilerCmd.Flags().BoolVarP(&timingProfilerVerbose, "verbose", "v", false, "Show verbose output")
-	timingProfilerCmd.Flags().BoolVar(&timingProfilerJSON, "json", false, "Output in JSON format")
 }
 
-func runTimingProfiler(cmd *cobra.Command, args []string) error {
+func runTimingProfiler(cmd *cobra.Command, args []string, opts *timingProfilerOptions) error {
 	tracePath := args[0]
 
 	// Verify trace file exists
@@ -86,7 +93,7 @@ Alternatively, use one of the other timing extraction methods:
 	extractor := gputrace.NewTimingExtractorProfilerRaw(trace)
 
 	// Extract timing
-	fmt.Fprintln(os.Stderr, "Inspecting legacy .gpuprofiler_raw timing fallbacks...")
+	fmt.Fprintln(cmd.ErrOrStderr(), "Inspecting legacy .gpuprofiler_raw timing fallbacks...")
 	timings, err := extractor.ExtractTimingFromProfilerRaw()
 	if err != nil {
 		return fmt.Errorf("failed to extract timing: %w", err)
@@ -96,31 +103,32 @@ Alternatively, use one of the other timing extraction methods:
 		return fmt.Errorf("no timing data found in .gpuprofiler_raw fallback sources")
 	}
 
-	if timingProfilerJSON {
+	w := cmd.OutOrStdout()
+	if opts.json {
 		data, err := json.MarshalIndent(timings, "", "  ")
 		if err != nil {
 			return fmt.Errorf("failed to marshal json: %w", err)
 		}
-		fmt.Println(string(data))
-		return nil
+		_, err = fmt.Fprintln(w, string(data))
+		return err
 	}
 
 	// Generate report
 	report := extractor.ProfilerRawTimingReport(timings)
-	fmt.Print(report)
+	fmt.Fprint(w, report)
 
-	if timingProfilerVerbose {
+	if opts.verbose {
 		// Show additional details
-		fmt.Println("\n=== Detailed Information ===")
-		fmt.Printf("Data Source: %s.gpuprofiler_raw\n", tracePath)
-		fmt.Printf("Encoders with timing: %d\n", len(timings))
+		fmt.Fprintln(w, "\n=== Detailed Information ===")
+		fmt.Fprintf(w, "Data Source: %s.gpuprofiler_raw\n", tracePath)
+		fmt.Fprintf(w, "Encoders with timing: %d\n", len(timings))
 
 		// Show per-encoder details
-		fmt.Println("\nPer-Encoder Details:")
+		fmt.Fprintln(w, "\nPer-Encoder Details:")
 		for i, timing := range timings {
-			fmt.Printf("  [%d] %s\n", i, timing.Label)
-			fmt.Printf("      Duration: %.2f ms (%d ns)\n", timing.DurationMs, timing.DurationNs)
-			fmt.Printf("      Percentage: %.1f%%\n", timing.Percentage)
+			fmt.Fprintf(w, "  [%d] %s\n", i, timing.Label)
+			fmt.Fprintf(w, "      Duration: %.2f ms (%d ns)\n", timing.DurationMs, timing.DurationNs)
+			fmt.Fprintf(w, "      Percentage: %.1f%%\n", timing.Percentage)
 		}
 	}
 

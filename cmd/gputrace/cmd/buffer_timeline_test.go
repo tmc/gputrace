@@ -126,22 +126,13 @@ func TestWriteBufferTimelineOutputStdout(t *testing.T) {
 }
 
 func TestRunBufferTimelineRejectsInvalidWidthBeforeTraceIO(t *testing.T) {
-	oldFormat := bufferTimelineFormat
-	oldOutput := bufferTimelineOutput
-	oldWidth := bufferTimelineWidth
-	t.Cleanup(func() {
-		bufferTimelineFormat = oldFormat
-		bufferTimelineOutput = oldOutput
-		bufferTimelineWidth = oldWidth
-	})
-
-	bufferTimelineFormat = "ascii"
-	bufferTimelineOutput = ""
 	tracePath := filepath.Join(t.TempDir(), "missing.gputrace")
 
 	for _, width := range []int{-1, minBufferTimelineWidth - 1} {
-		bufferTimelineWidth = width
-		err := runBufferTimeline(nil, []string{tracePath})
+		err := runBufferTimeline(nil, []string{tracePath}, &bufferTimelineOptions{
+			format: "ascii",
+			width:  width,
+		})
 		if err == nil {
 			t.Fatalf("runBufferTimeline width %d returned nil error", width)
 		}
@@ -192,21 +183,13 @@ func TestRunBufferTimelineJSONWritesOutputFile(t *testing.T) {
 		t.Fatalf("stat trace fixture: %v", err)
 	}
 
-	oldFormat := bufferTimelineFormat
-	oldOutput := bufferTimelineOutput
-	oldWidth := bufferTimelineWidth
-	t.Cleanup(func() {
-		bufferTimelineFormat = oldFormat
-		bufferTimelineOutput = oldOutput
-		bufferTimelineWidth = oldWidth
-	})
-
 	outPath := filepath.Join(t.TempDir(), "buffers.json")
-	bufferTimelineFormat = "json"
-	bufferTimelineOutput = outPath
-	bufferTimelineWidth = 100
 
-	if err := runBufferTimeline(nil, []string{tracePath}); err != nil {
+	if err := runBufferTimeline(nil, []string{tracePath}, &bufferTimelineOptions{
+		format: "json",
+		width:  100,
+		output: outPath,
+	}); err != nil {
 		t.Fatalf("runBufferTimeline json: %v", err)
 	}
 
@@ -242,21 +225,13 @@ func TestRunBufferTimelineChromeWritesOutputFile(t *testing.T) {
 		t.Fatalf("stat trace fixture: %v", err)
 	}
 
-	oldFormat := bufferTimelineFormat
-	oldOutput := bufferTimelineOutput
-	oldWidth := bufferTimelineWidth
-	t.Cleanup(func() {
-		bufferTimelineFormat = oldFormat
-		bufferTimelineOutput = oldOutput
-		bufferTimelineWidth = oldWidth
-	})
-
 	outPath := filepath.Join(t.TempDir(), "buffers.chrome.json")
-	bufferTimelineFormat = "chrome"
-	bufferTimelineOutput = outPath
-	bufferTimelineWidth = 100
 
-	if err := runBufferTimeline(nil, []string{tracePath}); err != nil {
+	if err := runBufferTimeline(nil, []string{tracePath}, &bufferTimelineOptions{
+		format: "chrome",
+		width:  100,
+		output: outPath,
+	}); err != nil {
 		t.Fatalf("runBufferTimeline chrome: %v", err)
 	}
 

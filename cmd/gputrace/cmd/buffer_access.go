@@ -10,12 +10,18 @@ import (
 	"github.com/tmc/gputrace"
 )
 
-var bufferAccessJSON bool
+type bufferAccessOptions struct {
+	json    bool
+	verbose bool
+}
 
-var bufferAccessCmd = &cobra.Command{
-	Use:   "buffer-access <trace.gputrace>",
-	Short: "Analyze buffer access patterns",
-	Long: `Analyze buffer access patterns to identify optimization opportunities.
+var bufferAccessCmd = newBufferAccessCommand(&bufferAccessOptions{})
+
+func newBufferAccessCommand(opts *bufferAccessOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "buffer-access <trace.gputrace>",
+		Short: "Analyze buffer access patterns",
+		Long: `Analyze buffer access patterns to identify optimization opportunities.
 
 This command analyzes Ct and Cul records to track:
 - Which encoders access which buffers
@@ -36,19 +42,21 @@ Examples:
 
   # Show detailed analysis
   gputrace buffer-access trace.gputrace -v`,
-	Args: cobra.ExactArgs(1),
-	RunE: runBufferAccess,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runBufferAccess(cmd, args, opts)
+		},
+	}
+	cmd.Flags().BoolVarP(&opts.verbose, "verbose", "v", false, "Show verbose output")
+	cmd.Flags().BoolVar(&opts.json, "json", false, "Output in JSON format")
+	return cmd
 }
-
-var bufferAccessVerbose bool
 
 func init() {
 	rootCmd.AddCommand(bufferAccessCmd)
-	bufferAccessCmd.Flags().BoolVarP(&bufferAccessVerbose, "verbose", "v", false, "Show verbose output")
-	bufferAccessCmd.Flags().BoolVar(&bufferAccessJSON, "json", false, "Output in JSON format")
 }
 
-func runBufferAccess(cmd *cobra.Command, args []string) error {
+func runBufferAccess(cmd *cobra.Command, args []string, opts *bufferAccessOptions) error {
 	tracePath := args[0]
 
 	// Verify trace file exists
@@ -68,15 +76,14 @@ func runBufferAccess(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to analyze buffer access: %w", err)
 	}
 
-	if bufferAccessJSON {
+	if opts.json {
 		return writeBufferAccessJSON(cmd.OutOrStdout(), analysis)
 	}
 
 	// Format and display report
-	report := gputrace.FormatBufferAccessReport(analysis, bufferAccessVerbose)
-	fmt.Print(report)
-
-	return nil
+	report := gputrace.FormatBufferAccessReport(analysis, opts.verbose)
+	_, err = fmt.Fprint(cmd.OutOrStdout(), report)
+	return err
 }
 
 func writeBufferAccessJSON(w io.Writer, analysis *gputrace.BufferAccessAnalysis) error {

@@ -14,17 +14,22 @@ import (
 	"github.com/tmc/gputrace/internal/counter"
 )
 
-var (
-	timingJSON    string
-	timingCSV     string
-	timingCompare string
-	timingTable   bool
-)
+var timingCmd = newTimingCommand(&timingOptions{
+	table: true,
+})
 
-var timingCmd = &cobra.Command{
-	Use:   "timing <trace.gputrace>",
-	Short: "Extract and export GPU timing metrics from traces",
-	Long: `Extract GPU timing metrics including per-kernel execution times,
+type timingOptions struct {
+	json    string
+	csv     string
+	compare string
+	table   bool
+}
+
+func newTimingCommand(opts *timingOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "timing <trace.gputrace>",
+		Short: "Extract and export GPU timing metrics from traces",
+		Long: `Extract GPU timing metrics including per-kernel execution times,
 command buffer timings, and statistical analysis.
 
 This command extracts timing data from GPU traces and provides:
@@ -53,22 +58,26 @@ Timing source priority:
 Capture fallbacks and synthetic timing are approximate. Hardware counter files
 alone are not treated as direct shader timing unless correlated through a
 supported timing source such as streamData/APSTimelineData.`,
-	Args: cobra.ExactArgs(1),
-	RunE: runTiming,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runTiming(cmd, args, opts)
+		},
+	}
+
+	cmd.Flags().StringVar(&opts.json, "json", opts.json, "Export timing metrics to JSON file")
+	cmd.Flags().StringVar(&opts.csv, "csv", opts.csv, "Export timing metrics to CSV file")
+	cmd.Flags().StringVar(&opts.compare, "compare", opts.compare, "Compare with baseline trace for regression detection")
+	cmd.Flags().BoolVar(&opts.table, "table", opts.table, "Show human-readable table output")
+	return cmd
 }
 
 func init() {
 	rootCmd.AddCommand(timingCmd)
-
-	timingCmd.Flags().StringVar(&timingJSON, "json", "", "Export timing metrics to JSON file")
-	timingCmd.Flags().StringVar(&timingCSV, "csv", "", "Export timing metrics to CSV file")
-	timingCmd.Flags().StringVar(&timingCompare, "compare", "", "Compare with baseline trace for regression detection")
-	timingCmd.Flags().BoolVar(&timingTable, "table", true, "Show human-readable table output")
 }
 
-func runTiming(cmd *cobra.Command, args []string) error {
+func runTiming(cmd *cobra.Command, args []string, opts *timingOptions) error {
 	tracePath := args[0]
-	if err := validateTimingOutputPaths(); err != nil {
+	if err := validateTimingOutputPaths(opts); err != nil {
 		return err
 	}
 
@@ -81,7 +90,7 @@ func runTiming(cmd *cobra.Command, args []string) error {
 	trace, err := gputrace.Open(tracePath)
 	if err != nil {
 		// Fall back to profiler-only mode if unsorted-capture is missing
-		return runTimingFromProfiler(tracePath)
+		return runTimingFromProfiler(tracePath, opts)
 	}
 
 	// Extract timing metrics
@@ -92,14 +101,14 @@ func runTiming(cmd *cobra.Command, args []string) error {
 	}
 
 	// Show table if requested
-	if timingTable {
+	if opts.table {
 		report := gputrace.FormatTimingMetrics(metrics)
-		fmt.Fprintln(timingReportWriter(), report)
+		fmt.Fprintln(timingReportWriter(opts), report)
 	}
 
 	// Export JSON if requested
-	if timingJSON != "" {
-		if err := writeTimingOutput(timingJSON, "JSON", func(w io.Writer) error {
+	if opts.json != "" {
+		if err := writeTimingOutput(opts.json, "JSON", func(w io.Writer) error {
 			return gputrace.ExportTimingMetricsJSON(w, metrics)
 		}); err != nil {
 			return err
@@ -107,8 +116,8 @@ func runTiming(cmd *cobra.Command, args []string) error {
 	}
 
 	// Export CSV if requested
-	if timingCSV != "" {
-		if err := writeTimingOutput(timingCSV, "CSV", func(w io.Writer) error {
+	if opts.csv != "" {
+		if err := writeTimingOutput(opts.csv, "CSV", func(w io.Writer) error {
 			return gputrace.ExportTimingMetricsCSV(w, metrics)
 		}); err != nil {
 			return err
@@ -116,12 +125,12 @@ func runTiming(cmd *cobra.Command, args []string) error {
 	}
 
 	// Compare traces if requested
-	if timingCompare != "" {
-		if err := checkTraceFile(timingCompare); err != nil {
+	if opts.compare != "" {
+		if err := checkTraceFile(opts.compare); err != nil {
 			return fmt.Errorf("baseline trace: %w", err)
 		}
 
-		baselineTrace, err := gputrace.Open(timingCompare)
+		baselineTrace, err := gputrace.Open(opts.compare)
 		if err != nil {
 			return fmt.Errorf("failed to open baseline trace: %w", err)
 		}
@@ -133,7 +142,7 @@ func runTiming(cmd *cobra.Command, args []string) error {
 		}
 
 		comparison := gputrace.CompareTraces(baselineMetrics, metrics)
-		fmt.Fprintln(timingReportWriter(), "\n"+gputrace.FormatTimingComparison(comparison))
+		fmt.Fprintln(timingReportWriter(opts), "\n"+gputrace.FormatTimingComparison(comparison))
 
 		if comparison.RegressionCount > 0 {
 			// Return error to indicate regressions found
@@ -145,8 +154,8 @@ func runTiming(cmd *cobra.Command, args []string) error {
 }
 
 // runTimingFromProfiler extracts timing from .gpuprofiler_raw when unsorted-capture is missing.
-func runTimingFromProfiler(tracePath string) error {
-	if err := validateTimingOutputPaths(); err != nil {
+func runTimingFromProfiler(tracePath string, opts *timingOptions) error {
+	if err := validateTimingOutputPaths(opts); err != nil {
 		return err
 	}
 
@@ -186,14 +195,14 @@ func runTimingFromProfiler(tracePath string) error {
 	metrics := convertStreamDataToTimingMetrics(tracePath, stats)
 
 	// Show table if requested
-	if timingTable {
+	if opts.table {
 		report := formatProfilerTimingMetrics(metrics)
-		fmt.Fprintln(timingReportWriter(), report)
+		fmt.Fprintln(timingReportWriter(opts), report)
 	}
 
 	// Export JSON if requested
-	if timingJSON != "" {
-		if err := writeTimingOutput(timingJSON, "JSON", func(w io.Writer) error {
+	if opts.json != "" {
+		if err := writeTimingOutput(opts.json, "JSON", func(w io.Writer) error {
 			return gputrace.ExportTimingMetricsJSON(w, metrics)
 		}); err != nil {
 			return err
@@ -201,8 +210,8 @@ func runTimingFromProfiler(tracePath string) error {
 	}
 
 	// Export CSV if requested
-	if timingCSV != "" {
-		if err := writeTimingOutput(timingCSV, "CSV", func(w io.Writer) error {
+	if opts.csv != "" {
+		if err := writeTimingOutput(opts.csv, "CSV", func(w io.Writer) error {
 			return gputrace.ExportTimingMetricsCSV(w, metrics)
 		}); err != nil {
 			return err
@@ -232,8 +241,8 @@ func writeTimingOutput(path, format string, write func(io.Writer) error) error {
 	return nil
 }
 
-func timingReportWriter() *os.File {
-	if timingExportWritesStdout(timingJSON) || timingExportWritesStdout(timingCSV) {
+func timingReportWriter(opts *timingOptions) *os.File {
+	if timingExportWritesStdout(opts.json) || timingExportWritesStdout(opts.csv) {
 		return os.Stderr
 	}
 	return os.Stdout
@@ -243,12 +252,12 @@ func timingExportWritesStdout(path string) bool {
 	return path != "" && commandOutputPathIsStdout(path)
 }
 
-func validateTimingOutputPaths() error {
+func validateTimingOutputPaths(opts *timingOptions) error {
 	stdoutExports := 0
-	if timingExportWritesStdout(timingJSON) {
+	if timingExportWritesStdout(opts.json) {
 		stdoutExports++
 	}
-	if timingExportWritesStdout(timingCSV) {
+	if timingExportWritesStdout(opts.csv) {
 		stdoutExports++
 	}
 	if stdoutExports > 1 {

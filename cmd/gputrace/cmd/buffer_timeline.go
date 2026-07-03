@@ -11,18 +11,24 @@ import (
 	"github.com/tmc/gputrace"
 )
 
-var (
-	bufferTimelineFormat string
-	bufferTimelineWidth  int
-	bufferTimelineOutput string
-)
-
 const minBufferTimelineWidth = 21
 
-var bufferTimelineCmd = &cobra.Command{
-	Use:   "buffer-timeline <trace.gputrace>",
-	Short: "Visualize buffer allocation and usage timeline",
-	Long: `Analyze and visualize buffer lifecycle events across the trace.
+var bufferTimelineCmd = newBufferTimelineCommand(&bufferTimelineOptions{
+	format: "ascii",
+	width:  100,
+})
+
+type bufferTimelineOptions struct {
+	format string
+	width  int
+	output string
+}
+
+func newBufferTimelineCommand(opts *bufferTimelineOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "buffer-timeline <trace.gputrace>",
+		Short: "Visualize buffer allocation and usage timeline",
+		Long: `Analyze and visualize buffer lifecycle events across the trace.
 
 This command extracts buffer allocation, usage, and deallocation patterns
 and presents them in various formats:
@@ -50,25 +56,29 @@ Examples:
 
   # Wider ASCII display
   gputrace buffer-timeline trace.gputrace --width 120`,
-	Args: cobra.ExactArgs(1),
-	RunE: runBufferTimeline,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runBufferTimeline(cmd, args, opts)
+		},
+	}
+
+	cmd.Flags().StringVarP(&opts.format, "format", "f", opts.format,
+		"Output format: ascii, summary, chrome, json")
+	cmd.Flags().IntVarP(&opts.width, "width", "w", opts.width,
+		"Width for ASCII visualization")
+	cmd.Flags().StringVarP(&opts.output, "output", "o", opts.output,
+		"Output file (default: stdout)")
+	return cmd
 }
 
 func init() {
 	rootCmd.AddCommand(bufferTimelineCmd)
-
-	bufferTimelineCmd.Flags().StringVarP(&bufferTimelineFormat, "format", "f", "ascii",
-		"Output format: ascii, summary, chrome, json")
-	bufferTimelineCmd.Flags().IntVarP(&bufferTimelineWidth, "width", "w", 100,
-		"Width for ASCII visualization")
-	bufferTimelineCmd.Flags().StringVarP(&bufferTimelineOutput, "output", "o", "",
-		"Output file (default: stdout)")
 }
 
-func runBufferTimeline(cmd *cobra.Command, args []string) error {
+func runBufferTimeline(cmd *cobra.Command, args []string, opts *bufferTimelineOptions) error {
 	tracePath := args[0]
 
-	if err := validateBufferTimelineWidth(bufferTimelineWidth); err != nil {
+	if err := validateBufferTimelineWidth(opts.width); err != nil {
 		return err
 	}
 
@@ -91,9 +101,9 @@ func runBufferTimeline(cmd *cobra.Command, args []string) error {
 
 	// Generate output based on format
 	var output string
-	switch bufferTimelineFormat {
+	switch opts.format {
 	case "ascii":
-		output = gputrace.FormatBufferTimelineASCII(timeline, bufferTimelineWidth)
+		output = gputrace.FormatBufferTimelineASCII(timeline, opts.width)
 	case "summary":
 		output = gputrace.FormatBufferTimelineSummary(timeline)
 	case "chrome":
@@ -107,10 +117,10 @@ func runBufferTimeline(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("format json: %w", err)
 		}
 	default:
-		return fmt.Errorf("unknown format: %s (valid: ascii, summary, chrome, json)", bufferTimelineFormat)
+		return fmt.Errorf("unknown format: %s (valid: ascii, summary, chrome, json)", opts.format)
 	}
 
-	return writeBufferTimelineOutput(bufferTimelineOutput, output)
+	return writeBufferTimelineOutput(opts.output, output)
 }
 
 func validateBufferTimelineWidth(width int) error {

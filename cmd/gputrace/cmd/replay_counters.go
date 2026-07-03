@@ -11,20 +11,27 @@ import (
 	"github.com/tmc/gputrace"
 )
 
-var (
-	counterSetsFlag        []string
-	encoderBoundariesFlag  bool
-	dispatchBoundariesFlag bool
-	useBarriersFlag        bool
-	simulateOnlyFlag       bool
-	counterOutputFlag      string
-)
+var replayCountersCmd = newReplayCountersCommand(&replayCountersOptions{
+	encoderBoundaries:  true,
+	dispatchBoundaries: true,
+	useBarriers:        true,
+})
 
-var replayCountersCmd = &cobra.Command{
-	Use:    "replay-counters <trace.gputrace>",
-	Short:  "Plan MTLCounterSampleBuffer sampling; real collection is disabled",
-	Hidden: true,
-	Long: `Plan Metal performance counter sampling for trace replay.
+type replayCountersOptions struct {
+	counterSets        []string
+	encoderBoundaries  bool
+	dispatchBoundaries bool
+	useBarriers        bool
+	simulate           bool
+	output             string
+}
+
+func newReplayCountersCommand(opts *replayCountersOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:    "replay-counters <trace.gputrace>",
+		Short:  "Plan MTLCounterSampleBuffer sampling; real collection is disabled",
+		Hidden: true,
+		Long: `Plan Metal performance counter sampling for trace replay.
 
 IMPORTANT: This command is fail-closed for real replay counter collection.
 
@@ -90,28 +97,32 @@ Implementation Status:
 Related Commands:
   - gputrace profiler: Extract profiler timing data from .gpuprofiler_raw/streamData
   - gputrace xcode-profile xcode-export-counters: Export counters through Xcode`,
-	Args: cobra.ExactArgs(1),
-	RunE: runReplayCounters,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runReplayCounters(cmd, args, opts)
+		},
+	}
+
+	cmd.Flags().StringSliceVar(&opts.counterSets, "counter-sets", opts.counterSets,
+		"Counter sets to enable (default: all)")
+	cmd.Flags().BoolVar(&opts.encoderBoundaries, "encoder-boundaries", opts.encoderBoundaries,
+		"Sample at encoder boundaries (start/end)")
+	cmd.Flags().BoolVar(&opts.dispatchBoundaries, "dispatch-boundaries", opts.dispatchBoundaries,
+		"Sample at dispatch boundaries (before/after)")
+	cmd.Flags().BoolVar(&opts.useBarriers, "use-barriers", opts.useBarriers,
+		"Insert barriers for accurate sampling")
+	cmd.Flags().BoolVar(&opts.simulate, "simulate", opts.simulate,
+		"Show simulation/overhead analysis only")
+	cmd.Flags().StringVarP(&opts.output, "output", "o", opts.output,
+		"Output file (default: stdout)")
+	return cmd
 }
 
 func init() {
 	rootCmd.AddCommand(replayCountersCmd)
-
-	replayCountersCmd.Flags().StringSliceVar(&counterSetsFlag, "counter-sets", []string{},
-		"Counter sets to enable (default: all)")
-	replayCountersCmd.Flags().BoolVar(&encoderBoundariesFlag, "encoder-boundaries", true,
-		"Sample at encoder boundaries (start/end)")
-	replayCountersCmd.Flags().BoolVar(&dispatchBoundariesFlag, "dispatch-boundaries", true,
-		"Sample at dispatch boundaries (before/after)")
-	replayCountersCmd.Flags().BoolVar(&useBarriersFlag, "use-barriers", true,
-		"Insert barriers for accurate sampling")
-	replayCountersCmd.Flags().BoolVar(&simulateOnlyFlag, "simulate", false,
-		"Show simulation/overhead analysis only")
-	replayCountersCmd.Flags().StringVarP(&counterOutputFlag, "output", "o", "",
-		"Output file (default: stdout)")
 }
 
-func runReplayCounters(cmd *cobra.Command, args []string) error {
+func runReplayCounters(cmd *cobra.Command, args []string, opts *replayCountersOptions) error {
 	tracePath := args[0]
 
 	// Verify trace file exists
@@ -119,7 +130,7 @@ func runReplayCounters(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if !simulateOnlyFlag {
+	if !opts.simulate {
 		return fmt.Errorf("real replay counter collection is unavailable without replay-time Metal bindings; rerun with --simulate to inspect the sampling plan")
 	}
 
@@ -134,10 +145,10 @@ func runReplayCounters(cmd *cobra.Command, args []string) error {
 
 	// Configure counter sampling
 	config := &gputrace.CounterSamplingConfig{
-		EnabledCounterSets:         counterSetsFlag,
-		SampleAtEncoderBoundaries:  encoderBoundariesFlag,
-		SampleAtDispatchBoundaries: dispatchBoundariesFlag,
-		UseBarriers:                useBarriersFlag,
+		EnabledCounterSets:         opts.counterSets,
+		SampleAtEncoderBoundaries:  opts.encoderBoundaries,
+		SampleAtDispatchBoundaries: opts.dispatchBoundaries,
+		UseBarriers:                opts.useBarriers,
 		GPUFrequency:               0, // Auto-detect
 	}
 
@@ -154,14 +165,14 @@ func runReplayCounters(cmd *cobra.Command, args []string) error {
 	var output string
 	var data interface{}
 
-	if simulateOnlyFlag {
+	if opts.simulate {
 		// Show simulation/overhead analysis
 		simulation, err := engine.SimulateCounterSampling()
 		if err != nil {
 			return fmt.Errorf("failed to simulate counter sampling: %w", err)
 		}
 
-		if counterOutputFlag != "" && isJSONOutput(counterOutputFlag) {
+		if opts.output != "" && isJSONOutput(opts.output) {
 			data = simulation
 		} else {
 			output = gputrace.FormatCounterSamplingSimulation(simulation)
@@ -173,7 +184,7 @@ func runReplayCounters(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("failed to analyze replay with counters: %w", err)
 		}
 
-		if counterOutputFlag != "" && isJSONOutput(counterOutputFlag) {
+		if opts.output != "" && isJSONOutput(opts.output) {
 			// Export combined result
 			data = map[string]interface{}{
 				"plan":   plan,
@@ -193,7 +204,7 @@ func runReplayCounters(cmd *cobra.Command, args []string) error {
 	}
 
 	// Write output
-	return writeOutput(counterOutputFlag, output, data)
+	return writeOutput(opts.output, output, data)
 }
 
 func writeOutput(filename, textOutput string, jsonData interface{}) error {

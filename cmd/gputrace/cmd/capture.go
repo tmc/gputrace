@@ -21,15 +21,20 @@ import (
 // The generated enum has a bug where both values are 0.
 const MTLCaptureDestinationGPUTraceDocumentValue metal.MTLCaptureDestination = 2
 
-var (
-	captureOutput   string
-	captureNoBundle bool
-)
+var captureCmd = newCaptureCommand(&captureOptions{
+	output: "capture.gputrace",
+})
 
-var captureCmd = &cobra.Command{
-	Use:   "capture -- command [args...]",
-	Short: "Capture GPU trace while running a command",
-	Long: `Captures Metal GPU activity to a .gputrace file while running the specified command.
+type captureOptions struct {
+	output   string
+	noBundle bool
+}
+
+func newCaptureCommand(opts *captureOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "capture -- command [args...]",
+		Short: "Capture GPU trace while running a command",
+		Long: `Captures Metal GPU activity to a .gputrace file while running the specified command.
 
 The captured trace can be opened in Xcode for analysis.
 
@@ -40,19 +45,24 @@ Requirements:
   - The target application must use Metal
   - GPU Frame Capture must be enabled (MTL_CAPTURE_ENABLED=1)
   - May require entitlements for some applications`,
-	Args: cobra.MinimumNArgs(1),
-	RunE: runCapture,
+		Args: cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runCapture(cmd, args, opts)
+		},
+	}
+
+	cmd.Flags().StringVarP(&opts.output, "output", "o", opts.output, "Output .gputrace file path")
+	cmd.Flags().BoolVar(&opts.noBundle, "no-bundle", opts.noBundle, "Skip macgo app bundle (may limit capture capabilities)")
+	return cmd
 }
 
 func init() {
-	captureCmd.Flags().StringVarP(&captureOutput, "output", "o", "capture.gputrace", "Output .gputrace file path")
-	captureCmd.Flags().BoolVar(&captureNoBundle, "no-bundle", false, "Skip macgo app bundle (may limit capture capabilities)")
 	rootCmd.AddCommand(captureCmd)
 }
 
 // setupCaptureBundle configures macgo with entitlements needed for GPU capture.
-func setupCaptureBundle() error {
-	if captureNoBundle || os.Getenv("GPUTRACE_SKIP_MACGO") != "" {
+func setupCaptureBundle(noBundle bool) error {
+	if noBundle || os.Getenv("GPUTRACE_SKIP_MACGO") != "" {
 		return nil
 	}
 
@@ -83,18 +93,18 @@ func setupCaptureBundle() error {
 	return nil
 }
 
-func runCapture(cmd *cobra.Command, args []string) error {
+func runCapture(cmd *cobra.Command, args []string, opts *captureOptions) error {
 	var status io.Writer = os.Stderr
 	if cmd != nil {
 		status = cmd.ErrOrStderr()
 	}
 
 	// Setup macgo bundle with GPU capture entitlements
-	if err := setupCaptureBundle(); err != nil {
+	if err := setupCaptureBundle(opts.noBundle); err != nil {
 		return err
 	}
 
-	absOutput, err := resolveCaptureOutputPath(captureOutput)
+	absOutput, err := resolveCaptureOutputPath(opts.output)
 	if err != nil {
 		return err
 	}

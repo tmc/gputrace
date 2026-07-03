@@ -16,18 +16,28 @@ import (
 	"github.com/tmc/gputrace/internal/xcodebindings"
 )
 
-var xcodeParityJSON bool
+type xcodeParityOptions struct {
+	json bool
+}
 
-var xcodeParityCmd = &cobra.Command{
-	Use:   "xcode-parity <trace.gputrace>",
-	Short: "Audit Xcode metric parity for a trace",
-	Long: `Audit Xcode metric parity for a trace.
+var xcodeParityCmd = newXcodeParityCommand(&xcodeParityOptions{})
+
+func newXcodeParityCommand(opts *xcodeParityOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "xcode-parity <trace.gputrace>",
+		Short: "Audit Xcode metric parity for a trace",
+		Long: `Audit Xcode metric parity for a trace.
 
 The report compares the trace's timeline metadata against the private
 GTShaderProfiler binding surface and lists the remaining adapter work for any
 missing Xcode-style fields.`,
-	Args: cobra.ExactArgs(1),
-	RunE: runXcodeParity,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runXcodeParity(cmd, args, opts)
+		},
+	}
+	cmd.Flags().BoolVar(&opts.json, "json", false, "Output in JSON format")
+	return cmd
 }
 
 type xcodeParityReport struct {
@@ -53,10 +63,9 @@ type xcodeParityGap struct {
 
 func init() {
 	rootCmd.AddCommand(xcodeParityCmd)
-	xcodeParityCmd.Flags().BoolVar(&xcodeParityJSON, "json", false, "Output in JSON format")
 }
 
-func runXcodeParity(cmd *cobra.Command, args []string) error {
+func runXcodeParity(cmd *cobra.Command, args []string, opts *xcodeParityOptions) error {
 	timeline, err := timelineForParity(args[0])
 	if err != nil {
 		return err
@@ -68,49 +77,50 @@ func runXcodeParity(cmd *cobra.Command, args []string) error {
 			report.applyStreamDataEvidence()
 		}
 	}
-	if xcodeParityJSON {
-		enc := json.NewEncoder(os.Stdout)
+	w := cmd.OutOrStdout()
+	if opts.json {
+		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
 		return enc.Encode(report)
 	}
 
-	fmt.Printf("Trace: %s\n", report.Trace)
-	fmt.Printf("Kernel events: %d\n", report.KernelEvents)
-	fmt.Printf("Bindings: %d/%d classes, %d/%d selectors\n",
+	fmt.Fprintf(w, "Trace: %s\n", report.Trace)
+	fmt.Fprintf(w, "Kernel events: %d\n", report.KernelEvents)
+	fmt.Fprintf(w, "Bindings: %d/%d classes, %d/%d selectors\n",
 		report.Bindings["classes_present"],
 		report.Bindings["classes_present"]+report.Bindings["classes_missing"],
 		report.Bindings["selectors_present"],
 		report.Bindings["selectors_present"]+report.Bindings["selectors_missing"])
-	fmt.Printf("Present fields: %s\n", stringsOrNone(report.PresentFields))
-	fmt.Printf("Absent fields: %s\n", stringsOrNone(report.AbsentFields))
+	fmt.Fprintf(w, "Present fields: %s\n", stringsOrNone(report.PresentFields))
+	fmt.Fprintf(w, "Absent fields: %s\n", stringsOrNone(report.AbsentFields))
 	if source, _ := report.Timing["timing_source"].(string); source != "" {
-		fmt.Printf("Timing: %s\n", source)
+		fmt.Fprintf(w, "Timing: %s\n", source)
 	}
 	if has, _ := report.Timing["has_effective_gpu_time"].(bool); !has {
-		fmt.Println("Effective GPU time: not archived; using reported display-duration fallback")
+		fmt.Fprintln(w, "Effective GPU time: not archived; using reported display-duration fallback")
 	}
 	if report.StreamData != nil {
-		fmt.Printf("StreamData: %d encoders, %d GPU commands, %d pipeline states, %d functions\n",
+		fmt.Fprintf(w, "StreamData: %d encoders, %d GPU commands, %d pipeline states, %d functions\n",
 			report.StreamData.EncoderInfoCount,
 			report.StreamData.GPUCommandInfoCount,
 			report.StreamData.PipelineStateInfoCount,
 			report.StreamData.FunctionInfoCount)
 		if report.StreamData.MetalDeviceName != "" {
-			fmt.Printf("Device: %s (%s)\n", report.StreamData.MetalDeviceName, report.StreamData.MetalPluginName)
+			fmt.Fprintf(w, "Device: %s (%s)\n", report.StreamData.MetalDeviceName, report.StreamData.MetalPluginName)
 		}
 	}
 	if len(report.ClosedExamples) > 0 {
-		fmt.Println("\nClosed in current trace")
+		fmt.Fprintln(w, "\nClosed in current trace")
 		for _, item := range report.ClosedExamples {
-			fmt.Printf("  %s\n", item)
+			fmt.Fprintf(w, "  %s\n", item)
 		}
 	}
 	if len(report.RemainingGaps) > 0 {
-		fmt.Println("\nRemaining gaps")
+		fmt.Fprintln(w, "\nRemaining gaps")
 		for _, gap := range report.RemainingGaps {
-			fmt.Printf("  %s: %s\n", gap.Metric, gap.Status)
-			fmt.Printf("    binding: %s\n", gap.Binding)
-			fmt.Printf("    next: %s\n", gap.Next)
+			fmt.Fprintf(w, "  %s: %s\n", gap.Metric, gap.Status)
+			fmt.Fprintf(w, "    binding: %s\n", gap.Binding)
+			fmt.Fprintf(w, "    next: %s\n", gap.Next)
 		}
 	}
 	return nil

@@ -16,20 +16,12 @@ func TestRunStatsJSONUsesCommandOutput(t *testing.T) {
 		t.Skipf("trace fixture not available: %s", tracePath)
 	}
 
-	oldJSON := statsJSON
-	oldVerbose := statsVerbose
-	defer func() {
-		statsJSON = oldJSON
-		statsVerbose = oldVerbose
-	}()
-	statsJSON = true
-	statsVerbose = false
-
 	var out bytes.Buffer
 	command := &cobra.Command{}
 	command.SetOut(&out)
 
-	if err := runStats(command, []string{tracePath}); err != nil {
+	opts := &statsOptions{json: true}
+	if err := runStats(command, []string{tracePath}, opts); err != nil {
 		t.Fatalf("runStats: %v", err)
 	}
 	if !strings.HasSuffix(out.String(), "\n") {

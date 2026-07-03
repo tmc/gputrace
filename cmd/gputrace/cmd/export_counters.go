@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 
@@ -10,15 +9,18 @@ import (
 	"github.com/tmc/gputrace/internal/counter"
 )
 
-var (
-	exportCountersOutput string
-)
+var exportCountersCmd = newExportCountersCommand(&exportCountersOptions{})
 
-var exportCountersCmd = &cobra.Command{
-	Use:    "export-counters <trace.gputrace>",
-	Short:  "Export performance counters in Xcode Counters.csv format",
-	Hidden: true,
-	Long: `Export performance counter data in Xcode Instruments Counters.csv format.
+type exportCountersOptions struct {
+	output string
+}
+
+func newExportCountersCommand(opts *exportCountersOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:    "export-counters <trace.gputrace>",
+		Short:  "Export performance counters in Xcode Counters.csv format",
+		Hidden: true,
+		Long: `Export performance counter data in Xcode Instruments Counters.csv format.
 
 Generates a 246-column CSV file matching the exact format used by Xcode
 Instruments when exporting GPU performance counter data. This includes:
@@ -72,18 +74,22 @@ Related Commands:
   - gputrace timeline: Visual timeline with counter tracks
   - gputrace profiler: Extract profiler timing data
   - gputrace xcode-profile xcode-export-counters: Export counters through Xcode`,
-	Args: cobra.ExactArgs(1),
-	RunE: runExportCounters,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runExportCounters(cmd, args, opts)
+		},
+	}
+
+	cmd.Flags().StringVarP(&opts.output, "output", "o", opts.output,
+		"Output CSV file (default: stdout)")
+	return cmd
 }
 
 func init() {
 	rootCmd.AddCommand(exportCountersCmd)
-
-	exportCountersCmd.Flags().StringVarP(&exportCountersOutput, "output", "o", "",
-		"Output CSV file (default: stdout)")
 }
 
-func runExportCounters(cmd *cobra.Command, args []string) error {
+func runExportCounters(cmd *cobra.Command, args []string, opts *exportCountersOptions) error {
 	tracePath := args[0]
 
 	// Verify trace file exists
@@ -101,7 +107,7 @@ func runExportCounters(cmd *cobra.Command, args []string) error {
 	exporter := gputrace.NewCountersCSVExporter(trace)
 	sourceSummary, sourceSummaryErr := summarizeExportCounterSources(trace)
 
-	writer, closeOutput, err := createCommandOutput(exportCountersOutput)
+	writer, closeOutput, err := createCommandOutput(opts.output)
 	if err != nil {
 		return fmt.Errorf("failed to create output file: %w", err)
 	}
@@ -115,12 +121,12 @@ func runExportCounters(cmd *cobra.Command, args []string) error {
 	}
 
 	if sourceSummaryErr == nil {
-		fmt.Fprint(os.Stderr, formatExportCounterSourceNotice(sourceSummary))
+		fmt.Fprint(cmd.ErrOrStderr(), formatExportCounterSourceNotice(sourceSummary))
 	}
 
 	// Print success message to stderr (not stdout which has CSV data)
-	if exportCountersOutput != "" {
-		fmt.Fprintf(os.Stderr, "✓ Exported counters to: %s\n", exportCountersOutput)
+	if opts.output != "" {
+		fmt.Fprintf(cmd.ErrOrStderr(), "✓ Exported counters to: %s\n", opts.output)
 	}
 
 	return nil

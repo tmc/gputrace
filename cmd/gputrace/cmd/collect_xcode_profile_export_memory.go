@@ -10,10 +10,16 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var exportMemoryForce bool
-
 func init() {
-	xcodeExportMemoryCmd := &cobra.Command{
+	collectXcodeProfileCmd.AddCommand(newXcodeExportMemoryCommand(&xcodeExportMemoryOptions{}))
+}
+
+type xcodeExportMemoryOptions struct {
+	force bool
+}
+
+func newXcodeExportMemoryCommand(opts *xcodeExportMemoryOptions) *cobra.Command {
+	cmd := &cobra.Command{
 		Use:   "xcode-export-memory [trace_file]",
 		Short: "Export memory report from Xcode's Performance view",
 		Long: `Triggers Xcode's Export Memory Report dialog and accepts the default save location.
@@ -32,13 +38,15 @@ Example:
   gputrace xp xcode-export-memory MyTrace.gputrace
   gputrace xp xcode-export-memory --force`,
 		Args: cobra.MaximumNArgs(1),
-		RunE: runXcodeExportMemory,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runXcodeExportMemory(cmd, args, opts)
+		},
 	}
-	xcodeExportMemoryCmd.Flags().BoolVarP(&exportMemoryForce, "force", "f", false, "Replace existing file if it exists")
-	collectXcodeProfileCmd.AddCommand(xcodeExportMemoryCmd)
+	cmd.Flags().BoolVarP(&opts.force, "force", "f", opts.force, "Replace existing file if it exists")
+	return cmd
 }
 
-func runXcodeExportMemory(cmd *cobra.Command, args []string) error {
+func runXcodeExportMemory(cmd *cobra.Command, args []string, opts *xcodeExportMemoryOptions) error {
 	status := xcodeProfileStatusWriter()
 	traceFile := ""
 	if len(args) > 0 {
@@ -189,7 +197,7 @@ saveClicked:
 	replaceWindows := GetAllWindows(appAX)
 	for _, w := range replaceWindows {
 		if btn := findButtonBFS(w, "Replace", 200); btn != 0 {
-			if exportMemoryForce {
+			if opts.force {
 				fmt.Fprintln(status, "File exists, clicking Replace...")
 				if err := axAction(btn, "AXPress"); err != nil {
 					return fmt.Errorf("failed to click Replace: %w", err)

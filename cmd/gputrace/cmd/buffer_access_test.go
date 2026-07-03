@@ -40,15 +40,13 @@ func TestWriteBufferAccessJSON(t *testing.T) {
 }
 
 func TestRunBufferAccessJSONUsesCommandOutput(t *testing.T) {
-	restoreBufferAccessGlobals(t)
-	bufferAccessJSON = true
-
 	var out bytes.Buffer
 	command := &cobra.Command{}
 	command.SetOut(&out)
+	opts := &bufferAccessOptions{json: true}
 
 	stdout, err := captureStdout(t, func() error {
-		return runBufferAccess(command, []string{testBufferAccessTracePath(t)})
+		return runBufferAccess(command, []string{testBufferAccessTracePath(t)}, opts)
 	})
 	if err != nil {
 		t.Fatalf("runBufferAccess: %v", err)
@@ -110,18 +108,4 @@ func testBufferAccessTracePath(t *testing.T) string {
 		t.Skipf("trace fixture not available: %s", tracePath)
 	}
 	return tracePath
-}
-
-func restoreBufferAccessGlobals(t *testing.T) {
-	t.Helper()
-
-	oldVerbose := bufferAccessVerbose
-	oldJSON := bufferAccessJSON
-	t.Cleanup(func() {
-		bufferAccessVerbose = oldVerbose
-		bufferAccessJSON = oldJSON
-	})
-
-	bufferAccessVerbose = false
-	bufferAccessJSON = false
 }

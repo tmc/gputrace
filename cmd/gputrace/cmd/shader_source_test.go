@@ -56,14 +56,10 @@ func TestValidateShaderSourceFormatRejectsUnknownValues(t *testing.T) {
 }
 
 func TestRunShaderSourceValidatesFormatBeforeTraceIO(t *testing.T) {
-	oldFormat := shaderSourceFormat
-	shaderSourceFormat = "xml"
-	t.Cleanup(func() {
-		shaderSourceFormat = oldFormat
-	})
-
 	missingTrace := filepath.Join(t.TempDir(), "missing.gputrace")
-	err := runShaderSource(nil, []string{missingTrace, "kernel"})
+	err := runShaderSource(nil, []string{missingTrace, "kernel"}, &shaderSourceOptions{
+		format: "xml",
+	})
 	if err == nil {
 		t.Fatal("runShaderSource succeeded, want error")
 	}

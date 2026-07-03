@@ -14,10 +14,16 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var exportCountersForce bool
-
 func init() {
-	xcodeExportCountersCmd := &cobra.Command{
+	collectXcodeProfileCmd.AddCommand(newXcodeExportCountersCommand(&xcodeExportCountersOptions{}))
+}
+
+type xcodeExportCountersOptions struct {
+	force bool
+}
+
+func newXcodeExportCountersCommand(opts *xcodeExportCountersOptions) *cobra.Command {
+	cmd := &cobra.Command{
 		Use:   "xcode-export-counters [trace_file]",
 		Short: "Export GPU counters from Xcode's Performance view to CSV",
 		Long: `Triggers Xcode's Export GPU Counters dialog and accepts the default save location.
@@ -36,13 +42,15 @@ Example:
   gputrace xp xcode-export-counters MyTrace.gputrace
   gputrace xp xcode-export-counters --force`,
 		Args: cobra.MaximumNArgs(1),
-		RunE: runXcodeExportCounters,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runXcodeExportCounters(cmd, args, opts)
+		},
 	}
-	xcodeExportCountersCmd.Flags().BoolVarP(&exportCountersForce, "force", "f", false, "Replace existing file if it exists")
-	collectXcodeProfileCmd.AddCommand(xcodeExportCountersCmd)
+	cmd.Flags().BoolVarP(&opts.force, "force", "f", opts.force, "Replace existing file if it exists")
+	return cmd
 }
 
-func runXcodeExportCounters(cmd *cobra.Command, args []string) error {
+func runXcodeExportCounters(cmd *cobra.Command, args []string, opts *xcodeExportCountersOptions) error {
 	status := xcodeProfileStatusWriter()
 	traceFile := ""
 	if len(args) > 0 {
@@ -198,7 +206,7 @@ saveClicked:
 	replaceWindows := GetAllWindows(appAX)
 	for _, w := range replaceWindows {
 		if btn := findButtonBFS(w, "Replace", 200); btn != 0 {
-			if exportCountersForce {
+			if opts.force {
 				fmt.Fprintln(status, "File exists, clicking Replace...")
 				if err := axAction(btn, "AXPress"); err != nil {
 					return fmt.Errorf("failed to click Replace: %w", err)

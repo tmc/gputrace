@@ -10,11 +10,11 @@ import (
 	"github.com/tmc/gputrace"
 )
 
-var (
-	cmdBuffersVerbose  bool
-	cmdBuffersDetailed bool
-	cmdBuffersJSON     bool
-)
+type commandBuffersOptions struct {
+	verbose  bool
+	detailed bool
+	json     bool
+}
 
 type commandBufferEncoderJSON struct {
 	Index int    `json:"index"`
@@ -31,10 +31,13 @@ type commandBufferJSON struct {
 	Dispatches      int                        `json:"dispatches"`
 }
 
-var commandBuffersCmd = &cobra.Command{
-	Use:   "command-buffers <trace.gputrace>",
-	Short: "List and analyze command buffers in a GPU trace",
-	Long: `List all Metal command buffers found in a GPU trace.
+var commandBuffersCmd = newCommandBuffersCommand(&commandBuffersOptions{})
+
+func newCommandBuffersCommand(opts *commandBuffersOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "command-buffers <trace.gputrace>",
+		Short: "List and analyze command buffers in a GPU trace",
+		Long: `List all Metal command buffers found in a GPU trace.
 
 This command parses CUUU markers to identify command buffer submissions
 and can provide detailed analysis of each command buffer including:
@@ -46,19 +49,22 @@ Examples:
   gputrace command-buffers trace.gputrace
   gputrace command-buffers trace.gputrace -v
   gputrace command-buffers trace.gputrace -d`,
-	Args: cobra.ExactArgs(1),
-	RunE: runCommandBuffers,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runCommandBuffers(cmd, args, opts)
+		},
+	}
+	cmd.Flags().BoolVarP(&opts.verbose, "verbose", "v", false, "Show verbose output with encoder and API call counts")
+	cmd.Flags().BoolVarP(&opts.detailed, "detailed", "d", false, "Show detailed analysis of each command buffer")
+	cmd.Flags().BoolVar(&opts.json, "json", false, "Output in JSON format")
+	return cmd
 }
 
 func init() {
 	rootCmd.AddCommand(commandBuffersCmd)
-
-	commandBuffersCmd.Flags().BoolVarP(&cmdBuffersVerbose, "verbose", "v", false, "Show verbose output with encoder and API call counts")
-	commandBuffersCmd.Flags().BoolVarP(&cmdBuffersDetailed, "detailed", "d", false, "Show detailed analysis of each command buffer")
-	commandBuffersCmd.Flags().BoolVar(&cmdBuffersJSON, "json", false, "Output in JSON format")
 }
 
-func runCommandBuffers(cmd *cobra.Command, args []string) error {
+func runCommandBuffers(cmd *cobra.Command, args []string, opts *commandBuffersOptions) error {
 	tracePath := args[0]
 
 	// Verify trace file exists
@@ -78,7 +84,7 @@ func runCommandBuffers(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to parse command buffers: %w", err)
 	}
 
-	if cmdBuffersJSON {
+	if opts.json {
 		out, err := commandBuffersJSONOutput(trace, commandBuffers)
 		if err != nil {
 			return err
@@ -86,38 +92,40 @@ func runCommandBuffers(cmd *cobra.Command, args []string) error {
 		return writeCommandBuffersJSON(cmd.OutOrStdout(), out)
 	}
 
+	w := cmd.OutOrStdout()
+
 	// Compact one-line-per-buffer output
-	fmt.Printf("%d command buffers:\n", len(commandBuffers))
+	fmt.Fprintf(w, "%d command buffers:\n", len(commandBuffers))
 	for _, cb := range commandBuffers {
 		label := ""
 		if cb.Label != "" {
 			label = fmt.Sprintf(" label=%q", cb.Label)
 		}
-		if cmdBuffersVerbose || cmdBuffersDetailed {
+		if opts.verbose || opts.detailed {
 			dcb, err := gputrace.ParseDetailedCommandBuffer(trace, cb.Index)
 			if err != nil {
-				fmt.Printf("  %3d: offset=0x%08x%s (error: %v)\n", cb.Index, cb.Offset, label, err)
+				fmt.Fprintf(w, "  %3d: offset=0x%08x%s (error: %v)\n", cb.Index, cb.Offset, label, err)
 			} else {
-				fmt.Printf("  %3d: %d explicit encoders, %d pipeline records, %d dispatches%s\n",
+				fmt.Fprintf(w, "  %3d: %d explicit encoders, %d pipeline records, %d dispatches%s\n",
 					cb.Index, len(dcb.Encoders), len(dcb.Calls), len(dcb.Dispatches), label)
 			}
 		} else {
-			fmt.Printf("  %3d: offset=0x%08x%s\n", cb.Index, cb.Offset, label)
+			fmt.Fprintf(w, "  %3d: offset=0x%08x%s\n", cb.Index, cb.Offset, label)
 		}
 	}
 
 	// Show detailed analysis if requested
-	if cmdBuffersDetailed {
-		fmt.Printf("\n=== Detailed Analysis ===\n\n")
+	if opts.detailed {
+		fmt.Fprintf(w, "\n=== Detailed Analysis ===\n\n")
 		for _, cb := range commandBuffers {
-			if err := gputrace.DumpCommandBuffer(trace, cmd.OutOrStdout(), cb.Index); err != nil {
-				fmt.Printf("Error dumping command buffer #%d: %v\n", cb.Index, err)
+			if err := gputrace.DumpCommandBuffer(trace, w, cb.Index); err != nil {
+				fmt.Fprintf(w, "Error dumping command buffer #%d: %v\n", cb.Index, err)
 			}
 		}
 	}
 
 	// Summary statistics (verbose only)
-	if cmdBuffersVerbose && !cmdBuffersDetailed {
+	if opts.verbose && !opts.detailed {
 		totalEncoders := 0
 		totalAPICalls := 0
 		totalDispatches := 0
@@ -130,7 +138,7 @@ func runCommandBuffers(cmd *cobra.Command, args []string) error {
 			}
 		}
 		if len(commandBuffers) > 0 {
-			fmt.Printf("\nTotal: %d explicit encoders, %d pipeline records, %d dispatches (%.1f enc/buf, %.1f records/buf, %.1f dispatches/buf)\n",
+			fmt.Fprintf(w, "\nTotal: %d explicit encoders, %d pipeline records, %d dispatches (%.1f enc/buf, %.1f records/buf, %.1f dispatches/buf)\n",
 				totalEncoders, totalAPICalls, totalDispatches,
 				float64(totalEncoders)/float64(len(commandBuffers)),
 				float64(totalAPICalls)/float64(len(commandBuffers)),

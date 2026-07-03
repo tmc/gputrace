@@ -12,7 +12,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var checkStatusDebug bool
+type checkStatusOptions struct {
+	debug bool
+}
 
 // StatusOutput represents the JSON output for check-status.
 type StatusOutput struct {
@@ -24,6 +26,7 @@ type StatusOutput struct {
 }
 
 func init() {
+	opts := &checkStatusOptions{}
 	checkStatusCmd := &cobra.Command{
 		Use:   "check-status [trace_file]",
 		Short: "Check profiling status",
@@ -34,18 +37,20 @@ func init() {
   - complete: Performance data available
   - unknown: Unable to determine status`,
 		Args: cobra.MaximumNArgs(1),
-		RunE: runCheckStatus,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runCheckStatus(cmd, args, opts)
+		},
 	}
-	checkStatusCmd.Flags().BoolVar(&checkStatusDebug, "debug", false, "Print debug info")
+	checkStatusCmd.Flags().BoolVar(&opts.debug, "debug", false, "Print debug info")
 	collectXcodeProfileCmd.AddCommand(checkStatusCmd)
 }
 
-func runCheckStatus(cmd *cobra.Command, args []string) error {
+func runCheckStatus(cmd *cobra.Command, args []string, opts *checkStatusOptions) error {
 	traceFile := ""
 	if len(args) > 0 {
 		traceFile = args[0]
 	}
-	debug := statusDebugEnabled(checkStatusDebug)
+	debug := statusDebugEnabled(opts.debug)
 
 	// Note: setupMacgo and checkPermissions are called by PersistentPreRunE
 

@@ -11,11 +11,17 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var screenshotOutput string
-var screenshotNoPrompt bool
-
 func init() {
-	screenshotCmd := &cobra.Command{
+	collectXcodeProfileCmd.AddCommand(newScreenshotCommand(&screenshotOptions{}))
+}
+
+type screenshotOptions struct {
+	output   string
+	noPrompt bool
+}
+
+func newScreenshotCommand(opts *screenshotOptions) *cobra.Command {
+	cmd := &cobra.Command{
 		Use:    "screenshot [trace_file]",
 		Short:  "Capture a screenshot of the Xcode window",
 		Hidden: true,
@@ -37,16 +43,18 @@ Examples:
   gputrace xp screenshot --no-prompt
 `,
 		Args: cobra.MaximumNArgs(1),
-		RunE: runScreenshot,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runScreenshot(cmd, args, opts)
+		},
 	}
-	screenshotCmd.Flags().StringVarP(&screenshotOutput, "output", "o", "", "Output path for screenshot")
-	screenshotCmd.Flags().BoolVar(&screenshotNoPrompt, "no-prompt", false, "Trigger TCC entry without prompting")
-	collectXcodeProfileCmd.AddCommand(screenshotCmd)
+	cmd.Flags().StringVarP(&opts.output, "output", "o", opts.output, "Output path for screenshot")
+	cmd.Flags().BoolVar(&opts.noPrompt, "no-prompt", opts.noPrompt, "Trigger TCC entry without prompting")
+	return cmd
 }
 
-func runScreenshot(cmd *cobra.Command, args []string) error {
+func runScreenshot(cmd *cobra.Command, args []string, opts *screenshotOptions) error {
 	// Handle --no-prompt: trigger TCC entry without prompting
-	if screenshotNoPrompt {
+	if opts.noPrompt {
 		return triggerScreenRecordingTCC()
 	}
 
@@ -56,7 +64,7 @@ func runScreenshot(cmd *cobra.Command, args []string) error {
 		traceFile = args[0]
 	}
 
-	outputPath, err := resolveScreenshotOutputPath(screenshotOutput, time.Now())
+	outputPath, err := resolveScreenshotOutputPath(opts.output, time.Now())
 	if err != nil {
 		return err
 	}

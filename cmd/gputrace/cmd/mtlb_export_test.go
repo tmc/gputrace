@@ -52,20 +52,10 @@ func TestValidateMTLBExportFormat(t *testing.T) {
 }
 
 func TestMTLBExportFunctionsValidatesFormatBeforeTraceIO(t *testing.T) {
-	oldFormat := exportFormat
-	oldUsedOnly := exportUsedOnly
-	oldUsage := exportUsage
-	exportFormat = "yaml"
-	exportUsedOnly = false
-	exportUsage = false
-	t.Cleanup(func() {
-		exportFormat = oldFormat
-		exportUsedOnly = oldUsedOnly
-		exportUsage = oldUsage
-	})
-
 	missingTrace := filepath.Join(t.TempDir(), "missing.gputrace")
-	err := mtlbExportFunctionsCmd.RunE(mtlbExportFunctionsCmd, []string{missingTrace})
+	err := runMTLBExportFunctions(mtlbExportFunctionsCmd, []string{missingTrace}, &mtlbExportOptions{
+		format: "yaml",
+	})
 	if err == nil {
 		t.Fatal("export-functions succeeded, want error")
 	}

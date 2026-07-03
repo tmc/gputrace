@@ -16,13 +16,17 @@ var analyzeUsageCmd = &cobra.Command{
 	Short:  "Analyze buffer usage across kernels",
 	Hidden: true,
 	Args:   cobra.ExactArgs(1),
-	RunE:   runAnalyzeUsage,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		format, err := cmd.Flags().GetString("format")
+		if err != nil {
+			return err
+		}
+		return runAnalyzeUsage(cmd, args, format)
+	},
 }
 
-var analyzeFormat string
-
 func init() {
-	analyzeUsageCmd.Flags().StringVar(&analyzeFormat, "format", "text", "Output format (text, dot, json)")
+	analyzeUsageCmd.Flags().String("format", "text", "Output format (text, dot, json)")
 	rootCmd.AddCommand(analyzeUsageCmd)
 }
 
@@ -53,8 +57,8 @@ type analyzeBufferUsageJSON struct {
 	Kernels    []analyzeKernelUsageJSON `json:"kernels"`
 }
 
-func runAnalyzeUsage(cmd *cobra.Command, args []string) error {
-	format, err := normalizeAnalyzeFormat(analyzeFormat)
+func runAnalyzeUsage(cmd *cobra.Command, args []string, outputFormat string) error {
+	format, err := normalizeAnalyzeFormat(outputFormat)
 	if err != nil {
 		return err
 	}
@@ -80,15 +84,16 @@ func runAnalyzeUsage(cmd *cobra.Command, args []string) error {
 		return writeAnalyzeUsageDOT(cmd.OutOrStdout(), bufferUsage)
 	}
 
-	fmt.Printf("Trace Buffer Usage Analysis\n")
-	fmt.Printf("=============================\n")
+	w := cmd.OutOrStdout()
+	fmt.Fprintf(w, "Trace Buffer Usage Analysis\n")
+	fmt.Fprintf(w, "=============================\n")
 
 	for _, stats := range sortedUsageStats(bufferUsage) {
 		name := fmt.Sprintf("%s (0x%x)", stats.Name, stats.Address)
 
-		fmt.Printf("\n%s: Used in %d dispatches\n", name, stats.Dispatches)
+		fmt.Fprintf(w, "\n%s: Used in %d dispatches\n", name, stats.Dispatches)
 		for _, kernel := range sortedKernelUsageStats(stats.Kernels) {
-			fmt.Printf("  - %s: %d\n", kernel.Name, kernel.Accesses)
+			fmt.Fprintf(w, "  - %s: %d\n", kernel.Name, kernel.Accesses)
 		}
 	}
 

@@ -12,17 +12,20 @@ import (
 	"github.com/tmc/gputrace"
 )
 
-var (
-	kernelsFilter  string
-	kernelsVerbose bool
-	kernelsStats   bool
-	kernelsJSON    bool
-)
+var kernelsCmd = newKernelsCommand(&kernelsOptions{})
 
-var kernelsCmd = &cobra.Command{
-	Use:   "kernels <trace.gputrace>",
-	Short: "List kernel functions and their pipeline state mappings",
-	Long: `List all kernel functions found in a GPU trace with their pipeline state addresses.
+type kernelsOptions struct {
+	filter  string
+	verbose bool
+	stats   bool
+	json    bool
+}
+
+func newKernelsCommand(opts *kernelsOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "kernels <trace.gputrace>",
+		Short: "List kernel functions and their pipeline state mappings",
+		Long: `List all kernel functions found in a GPU trace with their pipeline state addresses.
 
 This command extracts the mapping between pipeline state objects and their
 associated kernel functions, making it easy to understand which Metal functions
@@ -41,20 +44,24 @@ Examples:
   # Verbose output with detailed stats (debug groups, encoder labels)
   gputrace kernels trace.gputrace -v
   gputrace kernels trace.gputrace --stats`,
-	Args: cobra.ExactArgs(1),
-	RunE: runKernels,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runKernels(cmd, args, opts)
+		},
+	}
+
+	cmd.Flags().StringVarP(&opts.filter, "filter", "f", opts.filter, "Filter kernels by name (case-insensitive substring match)")
+	cmd.Flags().BoolVarP(&opts.verbose, "verbose", "v", opts.verbose, "Show verbose output with additional details")
+	cmd.Flags().BoolVar(&opts.stats, "stats", opts.stats, "Show detailed statistics (debug groups, encoder labels)")
+	cmd.Flags().BoolVar(&opts.json, "json", opts.json, "Output in JSON format")
+	return cmd
 }
 
 func init() {
 	rootCmd.AddCommand(kernelsCmd)
-
-	kernelsCmd.Flags().StringVarP(&kernelsFilter, "filter", "f", "", "Filter kernels by name (case-insensitive substring match)")
-	kernelsCmd.Flags().BoolVarP(&kernelsVerbose, "verbose", "v", false, "Show verbose output with additional details")
-	kernelsCmd.Flags().BoolVar(&kernelsStats, "stats", false, "Show detailed statistics (debug groups, encoder labels)")
-	kernelsCmd.Flags().BoolVar(&kernelsJSON, "json", false, "Output in JSON format")
 }
 
-func runKernels(cmd *cobra.Command, args []string) error {
+func runKernels(cmd *cobra.Command, args []string, opts *kernelsOptions) error {
 	tracePath := args[0]
 
 	if err := checkTraceFile(tracePath); err != nil {
@@ -117,10 +124,10 @@ func runKernels(cmd *cobra.Command, args []string) error {
 
 	// Filter and sort
 	var kernels []*gputrace.KernelStat
-	filterLower := strings.ToLower(kernelsFilter)
+	filterLower := strings.ToLower(opts.filter)
 
 	for _, k := range stats {
-		if kernelsFilter != "" && !strings.Contains(strings.ToLower(k.Name), filterLower) {
+		if opts.filter != "" && !strings.Contains(strings.ToLower(k.Name), filterLower) {
 			continue
 		}
 		kernels = append(kernels, k)
@@ -134,20 +141,22 @@ func runKernels(cmd *cobra.Command, args []string) error {
 		return kernels[i].Name < kernels[j].Name
 	})
 
-	if kernelsJSON {
+	if opts.json {
 		return writeKernelsJSON(cmd.OutOrStdout(), kernels, timingStats)
 	}
+
+	out := cmd.OutOrStdout()
 
 	// Count unique kernels
 	uniqueKernels := len(kernels)
 
 	// Output header
-	if kernelsFilter != "" {
-		fmt.Printf("%d %s matching %q:\n", uniqueKernels, Pluralize(uniqueKernels, "kernel", "kernels"), kernelsFilter)
+	if opts.filter != "" {
+		fmt.Fprintf(out, "%d %s matching %q:\n", uniqueKernels, Pluralize(uniqueKernels, "kernel", "kernels"), opts.filter)
 	} else {
-		fmt.Printf("%d %s:\n", uniqueKernels, Pluralize(uniqueKernels, "kernel", "kernels"))
+		fmt.Fprintf(out, "%d %s:\n", uniqueKernels, Pluralize(uniqueKernels, "kernel", "kernels"))
 	}
-	fmt.Println()
+	fmt.Fprintln(out)
 
 	if uniqueKernels == 0 {
 		return nil
@@ -171,23 +180,23 @@ func runKernels(cmd *cobra.Command, args []string) error {
 	// Adjust columns if we have timing
 	hasTiming := len(timingStats) > 0
 
-	fmt.Printf(nameFmt+"  %-18s  %-10s", "Name", "Pipeline State", "Dispatches")
+	fmt.Fprintf(out, nameFmt+"  %-18s  %-10s", "Name", "Pipeline State", "Dispatches")
 	if hasTiming {
-		fmt.Printf("  %-10s  %-10s", "Total Time", "Avg Time")
+		fmt.Fprintf(out, "  %-10s  %-10s", "Total Time", "Avg Time")
 	}
-	if kernelsVerbose || kernelsStats {
-		fmt.Printf("  %s", "Debug Groups / Labels")
+	if opts.verbose || opts.stats {
+		fmt.Fprintf(out, "  %s", "Debug Groups / Labels")
 	}
-	fmt.Println()
+	fmt.Fprintln(out)
 
 	sepWidth := maxNameLen + 2 + 18 + 2 + 10
 	if hasTiming {
 		sepWidth += 2 + 10 + 2 + 10
 	}
-	if kernelsVerbose || kernelsStats {
+	if opts.verbose || opts.stats {
 		sepWidth += 2 + 30
 	}
-	fmt.Println(TableSeparator(sepWidth))
+	fmt.Fprintln(out, TableSeparator(sepWidth))
 
 	// Print rows
 	for _, k := range kernels {
@@ -197,7 +206,7 @@ func runKernels(cmd *cobra.Command, args []string) error {
 			displayName = displayName[:maxNameLen-3] + "..."
 		}
 
-		fmt.Printf(nameFmt+"  0x%-16x  %-10d", displayName, k.PipelineAddr, k.DispatchCount)
+		fmt.Fprintf(out, nameFmt+"  0x%-16x  %-10d", displayName, k.PipelineAddr, k.DispatchCount)
 
 		if hasTiming {
 			if tStat, ok := timingStats[name]; ok {
@@ -207,7 +216,7 @@ func runKernels(cmd *cobra.Command, args []string) error {
 				}
 				// Note: Timing extraction might not match 1:1 with dispatch counts if aggregation is different.
 				// But we display what we have.
-				fmt.Printf("  %7.2f ms  %7.3f ms", tStat.TotalTime, avg)
+				fmt.Fprintf(out, "  %7.2f ms  %7.3f ms", tStat.TotalTime, avg)
 			} else {
 				// Try looking up via encoder labels if direct name match failed
 				var found bool
@@ -216,18 +225,18 @@ func runKernels(cmd *cobra.Command, args []string) error {
 						// Found a match via encoder label
 						// Aggregating multiple matches is complex, just show first found for now
 						// or maybe we should have aggregated timingStats differently
-						fmt.Printf("  %7.2f ms  %7.3f ms", tStat.TotalTime, tStat.TotalTime/float64(k.DispatchCount)) // approx
+						fmt.Fprintf(out, "  %7.2f ms  %7.3f ms", tStat.TotalTime, tStat.TotalTime/float64(k.DispatchCount)) // approx
 						found = true
 						break
 					}
 				}
 				if !found {
-					fmt.Printf("  %10s  %10s", "-", "-")
+					fmt.Fprintf(out, "  %10s  %10s", "-", "-")
 				}
 			}
 		}
 
-		if kernelsVerbose || kernelsStats {
+		if opts.verbose || opts.stats {
 			var details []string
 
 			// Add debug groups
@@ -254,15 +263,15 @@ func runKernels(cmd *cobra.Command, args []string) error {
 				if len(str) > 60 {
 					str = str[:57] + "..."
 				}
-				fmt.Printf("  %s", str)
+				fmt.Fprintf(out, "  %s", str)
 			}
 		}
-		fmt.Println()
+		fmt.Fprintln(out)
 	}
 
 	// Print summary of unknown pipelines if any
 	if k, ok := stats["unknown"]; ok && k.DispatchCount > 0 {
-		fmt.Printf("\nUnknown Pipelines: %d dispatches (encoder: %v)\n", k.DispatchCount, k.EncoderLabels)
+		fmt.Fprintf(out, "\nUnknown Pipelines: %d dispatches (encoder: %v)\n", k.DispatchCount, k.EncoderLabels)
 	}
 
 	return nil

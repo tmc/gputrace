@@ -9,22 +9,27 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var debugTreeVerbose bool
+type debugTreeOptions struct {
+	verbose bool
+}
 
 func init() {
+	opts := &debugTreeOptions{}
 	debugTreeCmd := &cobra.Command{
 		Use:    "debug-tree [trace_file]",
 		Short:  "Print UI tree to find key elements",
 		Hidden: true,
 		Long:   `Prints the Accessibility tree structure showing paths to key buttons like Replay, Stop, Show Performance.`,
 		Args:   cobra.MaximumNArgs(1),
-		RunE:   runDebugTree,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runDebugTree(cmd, args, opts)
+		},
 	}
-	debugTreeCmd.Flags().BoolVarP(&debugTreeVerbose, "verbose", "v", false, "Print verbose progress info")
+	debugTreeCmd.Flags().BoolVarP(&opts.verbose, "verbose", "v", false, "Print verbose progress info")
 	collectXcodeProfileCmd.AddCommand(debugTreeCmd)
 }
 
-func runDebugTree(cmd *cobra.Command, args []string) error {
+func runDebugTree(cmd *cobra.Command, args []string, opts *debugTreeOptions) error {
 	traceFile := ""
 	if len(args) > 0 {
 		traceFile = args[0]
@@ -75,7 +80,7 @@ func runDebugTree(cmd *cobra.Command, args []string) error {
 		// Cycle detection
 		if seen[item.el] {
 			cycleCount++
-			if debugTreeVerbose {
+			if opts.verbose {
 				fmt.Printf("[CYCLE] Skipping already-seen element at depth %d\n", item.depth)
 			}
 			continue
@@ -97,7 +102,7 @@ func runDebugTree(cmd *cobra.Command, args []string) error {
 		visited++
 
 		// Verbose progress
-		if debugTreeVerbose && visited%100 == 0 {
+		if opts.verbose && visited%100 == 0 {
 			fmt.Printf("[PROGRESS] Visited %d, Queue: %d, Depth: %d, Cycles: %d\n", visited, len(queue), item.depth, cycleCount)
 		}
 

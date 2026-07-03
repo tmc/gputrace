@@ -13,7 +13,9 @@ import (
 	"github.com/tmc/gputrace/internal/timing"
 )
 
-var (
+var pprofCmd = newPprofCommand(&pprofOptions{})
+
+type pprofOptions struct {
 	output      string
 	prefix      string
 	all         bool
@@ -22,12 +24,13 @@ var (
 	showStats   bool
 	searchPaths []string
 	sourceLines bool
-)
+}
 
-var pprofCmd = &cobra.Command{
-	Use:   "pprof <trace.gputrace>",
-	Short: "Convert .gputrace files to pprof format",
-	Long: `Convert .gputrace files to pprof format with shader-level timing breakdowns.
+func newPprofCommand(opts *pprofOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "pprof <trace.gputrace>",
+		Short: "Convert .gputrace files to pprof format",
+		Long: `Convert .gputrace files to pprof format with shader-level timing breakdowns.
 
 This tool generates pprof profiles showing GPU shader timing breakdowns.
 The resulting pprof files can be analyzed with standard Go profiling tools:
@@ -58,24 +61,28 @@ The pprof profile shows GPU time organized hierarchically:
             └─ Kernel (shader)
 
 This makes it easy to identify which shaders are consuming the most GPU time.`,
-	Args: cobra.ExactArgs(1),
-	RunE: runPprof,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runPprof(cmd, args, opts)
+		},
+	}
+
+	cmd.Flags().StringVarP(&opts.output, "output", "o", opts.output, "Output pprof file path (default: trace_name.pprof)")
+	cmd.Flags().StringVar(&opts.prefix, "prefix", opts.prefix, "Output prefix for -all mode (default: trace name)")
+	cmd.Flags().BoolVar(&opts.all, "all", opts.all, "Generate all profile formats (gpu, combined, text)")
+	cmd.Flags().BoolVarP(&opts.verbose, "verbose", "v", opts.verbose, "Verbose output")
+	cmd.Flags().BoolVar(&opts.textReport, "text", opts.textReport, "Generate text report only")
+	cmd.Flags().BoolVar(&opts.showStats, "stats", opts.showStats, "Show trace statistics only")
+	cmd.Flags().StringSliceVar(&opts.searchPaths, "search-path", opts.searchPaths, "Search paths for shader source files")
+	cmd.Flags().BoolVar(&opts.sourceLines, "source-lines", opts.sourceLines, "Generate pprof with per-source-line samples (enables go tool pprof -list)")
+	return cmd
 }
 
 func init() {
 	rootCmd.AddCommand(pprofCmd)
-
-	pprofCmd.Flags().StringVarP(&output, "output", "o", "", "Output pprof file path (default: trace_name.pprof)")
-	pprofCmd.Flags().StringVar(&prefix, "prefix", "", "Output prefix for -all mode (default: trace name)")
-	pprofCmd.Flags().BoolVar(&all, "all", false, "Generate all profile formats (gpu, combined, text)")
-	pprofCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Verbose output")
-	pprofCmd.Flags().BoolVar(&textReport, "text", false, "Generate text report only")
-	pprofCmd.Flags().BoolVar(&showStats, "stats", false, "Show trace statistics only")
-	pprofCmd.Flags().StringSliceVar(&searchPaths, "search-path", nil, "Search paths for shader source files")
-	pprofCmd.Flags().BoolVar(&sourceLines, "source-lines", false, "Generate pprof with per-source-line samples (enables go tool pprof -list)")
 }
 
-func runPprof(cmd *cobra.Command, args []string) error {
+func runPprof(cmd *cobra.Command, args []string, opts *pprofOptions) error {
 	tracePath := args[0]
 
 	// Verify trace file exists
@@ -88,12 +95,12 @@ func runPprof(cmd *cobra.Command, args []string) error {
 		log.Printf("Warning: trace path does not have .gputrace extension: %s", tracePath)
 	}
 
-	if verbose {
-		fmt.Fprintf(pprofCurrentStatusWriter(), "Loading GPU trace: %s\n", tracePath)
+	if opts.verbose {
+		fmt.Fprintf(pprofCurrentStatusWriter(opts), "Loading GPU trace: %s\n", tracePath)
 	}
 
 	// If stats-only mode, show profiler summary
-	if showStats {
+	if opts.showStats {
 		prof, err := mlxprof.FromGPUTrace(tracePath)
 		if err != nil {
 			return fmt.Errorf("failed to load trace: %w", err)
@@ -105,8 +112,8 @@ func runPprof(cmd *cobra.Command, args []string) error {
 	}
 
 	// If source-lines mode, generate per-line pprof
-	if sourceLines {
-		return generateSourceLinesPprof(tracePath, searchPaths)
+	if opts.sourceLines {
+		return generateSourceLinesPprof(tracePath, opts)
 	}
 
 	// Create profiler
@@ -123,7 +130,7 @@ func runPprof(cmd *cobra.Command, args []string) error {
 	// but I didn't update FromGPUTrace to populate it.
 	// So I should update mlxprof.FromGPUTrace first to extract counters.
 
-	prof, err := mlxprof.FromGPUTrace(tracePath, searchPaths...)
+	prof, err := mlxprof.FromGPUTrace(tracePath, opts.searchPaths...)
 	if err != nil {
 		return fmt.Errorf("failed to load trace: %w\n\nPlease ensure this is a valid .gputrace directory bundle", err)
 	}
@@ -134,8 +141,8 @@ func runPprof(cmd *cobra.Command, args []string) error {
 	}()
 
 	// Show summary if verbose
-	if verbose {
-		status := pprofCurrentStatusWriter()
+	if opts.verbose {
+		status := pprofCurrentStatusWriter(opts)
 		prof.FprintSummary(status)
 		fmt.Fprintln(status)
 	}
@@ -146,15 +153,15 @@ func runPprof(cmd *cobra.Command, args []string) error {
 		baseName = baseName[:len(baseName)-len(ext)]
 	}
 
-	outputPrefix := prefix
+	outputPrefix := opts.prefix
 	if outputPrefix == "" {
 		outputPrefix = baseName
 	}
 
 	// Generate outputs
-	if all {
+	if opts.all {
 		// Generate all formats
-		if verbose {
+		if opts.verbose {
 			fmt.Printf("Generating all profile formats with prefix: %s\n", outputPrefix)
 		}
 
@@ -170,9 +177,9 @@ func runPprof(cmd *cobra.Command, args []string) error {
 		fmt.Printf("\nView with: go tool pprof -top %s.gpu.pprof\n", outputPrefix)
 		fmt.Printf("Or:        go tool pprof -http=:8080 %s.gpu.pprof\n", outputPrefix)
 
-	} else if textReport {
+	} else if opts.textReport {
 		// Generate text report only
-		outputPath := output
+		outputPath := opts.output
 		if outputPath == "" {
 			outputPath = outputPrefix + ".txt"
 		}
@@ -185,13 +192,13 @@ func runPprof(cmd *cobra.Command, args []string) error {
 
 	} else {
 		// Generate single pprof file
-		outputPath := output
+		outputPath := opts.output
 		if outputPath == "" {
 			outputPath = outputPrefix + ".pprof"
 		}
 
 		status := pprofStatusWriter(outputPath)
-		if verbose {
+		if opts.verbose {
 			fmt.Fprintf(status, "Writing pprof to: %s\n", outputPath)
 		}
 
@@ -207,8 +214,8 @@ func runPprof(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func pprofCurrentStatusWriter() *os.File {
-	if !all && pprofOutputPathIsStdout(output) {
+func pprofCurrentStatusWriter(opts *pprofOptions) *os.File {
+	if !opts.all && pprofOutputPathIsStdout(opts.output) {
 		return os.Stderr
 	}
 	return os.Stdout
@@ -227,7 +234,7 @@ func pprofOutputPathIsStdout(path string) bool {
 
 // generateSourceLinesPprof generates a pprof profile with per-source-line samples.
 // This enables 'go tool pprof -list kernel_name' to show line-by-line costs.
-func generateSourceLinesPprof(tracePath string, searchPaths []string) error {
+func generateSourceLinesPprof(tracePath string, opts *pprofOptions) error {
 	// Open trace
 	trace, err := gputrace.Open(tracePath)
 	if err != nil {
@@ -235,7 +242,7 @@ func generateSourceLinesPprof(tracePath string, searchPaths []string) error {
 	}
 
 	// Create shader source mapper
-	mapper := gputrace.NewShaderSourceMapper(searchPaths...)
+	mapper := gputrace.NewShaderSourceMapper(opts.searchPaths...)
 	if err := mapper.IndexShaderSources(); err != nil {
 		log.Printf("Warning: failed to index shader sources: %v", err)
 	}
@@ -248,7 +255,7 @@ func generateSourceLinesPprof(tracePath string, searchPaths []string) error {
 	if ext := filepath.Ext(baseName); ext != "" {
 		baseName = baseName[:len(baseName)-len(ext)]
 	}
-	outputPath := output
+	outputPath := opts.output
 	if outputPath == "" {
 		outputPath = baseName + ".source.pprof"
 	}

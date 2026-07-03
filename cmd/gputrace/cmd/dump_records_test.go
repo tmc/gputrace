@@ -83,17 +83,11 @@ func TestRunDumpRecordsValidatesFlagsBeforeTraceIO(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			oldOffset := dumpRecordsOffset
-			oldLimit := dumpRecordsLimit
-			dumpRecordsOffset = tt.offset
-			dumpRecordsLimit = tt.limit
-			t.Cleanup(func() {
-				dumpRecordsOffset = oldOffset
-				dumpRecordsLimit = oldLimit
-			})
-
 			missingTrace := filepath.Join(t.TempDir(), "missing.gputrace")
-			err := runDumpRecords(nil, []string{missingTrace})
+			err := runDumpRecords(nil, []string{missingTrace}, &dumpRecordsOptions{
+				offset: tt.offset,
+				limit:  tt.limit,
+			})
 			if err == nil {
 				t.Fatal("runDumpRecords succeeded, want error")
 			}

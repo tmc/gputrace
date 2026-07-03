@@ -4,23 +4,28 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 
 	"github.com/spf13/cobra"
 
 	"github.com/tmc/gputrace"
 )
 
-var (
-	shaderSourceFormat string
-	shaderSourceOutput string
-	shaderSourceHints  bool
-)
+var shaderSourceCmd = newShaderSourceCommand(&shaderSourceOptions{
+	format: "text",
+	hints:  true,
+})
 
-var shaderSourceCmd = &cobra.Command{
-	Use:   "shader-source <trace.gputrace> <shader-name>",
-	Short: "Show source-level performance attribution for a Metal shader",
-	Long: `Analyze shader performance at the source code level, similar to 'go tool pprof -list'.
+type shaderSourceOptions struct {
+	format string
+	output string
+	hints  bool
+}
+
+func newShaderSourceCommand(opts *shaderSourceOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "shader-source <trace.gputrace> <shader-name>",
+		Short: "Show source-level performance attribution for a Metal shader",
+		Long: `Analyze shader performance at the source code level, similar to 'go tool pprof -list'.
 
 This command maps performance metrics (execution time, ALU utilization, memory bandwidth)
 to individual source code lines, enabling precise identification of expensive operations.
@@ -69,26 +74,30 @@ See also:
   - gputrace shaders: List all shaders with aggregate metrics
   - gputrace profiler: Show profiler timing and shader cost breakdowns
   - go tool pprof -list: Similar concept for CPU profiles`,
-	Args: cobra.ExactArgs(2),
-	RunE: runShaderSource,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runShaderSource(cmd, args, opts)
+		},
+	}
+
+	cmd.Flags().StringVarP(&opts.format, "format", "f", opts.format,
+		"Output format: text, html, json")
+	cmd.Flags().StringVarP(&opts.output, "output", "o", opts.output,
+		"Output file (default: stdout)")
+	cmd.Flags().BoolVar(&opts.hints, "hints", opts.hints,
+		"Show optimization hints for expensive lines")
+	return cmd
 }
 
 func init() {
 	rootCmd.AddCommand(shaderSourceCmd)
-
-	shaderSourceCmd.Flags().StringVarP(&shaderSourceFormat, "format", "f", "text",
-		"Output format: text, html, json")
-	shaderSourceCmd.Flags().StringVarP(&shaderSourceOutput, "output", "o", "",
-		"Output file (default: stdout)")
-	shaderSourceCmd.Flags().BoolVar(&shaderSourceHints, "hints", true,
-		"Show optimization hints for expensive lines")
 }
 
-func runShaderSource(cmd *cobra.Command, args []string) error {
+func runShaderSource(cmd *cobra.Command, args []string, opts *shaderSourceOptions) error {
 	tracePath := args[0]
 	shaderName := args[1]
 
-	format, err := validateShaderSourceFormat(shaderSourceFormat)
+	format, err := validateShaderSourceFormat(opts.format)
 	if err != nil {
 		return err
 	}
@@ -116,7 +125,7 @@ func runShaderSource(cmd *cobra.Command, args []string) error {
 
 	switch format {
 	case "text":
-		output = gputrace.FormatShaderSourceAttribution(attribution, shaderSourceHints)
+		output = gputrace.FormatShaderSourceAttribution(attribution, opts.hints)
 
 	case "html":
 		output = gputrace.FormatShaderSourceAttributionHTML(attribution)
@@ -125,7 +134,7 @@ func runShaderSource(cmd *cobra.Command, args []string) error {
 		data = attribution
 	}
 
-	writer, closeOutput, err := createCommandOutput(shaderSourceOutput)
+	writer, closeOutput, err := createCommandOutput(opts.output)
 	if err != nil {
 		return fmt.Errorf("failed to create output file: %w", err)
 	}
@@ -144,8 +153,8 @@ func runShaderSource(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("failed to write JSON: %w", err)
 		}
 	}
-	if shaderSourceOutput != "" {
-		fmt.Fprintf(os.Stderr, "✓ Written to: %s\n", shaderSourceOutput)
+	if opts.output != "" {
+		fmt.Fprintf(cmd.ErrOrStderr(), "✓ Written to: %s\n", opts.output)
 	}
 
 	return nil
