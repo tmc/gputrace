@@ -42,6 +42,7 @@ type BufferDiff struct {
 	RemovedBuffers map[uint64]*BufferMetadata // Buffers in trace1 only
 	CommonBuffers  map[uint64]*BufferMetadata // Buffers in both traces
 	ChangedBuffers map[uint64]*BufferChange   // Buffers with different sizes/usage
+	SizeBins       []BufferSizeBinDelta       // Cross-capture size-class changes
 
 	// Summary statistics
 	TotalAdded               int
@@ -75,6 +76,15 @@ type bufferSizeMetadata struct {
 }
 
 const bufferSizeSourceTraceMetadata = "trace metadata"
+
+// BufferSizeBinDelta is the change for one buffer size class.
+type BufferSizeBinDelta struct {
+	Size        uint64
+	Trace1Count int
+	Trace2Count int
+	CountDelta  int
+	ByteDelta   int64
+}
 
 // ExtractBufferSizes extracts buffer information from a trace.
 func ExtractBufferSizes(t *trace.Trace) (*BufferSizeInfo, error) {
@@ -300,8 +310,56 @@ func CompareBuffers(info1, info2 *BufferSizeInfo) *BufferDiff {
 	diff.Trace2KnownSizeBuffers = info2.KnownSizeBuffers
 	diff.Trace2UnknownSizeBuffers = info2.UnknownSizeBuffers
 	diff.SizeMetadataComplete = info1.UnknownSizeBuffers == 0 && info2.UnknownSizeBuffers == 0
+	diff.SizeBins = compareBufferSizeBins(info1, info2)
 
 	return diff
+}
+
+func compareBufferSizeBins(info1, info2 *BufferSizeInfo) []BufferSizeBinDelta {
+	counts1 := bufferSizeCounts(info1)
+	counts2 := bufferSizeCounts(info2)
+	seen := make(map[uint64]struct{}, len(counts1)+len(counts2))
+	for size := range counts1 {
+		seen[size] = struct{}{}
+	}
+	for size := range counts2 {
+		seen[size] = struct{}{}
+	}
+
+	bins := make([]BufferSizeBinDelta, 0, len(seen))
+	for size := range seen {
+		count1 := counts1[size]
+		count2 := counts2[size]
+		delta := count2 - count1
+		if delta == 0 {
+			continue
+		}
+		bins = append(bins, BufferSizeBinDelta{
+			Size:        size,
+			Trace1Count: count1,
+			Trace2Count: count2,
+			CountDelta:  delta,
+			ByteDelta:   int64(delta) * int64(size),
+		})
+	}
+
+	sort.Slice(bins, func(i, j int) bool {
+		absI := abs(bins[i].ByteDelta)
+		absJ := abs(bins[j].ByteDelta)
+		if absI != absJ {
+			return absI > absJ
+		}
+		return bins[i].Size > bins[j].Size
+	})
+	return bins
+}
+
+func bufferSizeCounts(info *BufferSizeInfo) map[uint64]int {
+	counts := make(map[uint64]int)
+	for _, buf := range info.Buffers {
+		counts[buf.Size]++
+	}
+	return counts
 }
 
 // FormatBufferDiff generates a human-readable diff report.
@@ -350,6 +408,34 @@ func FormatBufferDiff(diff *BufferDiff, trace1Path, trace2Path string) string {
 	out.WriteString(fmt.Sprintf("  Delta:   %s%.2f MB (%s%d bytes)\n",
 		deltaSign, diff.MemoryDeltaMB, deltaSign, diff.MemoryDeltaBytes))
 	out.WriteString("\n")
+
+	// Size bins are more stable than buffer IDs across independently captured traces.
+	if len(diff.SizeBins) > 0 {
+		out.WriteString(fmt.Sprintf("Top Size-Class Deltas (%d changed size classes):\n", len(diff.SizeBins)))
+		limit := 10
+		if len(diff.SizeBins) < limit {
+			limit = len(diff.SizeBins)
+		}
+		for i := 0; i < limit; i++ {
+			bin := diff.SizeBins[i]
+			countSign := ""
+			if bin.CountDelta > 0 {
+				countSign = "+"
+			}
+			byteSign := ""
+			if bin.ByteDelta > 0 {
+				byteSign = "+"
+			}
+			out.WriteString(fmt.Sprintf("  [%d] size %d bytes: %d -> %d (%s%d), %s%d bytes\n",
+				i+1, bin.Size, bin.Trace1Count, bin.Trace2Count,
+				countSign, bin.CountDelta,
+				byteSign, bin.ByteDelta))
+		}
+		if len(diff.SizeBins) > limit {
+			out.WriteString(fmt.Sprintf("  ... and %d more size classes\n", len(diff.SizeBins)-limit))
+		}
+		out.WriteString("\n")
+	}
 
 	// Show added buffers (if any)
 	if diff.TotalAdded > 0 {

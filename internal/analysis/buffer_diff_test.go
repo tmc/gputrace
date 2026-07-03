@@ -112,6 +112,48 @@ func TestFormatBufferDiffCallsOutIncompleteSizeMetadata(t *testing.T) {
 	}
 }
 
+func TestCompareBuffersReportsSizeBins(t *testing.T) {
+	info1 := &BufferSizeInfo{
+		Buffers: map[uint64]*BufferMetadata{
+			1: {Address: 1, Size: 1024},
+			2: {Address: 2, Size: 2048},
+			3: {Address: 3, Size: 2048},
+		},
+		TotalBuffers:     3,
+		TotalMemoryBytes: 5120,
+	}
+	info2 := &BufferSizeInfo{
+		Buffers: map[uint64]*BufferMetadata{
+			11: {Address: 11, Size: 1024},
+			12: {Address: 12, Size: 1024},
+			13: {Address: 13, Size: 4096},
+		},
+		TotalBuffers:     3,
+		TotalMemoryBytes: 6144,
+	}
+
+	diff := CompareBuffers(info1, info2)
+	if diff.MemoryDeltaBytes != 1024 {
+		t.Fatalf("MemoryDeltaBytes = %d, want 1024", diff.MemoryDeltaBytes)
+	}
+	if len(diff.SizeBins) != 3 {
+		t.Fatalf("len(SizeBins) = %d, want 3", len(diff.SizeBins))
+	}
+	got := map[uint64]BufferSizeBinDelta{}
+	for _, bin := range diff.SizeBins {
+		got[bin.Size] = bin
+	}
+	if bin := got[1024]; bin.CountDelta != 1 || bin.ByteDelta != 1024 {
+		t.Fatalf("1024 bin = %+v, want count delta 1 byte delta 1024", bin)
+	}
+	if bin := got[2048]; bin.CountDelta != -2 || bin.ByteDelta != -4096 {
+		t.Fatalf("2048 bin = %+v, want count delta -2 byte delta -4096", bin)
+	}
+	if bin := got[4096]; bin.CountDelta != 1 || bin.ByteDelta != 4096 {
+		t.Fatalf("4096 bin = %+v, want count delta 1 byte delta 4096", bin)
+	}
+}
+
 func makeCtURecord(addr uint64, name string) []byte {
 	const markerOffset = 16
 
