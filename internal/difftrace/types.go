@@ -185,6 +185,16 @@ type Summary struct {
 	LikelyCause        string `json:"likely_cause"`
 }
 
+// EncoderDivergence summarizes the first material encoder timing split.
+type EncoderDivergence struct {
+	AWallUs                []int   `json:"a_wall_us"`
+	BWallUs                []int   `json:"b_wall_us"`
+	FirstDivergentIndex    int     `json:"first_divergent_index"`
+	ThresholdUs            int     `json:"threshold_us"`
+	TailSlopeAUsPerEncoder float64 `json:"tail_slope_a_us_per_encoder"`
+	TailSlopeBUsPerEncoder float64 `json:"tail_slope_b_us_per_encoder"`
+}
+
 // Report is the complete diff result with a stable JSON schema.
 type Report struct {
 	SchemaVersion         string                 `json:"schema_version"`
@@ -201,6 +211,7 @@ type Report struct {
 	OccurrenceMatches     []OccurrenceMatch      `json:"occurrence_matches"`
 	MatchedPairs          []MatchPair            `json:"matched_pairs"`
 	Unmatched             []UnmatchedDispatch    `json:"unmatched"`
+	EncoderDivergence     *EncoderDivergence     `json:"encoder_divergence,omitempty"`
 	Warnings              []string               `json:"warnings,omitempty"`
 }
 

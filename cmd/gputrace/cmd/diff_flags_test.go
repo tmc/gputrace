@@ -7,10 +7,11 @@ import (
 
 func TestDiffOptionsValidate(t *testing.T) {
 	base := diffOptions{
-		Limit:       20,
-		MinDeltaUs:  0,
-		OnlyEncoder: -1,
-		BenchDir:    "/tmp/bench",
+		Limit:        20,
+		MinDeltaUs:   0,
+		DivergenceUs: 20,
+		OnlyEncoder:  -1,
+		BenchDir:     "/tmp/bench",
 	}
 
 	tests := []struct {
@@ -26,21 +27,23 @@ func TestDiffOptionsValidate(t *testing.T) {
 		{
 			name: "valid positional pair",
 			opts: diffOptions{
-				Limit:       20,
-				MinDeltaUs:  0,
-				OnlyEncoder: -1,
+				Limit:        20,
+				MinDeltaUs:   0,
+				DivergenceUs: 20,
+				OnlyEncoder:  -1,
 			},
 			args: []string{"left.gputrace", "right.gputrace"},
 		},
 		{
 			name: "valid explicit pair override",
 			opts: diffOptions{
-				Limit:       20,
-				MinDeltaUs:  0,
-				OnlyEncoder: -1,
-				BenchDir:    "/tmp/bench",
-				Left:        "left.gputrace",
-				Right:       "right.gputrace",
+				Limit:        20,
+				MinDeltaUs:   0,
+				DivergenceUs: 20,
+				OnlyEncoder:  -1,
+				BenchDir:     "/tmp/bench",
+				Left:         "left.gputrace",
+				Right:        "right.gputrace",
 			},
 		},
 		{
@@ -70,6 +73,15 @@ func TestDiffOptionsValidate(t *testing.T) {
 				return o
 			}(),
 			wantErr: "--min-delta-us must be >= 0",
+		},
+		{
+			name: "invalid divergence threshold",
+			opts: func() diffOptions {
+				o := base
+				o.DivergenceUs = 0
+				return o
+			}(),
+			wantErr: "--divergence-threshold-us must be > 0",
 		},
 		{
 			name: "invalid only encoder",
@@ -151,6 +163,24 @@ func TestDiffOptionsValidate(t *testing.T) {
 			}(),
 		},
 		{
+			name: "divergence with encoder by allowed",
+			opts: func() diffOptions {
+				o := base
+				o.By = "encoder"
+				o.Divergence = true
+				return o
+			}(),
+		},
+		{
+			name: "divergence without encoder by rejected",
+			opts: func() diffOptions {
+				o := base
+				o.Divergence = true
+				return o
+			}(),
+			wantErr: "--divergence requires --by encoder",
+		},
+		{
 			name: "quick with by rejected",
 			opts: func() diffOptions {
 				o := base
@@ -193,9 +223,10 @@ func TestDiffOptionsValidate(t *testing.T) {
 		{
 			name: "missing inputs rejected",
 			opts: diffOptions{
-				Limit:       20,
-				MinDeltaUs:  0,
-				OnlyEncoder: -1,
+				Limit:        20,
+				MinDeltaUs:   0,
+				DivergenceUs: 20,
+				OnlyEncoder:  -1,
 			},
 			wantErr: "missing traces",
 		},

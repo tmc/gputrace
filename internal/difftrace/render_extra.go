@@ -97,6 +97,17 @@ func RenderEncoderFocus(report Report, limit int) string {
 	return b.String()
 }
 
+// RenderEncoderDivergence renders encoder timing divergence diagnostics.
+func RenderEncoderDivergence(div EncoderDivergence) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Encoder Divergence\n")
+	fmt.Fprintf(&b, "Threshold: %dus\n", div.ThresholdUs)
+	fmt.Fprintf(&b, "First divergent index: %d\n", div.FirstDivergentIndex)
+	fmt.Fprintf(&b, "Tail slope A: %.1f us/encoder\n", div.TailSlopeAUsPerEncoder)
+	fmt.Fprintf(&b, "Tail slope B: %.1f us/encoder\n", div.TailSlopeBUsPerEncoder)
+	return b.String()
+}
+
 // RenderMarkdown renders a markdown report for sharing.
 func RenderMarkdown(report Report, limit int) string {
 	if limit <= 0 {
