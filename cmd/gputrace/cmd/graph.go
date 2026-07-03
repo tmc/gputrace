@@ -88,13 +88,17 @@ func runGraph(cmd *cobra.Command, args []string, opts *graphOptions) error {
 		ShowMemory: opts.showMemory,
 	}
 
-	// Generate graph
-	output, err := generator.Generate(trace, config)
+	writer, closeOutput, err := openGraphOutput(cmd, opts.output)
 	if err != nil {
+		return err
+	}
+	if err := generator.Generate(writer, trace, config); err != nil {
+		if closeOutput != nil {
+			_ = closeOutput()
+		}
 		return fmt.Errorf("failed to generate graph: %w", err)
 	}
-
-	return writeGraphOutput(cmd, opts.output, output)
+	return closeGraphOutput(cmd, opts.output, closeOutput)
 }
 
 type graphOptions struct {
@@ -136,24 +140,32 @@ func normalizeGraphType(graphType string) (string, error) {
 }
 
 func writeGraphOutput(cmd *cobra.Command, outputPath, output string) error {
-	if outputPath == "" {
-		if _, err := io.WriteString(cmd.OutOrStdout(), output); err != nil {
-			return fmt.Errorf("failed to write output: %w", err)
-		}
-		return nil
-	}
-
-	writer, closeOutput, err := createCommandOutput(outputPath)
+	writer, closeOutput, err := openGraphOutput(cmd, outputPath)
 	if err != nil {
-		return fmt.Errorf("failed to create output: %w", err)
+		return err
 	}
-
 	if _, err := io.WriteString(writer, output); err != nil {
 		if closeOutput != nil {
 			_ = closeOutput()
 		}
 		return fmt.Errorf("failed to write output: %w", err)
 	}
+	return closeGraphOutput(cmd, outputPath, closeOutput)
+}
+
+func openGraphOutput(cmd *cobra.Command, outputPath string) (io.Writer, func() error, error) {
+	if outputPath == "" {
+		return cmd.OutOrStdout(), nil, nil
+	}
+
+	writer, closeOutput, err := createCommandOutput(outputPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create output: %w", err)
+	}
+	return writer, closeOutput, nil
+}
+
+func closeGraphOutput(cmd *cobra.Command, outputPath string, closeOutput func() error) error {
 	if closeOutput != nil {
 		if err := closeOutput(); err != nil {
 			return fmt.Errorf("failed to close output: %w", err)

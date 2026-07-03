@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"bytes"
 	"encoding/binary"
 	"strings"
 	"testing"
@@ -11,10 +12,11 @@ import (
 func TestResourceGraphDOT(t *testing.T) {
 	tr := testResourceTrace()
 
-	got, err := NewDOTGenerator().Generate(tr, &Config{Type: "resources", ShowMemory: true})
-	if err != nil {
+	var out bytes.Buffer
+	if err := NewDOTGenerator().Generate(&out, tr, &Config{Type: "resources", ShowMemory: true}); err != nil {
 		t.Fatalf("Generate returned error: %v", err)
 	}
+	got := out.String()
 
 	for _, want := range []string{
 		"digraph GPUTraceResources",
@@ -35,10 +37,11 @@ func TestResourceGraphDOT(t *testing.T) {
 func TestResourceGraphMermaid(t *testing.T) {
 	tr := testResourceTrace()
 
-	got, err := NewMermaidGenerator().Generate(tr, &Config{Type: "resources", ShowMemory: true})
-	if err != nil {
+	var out bytes.Buffer
+	if err := NewMermaidGenerator().Generate(&out, tr, &Config{Type: "resources", ShowMemory: true}); err != nil {
 		t.Fatalf("Generate returned error: %v", err)
 	}
+	got := out.String()
 
 	for _, want := range []string{
 		"graph LR",
@@ -58,10 +61,11 @@ func TestResourceGraphMermaid(t *testing.T) {
 func TestResourceGraphOrdersUseEventsByTraceOffset(t *testing.T) {
 	tr := testResourceTraceWithUseBetweenEncoders()
 
-	got, err := NewDOTGenerator().Generate(tr, &Config{Type: "resources"})
-	if err != nil {
+	var out bytes.Buffer
+	if err := NewDOTGenerator().Generate(&out, tr, &Config{Type: "resources"}); err != nil {
 		t.Fatalf("Generate returned error: %v", err)
 	}
+	got := out.String()
 
 	want := `enc0 -> res_3000 [label="Read"];`
 	if !strings.Contains(got, want) {
