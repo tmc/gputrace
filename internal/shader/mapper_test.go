@@ -27,7 +27,7 @@ kernel void source_backed_kernel(device float *out [[buffer(0)]],
 	if err := mapper.IndexTraceBundleSources(dir); err != nil {
 		t.Fatal(err)
 	}
-	file, line := mapper.GetSourceLocation("source_backed_kernel")
+	file, line := mapper.SourceLocation("source_backed_kernel")
 	if file == "" {
 		t.Fatal("source_backed_kernel was not indexed")
 	}
@@ -58,7 +58,7 @@ using namespace metal;
 	if err := mapper.IndexTraceBundleSources(dir); err != nil {
 		t.Fatal(err)
 	}
-	file, line := mapper.GetSourceLocation("specialized_kernel_float16")
+	file, line := mapper.SourceLocation("specialized_kernel_float16")
 	if file == "" {
 		t.Fatal("host_name kernel was not indexed")
 	}

@@ -67,8 +67,8 @@ func (ml *MetalLibrary) FunctionCount() int {
 	return len(ml.library.FunctionNames())
 }
 
-// GetFunction returns a Metal function by name.
-func (ml *MetalLibrary) GetFunction(name string) (metal.MTLFunction, error) {
+// Function returns a Metal function by name.
+func (ml *MetalLibrary) Function(name string) (metal.MTLFunction, error) {
 	fn := ml.library.NewFunctionWithName(name)
 	if fn == nil || fn.GetID() == 0 {
 		return nil, fmt.Errorf("function not found: %s", name)

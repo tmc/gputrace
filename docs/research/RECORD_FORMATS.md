@@ -192,10 +192,10 @@ UUID: "3B026409-789D-3696-BE2A-5042B0AB077D"
 records, _ := trace.ParseCSRecords()
 
 // Get only kernel names
-kernels, _ := trace.GetKernelNameCSRecords()
+kernels, _ := trace.KernelNameCSRecords()
 
 // Get only pipeline UUIDs
-uuids, _ := trace.GetUUIDCSRecords()
+uuids, _ := trace.UUIDCSRecords()
 ```
 
 See `cs_records.go` for implementation details.

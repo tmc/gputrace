@@ -341,8 +341,8 @@ type TimelineSummary struct {
 	MaxTimestamp   uint64
 }
 
-// GetTimelineSummary computes aggregate statistics from multiple timeline files.
-func GetTimelineSummary(timelines []*TimelineData) *TimelineSummary {
+// TimelineSummaryForData computes aggregate statistics from multiple timeline files.
+func TimelineSummaryForData(timelines []*TimelineData) *TimelineSummary {
 	summary := &TimelineSummary{
 		FileCount:    len(timelines),
 		MinTimestamp: ^uint64(0), // Max uint64
@@ -387,6 +387,6 @@ func ExtractTimelineFromTrace(t *trace.Trace) (*TimelineSummary, []*TimelineData
 		return nil, nil, err
 	}
 
-	summary := GetTimelineSummary(timelines)
+	summary := TimelineSummaryForData(timelines)
 	return summary, timelines, nil
 }

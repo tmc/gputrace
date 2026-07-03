@@ -1417,7 +1417,7 @@ func addEncoderKernelEvents(timeline *Timeline, trace *gputrace.Trace, sourceMap
 			}
 		}
 		if sourceMapper != nil {
-			if sourceFile, sourceLine := sourceMapper.GetSourceLocation(encoder.Label); sourceFile != "" {
+			if sourceFile, sourceLine := sourceMapper.SourceLocation(encoder.Label); sourceFile != "" {
 				args["source_available"] = true
 				args["source_file"] = sourceFile
 				args["source_line"] = sourceLine
@@ -1590,7 +1590,7 @@ func dispatchKernelArgs(d counter.DispatchInfo, p *counter.PipelineStats, simdGr
 		if sourceName == "" && p != nil {
 			sourceName = p.FunctionName
 		}
-		if sourceFile, sourceLine := sourceMapper.GetSourceLocation(sourceName); sourceFile != "" {
+		if sourceFile, sourceLine := sourceMapper.SourceLocation(sourceName); sourceFile != "" {
 			args["source_available"] = true
 			args["source_file"] = sourceFile
 			args["source_line"] = sourceLine

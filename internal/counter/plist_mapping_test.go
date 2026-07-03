@@ -45,14 +45,14 @@ func TestGetCounterMetadata(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			meta, ok := GetCounterMetadata(tt.name)
+			meta, ok := CounterMetadataForName(tt.name)
 			if !ok {
-				t.Errorf("GetCounterMetadata(%q) not found", tt.name)
+				t.Errorf("CounterMetadataForName(%q) not found", tt.name)
 				return
 			}
 
 			if meta.DataType != tt.wantType {
-				t.Errorf("GetCounterMetadata(%q).DataType = %v, want %v", tt.name, meta.DataType, tt.wantType)
+				t.Errorf("CounterMetadataForName(%q).DataType = %v, want %v", tt.name, meta.DataType, tt.wantType)
 			}
 
 			t.Logf("%s: datatype=%d, unit=%q, vendors=%v", tt.name, meta.DataType, meta.Unit, meta.VendorCounters)
@@ -65,9 +65,9 @@ func TestGetVendorCounterNames(t *testing.T) {
 		t.Skip("Xcode not installed, skipping plist test")
 	}
 
-	vendors := GetVendorCounterNames("ALU Utilization")
+	vendors := VendorCounterNames("ALU Utilization")
 	if len(vendors) == 0 {
-		t.Error("GetVendorCounterNames(\"ALU Utilization\") returned empty")
+		t.Error("VendorCounterNames(\"ALU Utilization\") returned empty")
 	}
 
 	t.Logf("ALU Utilization vendor counters: %v", vendors)
@@ -78,9 +78,9 @@ func TestGetCounterFileMappings(t *testing.T) {
 		t.Skip("Xcode not installed, skipping plist test")
 	}
 
-	mappings := GetCounterFileMappings()
+	mappings := CounterFileMappings()
 	if len(mappings) == 0 {
-		t.Error("GetCounterFileMappings() returned empty")
+		t.Error("CounterFileMappings() returned empty")
 	}
 
 	// Check a few known mappings
@@ -115,4 +115,3 @@ func TestListByteCounters(t *testing.T) {
 		t.Logf("  - %s", name)
 	}
 }
-

@@ -144,32 +144,32 @@ func (p *KDebugParser) isGPUEvent(event *KDebugEvent) bool {
 	return class == KDebugClassGPU
 }
 
-// GetEventClass extracts the event class from debug ID.
-func (event *KDebugEvent) GetEventClass() uint8 {
+// EventClass extracts the event class from debug ID.
+func (event *KDebugEvent) EventClass() uint8 {
 	return uint8((event.DebugID >> 24) & 0xFF)
 }
 
-// GetEventSubclass extracts the event subclass from debug ID.
-func (event *KDebugEvent) GetEventSubclass() uint8 {
+// EventSubclass extracts the event subclass from debug ID.
+func (event *KDebugEvent) EventSubclass() uint8 {
 	return uint8((event.DebugID >> 16) & 0xFF)
 }
 
 // IsGPUSubmission checks if this is a GPU command submission event.
 func (event *KDebugEvent) IsGPUSubmission() bool {
-	return event.GetEventClass() == KDebugClassGPU &&
-		event.GetEventSubclass() == KDebugGPUSubmission
+	return event.EventClass() == KDebugClassGPU &&
+		event.EventSubclass() == KDebugGPUSubmission
 }
 
 // IsGPUExecutionStart checks if this is a GPU execution start event.
 func (event *KDebugEvent) IsGPUExecutionStart() bool {
-	return event.GetEventClass() == KDebugClassGPU &&
-		event.GetEventSubclass() == KDebugGPUExecutionStart
+	return event.EventClass() == KDebugClassGPU &&
+		event.EventSubclass() == KDebugGPUExecutionStart
 }
 
 // IsGPUExecutionEnd checks if this is a GPU execution end event.
 func (event *KDebugEvent) IsGPUExecutionEnd() bool {
-	return event.GetEventClass() == KDebugClassGPU &&
-		event.GetEventSubclass() == KDebugGPUExecutionEnd
+	return event.EventClass() == KDebugClassGPU &&
+		event.EventSubclass() == KDebugGPUExecutionEnd
 }
 
 // GPUExecutionInterval represents a GPU execution interval from kdebug events.

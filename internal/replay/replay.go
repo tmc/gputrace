@@ -282,8 +282,8 @@ type ReplayPlan struct {
 	ICBExecutions     int
 }
 
-// GetComputeDispatches returns all compute dispatch commands from the plan.
-func (plan *ReplayPlan) GetComputeDispatches() []ReplayCommand {
+// ComputeDispatchCommands returns all compute dispatch commands from the plan.
+func (plan *ReplayPlan) ComputeDispatchCommands() []ReplayCommand {
 	var dispatches []ReplayCommand
 	for _, cmd := range plan.Commands {
 		if cmd.Type == "compute_dispatch" {
@@ -485,8 +485,8 @@ func FormatReplayValidation(validation *ReplayValidation) string {
 	return output
 }
 
-// GetCommandTimeline returns commands sorted by execution order.
-func (plan *ReplayPlan) GetCommandTimeline() []ReplayCommand {
+// CommandTimeline returns commands sorted by execution order.
+func (plan *ReplayPlan) CommandTimeline() []ReplayCommand {
 	commands := make([]ReplayCommand, len(plan.Commands))
 	copy(commands, plan.Commands)
 
@@ -497,8 +497,8 @@ func (plan *ReplayPlan) GetCommandTimeline() []ReplayCommand {
 	return commands
 }
 
-// GetEncoderCommands returns all commands for a specific encoder.
-func (plan *ReplayPlan) GetEncoderCommands(encoderIndex int) []ReplayCommand {
+// EncoderCommands returns all commands for a specific encoder.
+func (plan *ReplayPlan) EncoderCommands(encoderIndex int) []ReplayCommand {
 	var commands []ReplayCommand
 	for _, cmd := range plan.Commands {
 		if cmd.EncoderIndex == encoderIndex {
@@ -508,8 +508,8 @@ func (plan *ReplayPlan) GetEncoderCommands(encoderIndex int) []ReplayCommand {
 	return commands
 }
 
-// GetUniqueBufferAddresses returns all unique buffer addresses used in the replay.
-func (plan *ReplayPlan) GetUniqueBufferAddresses() []uint64 {
+// UniqueBufferAddresses returns all unique buffer addresses used in the replay.
+func (plan *ReplayPlan) UniqueBufferAddresses() []uint64 {
 	seen := make(map[uint64]bool)
 	var addresses []uint64
 
@@ -529,8 +529,8 @@ func (plan *ReplayPlan) GetUniqueBufferAddresses() []uint64 {
 	return addresses
 }
 
-// GetUniqueFunctionAddresses returns all unique function addresses used in the replay.
-func (plan *ReplayPlan) GetUniqueFunctionAddresses() []uint64 {
+// UniqueFunctionAddresses returns all unique function addresses used in the replay.
+func (plan *ReplayPlan) UniqueFunctionAddresses() []uint64 {
 	seen := make(map[uint64]bool)
 	var addresses []uint64
 
@@ -598,7 +598,7 @@ func (re *ReplayEngine) AnalyzeReplayWithCounters() (*ReplayPlan, *CounterSampli
 
 		// Sample at each dispatch within encoder
 		if re.CounterSampler.Config.SampleAtDispatchBoundaries {
-			encoderCommands := plan.GetEncoderCommands(i)
+			encoderCommands := plan.EncoderCommands(i)
 			for j, cmd := range encoderCommands {
 				if cmd.Type == "compute_dispatch" {
 					// Sample before dispatch

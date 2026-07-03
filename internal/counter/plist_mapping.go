@@ -154,8 +154,8 @@ func buildVendorMappings() {
 	}
 }
 
-// GetCounterMetadata returns metadata for a counter by its user-facing name.
-func GetCounterMetadata(name string) (*CounterMetadata, bool) {
+// CounterMetadataForName returns metadata for a counter by its user-facing name.
+func CounterMetadataForName(name string) (*CounterMetadata, bool) {
 	graph, err := LoadGPUCounterGraph()
 	if err != nil || graph == nil {
 		return nil, false
@@ -167,16 +167,16 @@ func GetCounterMetadata(name string) (*CounterMetadata, bool) {
 	return &meta, true
 }
 
-// GetVendorCounterNames returns the vendor counter names for a user-facing name.
-func GetVendorCounterNames(userName string) []string {
+// VendorCounterNames returns the vendor counter names for a user-facing name.
+func VendorCounterNames(userName string) []string {
 	if _, err := LoadGPUCounterGraph(); err != nil {
 		return nil
 	}
 	return userToVendorNames[userName]
 }
 
-// GetUserNameForVendor returns the user-facing name for a vendor counter name.
-func GetUserNameForVendor(vendorName string) (string, bool) {
+// UserNameForVendor returns the user-facing name for a vendor counter name.
+func UserNameForVendor(vendorName string) (string, bool) {
 	if _, err := LoadGPUCounterGraph(); err != nil {
 		return "", false
 	}
@@ -184,10 +184,10 @@ func GetUserNameForVendor(vendorName string) (string, bool) {
 	return name, ok
 }
 
-// GetDataTypeForCounter returns the data type for a counter by name.
+// DataTypeForCounter returns the data type for a counter by name.
 // Returns DataTypePercentage as default if not found or no datatype specified.
-func GetDataTypeForCounter(name string) CounterDataType {
-	meta, ok := GetCounterMetadata(name)
+func DataTypeForCounter(name string) CounterDataType {
+	meta, ok := CounterMetadataForName(name)
 	if !ok {
 		return DataTypePercentage
 	}
@@ -196,25 +196,25 @@ func GetDataTypeForCounter(name string) CounterDataType {
 
 // IsCounterVisible returns whether a counter should be visible in the UI.
 func IsCounterVisible(name string) bool {
-	meta, ok := GetCounterMetadata(name)
+	meta, ok := CounterMetadataForName(name)
 	if !ok {
 		return true // Default to visible
 	}
 	return meta.Visible
 }
 
-// GetCounterUnit returns the unit string for a counter.
-func GetCounterUnit(name string) string {
-	meta, ok := GetCounterMetadata(name)
+// CounterUnit returns the unit string for a counter.
+func CounterUnit(name string) string {
+	meta, ok := CounterMetadataForName(name)
 	if !ok {
 		return ""
 	}
 	return meta.Unit
 }
 
-// GetCounterDescription returns the description for a counter.
-func GetCounterDescription(name string) string {
-	meta, ok := GetCounterMetadata(name)
+// CounterDescription returns the description for a counter.
+func CounterDescription(name string) string {
+	meta, ok := CounterMetadataForName(name)
 	if !ok {
 		return ""
 	}
@@ -274,27 +274,27 @@ type CounterFileMapping struct {
 	Unit           string
 }
 
-// GetCounterFileMappings returns mappings for all known counter files (4-39).
+// CounterFileMappings returns mappings for all known counter files (4-39).
 // Combines file_mapping.go indices with GPUCounterGraph.plist metadata.
-func GetCounterFileMappings() []CounterFileMapping {
+func CounterFileMappings() []CounterFileMapping {
 	mappings := make([]CounterFileMapping, 0, len(CounterFileToName))
 
 	for fileIdx, userName := range CounterFileToName {
 		mapping := CounterFileMapping{
 			FileIndex: fileIdx,
 			UserName:  userName,
-			DataType:  GetDataTypeForCounter(userName),
-			Unit:      GetCounterUnit(userName),
+			DataType:  DataTypeForCounter(userName),
+			Unit:      CounterUnit(userName),
 		}
-		mapping.VendorCounters = GetVendorCounterNames(userName)
+		mapping.VendorCounters = VendorCounterNames(userName)
 		mappings = append(mappings, mapping)
 	}
 
 	return mappings
 }
 
-// GetCounterFileMappingByIndex returns the mapping for a specific file index.
-func GetCounterFileMappingByIndex(fileIndex int) (*CounterFileMapping, bool) {
+// CounterFileMappingByIndex returns the mapping for a specific file index.
+func CounterFileMappingByIndex(fileIndex int) (*CounterFileMapping, bool) {
 	userName, ok := CounterFileToName[fileIndex]
 	if !ok {
 		return nil, false
@@ -303,9 +303,9 @@ func GetCounterFileMappingByIndex(fileIndex int) (*CounterFileMapping, bool) {
 	mapping := &CounterFileMapping{
 		FileIndex:      fileIndex,
 		UserName:       userName,
-		VendorCounters: GetVendorCounterNames(userName),
-		DataType:       GetDataTypeForCounter(userName),
-		Unit:           GetCounterUnit(userName),
+		VendorCounters: VendorCounterNames(userName),
+		DataType:       DataTypeForCounter(userName),
+		Unit:           CounterUnit(userName),
 	}
 	return mapping, true
 }

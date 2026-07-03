@@ -114,7 +114,7 @@ func (e *CountersCSVExporter) generateCounterRowSimple(index, functionIndex int,
 	row := make([]string, 247)
 
 	// Get debug group for this encoder based on its label (sequence-based mapping)
-	debugGroup := e.trace.GetDebugGroupForLabel(encoderLabel)
+	debugGroup := e.trace.DebugGroupForLabel(encoderLabel)
 
 	// Columns 1-6: Metadata
 	row[0] = fmt.Sprintf("%d", index)         // Index
@@ -148,7 +148,7 @@ func (e *CountersCSVExporter) generateCounterRowFromBinaryData(index, functionIn
 	row := make([]string, 247)
 
 	// Get debug group for this encoder based on its label
-	debugGroup := e.trace.GetDebugGroupForLabel(encoderLabel)
+	debugGroup := e.trace.DebugGroupForLabel(encoderLabel)
 
 	// Columns 1-6: Metadata
 	row[0] = fmt.Sprintf("%d", index)         // Index

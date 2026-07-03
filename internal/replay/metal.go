@@ -217,7 +217,7 @@ func (mre *MetalReplayEngine) createPipelinesFromMTLB() (map[string]*MetalPipeli
 			}
 
 			// Get the function from the library
-			fn, err := lib.GetFunction(name)
+			fn, err := lib.Function(name)
 			if err != nil {
 				continue // Skip functions we can't load
 			}

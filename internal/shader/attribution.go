@@ -86,7 +86,7 @@ func ExtractShaderSourceAttributionWithMapper(t *trace.Trace, shaderName string,
 		return nil, fmt.Errorf("no shader source mapper")
 	}
 
-	sourceFile, startLine := mapper.GetSourceLocation(shaderName)
+	sourceFile, startLine := mapper.SourceLocation(shaderName)
 	if sourceFile == "" {
 		return nil, fmt.Errorf("source file for shader %q not found", shaderName)
 	}

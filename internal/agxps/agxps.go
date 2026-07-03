@@ -221,8 +221,8 @@ type KickTiming struct {
 	DurationNs  uint64
 }
 
-// GetKickTimings extracts kick timing data from parsed profile data.
-func GetKickTimings(profileData ProfileData) ([]KickTiming, error) {
+// KickTimings extracts kick timing data from parsed profile data.
+func KickTimings(profileData ProfileData) ([]KickTiming, error) {
 	if profileData == 0 {
 		return nil, fmt.Errorf("invalid profile data")
 	}
@@ -269,8 +269,8 @@ type TimingStats struct {
 	MaxDuration float64
 }
 
-// GetTimingStats extracts timing statistics from a timing analyzer.
-func GetTimingStats(analyzer uintptr) TimingStats {
+// TimingStatsForAnalyzer extracts timing statistics from a timing analyzer.
+func TimingStatsForAnalyzer(analyzer uintptr) TimingStats {
 	numCommands, _ := gtshaderprofiler.Agxps_aps_timing_analyzer_get_num_commands(analyzer)
 	avgDuration, _ := gtshaderprofiler.Agxps_aps_timing_analyzer_get_work_cliques_average_duration(analyzer)
 	minDuration, _ := gtshaderprofiler.Agxps_aps_timing_analyzer_get_work_cliques_min_duration(analyzer)
@@ -295,8 +295,8 @@ type ESLCliqueTiming struct {
 	MissingEnd bool
 }
 
-// GetESLCliqueTimings extracts ESL clique timing data from parsed profile data.
-func GetESLCliqueTimings(profileData ProfileData) ([]ESLCliqueTiming, error) {
+// ESLCliqueTimings extracts ESL clique timing data from parsed profile data.
+func ESLCliqueTimings(profileData ProfileData) ([]ESLCliqueTiming, error) {
 	if profileData == 0 {
 		return nil, fmt.Errorf("invalid profile data")
 	}
@@ -350,8 +350,8 @@ func GetESLCliqueTimings(profileData ProfileData) ([]ESLCliqueTiming, error) {
 	return timings, nil
 }
 
-// GetESLCliqueInstructionTrace returns the instruction trace handle for a clique.
-func GetESLCliqueInstructionTrace(profileData ProfileData, cliqueIndex uint64) uintptr {
+// ESLCliqueInstructionTrace returns the instruction trace handle for a clique.
+func ESLCliqueInstructionTrace(profileData ProfileData, cliqueIndex uint64) uintptr {
 	if profileData == 0 {
 		return 0
 	}
@@ -372,8 +372,8 @@ type InstructionTraceStats struct {
 	NumPcAdvances      uint64
 }
 
-// GetInstructionTraceStats returns statistics about an instruction trace.
-func GetInstructionTraceStats(trace uintptr) InstructionTraceStats {
+// TraceInstructionStats returns statistics about an instruction trace.
+func TraceInstructionStats(trace uintptr) InstructionTraceStats {
 	if trace == 0 {
 		return InstructionTraceStats{}
 	}

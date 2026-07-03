@@ -388,7 +388,7 @@ func appendSourceMappedEncoderTimings(trace *gputrace.Trace, timings []*export.E
 		if enc.Label == "" || seen[enc.Label] {
 			continue
 		}
-		if sourceFile, _ := mapper.GetSourceLocation(enc.Label); sourceFile == "" {
+		if sourceFile, _ := mapper.SourceLocation(enc.Label); sourceFile == "" {
 			continue
 		}
 		durationNs := uint64(1000000)

@@ -361,7 +361,7 @@ func (cs *CounterSampler) ResolveCounterSamples() error {
 // 	metrics := make([]DispatchCounterMetrics, 0)
 //
 // 	// Get compute dispatches
-// 	dispatches := plan.GetComputeDispatches()
+// 	dispatches := plan.ComputeDispatchCommands()
 //
 // 	for i, dispatch := range dispatches {
 // 		dispatchSamples := cs.getSamplesForDispatch(i)
