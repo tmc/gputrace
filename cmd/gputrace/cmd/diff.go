@@ -62,7 +62,7 @@ Examples:
 	}
 	cmd.Flags().BoolVar(&opts.JSON, "json", false, "Output machine-readable JSON")
 	cmd.Flags().BoolVar(&opts.CSV, "csv", false, "Output CSV for a single --by view")
-	cmd.Flags().StringVar(&opts.By, "by", "", "View: function,encoder,pipeline,timeline-windows,dispatch,unmatched,matches,occurrences")
+	cmd.Flags().StringVar(&opts.By, "by", "", "View: function,encoder,pipeline,pipeline-pairs,timeline-windows,dispatch,unmatched,matches,occurrences")
 	cmd.Flags().IntVar(&opts.Limit, "limit", 20, "Maximum rows per section")
 	cmd.Flags().IntVar(&opts.MinDeltaUs, "min-delta-us", 0, "Filter top outliers by absolute delta in microseconds")
 	cmd.Flags().IntVar(&opts.OnlyEncoder, "only-encoder", -1, "Only include dispatches for one encoder index")
@@ -121,6 +121,9 @@ func runDiff(cmd *cobra.Command, args []string, opts diffOptions) error {
 		MinDeltaUs:   opts.MinDeltaUs,
 	})
 	report := difftrace.BuildReport(a, b, aligned, difftrace.ReportOptions{Limit: opts.Limit, MinDeltaUs: opts.MinDeltaUs})
+	if diffByIncludes(opts.By, "pipeline-pairs") {
+		report.PipelinePairs = difftrace.BuildPipelinePairs(a, b)
+	}
 	if opts.Divergence {
 		divergence := difftrace.AnalyzeEncoderDivergence(a.Encoders, b.Encoders, opts.DivergenceUs)
 		report.EncoderDivergence = &divergence
@@ -300,6 +303,7 @@ func validateDiffBy(by string) error {
 	allowed := map[string]bool{
 		"function":         true,
 		"encoder":          true,
+		"pipeline-pairs":   true,
 		"pipeline":         true,
 		"timeline-windows": true,
 		"dispatch":         true,
@@ -317,4 +321,13 @@ func validateDiffBy(by string) error {
 		}
 	}
 	return nil
+}
+
+func diffByIncludes(by, view string) bool {
+	for _, part := range strings.Split(by, ",") {
+		if strings.TrimSpace(part) == view {
+			return true
+		}
+	}
+	return false
 }

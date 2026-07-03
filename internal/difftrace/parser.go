@@ -32,6 +32,7 @@ func LoadTraceData(path string, onlyEncoder int, onlyFunction *regexp.Regexp) (*
 	}
 
 	pipelineHashes := buildPipelineHashes(stats)
+	out.Pipelines = buildPipelineInfo(stats, pipelineHashes)
 	threadgroupSigs, sigErr := loadDispatchThreadgroupSignatures(path)
 	if sigErr != nil {
 		out.Warnings = append(out.Warnings, fmt.Sprintf("threadgroup signatures unavailable for %s: %v", path, sigErr))
@@ -46,6 +47,27 @@ func LoadTraceData(path string, onlyEncoder int, onlyFunction *regexp.Regexp) (*
 		out.Warnings = append(out.Warnings, fmt.Sprintf("no dispatches after filtering in %s", path))
 	}
 	return out, nil
+}
+
+func buildPipelineInfo(stats *counter.StreamDataStats, hashes map[int]string) map[int]PipelineInfo {
+	out := map[int]PipelineInfo{}
+	if stats == nil {
+		return out
+	}
+	for _, p := range stats.Pipelines {
+		out[p.PipelineID] = PipelineInfo{
+			PipelineID:   p.PipelineID,
+			FunctionName: strings.TrimSpace(p.FunctionName),
+			PipelineHash: hashes[p.PipelineID],
+			StaticCounters: StaticCounters{
+				Instructions: p.InstructionCount,
+				Registers:    p.TemporaryRegisterCount,
+				Loads:        p.DeviceLoadCount,
+				Stores:       p.DeviceStoreCount,
+			},
+		}
+	}
+	return out
 }
 
 func sanitizeDispatches(stats *counter.StreamDataStats, onlyEncoder int, onlyFunction *regexp.Regexp, pipelineHashes map[int]string, threadgroupSigs []string) []Dispatch {

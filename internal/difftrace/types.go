@@ -8,6 +8,7 @@ type TraceData struct {
 	Label      string
 	Dispatches []Dispatch
 	Encoders   []EncoderInfo
+	Pipelines  map[int]PipelineInfo
 	Warnings   []string
 }
 
@@ -32,6 +33,22 @@ type EncoderInfo struct {
 	Label         string
 	DurationUs    int
 	DispatchCount int
+}
+
+// StaticCounters are the shader counters used in pipeline comparisons.
+type StaticCounters struct {
+	Instructions int `json:"instructions"`
+	Registers    int `json:"registers"`
+	Loads        int `json:"loads"`
+	Stores       int `json:"stores"`
+}
+
+// PipelineInfo summarizes one parsed pipeline.
+type PipelineInfo struct {
+	PipelineID     int
+	FunctionName   string
+	PipelineHash   string
+	StaticCounters StaticCounters
 }
 
 // AlignOptions controls dispatch matching.
@@ -195,6 +212,20 @@ type EncoderDivergence struct {
 	TailSlopeBUsPerEncoder float64 `json:"tail_slope_b_us_per_encoder"`
 }
 
+// PipelinePair matches pipelines by function name and threadgroup signature.
+type PipelinePair struct {
+	FunctionName       string         `json:"function"`
+	ThreadgroupSig     string         `json:"threadgroup_sig"`
+	AUs                int            `json:"a_us"`
+	BUs                int            `json:"b_us"`
+	AbsDeltaUs         int            `json:"abs_delta_us"`
+	APipelineID        int            `json:"a_pipeline_id"`
+	BPipelineID        int            `json:"b_pipeline_id"`
+	APipelineHash      string         `json:"a_pipeline_hash"`
+	BPipelineHash      string         `json:"b_pipeline_hash"`
+	StaticCounterDelta StaticCounters `json:"static_counter_delta"`
+}
+
 // Report is the complete diff result with a stable JSON schema.
 type Report struct {
 	SchemaVersion         string                 `json:"schema_version"`
@@ -211,6 +242,7 @@ type Report struct {
 	OccurrenceMatches     []OccurrenceMatch      `json:"occurrence_matches"`
 	MatchedPairs          []MatchPair            `json:"matched_pairs"`
 	Unmatched             []UnmatchedDispatch    `json:"unmatched"`
+	PipelinePairs         []PipelinePair         `json:"pipeline_pairs,omitempty"`
 	EncoderDivergence     *EncoderDivergence     `json:"encoder_divergence,omitempty"`
 	Warnings              []string               `json:"warnings,omitempty"`
 }
