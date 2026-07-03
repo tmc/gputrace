@@ -131,7 +131,7 @@ func runXcodeExportMemory(cmd *cobra.Command, args []string, opts *xcodeExportMe
 
 	var menuErr error
 	for _, menuName := range menuNames {
-		if collectProfileDebug {
+		if collectProfileOpts.debug {
 			fmt.Fprintf(os.Stderr, "Trying menu: Editor > %s\n", menuName)
 		}
 		if err := ClickMenuItem(appAX, []string{"Editor", menuName}); err == nil {

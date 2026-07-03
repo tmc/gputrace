@@ -42,7 +42,7 @@ func runCheckPermissions(cmd *cobra.Command, args []string) error {
 
 	// Check Accessibility
 	output.Accessibility = osa.HasAccessibilityPermission()
-	if !output.Accessibility && !collectProfileNoPrompt {
+	if !output.Accessibility && !collectProfileOpts.noPrompt {
 		osa.PromptAccessibilityPermission()
 		output.Accessibility = osa.HasAccessibilityPermission()
 	}
@@ -53,7 +53,7 @@ func runCheckPermissions(cmd *cobra.Command, args []string) error {
 	// Determine if all required permissions are granted
 	output.AllGranted = output.Accessibility && output.ScreenRecording
 
-	if collectProfileJSON {
+	if collectProfileOpts.json {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(output)
@@ -72,7 +72,7 @@ func runCheckPermissions(cmd *cobra.Command, args []string) error {
 
 	fmt.Println("Some permissions are missing. Run without --no-prompt to trigger dialogs,")
 	fmt.Println("or use 'axperms -enable gputrace.app' to grant permissions.")
-	if collectProfileNoPrompt {
+	if collectProfileOpts.noPrompt {
 		return fmt.Errorf("missing permissions")
 	}
 	return nil

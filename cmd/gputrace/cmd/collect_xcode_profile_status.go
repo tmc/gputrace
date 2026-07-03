@@ -59,7 +59,7 @@ func runCheckStatus(cmd *cobra.Command, args []string, opts *checkStatusOptions)
 	}
 	appAX, err := FindXcodeApp()
 	if err != nil {
-		if collectProfileJSON {
+		if collectProfileOpts.json {
 			return outputJSONError("XCODE_NOT_RUNNING", "Xcode not running", "Start Xcode first")
 		}
 		return fmt.Errorf("Xcode not running: %w", err)
@@ -74,7 +74,7 @@ func runCheckStatus(cmd *cobra.Command, args []string, opts *checkStatusOptions)
 	}
 	windowAX, err := findTargetWindow(appAX, traceFile)
 	if err != nil {
-		if collectProfileJSON {
+		if collectProfileOpts.json {
 			return outputJSONError("WINDOW_NOT_FOUND", err.Error(), "Check if the trace file is open")
 		}
 		return err
@@ -83,7 +83,7 @@ func runCheckStatus(cmd *cobra.Command, args []string, opts *checkStatusOptions)
 		fmt.Fprintf(os.Stderr, "[check-status] got window: %v (title=%q)\n", windowAX, axString(windowAX, "AXTitle"))
 	}
 
-	if collectProfileJSON {
+	if collectProfileOpts.json {
 		if debug {
 			fmt.Fprintln(os.Stderr, "[check-status] getting status output (JSON)...")
 		}
@@ -102,7 +102,7 @@ func runCheckStatus(cmd *cobra.Command, args []string, opts *checkStatusOptions)
 }
 
 func statusDebugEnabled(debug bool) bool {
-	return debug || collectProfileDebug || collectProfileVerbose
+	return debug || collectProfileOpts.debug || collectProfileOpts.verbose
 }
 
 // getStatusOutput returns a structured status output for JSON.

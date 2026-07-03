@@ -104,7 +104,7 @@ func runOpenTrace(cmd *cobra.Command, args []string, opts *openTraceOptions) err
 
 	// Ensure the Debug navigator is shown using AX menu click
 	if err := ClickMenuItem(appAX, []string{"View", "Navigators", "Debug"}); err != nil {
-		if collectProfileDebug {
+		if collectProfileOpts.debug {
 			fmt.Fprintf(os.Stderr, "Warning: could not show Debug navigator via menu: %v\n", err)
 		}
 	}

@@ -121,12 +121,12 @@ func TestValidateVertexOutputDraw(t *testing.T) {
 }
 
 func TestWriteVertexOutputStdoutText(t *testing.T) {
-	oldJSON := collectProfileJSON
+	oldJSON := collectProfileOpts.json
 	t.Cleanup(func() {
-		collectProfileJSON = oldJSON
+		collectProfileOpts.json = oldJSON
 	})
 
-	collectProfileJSON = false
+	collectProfileOpts.json = false
 
 	out, err := captureStdout(t, func() error {
 		return writeVertexOutput("ignored", "row 1\n", &vertexOutputOptions{
@@ -143,12 +143,12 @@ func TestWriteVertexOutputStdoutText(t *testing.T) {
 }
 
 func TestWriteVertexOutputDashJSON(t *testing.T) {
-	oldJSON := collectProfileJSON
+	oldJSON := collectProfileOpts.json
 	t.Cleanup(func() {
-		collectProfileJSON = oldJSON
+		collectProfileOpts.json = oldJSON
 	})
 
-	collectProfileJSON = false
+	collectProfileOpts.json = false
 
 	out, err := captureStdout(t, func() error {
 		return writeVertexOutput(vertexOutputResult{Status: "ok", Trace: "trace.gputrace", DrawCall: 21}, "", &vertexOutputOptions{

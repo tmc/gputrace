@@ -171,7 +171,7 @@ func runPerformanceShow(cmd *cobra.Command, args []string) error {
 
 	appAX, err := FindXcodeApp()
 	if err != nil {
-		if collectProfileJSON {
+		if collectProfileOpts.json {
 			return outputJSONError("XCODE_NOT_RUNNING", "Xcode not running", "Start Xcode first")
 		}
 		return fmt.Errorf("Xcode not running: %w", err)
@@ -180,7 +180,7 @@ func runPerformanceShow(cmd *cobra.Command, args []string) error {
 
 	windowAX, err := findTargetWindow(appAX, "")
 	if err != nil {
-		if collectProfileJSON {
+		if collectProfileOpts.json {
 			return outputJSONError("NO_WINDOWS", "no trace window found", "Open a trace file first")
 		}
 		return err
@@ -188,14 +188,14 @@ func runPerformanceShow(cmd *cobra.Command, args []string) error {
 
 	btn := findShowPerformanceButton(windowAX)
 	if btn == 0 {
-		if collectProfileJSON {
+		if collectProfileOpts.json {
 			return outputJSONError("NOT_AVAILABLE", "Show Performance button not found", "Replay may not be complete")
 		}
 		return fmt.Errorf("Show Performance button not found (replay may not be complete)")
 	}
 
 	if !IsElementEnabled(btn) {
-		if collectProfileJSON {
+		if collectProfileOpts.json {
 			return outputJSONError("DISABLED", "Show Performance button is disabled", "Wait for replay to complete")
 		}
 		return fmt.Errorf("Show Performance button is disabled")
@@ -204,13 +204,13 @@ func runPerformanceShow(cmd *cobra.Command, args []string) error {
 	fmt.Fprintln(status, "Clicking Show Performance...")
 
 	if err := axAction(btn, "AXPress"); err != nil {
-		if collectProfileJSON {
+		if collectProfileOpts.json {
 			return outputJSONError("CLICK_FAILED", fmt.Sprintf("failed to click: %v", err), "Try again")
 		}
 		return fmt.Errorf("failed to click: %w", err)
 	}
 
-	if collectProfileJSON {
+	if collectProfileOpts.json {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(map[string]interface{}{
@@ -230,7 +230,7 @@ func runPerformanceStatus(cmd *cobra.Command, args []string) error {
 
 	appAX, err := FindXcodeApp()
 	if err != nil {
-		if collectProfileJSON {
+		if collectProfileOpts.json {
 			return outputJSONError("XCODE_NOT_RUNNING", "Xcode not running", "Start Xcode first")
 		}
 		return fmt.Errorf("Xcode not running: %w", err)
@@ -239,7 +239,7 @@ func runPerformanceStatus(cmd *cobra.Command, args []string) error {
 
 	windowAX, err := findTargetWindow(appAX, "")
 	if err != nil {
-		if collectProfileJSON {
+		if collectProfileOpts.json {
 			return outputJSONError("NO_WINDOWS", "no trace window found", "Open a trace file first")
 		}
 		return err
@@ -259,7 +259,7 @@ func runPerformanceStatus(cmd *cobra.Command, args []string) error {
 		info.Status = "ready"
 	}
 
-	if collectProfileJSON {
+	if collectProfileOpts.json {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(info)
@@ -283,7 +283,7 @@ func runPerformanceSummary(cmd *cobra.Command, args []string) error {
 
 	appAX, err := FindXcodeApp()
 	if err != nil {
-		if collectProfileJSON {
+		if collectProfileOpts.json {
 			return outputJSONError("XCODE_NOT_RUNNING", "Xcode not running", "Start Xcode first")
 		}
 		return fmt.Errorf("Xcode not running: %w", err)
@@ -292,7 +292,7 @@ func runPerformanceSummary(cmd *cobra.Command, args []string) error {
 
 	windowAX, err := findTargetWindow(appAX, "")
 	if err != nil {
-		if collectProfileJSON {
+		if collectProfileOpts.json {
 			return outputJSONError("NO_WINDOWS", "no trace window found", "Open a trace file first")
 		}
 		return err
@@ -301,7 +301,7 @@ func runPerformanceSummary(cmd *cobra.Command, args []string) error {
 	summary, err := extractPerformanceSummary(windowAX)
 	if err != nil {
 		if summaryErr, ok := err.(performanceSummaryError); ok {
-			if collectProfileJSON {
+			if collectProfileOpts.json {
 				return outputJSONError(summaryErr.Code, summaryErr.Message, summaryErr.Suggestion)
 			}
 			if summaryErr.Suggestion != "" {
@@ -312,7 +312,7 @@ func runPerformanceSummary(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if collectProfileJSON {
+	if collectProfileOpts.json {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(summary)
@@ -573,7 +573,7 @@ func runPerformanceMemory(cmd *cobra.Command, args []string) error {
 
 	appAX, err := FindXcodeApp()
 	if err != nil {
-		if collectProfileJSON {
+		if collectProfileOpts.json {
 			return outputJSONError("XCODE_NOT_RUNNING", "Xcode not running", "Start Xcode first")
 		}
 		return fmt.Errorf("Xcode not running: %w", err)
@@ -582,14 +582,14 @@ func runPerformanceMemory(cmd *cobra.Command, args []string) error {
 
 	windowAX, err := findTargetWindow(appAX, "")
 	if err != nil {
-		if collectProfileJSON {
+		if collectProfileOpts.json {
 			return outputJSONError("NO_WINDOWS", "no trace window found", "Open a trace file first")
 		}
 		return err
 	}
 
 	info := extractPerformanceMemoryInfo(windowAX)
-	if collectProfileJSON {
+	if collectProfileOpts.json {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(info)
@@ -860,7 +860,7 @@ func runPerformanceView(viewName string) error {
 
 	appAX, err := FindXcodeApp()
 	if err != nil {
-		if collectProfileJSON {
+		if collectProfileOpts.json {
 			return outputJSONError("XCODE_NOT_RUNNING", "Xcode not running", "Start Xcode first")
 		}
 		return fmt.Errorf("Xcode not running: %w", err)
@@ -869,7 +869,7 @@ func runPerformanceView(viewName string) error {
 
 	windowAX, err := findTargetWindow(appAX, "")
 	if err != nil {
-		if collectProfileJSON {
+		if collectProfileOpts.json {
 			return outputJSONError("NO_WINDOWS", "no trace window found", "Open a trace file first")
 		}
 		return err
@@ -895,14 +895,14 @@ func runPerformanceView(viewName string) error {
 	// Find and click the button
 	btn := findButtonBFS(windowAX, buttonName, 1000)
 	if btn == 0 {
-		if collectProfileJSON {
+		if collectProfileOpts.json {
 			return outputJSONError("NOT_FOUND", fmt.Sprintf("%s button not found", buttonName), "Open performance view first")
 		}
 		return fmt.Errorf("%s button not found (open performance view first)", buttonName)
 	}
 
 	if !IsElementEnabled(btn) {
-		if collectProfileJSON {
+		if collectProfileOpts.json {
 			return outputJSONError("DISABLED", fmt.Sprintf("%s button is disabled", buttonName), "")
 		}
 		return fmt.Errorf("%s button is disabled", buttonName)
@@ -911,13 +911,13 @@ func runPerformanceView(viewName string) error {
 	fmt.Fprintf(status, "Selecting %s view...\n", buttonName)
 
 	if err := axAction(btn, "AXPress"); err != nil {
-		if collectProfileJSON {
+		if collectProfileOpts.json {
 			return outputJSONError("CLICK_FAILED", fmt.Sprintf("failed to click: %v", err), "Try again")
 		}
 		return fmt.Errorf("failed to click: %w", err)
 	}
 
-	if collectProfileJSON {
+	if collectProfileOpts.json {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(map[string]interface{}{

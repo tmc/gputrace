@@ -10,17 +10,17 @@ import (
 )
 
 func TestRejectUnsupportedXcodeProfileJSON(t *testing.T) {
-	oldJSON := collectProfileJSON
+	oldJSON := collectProfileOpts.json
 	t.Cleanup(func() {
-		collectProfileJSON = oldJSON
+		collectProfileOpts.json = oldJSON
 	})
 
-	collectProfileJSON = false
+	collectProfileOpts.json = false
 	if err := rejectUnsupportedXcodeProfileJSON("list-menus"); err != nil {
 		t.Fatalf("rejectUnsupportedXcodeProfileJSON without JSON = %v, want nil", err)
 	}
 
-	collectProfileJSON = true
+	collectProfileOpts.json = true
 	err := rejectUnsupportedXcodeProfileJSON("list-menus")
 	if err == nil {
 		t.Fatal("rejectUnsupportedXcodeProfileJSON with JSON returned nil")
@@ -34,12 +34,12 @@ func TestRejectUnsupportedXcodeProfileJSON(t *testing.T) {
 }
 
 func TestUnsupportedXcodeProfileJSONArgsRejectsBeforeValidation(t *testing.T) {
-	oldJSON := collectProfileJSON
+	oldJSON := collectProfileOpts.json
 	t.Cleanup(func() {
-		collectProfileJSON = oldJSON
+		collectProfileOpts.json = oldJSON
 	})
 
-	collectProfileJSON = true
+	collectProfileOpts.json = true
 	called := false
 	validate := func(cmd *cobra.Command, args []string) error {
 		called = true
@@ -56,12 +56,12 @@ func TestUnsupportedXcodeProfileJSONArgsRejectsBeforeValidation(t *testing.T) {
 }
 
 func TestUnsupportedXcodeProfileJSONArgsPreservesValidation(t *testing.T) {
-	oldJSON := collectProfileJSON
+	oldJSON := collectProfileOpts.json
 	t.Cleanup(func() {
-		collectProfileJSON = oldJSON
+		collectProfileOpts.json = oldJSON
 	})
 
-	collectProfileJSON = false
+	collectProfileOpts.json = false
 	validate := unsupportedXcodeProfileJSONArgs("ensure-checked", cobra.ExactArgs(1))
 
 	if err := validate(&cobra.Command{}, []string{"Profile after replay"}); err != nil {

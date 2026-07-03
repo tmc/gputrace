@@ -79,7 +79,7 @@ This automates what you'd normally do manually:
 }
 
 func runVertexOutput(cmd *cobra.Command, args []string, opts *vertexOutputOptions) error {
-	jsonOutput, err := vertexOutputJSON(collectProfileJSON, opts.format)
+	jsonOutput, err := vertexOutputJSON(collectProfileOpts.json, opts.format)
 	if err != nil {
 		return err
 	}
@@ -223,7 +223,7 @@ func validateVertexOutputDraw(draw int) error {
 }
 
 func writeVertexOutput(v any, text string, opts *vertexOutputOptions) error {
-	jsonOutput, err := vertexOutputJSON(collectProfileJSON, opts.format)
+	jsonOutput, err := vertexOutputJSON(collectProfileOpts.json, opts.format)
 	if err != nil {
 		return err
 	}

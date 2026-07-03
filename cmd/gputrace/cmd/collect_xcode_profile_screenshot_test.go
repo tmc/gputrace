@@ -48,11 +48,11 @@ func TestResolveScreenshotOutputPath(t *testing.T) {
 }
 
 func TestTriggerScreenRecordingTCCJSONOutput(t *testing.T) {
-	oldJSON := collectProfileJSON
+	oldJSON := collectProfileOpts.json
 	t.Cleanup(func() {
-		collectProfileJSON = oldJSON
+		collectProfileOpts.json = oldJSON
 	})
-	collectProfileJSON = true
+	collectProfileOpts.json = true
 
 	out, err := captureStdout(t, triggerScreenRecordingTCC)
 	if err != nil {

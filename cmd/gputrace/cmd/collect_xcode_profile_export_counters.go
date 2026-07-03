@@ -140,7 +140,7 @@ func runXcodeExportCounters(cmd *cobra.Command, args []string, opts *xcodeExport
 
 	var menuErr error
 	for _, menuName := range menuNames {
-		if collectProfileDebug {
+		if collectProfileOpts.debug {
 			fmt.Fprintf(os.Stderr, "Trying menu: Editor > %s\n", menuName)
 		}
 		if err := ClickMenuItem(appAX, []string{"Editor", menuName}); err == nil {
@@ -233,7 +233,7 @@ saveClicked:
 // activateXcodeQuick activates Xcode using osascript with a timeout.
 // Respects --background flag and does nothing if set.
 func activateXcodeQuick() {
-	if collectProfileBackground {
+	if collectProfileOpts.background {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

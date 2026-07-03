@@ -205,7 +205,7 @@ func runListButtons(cmd *cobra.Command, args []string) error {
 	t1 := time.Now()
 	appAX, err := FindXcodeApp()
 	if err != nil {
-		if collectProfileJSON {
+		if collectProfileOpts.json {
 			return outputJSONError("XCODE_NOT_RUNNING", "Xcode not running", "Start Xcode first")
 		}
 		return fmt.Errorf("Xcode not running: %w", err)
@@ -218,7 +218,7 @@ func runListButtons(cmd *cobra.Command, args []string) error {
 	windows := GetAllWindows(appAX)
 	verboseLog("GetAllWindows: %v (%d windows)", time.Since(t2), len(windows))
 	if len(windows) == 0 {
-		if collectProfileJSON {
+		if collectProfileOpts.json {
 			return outputJSONError("NO_WINDOWS", "no Xcode windows found", "Open a trace file first")
 		}
 		return fmt.Errorf("no Xcode windows found")
@@ -245,7 +245,7 @@ func runListButtons(cmd *cobra.Command, args []string) error {
 	wg.Wait()
 	verboseLog("findAllButtonsFast: %v (%d buttons)", time.Since(t3), len(allButtons))
 
-	if collectProfileJSON {
+	if collectProfileOpts.json {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(ListButtonsOutput{Buttons: allButtons})

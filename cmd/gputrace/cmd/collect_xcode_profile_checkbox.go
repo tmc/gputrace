@@ -31,7 +31,7 @@ func documentUnsupportedXcodeProfileJSON(cmd *cobra.Command) {
 }
 
 func rejectUnsupportedXcodeProfileJSON(command string) error {
-	if !collectProfileJSON {
+	if !collectProfileOpts.json {
 		return nil
 	}
 	return fmt.Errorf("%s does not support --json", command)
