@@ -5,7 +5,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"github.com/tmc/gputrace/internal/mtlb"
+	"github.com/tmc/gputrace/internal/metallib"
 	"github.com/tmc/gputrace/internal/trace"
 )
 
@@ -61,7 +61,7 @@ func runMtlb(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid MTLB file (magic bytes mismatch)")
 	}
 
-	mtlbFile, err := mtlb.ParseMTLB(data)
+	mtlbFile, err := metallib.Parse(data)
 	if err != nil {
 		return err
 	}
@@ -71,7 +71,7 @@ func runMtlb(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func printMTLBDetails(lib *mtlb.MTLBFile) {
+func printMTLBDetails(lib *metallib.File) {
 	fmt.Printf("Header:\n")
 	fmt.Printf("  Version:        %d\n", lib.Header.Version)
 	fmt.Printf("  Total Size:     %d bytes\n", lib.Header.TotalSize)

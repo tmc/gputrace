@@ -10,7 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/tmc/gputrace/internal/fmtutil"
-	"github.com/tmc/gputrace/internal/mtlb"
+	"github.com/tmc/gputrace/internal/metallib"
 	"github.com/tmc/gputrace/internal/trace"
 )
 
@@ -51,7 +51,7 @@ var mtlbFunctionsCmd = &cobra.Command{
 }
 
 func runMTLBFunctions(tracePath string, opts mtlbFunctionsOptions, out io.Writer) error {
-	files, err := mtlb.FindMTLBFiles(tracePath)
+	files, err := metallib.FindFiles(tracePath)
 	if err != nil {
 		return err
 	}
@@ -65,7 +65,7 @@ func runMTLBFunctions(tracePath string, opts mtlbFunctionsOptions, out io.Writer
 			continue
 		}
 
-		lib, err := mtlb.ParseMTLB(data)
+		lib, err := metallib.Parse(data)
 		if err != nil {
 			continue
 		}

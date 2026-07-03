@@ -8,7 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/tmc/gputrace/internal/fmtutil"
-	"github.com/tmc/gputrace/internal/mtlb"
+	"github.com/tmc/gputrace/internal/metallib"
 )
 
 var (
@@ -25,7 +25,7 @@ var mtlbExtractCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		tracePath := args[0]
 
-		files, err := mtlb.FindMTLBFiles(tracePath)
+		files, err := metallib.FindFiles(tracePath)
 		if err != nil {
 			return err
 		}
@@ -58,7 +58,7 @@ var mtlbExtractCmd = &cobra.Command{
 		}
 
 		// Single file extraction
-		var targetFile mtlb.FoundMTLB
+		var targetFile metallib.FoundFile
 		if extractLibrary != "" {
 			found := false
 			for _, f := range files {

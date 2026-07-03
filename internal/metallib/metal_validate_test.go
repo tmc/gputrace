@@ -1,6 +1,6 @@
 //go:build darwin
 
-package mtlb
+package metallib
 
 import (
 	"sort"
@@ -16,12 +16,12 @@ func TestMTLBParserAgainstMetal(t *testing.T) {
 	data := loadMTLBTestData(t)
 
 	// Parse with our parser
-	mtlb, err := ParseMTLB(data)
+	lib, err := Parse(data)
 	if err != nil {
-		t.Fatalf("ParseMTLB failed: %v", err)
+		t.Fatalf("Parse failed: %v", err)
 	}
 
-	parserFunctions, err := mtlb.ListFunctions()
+	parserFunctions, err := lib.ListFunctions()
 	if err != nil {
 		t.Fatalf("ListFunctions failed: %v", err)
 	}

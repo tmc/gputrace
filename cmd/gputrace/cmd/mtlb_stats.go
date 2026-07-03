@@ -8,7 +8,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
-	"github.com/tmc/gputrace/internal/mtlb"
+	"github.com/tmc/gputrace/internal/metallib"
 	"github.com/tmc/gputrace/internal/trace"
 )
 
@@ -19,7 +19,7 @@ var mtlbStatsCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		tracePath := args[0]
 
-		files, err := mtlb.FindMTLBFiles(tracePath)
+		files, err := metallib.FindFiles(tracePath)
 		if err != nil {
 			return err
 		}
@@ -38,7 +38,7 @@ var mtlbStatsCmd = &cobra.Command{
 			if err != nil {
 				continue
 			}
-			lib, err := mtlb.ParseMTLB(data)
+			lib, err := metallib.Parse(data)
 			if err == nil {
 				funcs, _ := lib.ListFunctions()
 				allFuncs = append(allFuncs, funcs...)

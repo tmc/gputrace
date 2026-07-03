@@ -1,6 +1,6 @@
 //go:build darwin
 
-package mtlb
+package metallib
 
 import (
 	"fmt"

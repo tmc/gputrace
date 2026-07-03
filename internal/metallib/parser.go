@@ -1,4 +1,4 @@
-package mtlb
+package metallib
 
 import (
 	"bytes"
@@ -7,8 +7,8 @@ import (
 	"fmt"
 )
 
-// MTLBHeader represents the header of an MTLB file.
-type MTLBHeader struct {
+// Header represents the header of an MTLB file.
+type Header struct {
 	Magic          [4]byte // "MTLB"
 	Version        uint32
 	Flags          uint32
@@ -19,14 +19,14 @@ type MTLBHeader struct {
 	BytecodeOffset uint64 // Offset to bytecode
 }
 
-// MTLBFile represents a parsed Metal Library Binary file.
-type MTLBFile struct {
-	Header MTLBHeader
+// File represents a parsed Metal Library Binary file.
+type File struct {
+	Header Header
 	Data   []byte
 }
 
-// MTLBFunction represents a function in the library.
-type MTLBFunction struct {
+// Function represents a function in the library.
+type Function struct {
 	Name      string
 	NameOff   uint64
 	Offset    uint64
@@ -34,13 +34,13 @@ type MTLBFunction struct {
 	SizeKnown bool
 }
 
-// ParseMTLB parses the given data as an MTLB file.
-func ParseMTLB(data []byte) (*MTLBFile, error) {
+// Parse parses the given data as an MTLB file.
+func Parse(data []byte) (*File, error) {
 	if len(data) < 48 { // Header is 48 bytes
 		return nil, errors.New("data too short for MTLB header")
 	}
 
-	header := MTLBHeader{}
+	header := Header{}
 	copy(header.Magic[:], data[0:4])
 
 	if string(header.Magic[:]) != "MTLB" {
@@ -55,14 +55,14 @@ func ParseMTLB(data []byte) (*MTLBFile, error) {
 	header.StringTable = binary.LittleEndian.Uint64(data[32:40])
 	header.BytecodeOffset = binary.LittleEndian.Uint64(data[40:48])
 
-	return &MTLBFile{
+	return &File{
 		Header: header,
 		Data:   data,
 	}, nil
 }
 
 // ListFunctions returns a list of function names found in the MTLB file.
-func (m *MTLBFile) ListFunctions() ([]string, error) {
+func (m *File) ListFunctions() ([]string, error) {
 	metadata, err := m.ListFunctionMetadata()
 	if err != nil {
 		return nil, err
@@ -77,7 +77,7 @@ func (m *MTLBFile) ListFunctions() ([]string, error) {
 
 // ListFunctionMetadata returns function names and any per-function metadata the
 // parser can prove from tagged MTLB function-table entries.
-func (m *MTLBFile) ListFunctionMetadata() ([]MTLBFunction, error) {
+func (m *File) ListFunctionMetadata() ([]Function, error) {
 	if functions, ok := m.parseTaggedFunctionTable(); ok {
 		return functions, nil
 	}
@@ -85,7 +85,7 @@ func (m *MTLBFile) ListFunctionMetadata() ([]MTLBFunction, error) {
 	return m.scanLegacyFunctionNames(), nil
 }
 
-func (m *MTLBFile) parseTaggedFunctionTable() ([]MTLBFunction, bool) {
+func (m *File) parseTaggedFunctionTable() ([]Function, bool) {
 	if m.Header.FunctionTable > uint64(len(m.Data)) || uint64(len(m.Data))-m.Header.FunctionTable < 8 {
 		return nil, false
 	}
@@ -100,7 +100,7 @@ func (m *MTLBFile) parseTaggedFunctionTable() ([]MTLBFunction, bool) {
 		return nil, false
 	}
 
-	functions := make([]MTLBFunction, 0, count)
+	functions := make([]Function, 0, count)
 	entryStart := start + 8
 	for i := uint32(0); i < count; i++ {
 		size := int(entrySize)
@@ -130,8 +130,8 @@ func (m *MTLBFile) parseTaggedFunctionTable() ([]MTLBFunction, bool) {
 	return functions, true
 }
 
-func parseTaggedFunctionEntry(entry []byte, base uint64) (MTLBFunction, bool) {
-	var fn MTLBFunction
+func parseTaggedFunctionEntry(entry []byte, base uint64) (Function, bool) {
+	var fn Function
 	for pos := 0; pos+4 <= len(entry); {
 		tag := string(entry[pos : pos+4])
 		pos += 4
@@ -139,12 +139,12 @@ func parseTaggedFunctionEntry(entry []byte, base uint64) (MTLBFunction, bool) {
 			return fn, fn.Name != ""
 		}
 		if pos+2 > len(entry) {
-			return MTLBFunction{}, false
+			return Function{}, false
 		}
 		payloadLen := int(binary.LittleEndian.Uint16(entry[pos : pos+2]))
 		pos += 2
 		if payloadLen < 0 || pos+payloadLen > len(entry) {
-			return MTLBFunction{}, false
+			return Function{}, false
 		}
 
 		payload := entry[pos : pos+payloadLen]
@@ -171,11 +171,11 @@ func parseTaggedFunctionEntry(entry []byte, base uint64) (MTLBFunction, bool) {
 		pos += payloadLen
 	}
 
-	return MTLBFunction{}, false
+	return Function{}, false
 }
 
-func (m *MTLBFile) scanLegacyFunctionNames() []MTLBFunction {
-	var functions []MTLBFunction
+func (m *File) scanLegacyFunctionNames() []Function {
+	var functions []Function
 
 	// Start scanning from FunctionTable offset
 	start := m.Header.FunctionTable
@@ -224,7 +224,7 @@ func (m *MTLBFile) scanLegacyFunctionNames() []MTLBFunction {
 		// Extract name
 		name := string(data[nameStart : nameStart+nameEnd])
 		if len(name) > 0 {
-			functions = append(functions, MTLBFunction{
+			functions = append(functions, Function{
 				Name:    name,
 				NameOff: start + uint64(nameStart),
 			})

@@ -1,4 +1,4 @@
-package mtlb
+package metallib
 
 import (
 	"fmt"
@@ -7,16 +7,16 @@ import (
 	"path/filepath"
 )
 
-// FoundMTLB represents a discovered MTLB file.
-type FoundMTLB struct {
+// FoundFile represents a discovered MTLB file.
+type FoundFile struct {
 	Name string
 	Path string
 	Size int64
 }
 
-// FindMTLBFiles scans the trace directory for files with MTLB magic.
-func FindMTLBFiles(tracePath string) ([]FoundMTLB, error) {
-	var results []FoundMTLB
+// FindFiles scans the trace directory for files with MTLB magic.
+func FindFiles(tracePath string) ([]FoundFile, error) {
+	var results []FoundFile
 
 	// Walk the trace directory
 	err := filepath.Walk(tracePath, func(path string, info os.FileInfo, err error) error {
@@ -46,7 +46,7 @@ func FindMTLBFiles(tracePath string) ([]FoundMTLB, error) {
 		}
 
 		if string(magic[:]) == "MTLB" {
-			results = append(results, FoundMTLB{
+			results = append(results, FoundFile{
 				Name: info.Name(),
 				Path: path,
 				Size: info.Size(),
