@@ -67,7 +67,7 @@ func sanitizeDispatches(stats *counter.StreamDataStats, onlyEncoder int, onlyFun
 		if duration < 0 {
 			duration = 0
 		}
-		pipelineHash := pipelineHashes[d.PipelineIndex]
+		pipelineHash := pipelineHashes[d.PipelineID]
 		if pipelineHash == "" {
 			pipelineHash = fmt.Sprintf("pid%d", d.PipelineID)
 		}
@@ -180,8 +180,8 @@ func buildPipelineHashes(stats *counter.StreamDataStats) map[int]string {
 	if stats == nil {
 		return out
 	}
-	for i, p := range stats.Pipelines {
-		out[i] = hashPipelineStats(p)
+	for _, p := range stats.Pipelines {
+		out[p.PipelineID] = hashPipelineStats(p)
 	}
 	return out
 }
