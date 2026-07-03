@@ -9,7 +9,7 @@ import (
 func TestAPSTimelineDataExtraction(t *testing.T) {
 	dir := requireTimelineEnvPath(t, timelineDirEnv, true)
 
-	stats, err := ParseStreamData(dir)
+	stats, err := ParseStreamData(dir, nil)
 	if err != nil {
 		t.Skipf("Test trace not available: %v", err)
 	}

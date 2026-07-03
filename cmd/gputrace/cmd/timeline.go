@@ -2297,7 +2297,7 @@ func runTimelineFromProfiler(tracePath string) error {
 	}
 
 	// Parse streamData for timing info
-	stats, err := counter.ParseStreamData(profilerDir)
+	stats, err := counter.ParseStreamData(profilerDir, nil)
 	if err != nil {
 		return fmt.Errorf("parse streamData: %w", err)
 	}

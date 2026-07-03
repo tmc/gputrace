@@ -11,9 +11,9 @@ import (
 
 // ExecutionCostMetrics contains execution cost data per pipeline.
 type ExecutionCostMetrics struct {
-	PipelineCosts map[int]float64   // pipelineID -> cost percentage (0-100)
-	TotalSamples  int               // Total USC samples found
-	SamplesPerPipeline map[int]int  // pipelineID -> sample count
+	PipelineCosts      map[int]float64 // pipelineID -> cost percentage (0-100)
+	TotalSamples       int             // Total USC samples found
+	SamplesPerPipeline map[int]int     // pipelineID -> sample count
 }
 
 // ParseExecutionCost extracts execution cost percentages from Profiling_f_*.raw files.
@@ -105,7 +105,7 @@ func countPipelineSamples(path string, knownPipelines map[uint32]bool) (map[int]
 // This is a convenience function that finds pipeline IDs from streamData first.
 func ExtractExecutionCostFromDir(profilerDir string) (*ExecutionCostMetrics, error) {
 	// First parse streamData to get known pipeline IDs
-	stats, err := ParseStreamData(profilerDir)
+	stats, err := ParseStreamData(profilerDir, nil)
 	if err != nil {
 		return nil, fmt.Errorf("parse streamData for pipeline IDs: %w", err)
 	}
@@ -179,7 +179,7 @@ func AggregateExecutionCostByFunction(
 type ProfilingExecutionCost struct {
 	PipelineID    int
 	FunctionName  string
-	CostPercent   float64  // 0-100
+	CostPercent   float64 // 0-100
 	SampleCount   int
 	LimiterValues map[string]float64 // Optional: extracted limiter metrics
 }

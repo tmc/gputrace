@@ -174,9 +174,9 @@ type StreamDataStats struct {
 }
 
 // ParseStreamData parses the streamData plist from a .gpuprofiler_raw directory.
-// The optional addressToName parameter provides a mapping from pipeline addresses
-// to function names (typically from trace.FunctionToName) for accurate resolution.
-func ParseStreamData(gpuprofilerDir string, addressToName ...map[uint64]string) (*StreamDataStats, error) {
+// addressToName maps pipeline addresses to function names. Pass nil when no
+// trace-derived mapping is available.
+func ParseStreamData(gpuprofilerDir string, addressToName map[uint64]string) (*StreamDataStats, error) {
 	streamDataPath := filepath.Join(gpuprofilerDir, "streamData")
 
 	data, err := os.ReadFile(streamDataPath)
@@ -207,16 +207,10 @@ func ParseStreamData(gpuprofilerDir string, addressToName ...map[uint64]string) 
 			// Extract pipeline addresses and link to functions.
 			pipelineInfos := extractPipelineInfo(objects, obj1)
 
-			// Build address-to-name lookup from provided mapping
-			var addrToName map[uint64]string
-			if len(addressToName) > 0 && addressToName[0] != nil {
-				addrToName = addressToName[0]
-			}
-
 			if ppsUID, ok := obj1["pipelinePerformanceStatistics"].(plist.UID); ok {
 				stats.Pipelines = extractPipelineStats(objects, int(ppsUID))
 				stats.NumPipelines = len(stats.Pipelines)
-				attachPipelineMetadata(stats.Pipelines, pipelineInfos, addrToName)
+				attachPipelineMetadata(stats.Pipelines, pipelineInfos, addressToName)
 			}
 
 			// Extract encoder timing from encoderInfoData
@@ -244,7 +238,7 @@ func ParseStreamData(gpuprofilerDir string, addressToName ...map[uint64]string) 
 				// Build pipeline index maps from pipelineStateInfoData order.
 				// pipelinePerformanceStatistics is a dictionary and may be in a
 				// different order from gpuCommandInfoData pipeline indices.
-				pipelineToName, pipelineToID := pipelineDispatchMaps(pipelineInfos, addrToName)
+				pipelineToName, pipelineToID := pipelineDispatchMaps(pipelineInfos, addressToName)
 				stats.Dispatches = extractDispatchInfoWithMap(objects, int(gpuCmdUID), gpuCmdSize, pipelineToName, pipelineToID)
 				stats.NumGPUCommands = len(stats.Dispatches)
 				for _, d := range stats.Dispatches {
@@ -416,7 +410,7 @@ func extractPipelineInfo(objects []any, obj1 map[string]any) []pipelineInfo {
 	return infos
 }
 
-func attachPipelineMetadata(pipelines []PipelineStats, infos []pipelineInfo, addrToName map[uint64]string) {
+func attachPipelineMetadata(pipelines []PipelineStats, infos []pipelineInfo, addressToName map[uint64]string) {
 	if len(pipelines) == 0 || len(infos) == 0 {
 		return
 	}
@@ -430,8 +424,8 @@ func attachPipelineMetadata(pipelines []PipelineStats, infos []pipelineInfo, add
 			continue
 		}
 		pipelines[i].PipelineAddress = info.Address
-		if addrToName != nil {
-			if name, ok := addrToName[info.Address]; ok {
+		if addressToName != nil {
+			if name, ok := addressToName[info.Address]; ok {
 				pipelines[i].FunctionName = name
 				continue
 			}
@@ -440,13 +434,13 @@ func attachPipelineMetadata(pipelines []PipelineStats, infos []pipelineInfo, add
 	}
 }
 
-func pipelineDispatchMaps(infos []pipelineInfo, addrToName map[uint64]string) (map[int]string, map[int]int) {
+func pipelineDispatchMaps(infos []pipelineInfo, addressToName map[uint64]string) (map[int]string, map[int]int) {
 	pipelineToName := make(map[int]string, len(infos))
 	pipelineToID := make(map[int]int, len(infos))
 	for i, info := range infos {
 		name := info.FunctionName
-		if addrToName != nil {
-			if mapped, ok := addrToName[info.Address]; ok {
+		if addressToName != nil {
+			if mapped, ok := addressToName[info.Address]; ok {
 				name = mapped
 			}
 		}
@@ -732,7 +726,7 @@ func ExtractEncoderTimingsFromProfiler(t *trace.Trace) ([]EncoderTimingInfo, int
 	// Parse streamData for timing. APSTimelineData, when present, is captured
 	// in stats.TimingSource and effective/command-buffer totals; this helper
 	// returns encoderInfoData-derived per-encoder timings for existing callers.
-	stats, err := ParseStreamData(perfDir)
+	stats, err := ParseStreamData(perfDir, nil)
 	if err != nil {
 		return nil, 0, fmt.Errorf("parse streamData: %w", err)
 	}
@@ -795,11 +789,7 @@ func extractPipelineStatsFromTrace(t *trace.Trace, addressToName map[uint64]stri
 
 	var stats *StreamDataStats
 	var err error
-	if addressToName != nil {
-		stats, err = ParseStreamData(perfDir, addressToName)
-	} else {
-		stats, err = ParseStreamData(perfDir)
-	}
+	stats, err = ParseStreamData(perfDir, addressToName)
 	if err != nil {
 		return nil, fmt.Errorf("parse streamData: %w", err)
 	}

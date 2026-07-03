@@ -10,7 +10,7 @@ const streamDataIntegrationDirEnv = "GPUTRACE_COUNTER_STREAMDATA_DIR"
 
 func TestParseStreamDataIntegration(t *testing.T) {
 	gpuprofDir := integrationPathFromEnv(t, streamDataIntegrationDirEnv)
-	stats, err := ParseStreamData(gpuprofDir)
+	stats, err := ParseStreamData(gpuprofDir, nil)
 	if err != nil {
 		t.Fatalf("ParseStreamData failed: %v", err)
 	}
