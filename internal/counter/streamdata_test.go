@@ -102,3 +102,31 @@ func TestDispatchInfoDisplayNameUsesPipelineID(t *testing.T) {
 		t.Fatalf("DisplayName = %q, want %q", got, want)
 	}
 }
+
+func TestAttachPipelineMetadataUsesPipelineID(t *testing.T) {
+	pipelines := []PipelineStats{
+		{PipelineID: 200, InstructionCount: 20},
+		{PipelineID: 100, InstructionCount: 10},
+	}
+	infos := []pipelineInfo{
+		{ID: 100, Address: 0x1000, FunctionName: "first"},
+		{ID: 200, Address: 0x2000, FunctionName: "second"},
+	}
+
+	attachPipelineMetadata(pipelines, infos, nil)
+
+	if pipelines[0].PipelineAddress != 0x2000 || pipelines[0].FunctionName != "second" {
+		t.Fatalf("pipeline 200 metadata = addr 0x%x func %q, want addr 0x2000 func second", pipelines[0].PipelineAddress, pipelines[0].FunctionName)
+	}
+	if pipelines[1].PipelineAddress != 0x1000 || pipelines[1].FunctionName != "first" {
+		t.Fatalf("pipeline 100 metadata = addr 0x%x func %q, want addr 0x1000 func first", pipelines[1].PipelineAddress, pipelines[1].FunctionName)
+	}
+
+	nameByIndex, idByIndex := pipelineDispatchMaps(infos, nil)
+	if idByIndex[0] != 100 || nameByIndex[0] != "first" {
+		t.Fatalf("dispatch pipeline 0 = id %d func %q, want id 100 func first", idByIndex[0], nameByIndex[0])
+	}
+	if idByIndex[1] != 200 || nameByIndex[1] != "second" {
+		t.Fatalf("dispatch pipeline 1 = id %d func %q, want id 200 func second", idByIndex[1], nameByIndex[1])
+	}
+}

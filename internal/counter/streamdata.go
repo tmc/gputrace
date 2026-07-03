@@ -204,8 +204,8 @@ func ParseStreamData(gpuprofilerDir string, addressToName ...map[uint64]string) 
 			// Extract function names from strings array
 			stats.FunctionNames = extractFunctionNames(objects, obj1)
 
-			// Extract pipeline addresses and link to functions
-			pipelineAddrs, pipelineFuncs := extractPipelineInfo(objects, obj1)
+			// Extract pipeline addresses and link to functions.
+			pipelineInfos := extractPipelineInfo(objects, obj1)
 
 			// Build address-to-name lookup from provided mapping
 			var addrToName map[uint64]string
@@ -216,24 +216,7 @@ func ParseStreamData(gpuprofilerDir string, addressToName ...map[uint64]string) 
 			if ppsUID, ok := obj1["pipelinePerformanceStatistics"].(plist.UID); ok {
 				stats.Pipelines = extractPipelineStats(objects, int(ppsUID))
 				stats.NumPipelines = len(stats.Pipelines)
-
-				// Link pipeline addresses and function names
-				for i := range stats.Pipelines {
-					if i < len(pipelineAddrs) {
-						stats.Pipelines[i].PipelineAddress = pipelineAddrs[i]
-					}
-					// Prefer address-to-name mapping from trace (more accurate)
-					if addrToName != nil && i < len(pipelineAddrs) {
-						if name, ok := addrToName[pipelineAddrs[i]]; ok {
-							stats.Pipelines[i].FunctionName = name
-							continue
-						}
-					}
-					// Fall back to streamData extraction
-					if i < len(pipelineFuncs) {
-						stats.Pipelines[i].FunctionName = pipelineFuncs[i]
-					}
-				}
+				attachPipelineMetadata(stats.Pipelines, pipelineInfos, addrToName)
 			}
 
 			// Extract encoder timing from encoderInfoData
@@ -258,13 +241,10 @@ func ParseStreamData(gpuprofilerDir string, addressToName ...map[uint64]string) 
 				if size := plistUint64(obj1["gpuCommandInfoSize"]); size > 0 {
 					gpuCmdSize = int(size)
 				}
-				// Build pipeline index to function name and ID maps from pipelines
-				pipelineToName := make(map[int]string)
-				pipelineToID := make(map[int]int)
-				for i, p := range stats.Pipelines {
-					pipelineToName[i] = p.FunctionName
-					pipelineToID[i] = p.PipelineID
-				}
+				// Build pipeline index maps from pipelineStateInfoData order.
+				// pipelinePerformanceStatistics is a dictionary and may be in a
+				// different order from gpuCommandInfoData pipeline indices.
+				pipelineToName, pipelineToID := pipelineDispatchMaps(pipelineInfos, addrToName)
 				stats.Dispatches = extractDispatchInfoWithMap(objects, int(gpuCmdUID), gpuCmdSize, pipelineToName, pipelineToID)
 				stats.NumGPUCommands = len(stats.Dispatches)
 				for _, d := range stats.Dispatches {
@@ -338,8 +318,14 @@ func extractFunctionNames(objects []any, obj1 map[string]any) []string {
 	return names
 }
 
-// extractPipelineInfo extracts pipeline addresses and function names from pipelineStateInfoData.
-// Returns two slices: addresses and function names, indexed by pipeline order.
+type pipelineInfo struct {
+	ID           int
+	Address      uint64
+	FunctionName string
+}
+
+// extractPipelineInfo extracts pipeline IDs, addresses, and function names from pipelineStateInfoData.
+// The result is indexed by pipeline-state record order, matching gpuCommandInfoData pipeline indices.
 //
 // pipelineStateInfoData struct layout (40 bytes per record):
 //
@@ -358,10 +344,10 @@ func extractFunctionNames(objects []any, obj1 map[string]any) []string {
 //
 // The correct mapping uses functionInfoData[i][@28:32] as the string index,
 // NOT pipelineStateInfoData[@24:28] which often points to empty strings.
-func extractPipelineInfo(objects []any, obj1 map[string]any) ([]uint64, []string) {
+func extractPipelineInfo(objects []any, obj1 map[string]any) []pipelineInfo {
 	uid, ok := obj1["pipelineStateInfoData"].(plist.UID)
 	if !ok {
-		return nil, nil
+		return nil
 	}
 
 	pipeSize := 40
@@ -371,12 +357,12 @@ func extractPipelineInfo(objects []any, obj1 map[string]any) ([]uint64, []string
 
 	dataObj, ok := objects[int(uid)].(map[string]any)
 	if !ok {
-		return nil, nil
+		return nil
 	}
 
 	nsData, ok := dataObj["NS.data"].([]byte)
 	if !ok || len(nsData) < pipeSize {
-		return nil, nil
+		return nil
 	}
 
 	// Get function names from strings array
@@ -400,15 +386,15 @@ func extractPipelineInfo(objects []any, obj1 map[string]any) ([]uint64, []string
 		numFuncInfo = len(funcInfoData) / funcInfoSize
 	}
 
-	addrs := make([]uint64, numRecs)
-	funcs := make([]string, numRecs)
+	infos := make([]pipelineInfo, numRecs)
 
 	for i := range numRecs {
 		off := i * pipeSize
 		rec := nsData[off : off+pipeSize]
 
+		infos[i].ID = int(binary.LittleEndian.Uint32(rec[0:4]))
 		// [8:16] is pipeline address
-		addrs[i] = binary.LittleEndian.Uint64(rec[8:16])
+		infos[i].Address = binary.LittleEndian.Uint64(rec[8:16])
 
 		// Use functionInfoData[i][@28:32] for string index (correct mapping)
 		if funcInfoData != nil && i < numFuncInfo {
@@ -416,18 +402,58 @@ func extractPipelineInfo(objects []any, obj1 map[string]any) ([]uint64, []string
 			fiRec := funcInfoData[fiOff : fiOff+funcInfoSize]
 			funcStrIdx := int(binary.LittleEndian.Uint32(fiRec[28:32]))
 			if funcStrIdx >= 0 && funcStrIdx < len(funcNames) {
-				funcs[i] = funcNames[funcStrIdx]
+				infos[i].FunctionName = funcNames[funcStrIdx]
 				continue
 			}
 		}
 
 		// Fall back: try using pipeline index directly into strings array
 		if i < len(funcNames) {
-			funcs[i] = funcNames[i]
+			infos[i].FunctionName = funcNames[i]
 		}
 	}
 
-	return addrs, funcs
+	return infos
+}
+
+func attachPipelineMetadata(pipelines []PipelineStats, infos []pipelineInfo, addrToName map[uint64]string) {
+	if len(pipelines) == 0 || len(infos) == 0 {
+		return
+	}
+	metaByID := make(map[int]pipelineInfo, len(infos))
+	for _, info := range infos {
+		metaByID[info.ID] = info
+	}
+	for i := range pipelines {
+		info, ok := metaByID[pipelines[i].PipelineID]
+		if !ok {
+			continue
+		}
+		pipelines[i].PipelineAddress = info.Address
+		if addrToName != nil {
+			if name, ok := addrToName[info.Address]; ok {
+				pipelines[i].FunctionName = name
+				continue
+			}
+		}
+		pipelines[i].FunctionName = info.FunctionName
+	}
+}
+
+func pipelineDispatchMaps(infos []pipelineInfo, addrToName map[uint64]string) (map[int]string, map[int]int) {
+	pipelineToName := make(map[int]string, len(infos))
+	pipelineToID := make(map[int]int, len(infos))
+	for i, info := range infos {
+		name := info.FunctionName
+		if addrToName != nil {
+			if mapped, ok := addrToName[info.Address]; ok {
+				name = mapped
+			}
+		}
+		pipelineToName[i] = name
+		pipelineToID[i] = info.ID
+	}
+	return pipelineToName, pipelineToID
 }
 
 // extractDispatchInfoWithMap is like extractDispatchInfo but uses maps for pipeline-to-name and pipeline-to-ID lookup.
