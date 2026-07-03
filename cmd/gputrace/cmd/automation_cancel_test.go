@@ -24,7 +24,7 @@ func TestAutomationCancelListenerCancelsOnSignal(t *testing.T) {
 	}
 
 	select {
-	case <-automationCtx.Done():
+	case <-automationContext().Done():
 	case <-deadline:
 		t.Fatal("listener did not cancel automation context")
 	}

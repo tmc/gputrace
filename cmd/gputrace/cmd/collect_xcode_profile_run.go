@@ -63,7 +63,7 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(status, "  Input:  %s\n", inputPath)
 	fmt.Fprintf(status, "  Output: %s\n", outputPath)
 
-	ctx, cancel := context.WithTimeout(automationCtx, collectProfileTimeout)
+	ctx, cancel := context.WithTimeout(automationContext(), collectProfileTimeout)
 	defer cancel()
 
 	// Validate trace bundle before opening in Xcode
