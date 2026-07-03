@@ -30,10 +30,6 @@ type DetailedCommandBuffer struct {
 
 // APICall represents a parsed Metal command record.
 type APICall struct {
-	// Type is retained for older callers. For Ct records it is the binding
-	// count, not a Metal API selector.
-	Type uint32
-
 	// RecordType is the MTSP record type, such as Ct.
 	RecordType string
 
@@ -174,7 +170,6 @@ func parseAPICallsInRegion(data []byte, baseOffset int64) ([]APICall, error) {
 			return nil, err
 		}
 		calls = append(calls, APICall{
-			Type:           ct.BindingCount,
 			RecordType:     rec.Type,
 			CommandFlags:   ct.CommandFlags,
 			ObjectAddr:     ct.PipelineAddr,

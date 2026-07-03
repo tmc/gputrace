@@ -44,9 +44,6 @@ func TestParseAPICallsInRegionParsesCtRecord(t *testing.T) {
 	if call.BindingCount != 2 {
 		t.Fatalf("BindingCount = %d, want 2", call.BindingCount)
 	}
-	if call.Type != 2 {
-		t.Fatalf("Type = %d, want compatibility binding count 2", call.Type)
-	}
 	if got, want := call.Offset, int64(0x1000); got != want {
 		t.Fatalf("Offset = 0x%x, want 0x%x", got, want)
 	}
