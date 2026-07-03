@@ -135,6 +135,9 @@ func runDiff(cmd *cobra.Command, args []string, opts diffOptions) error {
 	if opts.JSON {
 		enc := json.NewEncoder(cmd.OutOrStdout())
 		enc.SetIndent("", "  ")
+		if opts.Quick {
+			return enc.Encode(difftrace.NewQuickReport(report, 10))
+		}
 		return enc.Encode(report)
 	}
 
@@ -219,9 +222,6 @@ func (o diffOptions) validate(args []string) error {
 		}
 	}
 	if o.Quick {
-		if o.JSON {
-			return fmt.Errorf("--quick cannot be combined with --json")
-		}
 		if strings.TrimSpace(o.By) != "" {
 			return fmt.Errorf("--quick cannot be combined with --by")
 		}

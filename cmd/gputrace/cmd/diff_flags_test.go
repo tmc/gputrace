@@ -142,6 +142,15 @@ func TestDiffOptionsValidate(t *testing.T) {
 			wantErr: "--csv cannot be combined with text-only flags",
 		},
 		{
+			name: "quick json allowed",
+			opts: func() diffOptions {
+				o := base
+				o.Quick = true
+				o.JSON = true
+				return o
+			}(),
+		},
+		{
 			name: "quick with by rejected",
 			opts: func() diffOptions {
 				o := base
