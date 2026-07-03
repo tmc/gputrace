@@ -104,11 +104,6 @@ func Initialize() error {
 	return nil
 }
 
-// NewParser creates a new timeline data parser.
-func NewParser() (*Parser, error) {
-	return nil, fmt.Errorf("parser creation requires descriptor - use NewParserWithGPU or NewParserWithDescriptor")
-}
-
 // NewParserWithGPU creates a parser configured for the specified GPU.
 func NewParserWithGPU(gpu GPU) (*Parser, error) {
 	desc := &Descriptor{ChunkSize: 262144}
