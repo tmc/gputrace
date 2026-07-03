@@ -2,6 +2,7 @@ package graph
 
 import (
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/tmc/gputrace/internal/trace"
@@ -16,17 +17,26 @@ func NewMermaidGenerator() *MermaidGenerator {
 }
 
 // Generate creates a Mermaid graph from the trace.
-func (g *MermaidGenerator) Generate(t *trace.Trace, config *Config) (string, error) {
+func (g *MermaidGenerator) Generate(w io.Writer, t *trace.Trace, config *Config) error {
+	var (
+		output string
+		err    error
+	)
 	switch config.Type {
 	case "hierarchy":
-		return g.generateHierarchy(t, config)
+		output, err = g.generateHierarchy(t, config)
 	case "flow":
-		return g.generateFlow(t, config)
+		output, err = g.generateFlow(t, config)
 	case "resources":
-		return g.generateResources(t, config)
+		output, err = g.generateResources(t, config)
 	default:
-		return "", fmt.Errorf("unsupported graph type: %s", config.Type)
+		return fmt.Errorf("unsupported graph type: %s", config.Type)
 	}
+	if err != nil {
+		return err
+	}
+	_, err = io.WriteString(w, output)
+	return err
 }
 
 // generateHierarchy creates a hierarchical Mermaid graph: command buffers → encoders → shaders.

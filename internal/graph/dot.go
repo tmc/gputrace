@@ -18,41 +18,26 @@ func NewDOTGenerator() *DOTGenerator {
 }
 
 // Generate creates a DOT graph from the trace.
-func (g *DOTGenerator) Generate(t *trace.Trace, config *Config) (string, error) {
-	var out strings.Builder
-	if err := g.GenerateTo(&out, t, config); err != nil {
-		return "", err
-	}
-	return out.String(), nil
-}
-
-// GenerateTo writes a DOT graph from the trace.
-func (g *DOTGenerator) GenerateTo(w io.Writer, t *trace.Trace, config *Config) error {
+func (g *DOTGenerator) Generate(w io.Writer, t *trace.Trace, config *Config) error {
+	var (
+		output string
+		err    error
+	)
 	switch config.Type {
 	case "hierarchy":
-		output, err := g.generateHierarchy(t, config)
-		if err != nil {
-			return err
-		}
-		_, err = io.WriteString(w, output)
-		return err
+		output, err = g.generateHierarchy(t, config)
 	case "flow":
-		output, err := g.generateFlow(t, config)
-		if err != nil {
-			return err
-		}
-		_, err = io.WriteString(w, output)
-		return err
+		output, err = g.generateFlow(t, config)
 	case "resources":
-		output, err := g.generateResources(t, config)
-		if err != nil {
-			return err
-		}
-		_, err = io.WriteString(w, output)
-		return err
+		output, err = g.generateResources(t, config)
 	default:
 		return fmt.Errorf("unsupported graph type: %s", config.Type)
 	}
+	if err != nil {
+		return err
+	}
+	_, err = io.WriteString(w, output)
+	return err
 }
 
 // generateHierarchy creates a hierarchical graph: command buffers → encoders → shaders.

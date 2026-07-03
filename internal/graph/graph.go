@@ -12,13 +12,7 @@ import (
 // Generator is the interface for graph output generators.
 type Generator interface {
 	// Generate creates a graph visualization from a trace.
-	Generate(t *trace.Trace, config *Config) (string, error)
-}
-
-// WriterGenerator is implemented by generators that can stream output.
-type WriterGenerator interface {
-	// GenerateTo writes a graph visualization from a trace.
-	GenerateTo(w io.Writer, t *trace.Trace, config *Config) error
+	Generate(w io.Writer, t *trace.Trace, config *Config) error
 }
 
 // Config holds configuration for graph generation.
