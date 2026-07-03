@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"github.com/tmc/gputrace/internal/fmtutil"
 	"github.com/tmc/gputrace/internal/mtlb"
 )
 
@@ -42,7 +43,7 @@ var mtlbInfoCmd = &cobra.Command{
 
 			fmt.Printf("\nMagic:          %s\n", string(lib.Header.Magic[:]))
 			fmt.Printf("Version:        %d\n", lib.Header.Version)
-			fmt.Printf("Size:           %s\n", formatSize(int64(lib.Header.TotalSize)))
+			fmt.Printf("Size:           %s\n", fmtutil.FormatBytes(int64(lib.Header.TotalSize), 1))
 			// Assuming flags/reserved might have meaning later
 			// fmt.Printf("Flags:          0x%x\n", lib.Header.Flags)
 
@@ -50,12 +51,12 @@ var mtlbInfoCmd = &cobra.Command{
 
 			fmt.Println("\nSections:")
 			fmt.Printf("  Functions:    %d\n", len(funcs))
-			fmt.Printf("  Bytecode:     %s (offset 0x%x)\n", formatSize(int64(len(data))-int64(lib.Header.BytecodeOffset)), lib.Header.BytecodeOffset)
+			fmt.Printf("  Bytecode:     %s (offset 0x%x)\n", fmtutil.FormatBytes(int64(len(data))-int64(lib.Header.BytecodeOffset), 1), lib.Header.BytecodeOffset)
 
 			// String table size estimation
 			stringTableSize := int64(lib.Header.BytecodeOffset - lib.Header.StringTable)
 			if stringTableSize > 0 {
-				fmt.Printf("  Strings:      %s\n", formatSize(stringTableSize))
+				fmt.Printf("  Strings:      %s\n", fmtutil.FormatBytes(stringTableSize, 1))
 			}
 		}
 

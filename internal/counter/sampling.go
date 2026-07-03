@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/tmc/gputrace/internal/fmtutil"
 	"github.com/tmc/gputrace/internal/trace"
 )
 
@@ -672,7 +673,7 @@ func FormatCounterSamplingResult(result *CounterSamplingResult) string {
 		output += "=== Per-Encoder Metrics ===\n\n"
 		output += fmt.Sprintf("%-5s %-30s %12s %12s %10s\n",
 			"Index", "Label", "Duration(ms)", "Cycles", "Compute%")
-		output += repeatChar('-', 75) + "\n"
+		output += fmtutil.RepeatChar('-', 75) + "\n"
 
 		for _, metric := range result.EncoderMetrics {
 			durationMs := float64(metric.Duration) / 1e6
@@ -683,7 +684,7 @@ func FormatCounterSamplingResult(result *CounterSamplingResult) string {
 
 			output += fmt.Sprintf("%-5d %-30s %12.3f %12d %9.1f%%\n",
 				metric.EncoderIndex,
-				truncateString(label, 30),
+				fmtutil.TruncateString(label, 30),
 				durationMs,
 				metric.DurationCycles,
 				metric.ComputeUtilization)
@@ -704,7 +705,7 @@ func FormatCounterSamplingResult(result *CounterSamplingResult) string {
 
 		output += fmt.Sprintf("%-5s %-40s %12s %10s\n",
 			"Index", "Function", "Duration(ms)", "Compute%")
-		output += repeatChar('-', 75) + "\n"
+		output += fmtutil.RepeatChar('-', 75) + "\n"
 
 		count := min(10, len(dispatches))
 		for i := 0; i < count; i++ {
@@ -717,7 +718,7 @@ func FormatCounterSamplingResult(result *CounterSamplingResult) string {
 
 			output += fmt.Sprintf("%-5d %-40s %12.3f %9.1f%%\n",
 				metric.DispatchIndex,
-				truncateString(funcName, 40),
+				fmtutil.TruncateString(funcName, 40),
 				durationMs,
 				metric.ComputeUtilization)
 		}

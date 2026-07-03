@@ -6,6 +6,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
+	"github.com/tmc/gputrace/internal/fmtutil"
 	"github.com/tmc/gputrace/internal/mtlb"
 )
 
@@ -44,7 +45,7 @@ var mtlbListCmd = &cobra.Command{
 				}
 			}
 
-			sizeStr := formatSize(f.Size)
+			sizeStr := fmtutil.FormatBytes(f.Size, 1)
 			fmt.Fprintf(w, "%s\t%s\t%d\n", f.Name, sizeStr, funcCount)
 		}
 
@@ -58,17 +59,4 @@ var mtlbListCmd = &cobra.Command{
 
 func init() {
 	mtlbCmd.AddCommand(mtlbListCmd)
-}
-
-func formatSize(bytes int64) string {
-	const unit = 1024
-	if bytes < unit {
-		return fmt.Sprintf("%d B", bytes)
-	}
-	div, exp := int64(unit), 0
-	for n := bytes / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }

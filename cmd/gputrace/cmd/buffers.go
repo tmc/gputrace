@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/tmc/gputrace"
+	"github.com/tmc/gputrace/internal/fmtutil"
 )
 
 var (
@@ -1229,24 +1230,6 @@ func parseSize(s string) (uint64, error) {
 	return value * multiplier, nil
 }
 
-// formatBytes formats a byte count as a human-readable string.
-func formatBytes(bytes uint64) string {
-	const (
-		KB = 1024
-		MB = 1024 * KB
-		GB = 1024 * MB
-	)
-
-	if bytes >= GB {
-		return fmt.Sprintf("%.2f GB", float64(bytes)/GB)
-	} else if bytes >= MB {
-		return fmt.Sprintf("%.2f MB", float64(bytes)/MB)
-	} else if bytes >= KB {
-		return fmt.Sprintf("%.2f KB", float64(bytes)/KB)
-	}
-	return fmt.Sprintf("%d B", bytes)
-}
-
 // inspectBuffer reads and displays buffer contents in the specified format.
 func inspectBuffer(tracePath, bufferName string, numBytes int, format string) error {
 	// Construct buffer file path
@@ -1297,7 +1280,7 @@ func inspectBuffer(tracePath, bufferName string, numBytes int, format string) er
 
 	// Display header
 	fmt.Printf("Buffer: %s\n", bufferName)
-	fmt.Printf("Size: %s (%d bytes)\n", formatBytes(uint64(fileSize)), fileSize)
+	fmt.Printf("Size: %s (%d bytes)\n", fmtutil.FormatBytes(fileSize, 2), fileSize)
 	fmt.Printf("Showing: %d bytes in %s format\n\n", n, format)
 
 	// Format and display data

@@ -9,6 +9,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
+	"github.com/tmc/gputrace/internal/fmtutil"
 	"github.com/tmc/gputrace/internal/mtlb"
 	"github.com/tmc/gputrace/internal/trace"
 )
@@ -168,7 +169,7 @@ func runMTLBFunctions(tracePath string, opts mtlbFunctionsOptions, out io.Writer
 
 		sizeStr := "unknown"
 		if size := funcSizes[fn]; size.Known {
-			sizeStr = formatSize(size.Bytes)
+			sizeStr = fmtutil.FormatBytes(size.Bytes, 1)
 		}
 
 		if opts.WithUsage {

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/tmc/gputrace/internal/fmtutil"
 )
 
 var (
@@ -97,7 +98,7 @@ func runClearBuffers(cmd *cobra.Command, args []string) error {
 	}
 
 	// Show summary and prompt for confirmation
-	fmt.Printf("Found %d buffer files (%s total)\n", fileCount, formatByteSize(totalSize))
+	fmt.Printf("Found %d buffer files (%s total)\n", fileCount, fmtutil.FormatBytes(totalSize, 2))
 	if skippedSymlinks > 0 {
 		fmt.Printf("Will skip %d symlinks\n", skippedSymlinks)
 	}
@@ -130,7 +131,7 @@ func runClearBuffers(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	fmt.Printf("Zeroed %d buffer files (%s)\n", fileCount, formatByteSize(totalSize))
+	fmt.Printf("Zeroed %d buffer files (%s)\n", fileCount, fmtutil.FormatBytes(totalSize, 2))
 	return nil
 }
 
@@ -160,24 +161,4 @@ func zeroFile(path string, size int64) error {
 	}
 
 	return nil
-}
-
-// formatByteSize formats bytes as human-readable size
-func formatByteSize(bytes int64) string {
-	const (
-		KB = 1024
-		MB = KB * 1024
-		GB = MB * 1024
-	)
-
-	switch {
-	case bytes >= GB:
-		return fmt.Sprintf("%.2f GB", float64(bytes)/GB)
-	case bytes >= MB:
-		return fmt.Sprintf("%.2f MB", float64(bytes)/MB)
-	case bytes >= KB:
-		return fmt.Sprintf("%.2f KB", float64(bytes)/KB)
-	default:
-		return fmt.Sprintf("%d B", bytes)
-	}
 }
