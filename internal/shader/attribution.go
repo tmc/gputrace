@@ -3,6 +3,7 @@ package shader
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -417,34 +418,65 @@ func identifyHotSpots(lines []SourceLineAttribution, threshold float64) []Source
 
 // FormatShaderSourceAttribution generates a human-readable annotated source view.
 func FormatShaderSourceAttribution(attr *ShaderSourceAttribution, showHints bool) string {
-	output := fmt.Sprintf("=== Shader Source Attribution: %s ===\n\n", attr.ShaderName)
-	output += fmt.Sprintf("Source: %s\n", attr.SourceFile)
+	var output strings.Builder
+	_ = WriteShaderSourceAttribution(&output, attr, showHints)
+	return output.String()
+}
+
+// WriteShaderSourceAttribution writes a human-readable annotated source view.
+func WriteShaderSourceAttribution(w io.Writer, attr *ShaderSourceAttribution, showHints bool) error {
+	if _, err := fmt.Fprintf(w, "=== Shader Source Attribution: %s ===\n\n", attr.ShaderName); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "Source: %s\n", attr.SourceFile); err != nil {
+		return err
+	}
 
 	if attr.Metrics != nil {
-		output += fmt.Sprintf("Total GPU Time: %.2f ms\n", float64(attr.Metrics.TotalDurationNs)/1e6)
-		output += fmt.Sprintf("Invocations: %d\n", attr.Metrics.InvocationCount)
+		if _, err := fmt.Fprintf(w, "Total GPU Time: %.2f ms\n", float64(attr.Metrics.TotalDurationNs)/1e6); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "Invocations: %d\n", attr.Metrics.InvocationCount); err != nil {
+			return err
+		}
 		if attr.Metrics.Occupancy > 0 {
-			output += fmt.Sprintf("Occupancy: %.1f%%\n", attr.Metrics.Occupancy*100)
+			if _, err := fmt.Fprintf(w, "Occupancy: %.1f%%\n", attr.Metrics.Occupancy*100); err != nil {
+				return err
+			}
 		}
 	}
-	output += "\n"
+	if _, err := fmt.Fprint(w, "\n"); err != nil {
+		return err
+	}
 
 	// Show hot spots summary
 	if len(attr.HotSpots) > 0 {
-		output += "Hot Spots (top 20% by cost):\n"
+		if _, err := fmt.Fprint(w, "Hot Spots (top 20% by cost):\n"); err != nil {
+			return err
+		}
 		for _, hs := range attr.HotSpots {
-			output += fmt.Sprintf("  Line %4d: %5.1f%% | %s\n",
+			if _, err := fmt.Fprintf(w, "  Line %4d: %5.1f%% | %s\n",
 				hs.LineNumber,
 				hs.GPUTimePercent,
-				strings.TrimSpace(hs.SourceCode))
+				strings.TrimSpace(hs.SourceCode)); err != nil {
+				return err
+			}
 		}
-		output += "\n"
+		if _, err := fmt.Fprint(w, "\n"); err != nil {
+			return err
+		}
 	}
 
 	// Annotated source view
-	output += "Annotated Source:\n"
-	output += fmt.Sprintf("%-6s %8s %8s %4s | %s\n", "Line", "Time%", "ALU%", "Type", "Source")
-	output += strings.Repeat("-", 100) + "\n"
+	if _, err := fmt.Fprint(w, "Annotated Source:\n"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "%-6s %8s %8s %4s | %s\n", "Line", "Time%", "ALU%", "Type", "Source"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "%s\n", strings.Repeat("-", 100)); err != nil {
+		return err
+	}
 
 	for _, line := range attr.Lines {
 		// Skip lines with zero cost
@@ -457,23 +489,27 @@ func FormatShaderSourceAttribution(attr *ShaderSourceAttribution, showHints bool
 			marker = ">"
 		}
 
-		output += fmt.Sprintf("%s%-5d %7.1f%% %7.1f%% %4s | %s\n",
+		if _, err := fmt.Fprintf(w, "%s%-5d %7.1f%% %7.1f%% %4s | %s\n",
 			marker,
 			line.LineNumber,
 			line.GPUTimePercent,
 			line.ALUUtilization,
 			line.InstructionType[:1], // First letter: m, c, o
-			strings.TrimSpace(line.SourceCode))
+			strings.TrimSpace(line.SourceCode)); err != nil {
+			return err
+		}
 
 		// Show hints for hot spots
 		if showHints && len(line.Hints) > 0 {
 			for _, hint := range line.Hints {
-				output += fmt.Sprintf("      ├─ 💡 %s\n", hint)
+				if _, err := fmt.Fprintf(w, "      ├─ 💡 %s\n", hint); err != nil {
+					return err
+				}
 			}
 		}
 	}
 
-	return output
+	return nil
 }
 
 // FormatShaderSourceAttributionHTML generates an HTML view with syntax highlighting and interactive elements.

@@ -2,6 +2,7 @@ package graph
 
 import (
 	"fmt"
+	"io"
 	"strings"
 	"unicode"
 
@@ -18,15 +19,39 @@ func NewDOTGenerator() *DOTGenerator {
 
 // Generate creates a DOT graph from the trace.
 func (g *DOTGenerator) Generate(t *trace.Trace, config *Config) (string, error) {
+	var out strings.Builder
+	if err := g.GenerateTo(&out, t, config); err != nil {
+		return "", err
+	}
+	return out.String(), nil
+}
+
+// GenerateTo writes a DOT graph from the trace.
+func (g *DOTGenerator) GenerateTo(w io.Writer, t *trace.Trace, config *Config) error {
 	switch config.Type {
 	case "hierarchy":
-		return g.generateHierarchy(t, config)
+		output, err := g.generateHierarchy(t, config)
+		if err != nil {
+			return err
+		}
+		_, err = io.WriteString(w, output)
+		return err
 	case "flow":
-		return g.generateFlow(t, config)
+		output, err := g.generateFlow(t, config)
+		if err != nil {
+			return err
+		}
+		_, err = io.WriteString(w, output)
+		return err
 	case "resources":
-		return g.generateResources(t, config)
+		output, err := g.generateResources(t, config)
+		if err != nil {
+			return err
+		}
+		_, err = io.WriteString(w, output)
+		return err
 	default:
-		return "", fmt.Errorf("unsupported graph type: %s", config.Type)
+		return fmt.Errorf("unsupported graph type: %s", config.Type)
 	}
 }
 

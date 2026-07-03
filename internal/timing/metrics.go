@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/tmc/gputrace/internal/command"
@@ -304,26 +305,51 @@ func (tme *TimingMetricsExtractor) extractCommandBufferTimings(metrics *TimingMe
 
 // FormatTimingMetrics formats timing metrics as a human-readable report.
 func FormatTimingMetrics(metrics *TimingMetrics) string {
-	var out string
+	var out strings.Builder
+	_ = WriteTimingMetrics(&out, metrics)
+	return out.String()
+}
 
-	out += "=== GPU Timing Metrics ===\n\n"
-	out += fmt.Sprintf("Trace: %s\n", metrics.TracePath)
-	out += fmt.Sprintf("Total Duration: %v (%.2f ms)\n", metrics.TotalDuration, float64(metrics.TotalDuration)/float64(time.Millisecond))
+// WriteTimingMetrics writes timing metrics as a human-readable report.
+func WriteTimingMetrics(w io.Writer, metrics *TimingMetrics) error {
+	if _, err := fmt.Fprint(w, "=== GPU Timing Metrics ===\n\n"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "Trace: %s\n", metrics.TracePath); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "Total Duration: %v (%.2f ms)\n", metrics.TotalDuration, float64(metrics.TotalDuration)/float64(time.Millisecond)); err != nil {
+		return err
+	}
 	if metrics.TimingSource != "" {
 		sourceKind := "measured"
 		if metrics.TimingApproximate {
 			sourceKind = "approximate"
 		}
-		out += fmt.Sprintf("Timing Source: %s (%s)\n", metrics.TimingSource, sourceKind)
+		if _, err := fmt.Fprintf(w, "Timing Source: %s (%s)\n", metrics.TimingSource, sourceKind); err != nil {
+			return err
+		}
 	}
-	out += fmt.Sprintf("Command Buffers: %d\n", metrics.TotalCommandBuffers)
-	out += fmt.Sprintf("Encoders: %d\n", metrics.TotalEncoders)
-	out += fmt.Sprintf("Unique Kernels: %d\n\n", len(metrics.KernelTimings))
+	if _, err := fmt.Fprintf(w, "Command Buffers: %d\n", metrics.TotalCommandBuffers); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "Encoders: %d\n", metrics.TotalEncoders); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "Unique Kernels: %d\n\n", len(metrics.KernelTimings)); err != nil {
+		return err
+	}
 
-	out += "=== Top Kernels by Time ===\n\n"
-	out += fmt.Sprintf("%-40s %8s %10s %10s %10s %10s %10s %10s %8s\n",
-		"Kernel Name", "Invokes", "Total(ms)", "Avg(µs)", "Min(µs)", "Max(µs)", "P50(µs)", "P95(µs)", "% Total")
-	out += fmt.Sprintf("%s\n", repeatStr("-", 140))
+	if _, err := fmt.Fprint(w, "=== Top Kernels by Time ===\n\n"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "%-40s %8s %10s %10s %10s %10s %10s %10s %8s\n",
+		"Kernel Name", "Invokes", "Total(ms)", "Avg(µs)", "Min(µs)", "Max(µs)", "P50(µs)", "P95(µs)", "% Total"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "%s\n", repeatStr("-", 140)); err != nil {
+		return err
+	}
 
 	for _, kt := range metrics.KernelTimings {
 		name := kt.Name
@@ -338,7 +364,7 @@ func FormatTimingMetrics(metrics *TimingMetrics) string {
 		p50Us := float64(kt.P50Duration) / float64(time.Microsecond)
 		p95Us := float64(kt.P95Duration) / float64(time.Microsecond)
 
-		out += fmt.Sprintf("%-40s %8d %10.2f %10.1f %10.1f %10.1f %10.1f %10.1f %7.1f%%\n",
+		if _, err := fmt.Fprintf(w, "%-40s %8d %10.2f %10.1f %10.1f %10.1f %10.1f %10.1f %7.1f%%\n",
 			name,
 			kt.InvocationCount,
 			totalMs,
@@ -347,14 +373,22 @@ func FormatTimingMetrics(metrics *TimingMetrics) string {
 			maxUs,
 			p50Us,
 			p95Us,
-			kt.PercentOfTotal)
+			kt.PercentOfTotal); err != nil {
+			return err
+		}
 	}
 
 	// Command buffer summary
 	if len(metrics.CommandBufferTimings) > 0 {
-		out += "\n=== Command Buffer Summary ===\n\n"
-		out += fmt.Sprintf("%-10s %-30s %12s %10s\n", "Index", "Label", "Duration(ms)", "Encoders")
-		out += fmt.Sprintf("%s\n", repeatStr("-", 70))
+		if _, err := fmt.Fprint(w, "\n=== Command Buffer Summary ===\n\n"); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "%-10s %-30s %12s %10s\n", "Index", "Label", "Duration(ms)", "Encoders"); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "%s\n", repeatStr("-", 70)); err != nil {
+			return err
+		}
 
 		for _, cbt := range metrics.CommandBufferTimings {
 			label := cbt.Label
@@ -367,15 +401,17 @@ func FormatTimingMetrics(metrics *TimingMetrics) string {
 
 			durationMs := float64(cbt.Duration) / float64(time.Millisecond)
 
-			out += fmt.Sprintf("%-10d %-30s %12.2f %10d\n",
+			if _, err := fmt.Fprintf(w, "%-10d %-30s %12.2f %10d\n",
 				cbt.Index,
 				label,
 				durationMs,
-				cbt.EncoderCount)
+				cbt.EncoderCount); err != nil {
+				return err
+			}
 		}
 	}
 
-	return out
+	return nil
 }
 
 // ExportTimingMetricsJSON exports timing metrics to JSON format.
