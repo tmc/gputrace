@@ -12,12 +12,41 @@ import (
 	"time"
 )
 
-// Global automation cancel state
-var automationCanceled atomic.Bool
+var automationState automationCancelState
 
-// automationContext is used to cancel automation via context
-var automationCtx context.Context
-var automationCancel context.CancelFunc
+type automationCancelState struct {
+	canceled atomic.Bool
+
+	mu     sync.Mutex
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+func (s *automationCancelState) resetContext() {
+	s.canceled.Store(false)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ctx, s.cancel = context.WithCancel(context.Background())
+}
+
+func (s *automationCancelState) context() context.Context {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ctx == nil {
+		return context.Background()
+	}
+	return s.ctx
+}
+
+func (s *automationCancelState) cancelContext() {
+	s.mu.Lock()
+	cancel := s.cancel
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
 
 // StartAutomationCancelListener starts a Ctrl+C listener for automation.
 func StartAutomationCancelListener(showOverlay bool) (cleanup func()) {
@@ -33,10 +62,7 @@ func StartAutomationCancelListener(showOverlay bool) (cleanup func()) {
 // Returns a cleanup function that should be called when automation is done.
 func startAutomationCancelListener(showOverlay bool, signals <-chan os.Signal, stop func()) (cleanup func()) {
 	// Reset cancel state
-	automationCanceled.Store(false)
-
-	// Create cancellable context
-	automationCtx, automationCancel = context.WithCancel(context.Background())
+	automationState.resetContext()
 
 	if showOverlay {
 		_ = ShowAutomationOverlay("Automation running. Press Ctrl+C to cancel.")
@@ -46,8 +72,8 @@ func startAutomationCancelListener(showOverlay bool, signals <-chan os.Signal, s
 	go func() {
 		select {
 		case <-signals:
-			automationCanceled.Store(true)
-			automationCancel()
+			automationState.canceled.Store(true)
+			automationState.cancelContext()
 		case <-done:
 		}
 	}()
@@ -59,29 +85,31 @@ func startAutomationCancelListener(showOverlay bool, signals <-chan os.Signal, s
 			if stop != nil {
 				stop()
 			}
-			if automationCancel != nil {
-				automationCancel()
-			}
+			automationState.cancelContext()
 		})
 	}
 }
 
 // IsAutomationCanceled returns true if the user has requested to cancel automation.
 func IsAutomationCanceled() bool {
-	return automationCanceled.Load()
+	return automationState.canceled.Load()
 }
 
 // ResetAutomationCancel resets the cancel flag.
 func ResetAutomationCancel() {
-	automationCanceled.Store(false)
+	automationState.canceled.Store(false)
 }
 
 // CheckCancelAndReturn returns an error if automation was canceled.
 func CheckCancelAndReturn() error {
-	if automationCanceled.Load() {
+	if automationState.canceled.Load() {
 		return fmt.Errorf("automation canceled by user")
 	}
 	return nil
+}
+
+func automationContext() context.Context {
+	return automationState.context()
 }
 
 // ShowAutomationOverlay shows a notification that automation is running.
