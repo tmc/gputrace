@@ -47,7 +47,7 @@ checked in. They are opt-in through environment variables:
 | `GPUTRACE_CS_TEST_TRACE` | `internal/trace` real-trace CS parser coverage |
 | `GPUTRACE_DIFFTRACE_GO_TRACE` | `internal/difftrace` Go trace regression input |
 | `GPUTRACE_DIFFTRACE_PY_TRACE` | `internal/difftrace` Python trace regression input |
-| `GPUTRACE_MTLB_TEST_FILE` | `internal/mtlb` Metal library parser comparison |
+| `GPUTRACE_MTLB_TEST_FILE` | `internal/metallib` Metal library parser comparison |
 | `GPUTRACE_TRACE_TEST_TRACE` | `internal/trace` real-trace open coverage |
 
 These variables should point to local, developer-supplied files or directories.

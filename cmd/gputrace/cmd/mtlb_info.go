@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/tmc/gputrace/internal/fmtutil"
-	"github.com/tmc/gputrace/internal/mtlb"
+	"github.com/tmc/gputrace/internal/metallib"
 )
 
 var mtlbInfoCmd = &cobra.Command{
@@ -16,7 +16,7 @@ var mtlbInfoCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		tracePath := args[0]
 
-		files, err := mtlb.FindMTLBFiles(tracePath)
+		files, err := metallib.FindFiles(tracePath)
 		if err != nil {
 			return err
 		}
@@ -35,7 +35,7 @@ var mtlbInfoCmd = &cobra.Command{
 				continue
 			}
 
-			lib, err := mtlb.ParseMTLB(data)
+			lib, err := metallib.Parse(data)
 			if err != nil {
 				fmt.Printf("Error parsing MTLB: %v\n", err)
 				continue

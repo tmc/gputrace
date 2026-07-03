@@ -9,7 +9,7 @@ import (
 
 	"github.com/tmc/apple/metal"
 	"github.com/tmc/apple/objc"
-	"github.com/tmc/gputrace/internal/mtlb"
+	"github.com/tmc/gputrace/internal/metallib"
 )
 
 // MetalReplayEngine extends ReplayEngine with actual Metal execution capabilities.
@@ -19,7 +19,7 @@ type MetalReplayEngine struct {
 	MetalBuffers   map[uint64]*MetalBufferHandle   // trace address -> Metal buffer
 	MetalFunctions map[uint64]*MetalFunctionHandle // trace address -> Metal function
 	MetalPipelines map[uint64]*MetalPipelineHandle // trace address -> Metal pipeline
-	MTLBLibraries  []*mtlb.MetalLibrary            // Pre-compiled Metal libraries loaded from trace
+	MTLBLibraries  []*metallib.MetalLibrary        // Pre-compiled Metal libraries loaded from trace
 }
 
 // NewMetalReplayEngine creates a replay engine with Metal execution support.
@@ -35,7 +35,7 @@ func NewMetalReplayEngine(trace *Trace) (*MetalReplayEngine, error) {
 		MetalBuffers:   make(map[uint64]*MetalBufferHandle),
 		MetalFunctions: make(map[uint64]*MetalFunctionHandle),
 		MetalPipelines: make(map[uint64]*MetalPipelineHandle),
-		MTLBLibraries:  make([]*mtlb.MetalLibrary, 0),
+		MTLBLibraries:  make([]*metallib.MetalLibrary, 0),
 	}, nil
 }
 
@@ -188,7 +188,7 @@ func (mre *MetalReplayEngine) loadMTLBLibraries() error {
 		}
 
 		// Load the MTLB data using Metal APIs
-		metalLib, err := mtlb.LoadMTLBWithMetal(mtlbFile.Data)
+		metalLib, err := metallib.LoadMTLBWithMetal(mtlbFile.Data)
 		if err != nil {
 			// Log but continue - some libraries might be incompatible
 			fmt.Printf("Warning: failed to load MTLB library: %v\n", err)

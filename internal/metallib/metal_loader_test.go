@@ -1,6 +1,6 @@
 //go:build darwin
 
-package mtlb
+package metallib
 
 import (
 	"os"
@@ -64,14 +64,14 @@ func TestMetalLoader(t *testing.T) {
 func BenchmarkParserListFunctions(b *testing.B) {
 	data := loadMTLBTestData(b)
 
-	mtlb, err := ParseMTLB(data)
+	lib, err := Parse(data)
 	if err != nil {
-		b.Fatalf("ParseMTLB failed: %v", err)
+		b.Fatalf("Parse failed: %v", err)
 	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = mtlb.ListFunctions()
+		_, _ = lib.ListFunctions()
 	}
 }
 

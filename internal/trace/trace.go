@@ -17,7 +17,7 @@ import (
 	"strings"
 
 	"github.com/tmc/apple/x/plist"
-	"github.com/tmc/gputrace/internal/mtlb"
+	"github.com/tmc/gputrace/internal/metallib"
 )
 
 // DebugGroupLabel represents a hierarchical debug group label with its position in the capture.
@@ -41,7 +41,7 @@ type Trace struct {
 	CommandQueueLabel  string
 	DeviceLabels       map[uint64]string // Maps device resource address to label (e.g. "fences")
 	FunctionToName     map[uint64]string // Maps Ct function addresses to kernel names (computed from dispatch order)
-	MTLBLibraries      []*mtlb.MTLBFile  // Parsed Metal libraries found in the bundle
+	MTLBLibraries      []*metallib.File  // Parsed Metal libraries found in the bundle
 }
 
 // Metadata contains information from the metadata plist file.
@@ -63,8 +63,8 @@ type Metadata struct {
 type RecordType byte
 
 const (
-	RecordTypeCommand RecordType = 0x43 // 'C' - command record
-	RecordTypeString  RecordType = 0x43 // 'C' - string record (disambiguated by following 'S' byte)
+	RecordTypeCommand      RecordType = 0x43 // 'C' - command record
+	RecordTypeString       RecordType = 0x43 // 'C' - string record (disambiguated by following 'S' byte)
 	RecordTypeFunction     RecordType = 0x46 // 'F'
 	RecordTypeInteger      RecordType = 0x69 // 'i'
 	RecordTypeUnsignedLong RecordType = 0x75 // 'u' followed by 'l'
@@ -106,7 +106,7 @@ func Open(path string) (*Trace, error) {
 		EncoderDebugGroups: make(map[string]string),
 		DeviceLabels:       make(map[uint64]string),
 		FunctionToName:     make(map[uint64]string),
-		MTLBLibraries:      make([]*mtlb.MTLBFile, 0),
+		MTLBLibraries:      make([]*metallib.File, 0),
 	}
 
 	// Parse metadata
@@ -323,7 +323,7 @@ func (t *Trace) scanSidecarFiles() error {
 				continue
 			}
 
-			if mtlbFile, err := mtlb.ParseMTLB(data); err == nil {
+			if mtlbFile, err := metallib.Parse(data); err == nil {
 				t.MTLBLibraries = append(t.MTLBLibraries, mtlbFile)
 			}
 		}

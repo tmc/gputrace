@@ -1,4 +1,4 @@
-package mtlb
+package metallib
 
 import (
 	"encoding/binary"
@@ -27,9 +27,9 @@ func TestParseMTLB(t *testing.T) {
 	offset += 6 + 10 // "NAMED\x00" (6) + "function1\x00" (10)
 	copy(data[offset:], []byte("NAMED\x00function2\x00"))
 
-	lib, err := ParseMTLB(data)
+	lib, err := Parse(data)
 	if err != nil {
-		t.Fatalf("ParseMTLB failed: %v", err)
+		t.Fatalf("Parse failed: %v", err)
 	}
 
 	if lib.Header.Version != 1 {
@@ -59,9 +59,9 @@ func TestListFunctionMetadataTaggedTable(t *testing.T) {
 		taggedFunctionForTest("tiny_mul", 2048, 8192, 0),
 	)
 
-	lib, err := ParseMTLB(data)
+	lib, err := Parse(data)
 	if err != nil {
-		t.Fatalf("ParseMTLB failed: %v", err)
+		t.Fatalf("Parse failed: %v", err)
 	}
 
 	funcs, err := lib.ListFunctionMetadata()
@@ -103,9 +103,9 @@ func TestListFunctionMetadataFallsBackAfterZeroTaggedCount(t *testing.T) {
 	binary.LittleEndian.PutUint64(data[40:48], uint64(len(data)))
 	copy(data[48:], payload)
 
-	lib, err := ParseMTLB(data)
+	lib, err := Parse(data)
 	if err != nil {
-		t.Fatalf("ParseMTLB failed: %v", err)
+		t.Fatalf("Parse failed: %v", err)
 	}
 
 	funcs, err := lib.ListFunctions()

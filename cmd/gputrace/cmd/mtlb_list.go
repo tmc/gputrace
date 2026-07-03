@@ -7,7 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/tmc/gputrace/internal/fmtutil"
-	"github.com/tmc/gputrace/internal/mtlb"
+	"github.com/tmc/gputrace/internal/metallib"
 )
 
 var mtlbListCmd = &cobra.Command{
@@ -17,7 +17,7 @@ var mtlbListCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		tracePath := args[0]
 
-		files, err := mtlb.FindMTLBFiles(tracePath)
+		files, err := metallib.FindFiles(tracePath)
 		if err != nil {
 			return err
 		}
@@ -37,7 +37,7 @@ var mtlbListCmd = &cobra.Command{
 			funcCount := 0
 			data, err := os.ReadFile(f.Path)
 			if err == nil {
-				if lib, err := mtlb.ParseMTLB(data); err == nil {
+				if lib, err := metallib.Parse(data); err == nil {
 					if funcs, err := lib.ListFunctions(); err == nil {
 						funcCount = len(funcs)
 						totalFuncs += funcCount
