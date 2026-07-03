@@ -189,9 +189,9 @@ func (m *ShaderSourceMapper) indexMetalFile(path string) error {
 	return scanner.Err()
 }
 
-// GetSourceLocation returns the source file and line number for a kernel.
+// SourceLocation returns the source file and line number for a kernel.
 // Returns empty string and 0 if not found.
-func (m *ShaderSourceMapper) GetSourceLocation(kernelName string) (file string, line int) {
+func (m *ShaderSourceMapper) SourceLocation(kernelName string) (file string, line int) {
 	// Try exact match first
 	if file, ok := m.kernelToFile[kernelName]; ok {
 		return file, m.kernelToLine[kernelName]

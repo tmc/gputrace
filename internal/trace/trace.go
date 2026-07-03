@@ -693,9 +693,9 @@ func isActualEncoderLabel(label string) bool {
 	return hasLetter
 }
 
-// GetDebugGroupForLabel returns the debug group for a given encoder label.
+// DebugGroupForLabel returns the debug group for a given encoder label.
 // Uses sequence-based mapping built during capture file parsing.
-func (t *Trace) GetDebugGroupForLabel(encoderLabel string) string {
+func (t *Trace) DebugGroupForLabel(encoderLabel string) string {
 	if debugGroup, exists := t.EncoderDebugGroups[encoderLabel]; exists {
 		return debugGroup
 	}

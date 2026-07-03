@@ -58,7 +58,7 @@ func TestParseTimelineFilesFromDirIntegration(t *testing.T) {
 
 	t.Logf("Parsed %d timeline files", len(timelines))
 
-	summary := GetTimelineSummary(timelines)
+	summary := TimelineSummaryForData(timelines)
 	t.Logf("Summary:")
 	t.Logf("  File count: %d", summary.FileCount)
 	t.Logf("  Total size: %d bytes (%.2f MB)", summary.TotalSize, float64(summary.TotalSize)/(1024*1024))

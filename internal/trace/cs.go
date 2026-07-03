@@ -92,8 +92,8 @@ func (t *Trace) ParseCSRecords() ([]*CSRecord, error) {
 	return records, nil
 }
 
-// GetKernelNameCSRecords returns only CS records that contain kernel names (not UUIDs).
-func (t *Trace) GetKernelNameCSRecords() ([]*CSRecord, error) {
+// KernelNameCSRecords returns only CS records that contain kernel names (not UUIDs).
+func (t *Trace) KernelNameCSRecords() ([]*CSRecord, error) {
 	allRecords, err := t.ParseCSRecords()
 	if err != nil {
 		return nil, err
@@ -109,8 +109,8 @@ func (t *Trace) GetKernelNameCSRecords() ([]*CSRecord, error) {
 	return kernelRecords, nil
 }
 
-// GetUUIDCSRecords returns only CS records that contain pipeline state UUIDs.
-func (t *Trace) GetUUIDCSRecords() ([]*CSRecord, error) {
+// UUIDCSRecords returns only CS records that contain pipeline state UUIDs.
+func (t *Trace) UUIDCSRecords() ([]*CSRecord, error) {
 	allRecords, err := t.ParseCSRecords()
 	if err != nil {
 		return nil, err

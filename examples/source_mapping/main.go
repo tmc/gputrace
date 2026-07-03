@@ -84,7 +84,7 @@ func main() {
 			if count >= 5 {
 				break
 			}
-			file, line := mapper.GetSourceLocation(kernelName)
+			file, line := mapper.SourceLocation(kernelName)
 			if file != "" {
 				fmt.Printf("  %-40s -> %s:%d\n", kernelName, file, line)
 				count++

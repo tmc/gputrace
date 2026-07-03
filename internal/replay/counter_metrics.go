@@ -38,7 +38,7 @@ func aggregateReplayEncoderCounterSamples(plan *ReplayPlan, samples []counter.Co
 			DispatchCount:       int(counterDelta(start, end, "dispatchCount")),
 		}
 		if metric.DispatchCount == 0 {
-			metric.DispatchCount = computeDispatchCount(plan.GetEncoderCommands(encoder.Index))
+			metric.DispatchCount = computeDispatchCount(plan.EncoderCommands(encoder.Index))
 		}
 		metrics = append(metrics, metric)
 	}
@@ -49,7 +49,7 @@ func aggregateReplayDispatchCounterSamples(plan *ReplayPlan, samples []counter.C
 	var metrics []counter.DispatchCounterMetrics
 	dispatchIndex := 0
 	for _, encoder := range plan.Encoders {
-		for commandIndex, cmd := range plan.GetEncoderCommands(encoder.Index) {
+		for commandIndex, cmd := range plan.EncoderCommands(encoder.Index) {
 			if cmd.Type != "compute_dispatch" {
 				continue
 			}

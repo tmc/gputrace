@@ -25,17 +25,17 @@ func TestESLCliqueFunctionsAvailable(t *testing.T) {
 	}
 	defer Close()
 
-	if _, err := GetESLCliqueTimings(0); err == nil {
-		t.Fatal("GetESLCliqueTimings(0) succeeded, want invalid profile data error")
+	if _, err := ESLCliqueTimings(0); err == nil {
+		t.Fatal("ESLCliqueTimings(0) succeeded, want invalid profile data error")
 	}
 
-	if trace := GetESLCliqueInstructionTrace(0, 0); trace != 0 {
-		t.Fatalf("GetESLCliqueInstructionTrace(0, 0) = %#x, want 0", trace)
+	if trace := ESLCliqueInstructionTrace(0, 0); trace != 0 {
+		t.Fatalf("ESLCliqueInstructionTrace(0, 0) = %#x, want 0", trace)
 	}
 
-	stats := GetInstructionTraceStats(0)
+	stats := TraceInstructionStats(0)
 	if stats != (InstructionTraceStats{}) {
-		t.Fatalf("GetInstructionTraceStats(0) = %+v, want zero stats", stats)
+		t.Fatalf("TraceInstructionStats(0) = %+v, want zero stats", stats)
 	}
 }
 

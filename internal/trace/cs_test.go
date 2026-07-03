@@ -60,9 +60,9 @@ func TestCSRecordHelpersSyntheticFixture(t *testing.T) {
 		),
 	}
 
-	kernels, err := tr.GetKernelNameCSRecords()
+	kernels, err := tr.KernelNameCSRecords()
 	if err != nil {
-		t.Fatalf("GetKernelNameCSRecords failed: %v", err)
+		t.Fatalf("KernelNameCSRecords failed: %v", err)
 	}
 	if got, want := len(kernels), 2; got != want {
 		t.Fatalf("kernel record count = %d, want %d", got, want)
@@ -71,9 +71,9 @@ func TestCSRecordHelpersSyntheticFixture(t *testing.T) {
 		t.Fatalf("kernel identifiers = %q, %q", kernels[0].Identifier, kernels[1].Identifier)
 	}
 
-	uuids, err := tr.GetUUIDCSRecords()
+	uuids, err := tr.UUIDCSRecords()
 	if err != nil {
-		t.Fatalf("GetUUIDCSRecords failed: %v", err)
+		t.Fatalf("UUIDCSRecords failed: %v", err)
 	}
 	if got, want := len(uuids), 1; got != want {
 		t.Fatalf("UUID record count = %d, want %d", got, want)
@@ -133,9 +133,9 @@ func TestParseCSRecordsRealTraceIntegration(t *testing.T) {
 		t.Fatal("expected at least one CS record")
 	}
 
-	kernels, err := tr.GetKernelNameCSRecords()
+	kernels, err := tr.KernelNameCSRecords()
 	if err != nil {
-		t.Fatalf("GetKernelNameCSRecords failed: %v", err)
+		t.Fatalf("KernelNameCSRecords failed: %v", err)
 	}
 	if len(kernels) == 0 {
 		t.Fatal("expected at least one kernel-name CS record")

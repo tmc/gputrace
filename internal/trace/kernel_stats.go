@@ -272,11 +272,11 @@ func (t *Trace) AnalyzeKernels() (map[string]*KernelStat, error) {
 						s.EncoderLabels[currentEncoder.Label]++
 					}
 
-					if debugGroup := t.GetDebugGroupForLabel(currentEncoder.Label); debugGroup != "" {
+					if debugGroup := t.DebugGroupForLabel(currentEncoder.Label); debugGroup != "" {
 						s.DebugGroups[debugGroup]++
-					} else if debugGroup := t.GetDebugGroupForLabel(kernelName); debugGroup != "" {
-                        s.DebugGroups[debugGroup]++
-                    }
+					} else if debugGroup := t.DebugGroupForLabel(kernelName); debugGroup != "" {
+						s.DebugGroups[debugGroup]++
+					}
 				} else {
 					// Dispatch outside of known encoder?
 					// Add to "unknown"

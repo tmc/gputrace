@@ -690,7 +690,7 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 
 		// Add source mapping
 		if mapper != nil {
-			if src, line := mapper.GetSourceLocation(enc.Label); src != "" {
+			if src, line := mapper.SourceLocation(enc.Label); src != "" {
 				fn.Filename = src
 				fn.StartLine = int64(line)
 			}
@@ -1019,7 +1019,7 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 
 				// Add source mapping if available
 				if mapper != nil {
-					if src, line := mapper.GetSourceLocation(funcName); src != "" {
+					if src, line := mapper.SourceLocation(funcName); src != "" {
 						fn.Filename = src
 						fn.StartLine = int64(line)
 					}

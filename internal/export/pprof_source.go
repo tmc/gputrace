@@ -108,7 +108,7 @@ func ToPprofWithSource(t *trace.Trace, timings []*EncoderTiming, mapper *ShaderS
 
 		// Try to add source file information
 		if mapper != nil {
-			if sourceFile, lineNum := mapper.GetSourceLocation(kernelName); sourceFile != "" {
+			if sourceFile, lineNum := mapper.SourceLocation(kernelName); sourceFile != "" {
 				kernelFunc.Filename = sourceFile
 				kernelFunc.StartLine = int64(lineNum)
 			}
@@ -290,7 +290,7 @@ func ToPprofWithSourceLines(t *trace.Trace, timings []*EncoderTiming, mapper *Sh
 
 		// Try to get source attribution for this kernel
 		if mapper != nil {
-			sourceFile, startLine := mapper.GetSourceLocation(kernelName)
+			sourceFile, startLine := mapper.SourceLocation(kernelName)
 			if sourceFile != "" {
 				// Get or create mapping for this source file
 				mapping, exists := fileToMapping[sourceFile]
