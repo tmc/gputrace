@@ -117,12 +117,13 @@ type briefPayload struct {
 }
 
 type briefTraceSummary struct {
-	Label           string `json:"label"`
-	TotalGPUUs      int    `json:"total_gpu_us"`
-	Dispatches      int    `json:"dispatches"`
-	ComputeEncoders int    `json:"compute_encoders"`
-	Buffers         int    `json:"buffers"`
-	BufferBytes     uint64 `json:"buffer_bytes"`
+	Label              string `json:"label"`
+	TotalGPUUs         int    `json:"total_gpu_us"`
+	Dispatches         int    `json:"dispatches"`
+	ProfilerEncoders   int    `json:"profiler_encoders"`
+	RawComputeEncoders int    `json:"raw_compute_encoders"`
+	Buffers            int    `json:"buffers"`
+	BufferBytes        uint64 `json:"buffer_bytes"`
 }
 
 func newBriefHeader() briefHeader {
@@ -134,7 +135,7 @@ func newBriefHeader() briefHeader {
 		},
 		Legend: briefLegend{
 			AbsDeltaUs:     "abs(A_us - B_us) for the matched kernel",
-			PipelineHash:   "per-side pipeline object hash; differs across processes even for identical function+threadgroup",
+			PipelineHash:   "per-side pipeline object hash; keyed by pipeline ID (gputrace 80d8c2b), so identical function+threadgroup now yields the SAME hash across processes — a delta here means genuinely different pipeline objects",
 			StaticCounters: "per-pipeline static shader metrics (instructions/registers/loads/stores)",
 		},
 		FieldOrder: []string{
@@ -149,7 +150,7 @@ func newBriefHeader() briefHeader {
 			"b_pipeline_hash",
 			"static_counter_delta",
 		},
-		GeneratedBy: fmt.Sprintf("gputrace brief v%s (schema 0)", buildinfo.EffectiveVersion()),
+		GeneratedBy: fmt.Sprintf("gputrace brief v%s (schema 1)", buildinfo.EffectiveVersion()),
 	}
 }
 
@@ -176,7 +177,7 @@ func buildBrief(leftPath, rightPath string, opts briefOptions) (briefDocument, e
 	budgeted := applyBriefTokenBudget(outliers, opts.tokenBudget)
 
 	return briefDocument{
-		SchemaVersion: "0",
+		SchemaVersion: "1",
 		Header:        newBriefHeader(),
 		Payload: briefPayload{
 			TraceA:            left.summary,
@@ -239,6 +240,7 @@ func loadBriefTrace(path, label string) (briefTraceData, error) {
 	if err != nil {
 		return briefTraceData{}, fmt.Errorf("summarize buffers: %w", err)
 	}
+	rawComputeEncoders := countRawComputeEncoders(trace)
 	insights, err := gputrace.GenerateInsights(trace)
 	if err != nil {
 		return briefTraceData{}, fmt.Errorf("generate insights: %w", err)
@@ -247,15 +249,24 @@ func loadBriefTrace(path, label string) (briefTraceData, error) {
 	return briefTraceData{
 		data: data,
 		summary: briefTraceSummary{
-			Label:           label,
-			TotalGPUUs:      totalBriefGPUUs(data.Dispatches),
-			Dispatches:      len(data.Dispatches),
-			ComputeEncoders: len(data.Encoders),
-			Buffers:         buffers,
-			BufferBytes:     bytes,
+			Label:              label,
+			TotalGPUUs:         totalBriefGPUUs(data.Dispatches),
+			Dispatches:         len(data.Dispatches),
+			ProfilerEncoders:   len(data.Encoders),
+			RawComputeEncoders: rawComputeEncoders,
+			Buffers:            buffers,
+			BufferBytes:        bytes,
 		},
 		insights: insights.Insights,
 	}, nil
+}
+
+func countRawComputeEncoders(trace *gputrace.Trace) int {
+	n, err := trace.CountComputeEncoders()
+	if err != nil || n == 0 {
+		return 0
+	}
+	return n
 }
 
 func briefBufferSummary(path string, trace *gputrace.Trace) (int, uint64, error) {
