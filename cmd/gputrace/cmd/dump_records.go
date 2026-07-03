@@ -10,19 +10,24 @@ import (
 	"github.com/tmc/gputrace/internal/trace"
 )
 
-var (
-	dumpRecordsType    string
-	dumpRecordsLimit   int
-	dumpRecordsOffset  int
-	dumpRecordsSummary bool
-	dumpRecordsAnalyze bool
-)
+var dumpRecordsCmd = newDumpRecordsCommand(&dumpRecordsOptions{
+	limit: -1,
+})
 
-var dumpRecordsCmd = &cobra.Command{
-	Use:    "dump-records <trace-path>",
-	Short:  "Dump raw MTSP records from a GPU trace",
-	Hidden: true,
-	Long: `Dumps raw MTSP records from a GPU trace file for low-level analysis.
+type dumpRecordsOptions struct {
+	recordType string
+	limit      int
+	offset     int
+	summary    bool
+	analyze    bool
+}
+
+func newDumpRecordsCommand(opts *dumpRecordsOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:    "dump-records <trace-path>",
+		Short:  "Dump raw MTSP records from a GPU trace",
+		Hidden: true,
+		Long: `Dumps raw MTSP records from a GPU trace file for low-level analysis.
 
 This command is useful for reverse-engineering the trace format and identifying
 unknown fields in record types like Ct, Ci, Cuw, and Cul.
@@ -35,22 +40,26 @@ Examples:
   # Dump a specific sidecar file (e.g. MTSP device-resources or MTLB library)
   gputrace dump-records trace.gputrace/5179640D...
 `,
-	Args: cobra.ExactArgs(1),
-	RunE: runDumpRecords,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runDumpRecords(cmd, args, opts)
+		},
+	}
+
+	cmd.Flags().StringVar(&opts.recordType, "type", opts.recordType, "Filter by record type (e.g., Ct, Ci, Cul)")
+	cmd.Flags().IntVar(&opts.limit, "limit", opts.limit, "Limit number of records to show")
+	cmd.Flags().IntVar(&opts.offset, "offset", opts.offset, "Start showing records from this index")
+	cmd.Flags().BoolVarP(&opts.summary, "summary", "s", opts.summary, "Show summary only (no data dump)")
+	cmd.Flags().BoolVarP(&opts.analyze, "analyze", "a", opts.analyze, "Show coverage analysis (byte counts)")
+	return cmd
 }
 
 func init() {
 	rootCmd.AddCommand(dumpRecordsCmd)
-
-	dumpRecordsCmd.Flags().StringVar(&dumpRecordsType, "type", "", "Filter by record type (e.g., Ct, Ci, Cul)")
-	dumpRecordsCmd.Flags().IntVar(&dumpRecordsLimit, "limit", -1, "Limit number of records to show")
-	dumpRecordsCmd.Flags().IntVar(&dumpRecordsOffset, "offset", 0, "Start showing records from this index")
-	dumpRecordsCmd.Flags().BoolVarP(&dumpRecordsSummary, "summary", "s", false, "Show summary only (no data dump)")
-	dumpRecordsCmd.Flags().BoolVarP(&dumpRecordsAnalyze, "analyze", "a", false, "Show coverage analysis (byte counts)")
 }
 
-func runDumpRecords(cmd *cobra.Command, args []string) error {
-	if err := validateDumpRecordsFlags(dumpRecordsOffset, dumpRecordsLimit); err != nil {
+func runDumpRecords(cmd *cobra.Command, args []string, opts *dumpRecordsOptions) error {
+	if err := validateDumpRecordsFlags(opts.offset, opts.limit); err != nil {
 		return err
 	}
 
@@ -85,26 +94,26 @@ func runDumpRecords(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Parsed %d records from %s\n\n", len(records), tracePath)
 
-	if dumpRecordsAnalyze {
+	if opts.analyze {
 		printCoverageAnalysis(records)
 		return nil
 	}
 
 	count := 0
 	for i, rec := range records {
-		if i < dumpRecordsOffset {
+		if i < opts.offset {
 			continue
 		}
 
-		if dumpRecordsType != "" && rec.Type != dumpRecordsType {
+		if opts.recordType != "" && rec.Type != opts.recordType {
 			continue
 		}
 
-		if dumpRecordsLimit >= 0 && count >= dumpRecordsLimit {
+		if opts.limit >= 0 && count >= opts.limit {
 			break
 		}
 
-		printRecord(i, rec, "")
+		printRecord(i, rec, "", opts.summary)
 		count++
 	}
 
@@ -194,10 +203,10 @@ func printCoverageAnalysis(records []trace.MTSPRecord) {
 	}
 }
 
-func printRecord(index int, rec trace.MTSPRecord, indent string) {
+func printRecord(index int, rec trace.MTSPRecord, indent string, summary bool) {
 	fmt.Printf("%s[%d] Offset: %s (Type: %s, Size: %d)\n", indent, index, Colorize(fmt.Sprintf("0x%x", rec.Offset), ColorCyan), Colorize(rec.Type, ColorYellow), rec.Size)
 
-	if !dumpRecordsSummary {
+	if !summary {
 		// Hex dump of data
 		if len(rec.Data) > 256 {
 			fmt.Println(hex.Dump(rec.Data[:256]))
@@ -289,7 +298,7 @@ func printRecord(index int, rec trace.MTSPRecord, indent string) {
 		if nested, err := t.ParseNestedRecords(rec); err == nil && len(nested) > 0 {
 			fmt.Printf("%s  Possible Container (%s) with %d nested records:\n", indent, rec.Type, len(nested))
 			for j, nrec := range nested {
-				printRecord(j, nrec, indent+"    ")
+				printRecord(j, nrec, indent+"    ", summary)
 			}
 		}
 	}

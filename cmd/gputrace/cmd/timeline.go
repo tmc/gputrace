@@ -15,15 +15,20 @@ import (
 	tracepkg "github.com/tmc/gputrace/internal/trace"
 )
 
-var (
-	timelineOutput string
-	timelineFormat string
-)
+var timelineCmd = newTimelineCommand(&timelineOptions{
+	format: "text",
+})
 
-var timelineCmd = &cobra.Command{
-	Use:   "timeline <trace.gputrace>",
-	Short: "Generate timeline visualization from GPU trace",
-	Long: `Generate an interactive timeline visualization showing:
+type timelineOptions struct {
+	output string
+	format string
+}
+
+func newTimelineCommand(opts *timelineOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "timeline <trace.gputrace>",
+		Short: "Generate timeline visualization from GPU trace",
+		Long: `Generate an interactive timeline visualization showing:
   - Chronological API call sequence with timestamps
   - Concurrent command buffer execution
   - Encoder lifecycle (creation -> encoding -> commit)
@@ -56,20 +61,24 @@ Examples:
 
   # Generate raw JSON for custom processing
   gputrace timeline trace.gputrace -o timeline.json --format json`,
-	Args: cobra.ExactArgs(1),
-	RunE: runTimeline,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runTimeline(cmd, args, opts)
+		},
+	}
+
+	cmd.Flags().StringVarP(&opts.output, "output", "o", opts.output, "Output file path (default: stdout for text, timeline.json otherwise)")
+	cmd.Flags().StringVar(&opts.format, "format", opts.format, "Output format: chrome, perfetto, html, json, text")
+	return cmd
 }
 
 func init() {
 	rootCmd.AddCommand(timelineCmd)
-
-	timelineCmd.Flags().StringVarP(&timelineOutput, "output", "o", "", "Output file path (default: stdout for text, timeline.json otherwise)")
-	timelineCmd.Flags().StringVar(&timelineFormat, "format", "text", "Output format: chrome, perfetto, html, json, text")
 }
 
-func runTimeline(cmd *cobra.Command, args []string) error {
+func runTimeline(cmd *cobra.Command, args []string, opts *timelineOptions) error {
 	tracePath := args[0]
-	if err := validateTimelineFormat(timelineFormat); err != nil {
+	if err := validateTimelineFormat(opts.format); err != nil {
 		return err
 	}
 
@@ -82,7 +91,7 @@ func runTimeline(cmd *cobra.Command, args []string) error {
 	trace, err := gputrace.Open(tracePath)
 	if err != nil {
 		// Fall back to profiler-only mode if unsorted-capture is missing
-		return runTimelineFromProfiler(tracePath)
+		return runTimelineFromProfiler(tracePath, opts)
 	}
 
 	// Generate timeline data
@@ -108,10 +117,10 @@ func runTimeline(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	outputPath := timelineOutputPath(timelineFormat, timelineOutput)
+	outputPath := timelineOutputPath(opts.format, opts.output)
 
 	// Export based on format
-	switch timelineFormat {
+	switch opts.format {
 	case "chrome", "perfetto":
 		if err := exportChromeTracing(timeline, outputPath); err != nil {
 			return fmt.Errorf("failed to export Chrome/Perfetto tracing: %w", err)
@@ -129,14 +138,14 @@ func runTimeline(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("failed to export text: %w", err)
 		}
 		if outputPath != "" && !commandOutputPathIsStdout(outputPath) {
-			printTimelineExportStatus(outputPath, timelineFormat, false)
+			printTimelineExportStatus(outputPath, opts.format, false)
 		}
 		return nil
 	default:
-		return validateTimelineFormat(timelineFormat)
+		return validateTimelineFormat(opts.format)
 	}
 
-	printTimelineExportStatus(outputPath, timelineFormat, false)
+	printTimelineExportStatus(outputPath, opts.format, false)
 	return nil
 }
 
@@ -2268,8 +2277,8 @@ func exportHTML(timeline *Timeline, outputPath string) error {
 }
 
 // runTimelineFromProfiler generates timeline from profiler-only traces (.gpuprofiler_raw without unsorted-capture).
-func runTimelineFromProfiler(tracePath string) error {
-	if err := validateTimelineFormat(timelineFormat); err != nil {
+func runTimelineFromProfiler(tracePath string, opts *timelineOptions) error {
+	if err := validateTimelineFormat(opts.format); err != nil {
 		return err
 	}
 
@@ -2307,10 +2316,10 @@ func runTimelineFromProfiler(tracePath string) error {
 	// Build timeline from profiler data
 	timeline := buildTimelineFromProfilerData(tracePath, stats)
 
-	outputPath := timelineOutputPath(timelineFormat, timelineOutput)
+	outputPath := timelineOutputPath(opts.format, opts.output)
 
 	// Export based on format
-	switch timelineFormat {
+	switch opts.format {
 	case "chrome", "perfetto":
 		if err := exportChromeTracing(timeline, outputPath); err != nil {
 			return fmt.Errorf("failed to export Chrome/Perfetto tracing: %w", err)
@@ -2328,14 +2337,14 @@ func runTimelineFromProfiler(tracePath string) error {
 			return fmt.Errorf("failed to export text: %w", err)
 		}
 		if outputPath != "" && !commandOutputPathIsStdout(outputPath) {
-			printTimelineExportStatus(outputPath, timelineFormat, true)
+			printTimelineExportStatus(outputPath, opts.format, true)
 		}
 		return nil
 	default:
-		return validateTimelineFormat(timelineFormat)
+		return validateTimelineFormat(opts.format)
 	}
 
-	printTimelineExportStatus(outputPath, timelineFormat, true)
+	printTimelineExportStatus(outputPath, opts.format, true)
 
 	return nil
 }

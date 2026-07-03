@@ -264,14 +264,15 @@ func TestFormatSourceLineTimingNotice(t *testing.T) {
 }
 
 func resetPprofTestFlags() {
-	output = ""
-	prefix = ""
-	all = false
-	verbose = false
-	textReport = false
-	showStats = false
-	searchPaths = nil
-	sourceLines = false
+	flags := pprofCmd.Flags()
+	_ = flags.Set("output", "")
+	_ = flags.Set("prefix", "")
+	_ = flags.Set("all", "false")
+	_ = flags.Set("verbose", "false")
+	_ = flags.Set("text", "false")
+	_ = flags.Set("stats", "false")
+	_ = flags.Set("search-path", "")
+	_ = flags.Set("source-lines", "false")
 }
 
 func captureStdout(t *testing.T, run func() error) (string, error) {

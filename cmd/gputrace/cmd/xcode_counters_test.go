@@ -71,17 +71,10 @@ func TestXcodeCountersRejectsInvalidOptionsBeforeTraceIO(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			oldFormat := xcodeCountersFormat
-			oldTop := xcodeCountersTop
-			t.Cleanup(func() {
-				xcodeCountersFormat = oldFormat
-				xcodeCountersTop = oldTop
+			err := runXcodeCounters(nil, []string{"missing.gputrace"}, &xcodeCountersOptions{
+				format: tt.format,
+				top:    tt.top,
 			})
-
-			xcodeCountersFormat = tt.format
-			xcodeCountersTop = tt.top
-
-			err := runXcodeCounters(nil, []string{"missing.gputrace"})
 			if err == nil {
 				t.Fatalf("runXcodeCounters succeeded, want %q", tt.wantErr)
 			}
@@ -154,16 +147,14 @@ func TestPrintXcodeJSONEscapesStrings(t *testing.T) {
 		},
 	}
 
-	out, err := captureStdout(t, func() error {
-		return printXcodeJSON(data)
-	})
-	if err != nil {
+	var out strings.Builder
+	if err := printXcodeJSON(&out, data); err != nil {
 		t.Fatalf("printXcodeJSON: %v", err)
 	}
 
 	var got xcodeCountersJSONOutput
-	if err := json.Unmarshal([]byte(out), &got); err != nil {
-		t.Fatalf("JSON output did not decode: %v\n%s", err, out)
+	if err := json.Unmarshal([]byte(out.String()), &got); err != nil {
+		t.Fatalf("JSON output did not decode: %v\n%s", err, out.String())
 	}
 	if got.Encoders != 1 || got.Metrics != 1 || len(got.Data) != 1 {
 		t.Fatalf("summary = encoders:%d metrics:%d data:%d, want 1,1,1", got.Encoders, got.Metrics, len(got.Data))

@@ -141,10 +141,8 @@ func TestFormatDumpAPICallListMatchesTraceFormatters(t *testing.T) {
 }
 
 func TestRunDumpValidatesFlagsBeforeTraceIO(t *testing.T) {
-	restoreDumpGlobals(t)
-	dumpCommandBufferIndex = -2
-
-	err := runDump(&cobra.Command{}, []string{filepath.Join(t.TempDir(), "missing.gputrace")})
+	opts := dumpOptions{commandBufferIndex: -2}
+	err := runDump(&cobra.Command{}, []string{filepath.Join(t.TempDir(), "missing.gputrace")}, opts)
 	if err == nil {
 		t.Fatal("runDump succeeded, want error")
 	}
@@ -155,16 +153,13 @@ func TestRunDumpValidatesFlagsBeforeTraceIO(t *testing.T) {
 
 func TestRunDumpJSONUsesCommandOutput(t *testing.T) {
 	tracePath := testDumpTracePath(t)
-
-	restoreDumpGlobals(t)
-	dumpJSON = true
-	dumpFilter = "dispatchthreads"
+	opts := dumpOptions{json: true, filter: "dispatchthreads", commandBufferIndex: -1}
 
 	var out bytes.Buffer
 	command := &cobra.Command{}
 	command.SetOut(&out)
 
-	if err := runDump(command, []string{tracePath}); err != nil {
+	if err := runDump(command, []string{tracePath}, opts); err != nil {
 		t.Fatalf("runDump: %v", err)
 	}
 	if got := out.String(); !strings.HasSuffix(got, "\n") {
@@ -195,32 +190,6 @@ func testDumpTracePath(t *testing.T) string {
 		t.Skipf("trace fixture not available: %s", tracePath)
 	}
 	return tracePath
-}
-
-func restoreDumpGlobals(t *testing.T) {
-	t.Helper()
-
-	oldFilter := dumpFilter
-	oldNoIndent := dumpNoIndent
-	oldNoNumbers := dumpNoNumbers
-	oldBuffersOnly := dumpBuffersOnly
-	oldDispatchOnly := dumpDispatchOnly
-	oldEncodersOnly := dumpEncodersOnly
-	oldJSON := dumpJSON
-	oldFull := dumpFull
-	oldCommandBufferIndex := dumpCommandBufferIndex
-
-	t.Cleanup(func() {
-		dumpFilter = oldFilter
-		dumpNoIndent = oldNoIndent
-		dumpNoNumbers = oldNoNumbers
-		dumpBuffersOnly = oldBuffersOnly
-		dumpDispatchOnly = oldDispatchOnly
-		dumpEncodersOnly = oldEncodersOnly
-		dumpJSON = oldJSON
-		dumpFull = oldFull
-		dumpCommandBufferIndex = oldCommandBufferIndex
-	})
 }
 
 func testDumpAPICallList() *gputrace.APICallList {

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
+	"io"
 	"sort"
 	"text/tabwriter"
 
@@ -13,17 +13,22 @@ import (
 	"github.com/tmc/gputrace"
 )
 
-var (
-	xcodeCountersFormat string
-	xcodeCountersMetric string
-	xcodeCountersTop    int
-)
+var xcodeCountersCmd = newXcodeCountersCommand(&xcodeCountersOptions{
+	format: "summary",
+})
 
-var xcodeCountersCmd = &cobra.Command{
-	Use:    "xcode-counters <trace.gputrace>",
-	Short:  "Display performance counters from Xcode Counters.csv",
-	Hidden: true,
-	Long: `Display hardware performance counters from Xcode Counters.csv file.
+type xcodeCountersOptions struct {
+	format string
+	metric string
+	top    int
+}
+
+func newXcodeCountersCommand(opts *xcodeCountersOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:    "xcode-counters <trace.gputrace>",
+		Short:  "Display performance counters from Xcode Counters.csv",
+		Hidden: true,
+		Long: `Display hardware performance counters from Xcode Counters.csv file.
 
 This command parses the Counters.csv file that Xcode Instruments generates
 when capturing GPU traces with performance counters enabled. It provides
@@ -46,20 +51,24 @@ Examples:
   # List all available metrics
   gputrace xcode-counters trace.gputrace --format metrics
 `,
-	Args: cobra.ExactArgs(1),
-	RunE: runXcodeCounters,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runXcodeCounters(cmd, args, opts)
+		},
+	}
+
+	cmd.Flags().StringVar(&opts.format, "format", opts.format, "Output format: summary, detailed, metrics, json")
+	cmd.Flags().StringVar(&opts.metric, "metric", opts.metric, "Filter/sort by specific metric (e.g., 'ALU Utilization')")
+	cmd.Flags().IntVar(&opts.top, "top", opts.top, "Show only top N encoders by metric value")
+	return cmd
 }
 
 func init() {
 	rootCmd.AddCommand(xcodeCountersCmd)
-
-	xcodeCountersCmd.Flags().StringVar(&xcodeCountersFormat, "format", "summary", "Output format: summary, detailed, metrics, json")
-	xcodeCountersCmd.Flags().StringVar(&xcodeCountersMetric, "metric", "", "Filter/sort by specific metric (e.g., 'ALU Utilization')")
-	xcodeCountersCmd.Flags().IntVar(&xcodeCountersTop, "top", 0, "Show only top N encoders by metric value")
 }
 
-func runXcodeCounters(cmd *cobra.Command, args []string) error {
-	if err := validateXcodeCountersOptions(xcodeCountersFormat, xcodeCountersTop); err != nil {
+func runXcodeCounters(cmd *cobra.Command, args []string, opts *xcodeCountersOptions) error {
+	if err := validateXcodeCountersOptions(opts.format, opts.top); err != nil {
 		return err
 	}
 
@@ -77,17 +86,18 @@ func runXcodeCounters(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to parse Xcode Counters.csv: %w", err)
 	}
 
-	switch xcodeCountersFormat {
+	out := cmd.OutOrStdout()
+	switch opts.format {
 	case "summary":
-		return printXcodeSummary(csvData)
+		return printXcodeSummary(out, csvData, opts)
 	case "detailed":
-		return printXcodeDetailed(csvData)
+		return printXcodeDetailed(out, csvData, opts)
 	case "metrics":
-		return printXcodeMetrics(csvData)
+		return printXcodeMetrics(out, csvData)
 	case "json":
-		return printXcodeJSON(csvData)
+		return printXcodeJSON(out, csvData)
 	default:
-		return fmt.Errorf("unknown format: %s (use summary, detailed, metrics, or json)", xcodeCountersFormat)
+		return fmt.Errorf("unknown format: %s (use summary, detailed, metrics, or json)", opts.format)
 	}
 }
 
@@ -103,10 +113,10 @@ func validateXcodeCountersOptions(format string, top int) error {
 	return nil
 }
 
-func printXcodeSummary(csvData *gputrace.XcodeCounterData) error {
-	fmt.Printf("=== Xcode Performance Counters ===\n\n")
-	fmt.Printf("Total Encoders: %d\n", len(csvData.Encoders))
-	fmt.Printf("Total Metrics:  %d\n\n", len(csvData.Metrics))
+func printXcodeSummary(out io.Writer, csvData *gputrace.XcodeCounterData, opts *xcodeCountersOptions) error {
+	fmt.Fprintf(out, "=== Xcode Performance Counters ===\n\n")
+	fmt.Fprintf(out, "Total Encoders: %d\n", len(csvData.Encoders))
+	fmt.Fprintf(out, "Total Metrics:  %d\n\n", len(csvData.Metrics))
 
 	// Key metrics to display in summary
 	keyMetrics := []string{
@@ -118,7 +128,7 @@ func printXcodeSummary(csvData *gputrace.XcodeCounterData) error {
 		"Instruction Throughput Utilization",
 	}
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	fmt.Fprintf(w, "Encoder\tCommand Buffer\t")
 	for _, metric := range keyMetrics {
 		fmt.Fprintf(w, "%s\t", metric)
@@ -134,8 +144,8 @@ func printXcodeSummary(csvData *gputrace.XcodeCounterData) error {
 
 	// Filter encoders if --metric and --top specified
 	encoders := csvData.Encoders
-	if xcodeCountersMetric != "" && xcodeCountersTop > 0 {
-		encoders = filterTopEncoders(csvData, xcodeCountersMetric, xcodeCountersTop)
+	if opts.metric != "" && opts.top > 0 {
+		encoders = filterTopEncoders(csvData, opts.metric, opts.top)
 	}
 
 	// Print each encoder
@@ -164,22 +174,22 @@ func printXcodeSummary(csvData *gputrace.XcodeCounterData) error {
 	return nil
 }
 
-func printXcodeDetailed(csvData *gputrace.XcodeCounterData) error {
-	fmt.Printf("=== Detailed Xcode Performance Counters ===\n\n")
+func printXcodeDetailed(out io.Writer, csvData *gputrace.XcodeCounterData, opts *xcodeCountersOptions) error {
+	fmt.Fprintf(out, "=== Detailed Xcode Performance Counters ===\n\n")
 
 	// Filter encoders if --metric and --top specified
 	encoders := csvData.Encoders
-	if xcodeCountersMetric != "" && xcodeCountersTop > 0 {
-		encoders = filterTopEncoders(csvData, xcodeCountersMetric, xcodeCountersTop)
+	if opts.metric != "" && opts.top > 0 {
+		encoders = filterTopEncoders(csvData, opts.metric, opts.top)
 	}
 
 	for i := range encoders {
 		enc := &encoders[i]
-		fmt.Printf("Encoder %d:\n", enc.Index)
-		fmt.Printf("  Function Index:    %d\n", enc.FunctionIndex)
-		fmt.Printf("  Command Buffer:    %s\n", enc.CommandBufferLabel)
-		fmt.Printf("  Encoder Label:     %s\n", enc.EncoderLabel)
-		fmt.Printf("  Counter count:     %d\n\n", len(enc.Counters))
+		fmt.Fprintf(out, "Encoder %d:\n", enc.Index)
+		fmt.Fprintf(out, "  Function Index:    %d\n", enc.FunctionIndex)
+		fmt.Fprintf(out, "  Command Buffer:    %s\n", enc.CommandBufferLabel)
+		fmt.Fprintf(out, "  Encoder Label:     %s\n", enc.EncoderLabel)
+		fmt.Fprintf(out, "  Counter count:     %d\n\n", len(enc.Counters))
 
 		// Sort counter names for consistent output
 		names := make([]string, 0, len(enc.Counters))
@@ -189,29 +199,29 @@ func printXcodeDetailed(csvData *gputrace.XcodeCounterData) error {
 		sort.Strings(names)
 
 		// Print counters in columns
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 		for _, name := range names {
 			val := enc.Counters[name]
 			fmt.Fprintf(w, "  %s:\t%.2f\n", name, val)
 		}
 		w.Flush()
-		fmt.Println()
+		fmt.Fprintln(out)
 	}
 
 	return nil
 }
 
-func printXcodeMetrics(csvData *gputrace.XcodeCounterData) error {
-	fmt.Printf("=== Available Metrics (%d total) ===\n\n", len(csvData.Metrics))
+func printXcodeMetrics(out io.Writer, csvData *gputrace.XcodeCounterData) error {
+	fmt.Fprintf(out, "=== Available Metrics (%d total) ===\n\n", len(csvData.Metrics))
 
 	for i, metric := range csvData.Metrics {
-		fmt.Printf("%3d. %s\n", i+1, metric)
+		fmt.Fprintf(out, "%3d. %s\n", i+1, metric)
 	}
 
 	return nil
 }
 
-func printXcodeJSON(csvData *gputrace.XcodeCounterData) error {
+func printXcodeJSON(out io.Writer, csvData *gputrace.XcodeCounterData) error {
 	output := xcodeCountersJSONOutput{
 		Encoders: len(csvData.Encoders),
 		Metrics:  len(csvData.Metrics),
@@ -228,7 +238,7 @@ func printXcodeJSON(csvData *gputrace.XcodeCounterData) error {
 		})
 	}
 
-	enc := json.NewEncoder(os.Stdout)
+	enc := json.NewEncoder(out)
 	enc.SetIndent("", "  ")
 	return enc.Encode(output)
 }

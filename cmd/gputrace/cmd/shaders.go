@@ -13,17 +13,22 @@ import (
 	"github.com/tmc/gputrace/internal/counter"
 )
 
-var (
-	shadersVerbose  bool
-	shadersEstimate bool
-	shadersFormat   string // "text", "csv", or "json"
-	shadersAll      bool   // Show all columns (verbose Xcode format)
-)
+var shadersCmd = newShadersCommand(&shadersOptions{
+	format: "text",
+})
 
-var shadersCmd = &cobra.Command{
-	Use:   "shaders <trace.gputrace>",
-	Short: "Show shader performance statistics",
-	Long: `Display shader/kernel performance statistics.
+type shadersOptions struct {
+	verbose  bool
+	estimate bool
+	format   string
+	all      bool
+}
+
+func newShadersCommand(opts *shadersOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "shaders <trace.gputrace>",
+		Short: "Show shader performance statistics",
+		Long: `Display shader/kernel performance statistics.
 
 By default shows a simple two-column output:
   - Cost % (percentage of total GPU time)
@@ -43,21 +48,25 @@ Examples:
   gputrace shaders trace.gputrace --estimate         # Show estimates for unknown fields
   gputrace shaders trace.gputrace --format csv       # Export as CSV
   gputrace shaders trace.gputrace --format json      # Export as JSON`,
-	Args: cobra.ExactArgs(1),
-	RunE: runShaders,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runShaders(cmd, args, opts)
+		},
+	}
+
+	cmd.Flags().BoolVarP(&opts.verbose, "verbose", "v", opts.verbose, "Show verbose output")
+	cmd.Flags().BoolVarP(&opts.estimate, "estimate", "e", opts.estimate, "Show estimated values for uncomputed fields")
+	cmd.Flags().StringVarP(&opts.format, "format", "f", opts.format, "Output format: text, csv, or json")
+	cmd.Flags().BoolVarP(&opts.all, "all", "a", opts.all, "Show all columns (full Xcode Instruments format)")
+	return cmd
 }
 
 func init() {
 	rootCmd.AddCommand(shadersCmd)
-
-	shadersCmd.Flags().BoolVarP(&shadersVerbose, "verbose", "v", false, "Show verbose output")
-	shadersCmd.Flags().BoolVarP(&shadersEstimate, "estimate", "e", false, "Show estimated values for uncomputed fields")
-	shadersCmd.Flags().StringVarP(&shadersFormat, "format", "f", "text", "Output format: text, csv, or json")
-	shadersCmd.Flags().BoolVarP(&shadersAll, "all", "a", false, "Show all columns (full Xcode Instruments format)")
 }
 
-func runShaders(cmd *cobra.Command, args []string) error {
-	if err := validateShadersFormat(shadersFormat); err != nil {
+func runShaders(cmd *cobra.Command, args []string, opts *shadersOptions) error {
+	if err := validateShadersFormat(opts.format); err != nil {
 		return err
 	}
 
@@ -78,7 +87,7 @@ func runShaders(cmd *cobra.Command, args []string) error {
 	if profilerDir == "" {
 		// No profiler data - show shaders without cost, with hint
 		if hasUnsortedCapture {
-			return runShadersNoCost(tracePath)
+			return runShadersNoCost(tracePath, opts)
 		}
 		fmt.Fprintln(os.Stderr, "No profiler data found. To get shader timing:")
 		fmt.Fprintf(os.Stderr, "  gputrace xp run %s -o profiled.gputrace\n\n", tracePath)
@@ -87,11 +96,11 @@ func runShaders(cmd *cobra.Command, args []string) error {
 
 	if hasUnsortedCapture {
 		// Full trace with profiler: use SIMD-based cost (matches Xcode)
-		return runShadersFromFullTrace(tracePath)
+		return runShadersFromFullTrace(tracePath, opts)
 	}
 
 	// Profiler-only: use dispatch duration for cost
-	return runShadersFromProfiler(tracePath)
+	return runShadersFromProfiler(tracePath, opts)
 }
 
 func validateShadersFormat(format string) error {
@@ -117,7 +126,7 @@ func checkUnsortedCapture(tracePath string) bool {
 }
 
 // runShadersNoCost shows shader names without cost percentages (no profiler data).
-func runShadersNoCost(tracePath string) error {
+func runShadersNoCost(tracePath string, opts *shadersOptions) error {
 	trace, err := gputrace.Open(tracePath)
 	if err != nil {
 		return fmt.Errorf("open trace: %w", err)
@@ -129,14 +138,14 @@ func runShadersNoCost(tracePath string) error {
 		return fmt.Errorf("extract shader metrics: %w", err)
 	}
 
-	return writeShadersNoCost(report, tracePath)
+	return writeShadersNoCost(report, tracePath, opts)
 }
 
-func writeShadersNoCost(report *gputrace.ShaderMetricsReport, tracePath string) error {
+func writeShadersNoCost(report *gputrace.ShaderMetricsReport, tracePath string, opts *shadersOptions) error {
 	fmt.Fprintf(os.Stderr, "No profiler data. To get Cost %%, run:\n")
 	fmt.Fprintf(os.Stderr, "  gputrace xp run %s -o profiled.gputrace\n\n", tracePath)
 
-	switch shadersFormat {
+	switch opts.format {
 	case "csv":
 		return gputrace.ExportShaderMetricsCSV(os.Stdout, report)
 	case "json":
@@ -144,7 +153,7 @@ func writeShadersNoCost(report *gputrace.ShaderMetricsReport, tracePath string) 
 	case "text":
 		return formatShadersNoCostText(os.Stdout, report)
 	default:
-		return invalidShadersFormatError(shadersFormat)
+		return invalidShadersFormatError(opts.format)
 	}
 }
 
@@ -158,7 +167,7 @@ func formatShadersNoCostText(w io.Writer, report *gputrace.ShaderMetricsReport) 
 
 // runShadersFromFullTrace uses full trace parsing for SIMD-based cost calculation.
 // This matches Xcode's Cost % = SIMD Groups / Total SIMD Groups × 100
-func runShadersFromFullTrace(tracePath string) error {
+func runShadersFromFullTrace(tracePath string, opts *shadersOptions) error {
 	// Open trace for full parsing
 	trace, err := gputrace.Open(tracePath)
 	if err != nil {
@@ -172,18 +181,18 @@ func runShadersFromFullTrace(tracePath string) error {
 		report, err := extractSIMDBasedMetrics(trace, profilerDir)
 		if err == nil && len(report.Shaders) > 0 {
 			// Output based on format
-			switch shadersFormat {
+			switch opts.format {
 			case "csv":
 				return gputrace.ExportShaderMetricsCSV(os.Stdout, report)
 			case "json":
 				return gputrace.ExportShaderMetricsJSON(os.Stdout, report)
 			case "text":
-				if shadersAll {
-					return gputrace.FormatShadersXcodeStyle(os.Stdout, report, trace, shadersEstimate)
+				if opts.all {
+					return gputrace.FormatShadersXcodeStyle(os.Stdout, report, trace, opts.estimate)
 				}
 				return gputrace.FormatShadersSimple(os.Stdout, report)
 			default:
-				return invalidShadersFormatError(shadersFormat)
+				return invalidShadersFormatError(opts.format)
 			}
 		}
 		// Fall through to legacy method if combined approach fails
@@ -213,7 +222,7 @@ func runShadersFromFullTrace(tracePath string) error {
 	})
 
 	// Output based on format
-	switch shadersFormat {
+	switch opts.format {
 	case "csv":
 		if err := gputrace.ExportShaderMetricsCSV(os.Stdout, report); err != nil {
 			return fmt.Errorf("failed to export CSV: %w", err)
@@ -223,13 +232,13 @@ func runShadersFromFullTrace(tracePath string) error {
 			return fmt.Errorf("failed to export JSON: %w", err)
 		}
 	case "text":
-		if shadersAll {
-			gputrace.FormatShadersXcodeStyle(os.Stdout, report, trace, shadersEstimate)
+		if opts.all {
+			gputrace.FormatShadersXcodeStyle(os.Stdout, report, trace, opts.estimate)
 		} else {
 			gputrace.FormatShadersSimple(os.Stdout, report)
 		}
 	default:
-		return invalidShadersFormatError(shadersFormat)
+		return invalidShadersFormatError(opts.format)
 	}
 
 	return nil
@@ -387,7 +396,7 @@ func findProfilerDir(tracePath string) string {
 // runShadersFromProfiler extracts shader info from .gpuprofiler_raw when unsorted-capture is missing.
 // Note: This uses dispatch duration for Cost %, NOT SIMD groups (Xcode uses SIMD groups).
 // For Xcode-matching Cost %, use a full trace with unsorted-capture directory.
-func runShadersFromProfiler(tracePath string) error {
+func runShadersFromProfiler(tracePath string, opts *shadersOptions) error {
 	fmt.Fprintln(os.Stderr, "Note: Using dispatch duration for Cost % (profiler-only trace).")
 	fmt.Fprintln(os.Stderr, "      Xcode uses SIMD Groups for Cost %. For matching values, use a full trace.")
 	fmt.Fprintln(os.Stderr, "")
@@ -429,7 +438,7 @@ func runShadersFromProfiler(tracePath string) error {
 	report := convertPipelineStatsToShaderReport(stats, nil)
 
 	// Output based on format
-	switch shadersFormat {
+	switch opts.format {
 	case "csv":
 		if err := gputrace.ExportShaderMetricsCSV(os.Stdout, report); err != nil {
 			return fmt.Errorf("failed to export CSV: %w", err)
@@ -439,14 +448,14 @@ func runShadersFromProfiler(tracePath string) error {
 			return fmt.Errorf("failed to export JSON: %w", err)
 		}
 	case "text":
-		if shadersAll {
+		if opts.all {
 			// Format as Xcode Instruments style output (no trace available)
-			gputrace.FormatShadersXcodeStyle(os.Stdout, report, nil, shadersEstimate)
+			gputrace.FormatShadersXcodeStyle(os.Stdout, report, nil, opts.estimate)
 		} else {
 			gputrace.FormatShadersSimple(os.Stdout, report)
 		}
 	default:
-		return invalidShadersFormatError(shadersFormat)
+		return invalidShadersFormatError(opts.format)
 	}
 
 	return nil

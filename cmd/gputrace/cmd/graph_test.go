@@ -59,17 +59,11 @@ func TestRunGraphValidatesOptionsBeforeTraceIO(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			oldFormat := graphFormat
-			oldType := graphType
-			graphFormat = tt.format
-			graphType = tt.graphType
-			t.Cleanup(func() {
-				graphFormat = oldFormat
-				graphType = oldType
-			})
-
 			missingTrace := filepath.Join(t.TempDir(), "missing.gputrace")
-			err := runGraph(nil, []string{missingTrace})
+			err := runGraph(nil, []string{missingTrace}, &graphOptions{
+				format:    tt.format,
+				graphType: tt.graphType,
+			})
 			if err == nil {
 				t.Fatal("runGraph succeeded, want error")
 			}

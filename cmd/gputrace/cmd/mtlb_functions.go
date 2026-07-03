@@ -14,13 +14,6 @@ import (
 	"github.com/tmc/gputrace/internal/trace"
 )
 
-var (
-	filterPattern string
-	showAll       bool
-	usedOnly      bool
-	withUsage     bool
-)
-
 type mtlbFunctionsOptions struct {
 	FilterPattern string
 	ShowAll       bool
@@ -35,19 +28,22 @@ type mtlbFunctionSize struct {
 
 const maxFunctionSizeForDisplay = uint64(1<<63 - 1)
 
-var mtlbFunctionsCmd = &cobra.Command{
-	Use:   "functions <trace>",
-	Short: "List all functions in MTLB files",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		opts := mtlbFunctionsOptions{
-			FilterPattern: filterPattern,
-			ShowAll:       showAll,
-			UsedOnly:      usedOnly,
-			WithUsage:     withUsage,
-		}
-		return runMTLBFunctions(args[0], opts, cmd.OutOrStdout())
-	},
+var mtlbFunctionsCmd = newMTLBFunctionsCommand(&mtlbFunctionsOptions{})
+
+func newMTLBFunctionsCommand(opts *mtlbFunctionsOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "functions <trace>",
+		Short: "List all functions in MTLB files",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runMTLBFunctions(args[0], *opts, cmd.OutOrStdout())
+		},
+	}
+	cmd.Flags().StringVar(&opts.FilterPattern, "filter", "", "Filter by name pattern")
+	cmd.Flags().BoolVar(&opts.ShowAll, "all", false, "Show all functions")
+	cmd.Flags().BoolVar(&opts.UsedOnly, "used-only", false, "Show only functions used in the trace")
+	cmd.Flags().BoolVar(&opts.WithUsage, "with-usage", false, "Show dispatch counts")
+	return cmd
 }
 
 func runMTLBFunctions(tracePath string, opts mtlbFunctionsOptions, out io.Writer) error {
@@ -194,8 +190,4 @@ func runMTLBFunctions(tracePath string, opts mtlbFunctionsOptions, out io.Writer
 
 func init() {
 	mtlbCmd.AddCommand(mtlbFunctionsCmd)
-	mtlbFunctionsCmd.Flags().StringVar(&filterPattern, "filter", "", "Filter by name pattern")
-	mtlbFunctionsCmd.Flags().BoolVar(&showAll, "all", false, "Show all functions")
-	mtlbFunctionsCmd.Flags().BoolVar(&usedOnly, "used-only", false, "Show only functions used in the trace")
-	mtlbFunctionsCmd.Flags().BoolVar(&withUsage, "with-usage", false, "Show dispatch counts")
 }

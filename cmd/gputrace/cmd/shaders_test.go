@@ -57,14 +57,10 @@ func TestValidateShadersFormatRejectsUnknownValues(t *testing.T) {
 }
 
 func TestRunShadersValidatesFormatBeforeTraceIO(t *testing.T) {
-	oldFormat := shadersFormat
-	shadersFormat = "xml"
-	t.Cleanup(func() {
-		shadersFormat = oldFormat
-	})
-
 	missingTrace := filepath.Join(t.TempDir(), "missing.gputrace")
-	err := runShaders(nil, []string{missingTrace})
+	err := runShaders(nil, []string{missingTrace}, &shadersOptions{
+		format: "xml",
+	})
 	if err == nil {
 		t.Fatal("runShaders succeeded, want error")
 	}
@@ -76,12 +72,11 @@ func TestRunShadersValidatesFormatBeforeTraceIO(t *testing.T) {
 
 func TestWriteShadersNoCostHonorsJSONFormat(t *testing.T) {
 	report := testShaderMetricsReport()
-	oldFormat := shadersFormat
-	shadersFormat = "json"
-	t.Cleanup(func() { shadersFormat = oldFormat })
 
 	out, err := captureStdout(t, func() error {
-		return writeShadersNoCost(report, "trace.gputrace")
+		return writeShadersNoCost(report, "trace.gputrace", &shadersOptions{
+			format: "json",
+		})
 	})
 	if err != nil {
 		t.Fatalf("writeShadersNoCost: %v", err)
@@ -101,12 +96,11 @@ func TestWriteShadersNoCostHonorsJSONFormat(t *testing.T) {
 
 func TestWriteShadersNoCostHonorsCSVFormat(t *testing.T) {
 	report := testShaderMetricsReport()
-	oldFormat := shadersFormat
-	shadersFormat = "csv"
-	t.Cleanup(func() { shadersFormat = oldFormat })
 
 	out, err := captureStdout(t, func() error {
-		return writeShadersNoCost(report, "trace.gputrace")
+		return writeShadersNoCost(report, "trace.gputrace", &shadersOptions{
+			format: "csv",
+		})
 	})
 	if err != nil {
 		t.Fatalf("writeShadersNoCost: %v", err)

@@ -9,8 +9,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var replayTraceFile string
-
 func init() {
 	runProfileCmd := &cobra.Command{
 		Use:     "run-profile [trace_file]",

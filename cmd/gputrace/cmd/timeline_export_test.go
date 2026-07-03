@@ -226,16 +226,9 @@ func TestValidateTimelineFormat(t *testing.T) {
 }
 
 func TestRunTimelineValidatesFormatBeforeTraceIO(t *testing.T) {
-	oldFormat := timelineFormat
-	oldOutput := timelineOutput
-	t.Cleanup(func() {
-		timelineFormat = oldFormat
-		timelineOutput = oldOutput
+	err := runTimeline(nil, []string{filepath.Join(t.TempDir(), "missing.gputrace")}, &timelineOptions{
+		format: "svg",
 	})
-
-	timelineFormat = "svg"
-	timelineOutput = ""
-	err := runTimeline(nil, []string{filepath.Join(t.TempDir(), "missing.gputrace")})
 	if err == nil {
 		t.Fatal("runTimeline = nil, want error")
 	}

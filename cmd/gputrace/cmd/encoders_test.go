@@ -81,15 +81,13 @@ func TestWriteEncodersText(t *testing.T) {
 }
 
 func TestRunEncodersJSONUsesCommandOutput(t *testing.T) {
-	restoreEncodersGlobals(t)
-	encodersJSON = true
-
 	var out bytes.Buffer
 	command := &cobra.Command{}
 	command.SetOut(&out)
+	opts := &encodersOptions{json: true}
 
 	stdout, err := captureStdout(t, func() error {
-		return runEncoders(command, []string{testEncodersTracePath(t)})
+		return runEncoders(command, []string{testEncodersTracePath(t)}, opts)
 	})
 	if err != nil {
 		t.Fatalf("runEncoders: %v", err)
@@ -115,14 +113,13 @@ func TestRunEncodersJSONUsesCommandOutput(t *testing.T) {
 }
 
 func TestRunEncodersTextUsesCommandOutput(t *testing.T) {
-	restoreEncodersGlobals(t)
-
 	var out bytes.Buffer
 	command := &cobra.Command{}
 	command.SetOut(&out)
+	opts := &encodersOptions{}
 
 	stdout, err := captureStdout(t, func() error {
-		return runEncoders(command, []string{testEncodersTracePath(t)})
+		return runEncoders(command, []string{testEncodersTracePath(t)}, opts)
 	})
 	if err != nil {
 		t.Fatalf("runEncoders: %v", err)
@@ -150,18 +147,4 @@ func testEncodersTracePath(t *testing.T) string {
 		t.Skipf("trace fixture not available: %s", tracePath)
 	}
 	return tracePath
-}
-
-func restoreEncodersGlobals(t *testing.T) {
-	t.Helper()
-
-	oldVerbose := encodersVerbose
-	oldJSON := encodersJSON
-	t.Cleanup(func() {
-		encodersVerbose = oldVerbose
-		encodersJSON = oldJSON
-	})
-
-	encodersVerbose = false
-	encodersJSON = false
 }

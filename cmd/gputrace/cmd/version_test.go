@@ -8,17 +8,11 @@ import (
 )
 
 func TestVersionCommandWritesToCommandOutput(t *testing.T) {
-	oldJSON := versionJSON
-	defer func() {
-		versionJSON = oldJSON
-		versionCmd.SetOut(nil)
-	}()
-
 	var out bytes.Buffer
-	versionJSON = false
-	versionCmd.SetOut(&out)
+	cmd := newVersionCommand(&versionOptions{})
+	cmd.SetOut(&out)
 
-	if err := versionCmd.RunE(versionCmd, nil); err != nil {
+	if err := cmd.RunE(cmd, nil); err != nil {
 		t.Fatalf("version RunE: %v", err)
 	}
 	if got := out.String(); !strings.HasPrefix(got, "gputrace ") {
@@ -27,17 +21,11 @@ func TestVersionCommandWritesToCommandOutput(t *testing.T) {
 }
 
 func TestVersionCommandJSONWritesToCommandOutput(t *testing.T) {
-	oldJSON := versionJSON
-	defer func() {
-		versionJSON = oldJSON
-		versionCmd.SetOut(nil)
-	}()
-
 	var out bytes.Buffer
-	versionJSON = true
-	versionCmd.SetOut(&out)
+	cmd := newVersionCommand(&versionOptions{json: true})
+	cmd.SetOut(&out)
 
-	if err := versionCmd.RunE(versionCmd, nil); err != nil {
+	if err := cmd.RunE(cmd, nil); err != nil {
 		t.Fatalf("version --json RunE: %v", err)
 	}
 	var got versionInfo

@@ -14,17 +14,14 @@ import (
 )
 
 func TestRunInsightsJSONUsesCommandOutput(t *testing.T) {
-	restoreInsightsGlobals(t)
-	insightsJSON = true
-	insightsMinLevel = "low"
-
 	cmd := &cobra.Command{}
 	var commandStdout bytes.Buffer
 	cmd.SetOut(&commandStdout)
+	opts := &insightsOptions{json: true, minLevel: "low"}
 
 	tracePath := writeInsightsMinimalTraceBundle(t)
 	osStdout, err := captureStdout(t, func() error {
-		return runInsights(cmd, []string{tracePath})
+		return runInsights(cmd, []string{tracePath}, opts)
 	})
 	if err != nil {
 		t.Fatalf("runInsights: %v", err)
@@ -139,17 +136,6 @@ func writeInsightsMinimalTraceBundle(t *testing.T) string {
 		t.Fatalf("write capture: %v", err)
 	}
 	return tracePath
-}
-
-func restoreInsightsGlobals(t *testing.T) {
-	t.Helper()
-
-	oldJSON := insightsJSON
-	oldMinLevel := insightsMinLevel
-	t.Cleanup(func() {
-		insightsJSON = oldJSON
-		insightsMinLevel = oldMinLevel
-	})
 }
 
 const insightsMinimalMetadataPlist = `<?xml version="1.0" encoding="UTF-8"?>

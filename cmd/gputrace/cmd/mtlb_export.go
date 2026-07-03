@@ -11,121 +11,133 @@ import (
 	"github.com/tmc/gputrace/internal/trace"
 )
 
-var (
-	exportFormat   string
-	exportUsedOnly bool
-	exportUsage    bool
-)
+var mtlbExportFunctionsCmd = newMTLBExportFunctionsCommand(&mtlbExportOptions{
+	format: "json",
+})
 
-var mtlbExportFunctionsCmd = &cobra.Command{
-	Use:   "export-functions <trace>",
-	Short: "Export function list to various formats",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		format, err := validateMTLBExportFormat(exportFormat)
+type mtlbExportOptions struct {
+	format   string
+	usedOnly bool
+	usage    bool
+}
+
+func newMTLBExportFunctionsCommand(opts *mtlbExportOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "export-functions <trace>",
+		Short: "Export function list to various formats",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runMTLBExportFunctions(cmd, args, opts)
+		},
+	}
+
+	cmd.Flags().StringVar(&opts.format, "format", opts.format, "Output format (json, csv)")
+	cmd.Flags().BoolVar(&opts.usedOnly, "used-only", opts.usedOnly, "Export only used functions")
+	cmd.Flags().BoolVar(&opts.usage, "with-usage", opts.usage, "Include usage stats")
+	return cmd
+}
+
+func runMTLBExportFunctions(cmd *cobra.Command, args []string, opts *mtlbExportOptions) error {
+	format, err := validateMTLBExportFormat(opts.format)
+	if err != nil {
+		return err
+	}
+
+	tracePath := args[0]
+
+	files, err := metallib.FindFiles(tracePath)
+	if err != nil {
+		return err
+	}
+
+	var allFuncs []string
+
+	for _, f := range files {
+		data, err := os.ReadFile(f.Path)
 		if err != nil {
-			return err
+			continue
 		}
+		lib, err := metallib.Parse(data)
+		if err == nil {
+			funcs, _ := lib.ListFunctions()
+			allFuncs = append(allFuncs, funcs...)
+		}
+	}
 
-		tracePath := args[0]
-
-		files, err := metallib.FindFiles(tracePath)
+	usageCounts := make(map[string]int)
+	if opts.usedOnly || opts.usage {
+		tr, err := trace.Open(tracePath)
 		if err != nil {
-			return err
+			return fmt.Errorf("open trace: %w", err)
 		}
 
-		var allFuncs []string
-
-		for _, f := range files {
-			data, err := os.ReadFile(f.Path)
-			if err != nil {
-				continue
-			}
-			lib, err := metallib.Parse(data)
-			if err == nil {
-				funcs, _ := lib.ListFunctions()
-				allFuncs = append(allFuncs, funcs...)
-			}
-		}
-
-		// Collect usage if needed
-		usageCounts := make(map[string]int)
-		if exportUsedOnly || exportUsage {
-			tr, err := trace.Open(tracePath)
-			if err != nil {
-				return fmt.Errorf("open trace: %w", err)
-			}
-
-			// Try accurate counting
-			pipelineMap := tr.BuildPipelineFunctionMap()
-			records, err := tr.ParseMTSPRecords()
-			if err == nil {
-				for _, rec := range records {
-					if rec.Type == trace.RecordTypeCt {
-						ct, err := rec.ParseCtRecord()
-						if err == nil {
-							if name, ok := pipelineMap[ct.PipelineAddr]; ok {
-								usageCounts[name]++
-							}
+		pipelineMap := tr.BuildPipelineFunctionMap()
+		records, err := tr.ParseMTSPRecords()
+		if err == nil {
+			for _, rec := range records {
+				if rec.Type == trace.RecordTypeCt {
+					ct, err := rec.ParseCtRecord()
+					if err == nil {
+						if name, ok := pipelineMap[ct.PipelineAddr]; ok {
+							usageCounts[name]++
 						}
 					}
 				}
-			} else {
-				// Fallback to KernelNames
-				for _, kn := range tr.KernelNames {
-					usageCounts[kn] = 1 // Just indicate presence
-				}
-			}
-		}
-
-		// Filter
-		var finalFuncs []string
-		if exportUsedOnly {
-			for _, fn := range allFuncs {
-				if usageCounts[fn] > 0 {
-					finalFuncs = append(finalFuncs, fn)
-				}
 			}
 		} else {
-			finalFuncs = allFuncs
+			for _, kn := range tr.KernelNames {
+				usageCounts[kn] = 1
+			}
 		}
+	}
 
-		if format == "json" {
-			type funcData struct {
-				Name       string `json:"name"`
-				Dispatches int    `json:"dispatches,omitempty"`
+	var finalFuncs []string
+	if opts.usedOnly {
+		for _, fn := range allFuncs {
+			if usageCounts[fn] > 0 {
+				finalFuncs = append(finalFuncs, fn)
 			}
-			var output []funcData
-			for _, fn := range finalFuncs {
-				item := funcData{Name: fn}
-				if exportUsage {
-					item.Dispatches = usageCounts[fn]
-				}
-				output = append(output, item)
-			}
-			enc := json.NewEncoder(os.Stdout)
-			enc.SetIndent("", "  ")
-			return enc.Encode(output)
-		} else if format == "csv" {
-			w := csv.NewWriter(os.Stdout)
-			header := []string{"Name"}
-			if exportUsage {
-				header = append(header, "Dispatches")
-			}
-			w.Write(header)
-			for _, fn := range finalFuncs {
-				row := []string{fn}
-				if exportUsage {
-					row = append(row, fmt.Sprintf("%d", usageCounts[fn]))
-				}
-				w.Write(row)
-			}
-			w.Flush()
-			return w.Error()
 		}
+	} else {
+		finalFuncs = allFuncs
+	}
 
-		return nil
-	},
+	switch format {
+	case "json":
+		type funcData struct {
+			Name       string `json:"name"`
+			Dispatches int    `json:"dispatches,omitempty"`
+		}
+		var output []funcData
+		for _, fn := range finalFuncs {
+			item := funcData{Name: fn}
+			if opts.usage {
+				item.Dispatches = usageCounts[fn]
+			}
+			output = append(output, item)
+		}
+		enc := json.NewEncoder(cmd.OutOrStdout())
+		enc.SetIndent("", "  ")
+		return enc.Encode(output)
+	case "csv":
+		w := csv.NewWriter(cmd.OutOrStdout())
+		header := []string{"Name"}
+		if opts.usage {
+			header = append(header, "Dispatches")
+		}
+		w.Write(header)
+		for _, fn := range finalFuncs {
+			row := []string{fn}
+			if opts.usage {
+				row = append(row, fmt.Sprintf("%d", usageCounts[fn]))
+			}
+			w.Write(row)
+		}
+		w.Flush()
+		return w.Error()
+	}
+
+	return nil
 }
 
 func validateMTLBExportFormat(format string) (string, error) {
@@ -139,7 +151,4 @@ func validateMTLBExportFormat(format string) (string, error) {
 
 func init() {
 	mtlbCmd.AddCommand(mtlbExportFunctionsCmd)
-	mtlbExportFunctionsCmd.Flags().StringVar(&exportFormat, "format", "json", "Output format (json, csv)")
-	mtlbExportFunctionsCmd.Flags().BoolVar(&exportUsedOnly, "used-only", false, "Export only used functions")
-	mtlbExportFunctionsCmd.Flags().BoolVar(&exportUsage, "with-usage", false, "Include usage stats")
 }

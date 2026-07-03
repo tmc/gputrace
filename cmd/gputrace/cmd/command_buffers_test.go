@@ -44,15 +44,14 @@ func TestWriteCommandBuffersJSON(t *testing.T) {
 
 func TestRunCommandBuffersJSONUsesCommandOutput(t *testing.T) {
 	tracePath := testCommandBuffersTracePath(t)
-	restoreCommandBuffersGlobals(t)
-	cmdBuffersJSON = true
 
 	var out bytes.Buffer
 	command := &cobra.Command{}
 	command.SetOut(&out)
+	opts := &commandBuffersOptions{json: true}
 
 	stdout, err := captureStdout(t, func() error {
-		return runCommandBuffers(command, []string{tracePath})
+		return runCommandBuffers(command, []string{tracePath}, opts)
 	})
 	if err != nil {
 		t.Fatalf("runCommandBuffers: %v", err)
@@ -78,21 +77,4 @@ func testCommandBuffersTracePath(t *testing.T) string {
 		t.Skipf("trace fixture not available: %s", tracePath)
 	}
 	return tracePath
-}
-
-func restoreCommandBuffersGlobals(t *testing.T) {
-	t.Helper()
-
-	oldVerbose := cmdBuffersVerbose
-	oldDetailed := cmdBuffersDetailed
-	oldJSON := cmdBuffersJSON
-	t.Cleanup(func() {
-		cmdBuffersVerbose = oldVerbose
-		cmdBuffersDetailed = oldDetailed
-		cmdBuffersJSON = oldJSON
-	})
-
-	cmdBuffersVerbose = false
-	cmdBuffersDetailed = false
-	cmdBuffersJSON = false
 }

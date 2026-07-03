@@ -10,15 +10,18 @@ import (
 	"github.com/tmc/gputrace"
 )
 
-var (
-	encodersVerbose bool
-	encodersJSON    bool
-)
+type encodersOptions struct {
+	verbose bool
+	json    bool
+}
 
-var encodersCmd = &cobra.Command{
-	Use:   "encoders <trace.gputrace>",
-	Short: "List compute command encoders in a GPU trace",
-	Long: `List all Metal compute command encoders found in a GPU trace.
+var encodersCmd = newEncodersCommand(&encodersOptions{})
+
+func newEncodersCommand(opts *encodersOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "encoders <trace.gputrace>",
+		Short: "List compute command encoders in a GPU trace",
+		Long: `List all Metal compute command encoders found in a GPU trace.
 
 This command parses Cul records to identify compute command encoder
 creation and usage. Compute encoders are used to encode compute
@@ -27,8 +30,14 @@ commands (kernel dispatches) into command buffers.
 Examples:
   gputrace encoders trace.gputrace
   gputrace encoders trace.gputrace -v`,
-	Args: cobra.ExactArgs(1),
-	RunE: runEncoders,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runEncoders(cmd, args, opts)
+		},
+	}
+	cmd.Flags().BoolVarP(&opts.verbose, "verbose", "v", false, "Show verbose output with encoder details")
+	cmd.Flags().BoolVar(&opts.json, "json", false, "Output in JSON format")
+	return cmd
 }
 
 type encodersCommandBufferSummary struct {
@@ -38,12 +47,9 @@ type encodersCommandBufferSummary struct {
 
 func init() {
 	rootCmd.AddCommand(encodersCmd)
-
-	encodersCmd.Flags().BoolVarP(&encodersVerbose, "verbose", "v", false, "Show verbose output with encoder details")
-	encodersCmd.Flags().BoolVar(&encodersJSON, "json", false, "Output in JSON format")
 }
 
-func runEncoders(cmd *cobra.Command, args []string) error {
+func runEncoders(cmd *cobra.Command, args []string, opts *encodersOptions) error {
 	tracePath := args[0]
 
 	// Verify trace file exists
@@ -63,13 +69,13 @@ func runEncoders(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to parse compute encoders: %w", err)
 	}
 
-	if encodersJSON {
+	if opts.json {
 		return writeEncodersJSON(cmd.OutOrStdout(), encoders)
 	}
 
 	commandBufferCount := 0
 	var commandBuffers []encodersCommandBufferSummary
-	if encodersVerbose {
+	if opts.verbose {
 		cbs, err := trace.ParseCommandBuffers()
 		if err == nil && len(cbs) > 0 {
 			commandBufferCount = len(cbs)

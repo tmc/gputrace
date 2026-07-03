@@ -12,23 +12,32 @@ import (
 	"github.com/tmc/gputrace/internal/trace"
 )
 
-var fencesJSON bool
+type fencesOptions struct {
+	json bool
+}
 
-var fencesCmd = &cobra.Command{
-	Use:   "fences <trace.gputrace>",
-	Short:  "List fence operations in the trace",
-	Hidden: true,
-	Long:  `Scans the trace for fence operations (e.g. waitForFence, updateFence) encoded as ICB executions.`,
-	Args:  cobra.ExactArgs(1),
-	RunE:  runFences,
+var fencesCmd = newFencesCommand(&fencesOptions{})
+
+func newFencesCommand(opts *fencesOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:    "fences <trace.gputrace>",
+		Short:  "List fence operations in the trace",
+		Hidden: true,
+		Long:   `Scans the trace for fence operations (e.g. waitForFence, updateFence) encoded as ICB executions.`,
+		Args:   cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runFences(cmd, args, opts)
+		},
+	}
+	cmd.Flags().BoolVar(&opts.json, "json", false, "Output in JSON format")
+	return cmd
 }
 
 func init() {
 	rootCmd.AddCommand(fencesCmd)
-	fencesCmd.Flags().BoolVar(&fencesJSON, "json", false, "Output in JSON format")
 }
 
-func runFences(cmd *cobra.Command, args []string) error {
+func runFences(cmd *cobra.Command, args []string, opts *fencesOptions) error {
 	tracePath := args[0]
 	t, err := trace.Open(tracePath)
 	if err != nil {
@@ -99,22 +108,23 @@ func runFences(cmd *cobra.Command, args []string) error {
 		offset = absPos + 8
 	}
 
-	if fencesJSON {
+	w := cmd.OutOrStdout()
+	if opts.json {
 		data, err := json.MarshalIndent(fences, "", "  ")
 		if err != nil {
 			return fmt.Errorf("failed to marshal json: %w", err)
 		}
-		fmt.Println(string(data))
-		return nil
+		_, err = fmt.Fprintln(w, string(data))
+		return err
 	}
 
-	fmt.Println("Scanning for fence operations...")
-	fmt.Printf("%-10s %-18s %-30s %s\n", "Offset", "Address", "Label", "Details")
-	fmt.Println("--------------------------------------------------------------------------------")
+	fmt.Fprintln(w, "Scanning for fence operations...")
+	fmt.Fprintf(w, "%-10s %-18s %-30s %s\n", "Offset", "Address", "Label", "Details")
+	fmt.Fprintln(w, "--------------------------------------------------------------------------------")
 	for _, f := range fences {
-		fmt.Printf("%-10s %-18s %-30s %s (Fields: %x %x)\n",
+		fmt.Fprintf(w, "%-10s %-18s %-30s %s (Fields: %x %x)\n",
 			f.Offset, f.Address, f.Label, f.OpType, f.Field1, f.Field2)
 	}
-	fmt.Printf("\nTotal fence operations found: %d\n", len(fences))
+	fmt.Fprintf(w, "\nTotal fence operations found: %d\n", len(fences))
 	return nil
 }

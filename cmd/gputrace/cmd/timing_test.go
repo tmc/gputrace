@@ -24,13 +24,10 @@ func TestTimingReportWriterUsesStderrForStdoutExports(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			oldJSON, oldCSV := timingJSON, timingCSV
-			timingJSON, timingCSV = tt.json, tt.csv
-			t.Cleanup(func() {
-				timingJSON, timingCSV = oldJSON, oldCSV
-			})
-
-			if got := timingReportWriter(); got != tt.want {
+			if got := timingReportWriter(&timingOptions{
+				json: tt.json,
+				csv:  tt.csv,
+			}); got != tt.want {
 				t.Fatalf("timingReportWriter() = %v, want %v", got, tt.want)
 			}
 		})
@@ -55,13 +52,10 @@ func TestValidateTimingOutputPathsRejectsMultipleStdoutExports(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			oldJSON, oldCSV := timingJSON, timingCSV
-			timingJSON, timingCSV = tt.json, tt.csv
-			t.Cleanup(func() {
-				timingJSON, timingCSV = oldJSON, oldCSV
+			err := validateTimingOutputPaths(&timingOptions{
+				json: tt.json,
+				csv:  tt.csv,
 			})
-
-			err := validateTimingOutputPaths()
 			if tt.wantErr && err == nil {
 				t.Fatal("validateTimingOutputPaths returned nil error")
 			}

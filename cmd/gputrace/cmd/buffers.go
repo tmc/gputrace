@@ -17,21 +17,29 @@ import (
 	"github.com/tmc/gputrace/internal/fmtutil"
 )
 
-var (
-	buffersSort          string
-	buffersMinSize       string
-	buffersFormat        string
-	buffersBindings      bool
-	buffersInspect       string // Buffer name to inspect (e.g., MTLBuffer-12-0)
-	buffersInspectBytes  int    // Number of bytes to show in inspection
-	buffersInspectFormat string // Format for inspection: hex, float32, int32, etc.
-	buffersResources     bool
-)
+var buffersCmd = newBuffersCommand(&buffersCommandOptions{
+	sort:          "size",
+	format:        "table",
+	inspectBytes:  256,
+	inspectFormat: "hex",
+})
 
-var buffersCmd = &cobra.Command{
-	Use:   "buffers <trace.gputrace>",
-	Short: "List buffers in a GPU trace",
-	Long: `Display information about Metal buffers captured in a GPU trace.
+type buffersCommandOptions struct {
+	sort          string
+	minSize       string
+	format        string
+	bindings      bool
+	inspect       string
+	inspectBytes  int
+	inspectFormat string
+	resources     bool
+}
+
+func newBuffersCommand(opts *buffersCommandOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "buffers <trace.gputrace>",
+		Short: "List buffers in a GPU trace",
+		Long: `Display information about Metal buffers captured in a GPU trace.
 
 This command shows:
   - Buffer IDs and addresses
@@ -47,25 +55,29 @@ Examples:
   gputrace buffers trace.gputrace --sort size
   gputrace buffers trace.gputrace --min-size 1MB
   gputrace buffers trace.gputrace --format json`,
-	Args: cobra.ExactArgs(1),
-	RunE: runBuffers,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runBuffers(cmd, args, opts)
+		},
+	}
+
+	cmd.Flags().StringVar(&opts.sort, "sort", opts.sort, "Sort by: size, id, name")
+	cmd.Flags().StringVar(&opts.minSize, "min-size", opts.minSize, "Minimum buffer size (e.g., 1KB, 1MB, 1GB)")
+	cmd.Flags().StringVar(&opts.format, "format", opts.format, "Output format: table, json, csv")
+	cmd.Flags().BoolVar(&opts.bindings, "bindings", opts.bindings, "Show which encoders use each buffer")
+	cmd.Flags().StringVar(&opts.inspect, "inspect", opts.inspect, "Inspect buffer contents (e.g., MTLBuffer-12-0)")
+	cmd.Flags().IntVar(&opts.inspectBytes, "bytes", opts.inspectBytes, "Number of bytes to show in inspection")
+	cmd.Flags().StringVar(&opts.inspectFormat, "inspect-format", opts.inspectFormat, "Inspection format: hex, float32, int32, uint32, float16")
+	cmd.Flags().BoolVar(&opts.resources, "resources", opts.resources, "Show device-resource buffer inventory")
+	return cmd
 }
 
 func init() {
 	rootCmd.AddCommand(buffersCmd)
-
-	buffersCmd.Flags().StringVar(&buffersSort, "sort", "size", "Sort by: size, id, name")
-	buffersCmd.Flags().StringVar(&buffersMinSize, "min-size", "", "Minimum buffer size (e.g., 1KB, 1MB, 1GB)")
-	buffersCmd.Flags().StringVar(&buffersFormat, "format", "table", "Output format: table, json, csv")
-	buffersCmd.Flags().BoolVar(&buffersBindings, "bindings", false, "Show which encoders use each buffer")
-	buffersCmd.Flags().StringVar(&buffersInspect, "inspect", "", "Inspect buffer contents (e.g., MTLBuffer-12-0)")
-	buffersCmd.Flags().IntVar(&buffersInspectBytes, "bytes", 256, "Number of bytes to show in inspection")
-	buffersCmd.Flags().StringVar(&buffersInspectFormat, "inspect-format", "hex", "Inspection format: hex, float32, int32, uint32, float16")
-	buffersCmd.Flags().BoolVar(&buffersResources, "resources", false, "Show device-resource buffer inventory")
 }
 
-func runBuffers(cmd *cobra.Command, args []string) error {
-	opts, err := validateBuffersOptions(buffersFormat, buffersSort, buffersMinSize, buffersInspect, buffersInspectBytes, buffersInspectFormat)
+func runBuffers(cmd *cobra.Command, args []string, cmdOpts *buffersCommandOptions) error {
+	opts, err := validateBuffersOptions(cmdOpts.format, cmdOpts.sort, cmdOpts.minSize, cmdOpts.inspect, cmdOpts.inspectBytes, cmdOpts.inspectFormat)
 	if err != nil {
 		return err
 	}
@@ -84,15 +96,15 @@ func runBuffers(cmd *cobra.Command, args []string) error {
 	}
 
 	// If --inspect is specified, handle buffer inspection
-	if buffersInspect != "" {
-		return inspectBuffer(tracePath, buffersInspect, opts.inspectBytes, opts.inspectFormat)
+	if cmdOpts.inspect != "" {
+		return inspectBuffer(tracePath, cmdOpts.inspect, opts.inspectBytes, opts.inspectFormat)
 	}
-	if buffersResources {
-		return formatBufferResourceInventory(tracePath, buffersFormat, trace)
+	if cmdOpts.resources {
+		return formatBufferResourceInventory(tracePath, opts.format, trace)
 	}
 
 	// Extract buffer information
-	buffers, err := extractBufferInfo(tracePath, trace, buffersBindings)
+	buffers, err := extractBufferInfo(tracePath, trace, cmdOpts.bindings)
 	if err != nil {
 		return fmt.Errorf("failed to extract buffer info: %w", err)
 	}

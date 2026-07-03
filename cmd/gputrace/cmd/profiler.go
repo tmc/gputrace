@@ -22,16 +22,19 @@ type ProfilerOutputStats struct {
 	// (StreamDataStats.Timeline is already included via embedding, but this ensures visibility)
 }
 
-var (
-	profilerJSON     bool
-	profilerLimiters bool
-	profilerKernels  bool
-)
+var profilerCmd = newProfilerCommand(new(profilerOptions))
 
-var profilerCmd = &cobra.Command{
-	Use:   "profiler <trace.gputrace>",
-	Short: "Extract GPU profiler data (timing, dispatches, pipelines) from trace",
-	Long: `Extract GPU profiler timing and performance data from a .gputrace bundle.
+type profilerOptions struct {
+	json     bool
+	limiters bool
+	kernels  bool
+}
+
+func newProfilerCommand(opts *profilerOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "profiler <trace.gputrace>",
+		Short: "Extract GPU profiler data (timing, dispatches, pipelines) from trace",
+		Long: `Extract GPU profiler timing and performance data from a .gputrace bundle.
 
 This command parses the streamData file from .gpuprofiler_raw to extract:
 - Per-dispatch timing with function names
@@ -45,18 +48,23 @@ Example:
   gputrace profiler /path/to/trace.gputrace
   gputrace profiler /path/to/trace.gpuprofiler_raw
   gputrace profiler /path/to/trace.gputrace --json`,
-	Args: cobra.ExactArgs(1),
-	RunE: runProfiler,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runProfiler(cmd, args, opts)
+		},
+	}
+
+	cmd.Flags().BoolVar(&opts.json, "json", opts.json, "Output in JSON format")
+	cmd.Flags().BoolVar(&opts.limiters, "limiters", opts.limiters, "Show performance limiter data from Counter files")
+	cmd.Flags().BoolVar(&opts.kernels, "kernels", opts.kernels, "Show kernel/function names and per-dispatch details")
+	return cmd
 }
 
 func init() {
 	rootCmd.AddCommand(profilerCmd)
-	profilerCmd.Flags().BoolVar(&profilerJSON, "json", false, "Output in JSON format")
-	profilerCmd.Flags().BoolVar(&profilerLimiters, "limiters", false, "Show performance limiter data from Counter files")
-	profilerCmd.Flags().BoolVar(&profilerKernels, "kernels", false, "Show kernel/function names and per-dispatch details")
 }
 
-func runProfiler(cmd *cobra.Command, args []string) error {
+func runProfiler(cmd *cobra.Command, args []string, opts *profilerOptions) error {
 	tracePath := args[0]
 
 	profilerDir, stats, err := loadProfilerStats(tracePath)
@@ -69,7 +77,7 @@ func runProfiler(cmd *cobra.Command, args []string) error {
 	// Parse execution cost from Profiling_f_*.raw files
 	execCost := aggregateExecutionCost(profilerDir, stats)
 
-	if profilerJSON {
+	if opts.json {
 		output := ProfilerOutputStats{
 			StreamDataStats: stats,
 			ExecutionCost:   execCost,
@@ -175,7 +183,7 @@ func runProfiler(cmd *cobra.Command, args []string) error {
 	}
 
 	// Detailed kernel info only with --kernels flag
-	if profilerKernels {
+	if opts.kernels {
 		// Function names
 		fmt.Println()
 		fmt.Println(Colorize("Kernel Details", ColorBold))
@@ -398,7 +406,7 @@ func runProfiler(cmd *cobra.Command, args []string) error {
 	}
 
 	// Display performance limiters if requested
-	if profilerLimiters {
+	if opts.limiters {
 		limiterData := extractLimiterData(profilerDir)
 		if len(limiterData) > 0 {
 			fmt.Println()

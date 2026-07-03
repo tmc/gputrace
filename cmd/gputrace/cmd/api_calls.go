@@ -10,15 +10,18 @@ import (
 	"github.com/tmc/gputrace"
 )
 
-var (
-	apiCallsKernelFilter string
-	apiCallsJSON         bool
-)
+type apiCallsOptions struct {
+	kernelFilter string
+	json         bool
+}
 
-var apiCallsCmd = &cobra.Command{
-	Use:   "api-calls <trace.gputrace>",
-	Short: "Display API call sequences from a GPU trace",
-	Long: `Display the sequence of Metal API calls captured in a GPU trace.
+var apiCallsCmd = newAPICallsCommand(&apiCallsOptions{})
+
+func newAPICallsCommand(opts *apiCallsOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "api-calls <trace.gputrace>",
+		Short: "Display API call sequences from a GPU trace",
+		Long: `Display the sequence of Metal API calls captured in a GPU trace.
 
 Shows the full API call sequence including:
 - Command buffer creation
@@ -42,18 +45,21 @@ Examples:
 
   # Filter by kernel name
   gputrace api-calls trace.gputrace --kernel g3_copy`,
-	Args: cobra.ExactArgs(1),
-	RunE: runAPICalls,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAPICalls(cmd, args, opts)
+		},
+	}
+	cmd.Flags().StringVarP(&opts.kernelFilter, "kernel", "k", "", "Filter output to show only calls related to kernels matching this pattern (case-insensitive)")
+	cmd.Flags().BoolVar(&opts.json, "json", false, "Output in JSON format")
+	return cmd
 }
 
 func init() {
 	rootCmd.AddCommand(apiCallsCmd)
-
-	apiCallsCmd.Flags().StringVarP(&apiCallsKernelFilter, "kernel", "k", "", "Filter output to show only calls related to kernels matching this pattern (case-insensitive)")
-	apiCallsCmd.Flags().BoolVar(&apiCallsJSON, "json", false, "Output in JSON format")
 }
 
-func runAPICalls(cmd *cobra.Command, args []string) error {
+func runAPICalls(cmd *cobra.Command, args []string, opts *apiCallsOptions) error {
 	tracePath := args[0]
 	if err := checkTraceFile(tracePath); err != nil {
 		return err
@@ -64,7 +70,7 @@ func runAPICalls(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to open trace: %w", err)
 	}
 
-	if apiCallsJSON {
+	if opts.json {
 		apiList, err := trace.ParseAPICallList()
 		if err != nil {
 			return fmt.Errorf("parse API calls: %w", err)
@@ -72,9 +78,9 @@ func runAPICalls(cmd *cobra.Command, args []string) error {
 		return writeAPICallsJSON(cmd.OutOrStdout(), apiList)
 	}
 
-	if apiCallsKernelFilter != "" {
+	if opts.kernelFilter != "" {
 		// Use filtered output
-		if err := formatAPICallsFiltered(cmd.OutOrStdout(), trace, apiCallsKernelFilter); err != nil {
+		if err := formatAPICallsFiltered(cmd.OutOrStdout(), trace, opts.kernelFilter); err != nil {
 			return fmt.Errorf("failed to format API calls: %w", err)
 		}
 	} else {

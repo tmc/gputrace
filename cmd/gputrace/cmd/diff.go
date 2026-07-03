@@ -3,34 +3,12 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/tmc/gputrace/internal/difftrace"
-)
-
-var (
-	diffJSON          bool
-	diffCSV           bool
-	diffBy            string
-	diffLimit         int
-	diffMinDeltaUs    int
-	diffOnlyEncoder   int
-	diffOnlyFunction  string
-	diffShowMatches   bool
-	diffShowUnmatched bool
-	diffShowOccur     bool
-	diffExplain       bool
-	diffQuick         bool
-	diffByEncoder     bool
-	diffMDOut         string
-	diffPerfettoOut   string
-	diffBenchDir      string
-	diffLeft          string
-	diffRight         string
 )
 
 type diffOptions struct {
@@ -54,10 +32,13 @@ type diffOptions struct {
 	Right         string
 }
 
-var diffCmd = &cobra.Command{
-	Use:   "diff [trace_a trace_b]",
-	Short: "Compare two profiled traces at dispatch/kernel/encoder/timeline levels",
-	Long: `Compare two traces using dispatch-level alignment from profiler streamData.
+var diffCmd = newDiffCommand(&diffOptions{Limit: 20, OnlyEncoder: -1})
+
+func newDiffCommand(opts *diffOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "diff [trace_a trace_b]",
+		Short: "Compare two profiled traces at dispatch/kernel/encoder/timeline levels",
+		Long: `Compare two traces using dispatch-level alignment from profiler streamData.
 
 This command supports .gputrace bundles and -perfdata.gputrace bundles.
 It reports total deltas, function-level contributors, encoder/pipeline deltas,
@@ -72,34 +53,37 @@ Examples:
   gputrace diff a.gputrace b.gputrace --json > diff.json
   gputrace diff a.gputrace b.gputrace --csv --by dispatch > outliers.csv
   gputrace diff a.gputrace b.gputrace --perfetto-out /tmp/diff_perfetto.json`,
-	Args: cobra.MaximumNArgs(2),
-	RunE: runDiff,
+		Args: cobra.MaximumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runDiff(cmd, args, *opts)
+		},
+	}
+	cmd.Flags().BoolVar(&opts.JSON, "json", false, "Output machine-readable JSON")
+	cmd.Flags().BoolVar(&opts.CSV, "csv", false, "Output CSV for a single --by view")
+	cmd.Flags().StringVar(&opts.By, "by", "", "View: function,encoder,pipeline,timeline-windows,dispatch,unmatched,matches,occurrences")
+	cmd.Flags().IntVar(&opts.Limit, "limit", 20, "Maximum rows per section")
+	cmd.Flags().IntVar(&opts.MinDeltaUs, "min-delta-us", 0, "Filter top outliers by absolute delta in microseconds")
+	cmd.Flags().IntVar(&opts.OnlyEncoder, "only-encoder", -1, "Only include dispatches for one encoder index")
+	cmd.Flags().StringVar(&opts.OnlyFunction, "only-function", "", "Only include function names matching this regex")
+	cmd.Flags().BoolVar(&opts.ShowMatches, "show-matches", false, "Show matched dispatch rows in text output")
+	cmd.Flags().BoolVar(&opts.ShowUnmatched, "show-unmatched", false, "Show unmatched dispatch rows in text output")
+	cmd.Flags().BoolVar(&opts.ShowOccur, "show-occurrences", false, "Show function+occurrence alignment rows in text output")
+	cmd.Flags().BoolVar(&opts.Explain, "explain", false, "Print concise interpretation text")
+	cmd.Flags().BoolVar(&opts.Quick, "quick", false, "Quick triage report (totals, top deltas, outliers, unnamed, spike windows)")
+	cmd.Flags().BoolVar(&opts.ByEncoder, "by-encoder", false, "Encoder-focused report and dominance summary")
+	cmd.Flags().StringVar(&opts.MDOut, "md-out", "", "Write markdown report to path")
+	cmd.Flags().StringVar(&opts.PerfettoOut, "perfetto-out", "", "Write combined Perfetto/Chrome trace JSON with shared match IDs")
+	cmd.Flags().StringVar(&opts.BenchDir, "bench-dir", "", "Auto-discover newest Go/Python perfdata pair from benchmark directory")
+	cmd.Flags().StringVar(&opts.Left, "left", "", "Explicit left trace path (overrides auto-discovery)")
+	cmd.Flags().StringVar(&opts.Right, "right", "", "Explicit right trace path (overrides auto-discovery)")
+	return cmd
 }
 
 func init() {
 	rootCmd.AddCommand(diffCmd)
-	diffCmd.Flags().BoolVar(&diffJSON, "json", false, "Output machine-readable JSON")
-	diffCmd.Flags().BoolVar(&diffCSV, "csv", false, "Output CSV for a single --by view")
-	diffCmd.Flags().StringVar(&diffBy, "by", "", "View: function,encoder,pipeline,timeline-windows,dispatch,unmatched,matches,occurrences")
-	diffCmd.Flags().IntVar(&diffLimit, "limit", 20, "Maximum rows per section")
-	diffCmd.Flags().IntVar(&diffMinDeltaUs, "min-delta-us", 0, "Filter top outliers by absolute delta in microseconds")
-	diffCmd.Flags().IntVar(&diffOnlyEncoder, "only-encoder", -1, "Only include dispatches for one encoder index")
-	diffCmd.Flags().StringVar(&diffOnlyFunction, "only-function", "", "Only include function names matching this regex")
-	diffCmd.Flags().BoolVar(&diffShowMatches, "show-matches", false, "Show matched dispatch rows in text output")
-	diffCmd.Flags().BoolVar(&diffShowUnmatched, "show-unmatched", false, "Show unmatched dispatch rows in text output")
-	diffCmd.Flags().BoolVar(&diffShowOccur, "show-occurrences", false, "Show function+occurrence alignment rows in text output")
-	diffCmd.Flags().BoolVar(&diffExplain, "explain", false, "Print concise interpretation text")
-	diffCmd.Flags().BoolVar(&diffQuick, "quick", false, "Quick triage report (totals, top deltas, outliers, unnamed, spike windows)")
-	diffCmd.Flags().BoolVar(&diffByEncoder, "by-encoder", false, "Encoder-focused report and dominance summary")
-	diffCmd.Flags().StringVar(&diffMDOut, "md-out", "", "Write markdown report to path")
-	diffCmd.Flags().StringVar(&diffPerfettoOut, "perfetto-out", "", "Write combined Perfetto/Chrome trace JSON with shared match IDs")
-	diffCmd.Flags().StringVar(&diffBenchDir, "bench-dir", "", "Auto-discover newest Go/Python perfdata pair from benchmark directory")
-	diffCmd.Flags().StringVar(&diffLeft, "left", "", "Explicit left trace path (overrides auto-discovery)")
-	diffCmd.Flags().StringVar(&diffRight, "right", "", "Explicit right trace path (overrides auto-discovery)")
 }
 
-func runDiff(cmd *cobra.Command, args []string) error {
-	opts := currentDiffOptions()
+func runDiff(cmd *cobra.Command, args []string, opts diffOptions) error {
 	if err := opts.validate(args); err != nil {
 		return err
 	}
@@ -149,7 +133,7 @@ func runDiff(cmd *cobra.Command, args []string) error {
 	}
 
 	if opts.JSON {
-		enc := json.NewEncoder(os.Stdout)
+		enc := json.NewEncoder(cmd.OutOrStdout())
 		enc.SetIndent("", "  ")
 		return enc.Encode(report)
 	}
@@ -163,7 +147,7 @@ func runDiff(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return err
 		}
-		_, err = fmt.Fprint(os.Stdout, csvText)
+		_, err = fmt.Fprint(cmd.OutOrStdout(), csvText)
 		return err
 	}
 
@@ -178,31 +162,8 @@ func runDiff(cmd *cobra.Command, args []string) error {
 	} else {
 		text = difftrace.RenderText(report, opts.By, opts.ShowMatches, opts.ShowUnmatched, opts.ShowOccur, opts.Explain, opts.Limit)
 	}
-	_, err = fmt.Fprint(os.Stdout, text)
+	_, err = fmt.Fprint(cmd.OutOrStdout(), text)
 	return err
-}
-
-func currentDiffOptions() diffOptions {
-	return diffOptions{
-		JSON:          diffJSON,
-		CSV:           diffCSV,
-		By:            diffBy,
-		Limit:         diffLimit,
-		MinDeltaUs:    diffMinDeltaUs,
-		OnlyEncoder:   diffOnlyEncoder,
-		OnlyFunction:  diffOnlyFunction,
-		ShowMatches:   diffShowMatches,
-		ShowUnmatched: diffShowUnmatched,
-		ShowOccur:     diffShowOccur,
-		Explain:       diffExplain,
-		Quick:         diffQuick,
-		ByEncoder:     diffByEncoder,
-		MDOut:         diffMDOut,
-		PerfettoOut:   diffPerfettoOut,
-		BenchDir:      diffBenchDir,
-		Left:          diffLeft,
-		Right:         diffRight,
-	}
 }
 
 func (o diffOptions) validate(args []string) error {

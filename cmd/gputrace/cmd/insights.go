@@ -11,15 +11,21 @@ import (
 	"github.com/tmc/gputrace"
 )
 
-var (
-	insightsJSON     bool
-	insightsMinLevel string
-)
+type insightsOptions struct {
+	json     bool
+	minLevel string
+}
 
-var insightsCmd = &cobra.Command{
-	Use:   "insights <trace.gputrace>",
-	Short: "Generate actionable performance insights from GPU trace",
-	Long: `Analyze GPU trace and generate actionable performance insights.
+var insightsCmd = newInsightsCommand(&insightsOptions{})
+
+func newInsightsCommand(opts *insightsOptions) *cobra.Command {
+	if opts.minLevel == "" {
+		opts.minLevel = "low"
+	}
+	cmd := &cobra.Command{
+		Use:   "insights <trace.gputrace>",
+		Short: "Generate actionable performance insights from GPU trace",
+		Long: `Analyze GPU trace and generate actionable performance insights.
 
 This command performs comprehensive analysis to identify:
   - BOTTLENECKS: Shaders consuming significant GPU time
@@ -49,19 +55,22 @@ Examples:
 
   # Export insights as JSON
   gputrace insights trace.gputrace --json > insights.json`,
-	Args: cobra.ExactArgs(1),
-	RunE: runInsights,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runInsights(cmd, args, opts)
+		},
+	}
+	cmd.Flags().BoolVar(&opts.json, "json", false, "Output in JSON format")
+	cmd.Flags().StringVar(&opts.minLevel, "min-level", "low",
+		"Minimum severity level to display (critical, high, medium, low, info)")
+	return cmd
 }
 
 func init() {
 	rootCmd.AddCommand(insightsCmd)
-
-	insightsCmd.Flags().BoolVar(&insightsJSON, "json", false, "Output in JSON format")
-	insightsCmd.Flags().StringVar(&insightsMinLevel, "min-level", "low",
-		"Minimum severity level to display (critical, high, medium, low, info)")
 }
 
-func runInsights(cmd *cobra.Command, args []string) error {
+func runInsights(cmd *cobra.Command, args []string, opts *insightsOptions) error {
 	tracePath := args[0]
 
 	// Verify trace file exists
@@ -83,12 +92,12 @@ func runInsights(cmd *cobra.Command, args []string) error {
 	}
 
 	// Filter by severity level if requested
-	if insightsMinLevel != "low" {
-		report = filterInsightsBySeverity(report, insightsMinLevel)
+	if opts.minLevel != "low" {
+		report = filterInsightsBySeverity(report, opts.minLevel)
 	}
 
 	// Output based on format
-	if insightsJSON {
+	if opts.json {
 		return writeInsightsJSON(cmd.OutOrStdout(), report)
 	}
 

@@ -129,29 +129,16 @@ func TestRunBuffersValidatesOptionsBeforeTraceIO(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			oldFormat := buffersFormat
-			oldSort := buffersSort
-			oldMinSize := buffersMinSize
-			oldInspect := buffersInspect
-			oldInspectBytes := buffersInspectBytes
-			oldInspectFormat := buffersInspectFormat
-			buffersFormat = tt.format
-			buffersSort = tt.sort
-			buffersMinSize = ""
-			buffersInspect = tt.inspect
-			buffersInspectBytes = tt.inspectBytes
-			buffersInspectFormat = tt.inspectFormat
-			t.Cleanup(func() {
-				buffersFormat = oldFormat
-				buffersSort = oldSort
-				buffersMinSize = oldMinSize
-				buffersInspect = oldInspect
-				buffersInspectBytes = oldInspectBytes
-				buffersInspectFormat = oldInspectFormat
-			})
+			opts := &buffersCommandOptions{
+				format:        tt.format,
+				sort:          tt.sort,
+				inspect:       tt.inspect,
+				inspectBytes:  tt.inspectBytes,
+				inspectFormat: tt.inspectFormat,
+			}
 
 			missingTrace := filepath.Join(t.TempDir(), "missing.gputrace")
-			err := runBuffers(nil, []string{missingTrace})
+			err := runBuffers(nil, []string{missingTrace}, opts)
 			if err == nil {
 				t.Fatal("runBuffers succeeded, want error")
 			}
@@ -173,29 +160,16 @@ func TestRunBuffersRejectsInspectBytesBeforeTraceIO(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			oldFormat := buffersFormat
-			oldSort := buffersSort
-			oldMinSize := buffersMinSize
-			oldInspect := buffersInspect
-			oldInspectBytes := buffersInspectBytes
-			oldInspectFormat := buffersInspectFormat
-			buffersFormat = "table"
-			buffersSort = "size"
-			buffersMinSize = ""
-			buffersInspect = "MTLBuffer-1-0"
-			buffersInspectBytes = tt.bytes
-			buffersInspectFormat = "hex"
-			t.Cleanup(func() {
-				buffersFormat = oldFormat
-				buffersSort = oldSort
-				buffersMinSize = oldMinSize
-				buffersInspect = oldInspect
-				buffersInspectBytes = oldInspectBytes
-				buffersInspectFormat = oldInspectFormat
-			})
+			opts := &buffersCommandOptions{
+				format:        "table",
+				sort:          "size",
+				inspect:       "MTLBuffer-1-0",
+				inspectBytes:  tt.bytes,
+				inspectFormat: "hex",
+			}
 
 			missingTrace := filepath.Join(t.TempDir(), "missing.gputrace")
-			err := runBuffers(nil, []string{missingTrace})
+			err := runBuffers(nil, []string{missingTrace}, opts)
 			if err == nil {
 				t.Fatal("runBuffers succeeded, want error")
 			}

@@ -16,10 +16,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var vertexOutputDrawCall int
-var vertexOutputFile string
-var vertexOutputFormat string
-
 type vertexOutputResult struct {
 	Status        string   `json:"status"`
 	Trace         string   `json:"trace"`
@@ -45,6 +41,19 @@ func (e *drawCallNotFoundError) Error() string {
 }
 
 func init() {
+	collectXcodeProfileCmd.AddCommand(newVertexOutputCommand(&vertexOutputOptions{
+		drawCall: 21,
+		format:   "text",
+	}))
+}
+
+type vertexOutputOptions struct {
+	drawCall int
+	output   string
+	format   string
+}
+
+func newVertexOutputCommand(opts *vertexOutputOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "vertex-output <trace.gputrace>",
 		Short: "Extract vertex shader output from Xcode GPU debugger",
@@ -59,23 +68,25 @@ This automates what you'd normally do manually:
   5. Read the vertex output table from the editor area`,
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
-		RunE:         runVertexOutput,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runVertexOutput(cmd, args, opts)
+		},
 	}
-	cmd.Flags().IntVar(&vertexOutputDrawCall, "draw", 21, "Draw call number to inspect")
-	cmd.Flags().StringVarP(&vertexOutputFile, "output", "o", "", "Output file path (default: stdout)")
-	cmd.Flags().StringVar(&vertexOutputFormat, "format", "text", "Output format: text, json")
-	collectXcodeProfileCmd.AddCommand(cmd)
+	cmd.Flags().IntVar(&opts.drawCall, "draw", opts.drawCall, "Draw call number to inspect")
+	cmd.Flags().StringVarP(&opts.output, "output", "o", opts.output, "Output file path (default: stdout)")
+	cmd.Flags().StringVar(&opts.format, "format", opts.format, "Output format: text, json")
+	return cmd
 }
 
-func runVertexOutput(cmd *cobra.Command, args []string) error {
-	jsonOutput, err := vertexOutputJSON(collectProfileJSON, vertexOutputFormat)
+func runVertexOutput(cmd *cobra.Command, args []string, opts *vertexOutputOptions) error {
+	jsonOutput, err := vertexOutputJSON(collectProfileJSON, opts.format)
 	if err != nil {
 		return err
 	}
-	if err := validateVertexOutputDraw(vertexOutputDrawCall); err != nil {
+	if err := validateVertexOutputDraw(opts.drawCall); err != nil {
 		return err
 	}
-	statusOut := vertexOutputStatusWriter(jsonOutput, vertexOutputFile)
+	statusOut := vertexOutputStatusWriter(jsonOutput, opts.output)
 
 	inputPath, err := filepath.Abs(args[0])
 	if err != nil {
@@ -86,7 +97,7 @@ func runVertexOutput(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	fmt.Fprintf(statusOut, "Extracting vertex output for draw call #%d...\n", vertexOutputDrawCall)
+	fmt.Fprintf(statusOut, "Extracting vertex output for draw call #%d...\n", opts.drawCall)
 
 	// Step 1: Open trace in Xcode
 	fmt.Fprintln(statusOut, "  Step 1: Opening trace in Xcode...")
@@ -152,8 +163,8 @@ func runVertexOutput(cmd *cobra.Command, args []string) error {
 	time.Sleep(500 * time.Millisecond)
 
 	// Step 4: Expand tree and find draw call
-	fmt.Fprintf(statusOut, "  Step 4: Finding draw call #%d...\n", vertexOutputDrawCall)
-	if err := navigateToDrawCall(windowAX, vertexOutputDrawCall); err != nil {
+	fmt.Fprintf(statusOut, "  Step 4: Finding draw call #%d...\n", opts.drawCall)
+	if err := navigateToDrawCall(windowAX, opts.drawCall); err != nil {
 		if jsonOutput {
 			var notFound *drawCallNotFoundError
 			if errors.As(err, &notFound) {
@@ -166,12 +177,12 @@ func runVertexOutput(cmd *cobra.Command, args []string) error {
 				return writeVertexOutput(vertexOutputResult{
 					Status:        "unsupported",
 					Trace:         inputPath,
-					DrawCall:      vertexOutputDrawCall,
+					DrawCall:      opts.drawCall,
 					Mode:          mode,
 					NavigatorRows: notFound.Rows,
 					Message:       notFound.Error(),
 					Suggestion:    suggestion,
-				}, "")
+				}, "", opts)
 			}
 		}
 		return fmt.Errorf("failed to navigate to draw call: %w", err)
@@ -189,17 +200,17 @@ func runVertexOutput(cmd *cobra.Command, args []string) error {
 		return writeVertexOutput(vertexOutputResult{
 			Status:   "ok",
 			Trace:    inputPath,
-			DrawCall: vertexOutputDrawCall,
+			DrawCall: opts.drawCall,
 			Mode:     "render",
 			Data:     data,
-		}, "")
+		}, "", opts)
 	}
 
-	if err := writeVertexOutput(data, data); err != nil {
+	if err := writeVertexOutput(data, data, opts); err != nil {
 		return err
 	}
-	if vertexOutputFile != "" {
-		fmt.Fprintf(statusOut, "  Wrote vertex output to %s\n", vertexOutputFile)
+	if opts.output != "" {
+		fmt.Fprintf(statusOut, "  Wrote vertex output to %s\n", opts.output)
 	}
 	return nil
 }
@@ -211,12 +222,12 @@ func validateVertexOutputDraw(draw int) error {
 	return nil
 }
 
-func writeVertexOutput(v any, text string) error {
-	jsonOutput, err := vertexOutputJSON(collectProfileJSON, vertexOutputFormat)
+func writeVertexOutput(v any, text string, opts *vertexOutputOptions) error {
+	jsonOutput, err := vertexOutputJSON(collectProfileJSON, opts.format)
 	if err != nil {
 		return err
 	}
-	writer, closeOutput, err := createCommandOutput(vertexOutputFile)
+	writer, closeOutput, err := createCommandOutput(opts.output)
 	if err != nil {
 		return fmt.Errorf("create vertex output: %w", err)
 	}
@@ -228,7 +239,7 @@ func writeVertexOutput(v any, text string) error {
 		enc.SetIndent("", "  ")
 		return enc.Encode(v)
 	}
-	if vertexOutputFile == "" {
+	if opts.output == "" {
 		_, err = fmt.Fprintln(writer, text)
 	} else {
 		_, err = io.WriteString(writer, text)

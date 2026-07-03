@@ -11,18 +11,6 @@ import (
 	"github.com/tmc/gputrace"
 )
 
-var (
-	dumpFilter             string
-	dumpNoIndent           bool
-	dumpNoNumbers          bool
-	dumpBuffersOnly        bool
-	dumpDispatchOnly       bool
-	dumpEncodersOnly       bool
-	dumpJSON               bool
-	dumpFull               bool
-	dumpCommandBufferIndex int
-)
-
 type dumpOptions struct {
 	filter             string
 	noIndent           bool
@@ -35,10 +23,13 @@ type dumpOptions struct {
 	commandBufferIndex int
 }
 
-var dumpCmd = &cobra.Command{
-	Use:   "dump <trace-path>",
-	Short: "Dump all API calls from a GPU trace",
-	Long: `Dumps all Metal API calls from a GPU trace in a format similar to Xcode Instruments.
+var dumpCmd = newDumpCommand(&dumpOptions{commandBufferIndex: -1})
+
+func newDumpCommand(opts *dumpOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "dump <trace-path>",
+		Short: "Dump all API calls from a GPU trace",
+		Long: `Dumps all Metal API calls from a GPU trace in a format similar to Xcode Instruments.
 
 The output shows:
 - Initialization calls (buffer/library/pipeline creation)
@@ -65,26 +56,28 @@ Examples:
   gputrace dump trace.gputrace --dispatch-only
   gputrace dump trace.gputrace --command-buffer 0
 `,
-	Args: cobra.ExactArgs(1),
-	RunE: runDump,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runDump(cmd, args, *opts)
+		},
+	}
+	cmd.Flags().StringVar(&opts.filter, "filter", "", "Filter API calls by pattern")
+	cmd.Flags().BoolVar(&opts.noIndent, "no-indent", false, "Disable indentation")
+	cmd.Flags().BoolVar(&opts.noNumbers, "no-numbers", false, "Don't number API calls")
+	cmd.Flags().BoolVar(&opts.buffersOnly, "buffers-only", false, "Show only buffer creation calls")
+	cmd.Flags().BoolVar(&opts.dispatchOnly, "dispatch-only", false, "Show only dispatch calls")
+	cmd.Flags().BoolVar(&opts.encodersOnly, "encoders-only", false, "Show only encoder-related calls")
+	cmd.Flags().BoolVar(&opts.json, "json", false, "Output in JSON format")
+	cmd.Flags().BoolVar(&opts.full, "full", false, "Show expanded tree view with all call levels")
+	cmd.Flags().IntVar(&opts.commandBufferIndex, "command-buffer", -1, "Show only calls from specific command buffer")
+	return cmd
 }
 
 func init() {
 	rootCmd.AddCommand(dumpCmd)
-
-	dumpCmd.Flags().StringVar(&dumpFilter, "filter", "", "Filter API calls by pattern")
-	dumpCmd.Flags().BoolVar(&dumpNoIndent, "no-indent", false, "Disable indentation")
-	dumpCmd.Flags().BoolVar(&dumpNoNumbers, "no-numbers", false, "Don't number API calls")
-	dumpCmd.Flags().BoolVar(&dumpBuffersOnly, "buffers-only", false, "Show only buffer creation calls")
-	dumpCmd.Flags().BoolVar(&dumpDispatchOnly, "dispatch-only", false, "Show only dispatch calls")
-	dumpCmd.Flags().BoolVar(&dumpEncodersOnly, "encoders-only", false, "Show only encoder-related calls")
-	dumpCmd.Flags().BoolVar(&dumpJSON, "json", false, "Output in JSON format")
-	dumpCmd.Flags().BoolVar(&dumpFull, "full", false, "Show expanded tree view with all call levels")
-	dumpCmd.Flags().IntVar(&dumpCommandBufferIndex, "command-buffer", -1, "Show only calls from specific command buffer")
 }
 
-func runDump(cmd *cobra.Command, args []string) error {
-	opts := currentDumpOptions()
+func runDump(cmd *cobra.Command, args []string, opts dumpOptions) error {
 	if err := validateDumpOptions(opts); err != nil {
 		return err
 	}
@@ -120,20 +113,6 @@ func runDump(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
-}
-
-func currentDumpOptions() dumpOptions {
-	return dumpOptions{
-		filter:             dumpFilter,
-		noIndent:           dumpNoIndent,
-		noNumbers:          dumpNoNumbers,
-		buffersOnly:        dumpBuffersOnly,
-		dispatchOnly:       dumpDispatchOnly,
-		encodersOnly:       dumpEncodersOnly,
-		json:               dumpJSON,
-		full:               dumpFull,
-		commandBufferIndex: dumpCommandBufferIndex,
-	}
 }
 
 func validateDumpOptions(opts dumpOptions) error {

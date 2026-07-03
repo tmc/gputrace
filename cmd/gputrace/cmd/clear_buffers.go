@@ -11,15 +11,18 @@ import (
 	"github.com/tmc/gputrace/internal/fmtutil"
 )
 
-var (
-	clearBuffersDryRun bool
-	clearBuffersYes    bool
-)
+type clearBuffersOptions struct {
+	dryRun bool
+	yes    bool
+}
 
-var clearBuffersCmd = &cobra.Command{
-	Use:   "clear-buffers <trace.gputrace>",
-	Short: "Zero out MTLBuffer files to reduce trace size",
-	Long: `Zero out all MTLBuffer-* files in a GPU trace directory.
+var clearBuffersCmd = newClearBuffersCommand(&clearBuffersOptions{})
+
+func newClearBuffersCommand(opts *clearBuffersOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "clear-buffers <trace.gputrace>",
+		Short: "Zero out MTLBuffer files to reduce trace size",
+		Long: `Zero out all MTLBuffer-* files in a GPU trace directory.
 
 This is useful for reducing trace size when buffer contents are not needed,
 such as when sharing traces or storing them for later analysis of structure
@@ -34,18 +37,23 @@ Examples:
   gputrace clear-buffers trace.gputrace              # Zero all buffers (prompts for confirmation)
   gputrace clear-buffers trace.gputrace -y           # Zero all buffers without prompting
   gputrace clear-buffers trace.gputrace --dry-run    # Show what would be done`,
-	Args: cobra.ExactArgs(1),
-	RunE: runClearBuffers,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runClearBuffers(cmd, args, opts)
+		},
+	}
+	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "Show what would be done without making changes")
+	cmd.Flags().BoolVarP(&opts.yes, "yes", "y", false, "Skip confirmation prompt")
+	return cmd
 }
 
 func init() {
 	rootCmd.AddCommand(clearBuffersCmd)
-	clearBuffersCmd.Flags().BoolVar(&clearBuffersDryRun, "dry-run", false, "Show what would be done without making changes")
-	clearBuffersCmd.Flags().BoolVarP(&clearBuffersYes, "yes", "y", false, "Skip confirmation prompt")
 }
 
-func runClearBuffers(cmd *cobra.Command, args []string) error {
+func runClearBuffers(cmd *cobra.Command, args []string, opts *clearBuffersOptions) error {
 	tracePath := args[0]
+	w := cmd.OutOrStdout()
 
 	// Verify trace directory exists
 	info, err := os.Stat(tracePath)
@@ -93,24 +101,24 @@ func runClearBuffers(cmd *cobra.Command, args []string) error {
 	}
 
 	if fileCount == 0 {
-		fmt.Println("No MTLBuffer files found")
+		fmt.Fprintln(w, "No MTLBuffer files found")
 		return nil
 	}
 
 	// Show summary and prompt for confirmation
-	fmt.Printf("Found %d buffer files (%s total)\n", fileCount, fmtutil.FormatBytes(totalSize, 2))
+	fmt.Fprintf(w, "Found %d buffer files (%s total)\n", fileCount, fmtutil.FormatBytes(totalSize, 2))
 	if skippedSymlinks > 0 {
-		fmt.Printf("Will skip %d symlinks\n", skippedSymlinks)
+		fmt.Fprintf(w, "Will skip %d symlinks\n", skippedSymlinks)
 	}
 
-	if clearBuffersDryRun {
-		fmt.Println("\nDry run: no changes made")
+	if opts.dryRun {
+		fmt.Fprintln(w, "\nDry run: no changes made")
 		return nil
 	}
 
 	// Prompt for confirmation unless -y flag is set
-	if !clearBuffersYes {
-		fmt.Print("\nZero out all buffer files? [y/N]: ")
+	if !opts.yes {
+		fmt.Fprint(w, "\nZero out all buffer files? [y/N]: ")
 		reader := bufio.NewReader(os.Stdin)
 		response, err := reader.ReadString('\n')
 		if err != nil {
@@ -118,7 +126,7 @@ func runClearBuffers(cmd *cobra.Command, args []string) error {
 		}
 		response = strings.TrimSpace(strings.ToLower(response))
 		if response != "y" && response != "yes" {
-			fmt.Println("Cancelled")
+			fmt.Fprintln(w, "Cancelled")
 			return nil
 		}
 	}
@@ -131,7 +139,7 @@ func runClearBuffers(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	fmt.Printf("Zeroed %d buffer files (%s)\n", fileCount, fmtutil.FormatBytes(totalSize, 2))
+	fmt.Fprintf(w, "Zeroed %d buffer files (%s)\n", fileCount, fmtutil.FormatBytes(totalSize, 2))
 	return nil
 }
 

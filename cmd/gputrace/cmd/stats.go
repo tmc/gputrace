@@ -13,15 +13,18 @@ import (
 	"github.com/tmc/gputrace/internal/counter"
 )
 
-var (
-	statsVerbose bool
-	statsJSON    bool
-)
+var statsCmd = newStatsCommand(new(statsOptions))
 
-var statsCmd = &cobra.Command{
-	Use:   "stats <trace.gputrace>",
-	Short: "Display GPU trace statistics",
-	Long: `Display comprehensive statistics about a GPU trace file.
+type statsOptions struct {
+	verbose bool
+	json    bool
+}
+
+func newStatsCommand(opts *statsOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "stats <trace.gputrace>",
+		Short: "Display GPU trace statistics",
+		Long: `Display comprehensive statistics about a GPU trace file.
 
 This command extracts and displays information including:
   - Trace metadata (UUID, version, API, device)
@@ -34,18 +37,22 @@ Examples:
   gputrace stats trace.gputrace
   gputrace stats trace.gputrace -v
   gputrace stats trace.gputrace --json`,
-	Args: cobra.ExactArgs(1),
-	RunE: runStats,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runStats(cmd, args, opts)
+		},
+	}
+
+	cmd.Flags().BoolVarP(&opts.verbose, "verbose", "v", opts.verbose, "Show verbose statistics including detailed analysis")
+	cmd.Flags().BoolVar(&opts.json, "json", opts.json, "Output statistics in JSON format")
+	return cmd
 }
 
 func init() {
 	rootCmd.AddCommand(statsCmd)
-
-	statsCmd.Flags().BoolVarP(&statsVerbose, "verbose", "v", false, "Show verbose statistics including detailed analysis")
-	statsCmd.Flags().BoolVar(&statsJSON, "json", false, "Output statistics in JSON format")
 }
 
-func runStats(cmd *cobra.Command, args []string) error {
+func runStats(cmd *cobra.Command, args []string, opts *statsOptions) error {
 	tracePath := args[0]
 
 	// Verify trace file exists
@@ -57,7 +64,7 @@ func runStats(cmd *cobra.Command, args []string) error {
 	trace, err := gputrace.Open(tracePath)
 	if err != nil {
 		if findProfilerDir(tracePath) != "" {
-			return runStatsFromProfiler(cmd.OutOrStdout(), tracePath)
+			return runStatsFromProfiler(cmd.OutOrStdout(), tracePath, opts)
 		}
 		return fmt.Errorf("failed to open trace: %w", err)
 	}
@@ -69,8 +76,8 @@ func runStats(cmd *cobra.Command, args []string) error {
 	}
 
 	// Handle JSON output
-	if statsJSON {
-		return outputStatsJSON(cmd.OutOrStdout(), statistics, trace, statsVerbose)
+	if opts.json {
+		return outputStatsJSON(cmd.OutOrStdout(), statistics, trace, opts.verbose)
 	}
 
 	// Quick one-liner summary
@@ -252,7 +259,7 @@ func runStats(cmd *cobra.Command, args []string) error {
 	fmt.Println()
 
 	// If verbose, show additional analysis
-	if statsVerbose {
+	if opts.verbose {
 		fmt.Println()
 		fmt.Println(Colorize("Detailed Analysis", ColorBold))
 		fmt.Println(TableSeparator(40))
@@ -336,7 +343,7 @@ type profilerStatsJSON struct {
 	TimingSource          string  `json:"timing_source"`
 }
 
-func runStatsFromProfiler(w io.Writer, tracePath string) error {
+func runStatsFromProfiler(w io.Writer, tracePath string, opts *statsOptions) error {
 	profilerDir, streamStats, err := loadProfilerStats(tracePath)
 	if err != nil {
 		return err
@@ -360,7 +367,7 @@ func runStatsFromProfiler(w io.Writer, tracePath string) error {
 		TimingSource:          streamStats.TimingSource,
 	}
 
-	if statsJSON {
+	if opts.json {
 		output := profilerStatsJSONOutput{
 			ProfilerOnly: true,
 			ProfilerDir:  profilerDir,

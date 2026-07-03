@@ -121,21 +121,18 @@ func TestValidateVertexOutputDraw(t *testing.T) {
 }
 
 func TestWriteVertexOutputStdoutText(t *testing.T) {
-	oldFile := vertexOutputFile
-	oldFormat := vertexOutputFormat
 	oldJSON := collectProfileJSON
 	t.Cleanup(func() {
-		vertexOutputFile = oldFile
-		vertexOutputFormat = oldFormat
 		collectProfileJSON = oldJSON
 	})
 
-	vertexOutputFile = "/dev/stdout"
-	vertexOutputFormat = "text"
 	collectProfileJSON = false
 
 	out, err := captureStdout(t, func() error {
-		return writeVertexOutput("ignored", "row 1\n")
+		return writeVertexOutput("ignored", "row 1\n", &vertexOutputOptions{
+			output: "/dev/stdout",
+			format: "text",
+		})
 	})
 	if err != nil {
 		t.Fatalf("writeVertexOutput: %v", err)
@@ -146,21 +143,18 @@ func TestWriteVertexOutputStdoutText(t *testing.T) {
 }
 
 func TestWriteVertexOutputDashJSON(t *testing.T) {
-	oldFile := vertexOutputFile
-	oldFormat := vertexOutputFormat
 	oldJSON := collectProfileJSON
 	t.Cleanup(func() {
-		vertexOutputFile = oldFile
-		vertexOutputFormat = oldFormat
 		collectProfileJSON = oldJSON
 	})
 
-	vertexOutputFile = "-"
-	vertexOutputFormat = "json"
 	collectProfileJSON = false
 
 	out, err := captureStdout(t, func() error {
-		return writeVertexOutput(vertexOutputResult{Status: "ok", Trace: "trace.gputrace", DrawCall: 21}, "")
+		return writeVertexOutput(vertexOutputResult{Status: "ok", Trace: "trace.gputrace", DrawCall: 21}, "", &vertexOutputOptions{
+			output: "-",
+			format: "json",
+		})
 	})
 	if err != nil {
 		t.Fatalf("writeVertexOutput: %v", err)

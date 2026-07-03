@@ -12,29 +12,15 @@ import (
 )
 
 func TestRunKernelsJSONWritesToCommandOutput(t *testing.T) {
-	oldFilter := kernelsFilter
-	oldVerbose := kernelsVerbose
-	oldStats := kernelsStats
-	oldJSON := kernelsJSON
-	t.Cleanup(func() {
-		kernelsFilter = oldFilter
-		kernelsVerbose = oldVerbose
-		kernelsStats = oldStats
-		kernelsJSON = oldJSON
-	})
-
-	kernelsFilter = ""
-	kernelsVerbose = false
-	kernelsStats = false
-	kernelsJSON = true
-
 	cmd := &cobra.Command{}
 	var commandStdout bytes.Buffer
 	cmd.SetOut(&commandStdout)
 
 	tracePath := writeKernelsMinimalTraceBundle(t)
 	osStdout, err := captureStdout(t, func() error {
-		return runKernels(cmd, []string{tracePath})
+		return runKernels(cmd, []string{tracePath}, &kernelsOptions{
+			json: true,
+		})
 	})
 	if err != nil {
 		t.Fatalf("runKernels: %v", err)

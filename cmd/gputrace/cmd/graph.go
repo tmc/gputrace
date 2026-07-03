@@ -10,18 +10,16 @@ import (
 	"github.com/tmc/gputrace/internal/graph"
 )
 
-var (
-	graphFormat     string
-	graphType       string
-	graphOutput     string
-	graphShowTiming bool
-	graphShowMemory bool
-)
+var graphCmd = newGraphCommand(&graphOptions{
+	format:    "dot",
+	graphType: "hierarchy",
+})
 
-var graphCmd = &cobra.Command{
-	Use:   "graph <trace.gputrace>",
-	Short: "Generate graph visualization of GPU trace structure",
-	Long: `Generate graph visualizations showing relationships between GPU trace entities.
+func newGraphCommand(opts *graphOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "graph <trace.gputrace>",
+		Short: "Generate graph visualization of GPU trace structure",
+		Long: `Generate graph visualizations showing relationships between GPU trace entities.
 
 Supported formats:
   - dot: Graphviz DOT format (default)
@@ -37,22 +35,26 @@ Examples:
   gputrace graph trace.gputrace --format mermaid
   gputrace graph trace.gputrace --type hierarchy --show-timing
   gputrace graph trace.gputrace -o graph.dot`,
-	Args: cobra.ExactArgs(1),
-	RunE: runGraph,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runGraph(cmd, args, opts)
+		},
+	}
+
+	cmd.Flags().StringVar(&opts.format, "format", opts.format, "Output format: dot, mermaid")
+	cmd.Flags().StringVar(&opts.graphType, "type", opts.graphType, "Graph type: hierarchy, flow, resources")
+	cmd.Flags().StringVarP(&opts.output, "output", "o", opts.output, "Output file (default: stdout)")
+	cmd.Flags().BoolVar(&opts.showTiming, "show-timing", opts.showTiming, "Include timing information in nodes")
+	cmd.Flags().BoolVar(&opts.showMemory, "show-memory", opts.showMemory, "Include memory usage information")
+	return cmd
 }
 
 func init() {
 	rootCmd.AddCommand(graphCmd)
-
-	graphCmd.Flags().StringVar(&graphFormat, "format", "dot", "Output format: dot, mermaid")
-	graphCmd.Flags().StringVar(&graphType, "type", "hierarchy", "Graph type: hierarchy, flow, resources")
-	graphCmd.Flags().StringVarP(&graphOutput, "output", "o", "", "Output file (default: stdout)")
-	graphCmd.Flags().BoolVar(&graphShowTiming, "show-timing", false, "Include timing information in nodes")
-	graphCmd.Flags().BoolVar(&graphShowMemory, "show-memory", false, "Include memory usage information")
 }
 
-func runGraph(cmd *cobra.Command, args []string) error {
-	opts, err := validateGraphOptions(graphFormat, graphType)
+func runGraph(cmd *cobra.Command, args []string, opts *graphOptions) error {
+	valid, err := validateGraphOptions(opts.format, opts.graphType)
 	if err != nil {
 		return err
 	}
@@ -81,9 +83,9 @@ func runGraph(cmd *cobra.Command, args []string) error {
 
 	// Configure generator
 	config := &graph.Config{
-		Type:       opts.graphType,
-		ShowTiming: graphShowTiming,
-		ShowMemory: graphShowMemory,
+		Type:       valid.graphType,
+		ShowTiming: opts.showTiming,
+		ShowMemory: opts.showMemory,
 	}
 
 	// Generate graph
@@ -92,12 +94,15 @@ func runGraph(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to generate graph: %w", err)
 	}
 
-	return writeGraphOutput(cmd, graphOutput, output)
+	return writeGraphOutput(cmd, opts.output, output)
 }
 
 type graphOptions struct {
-	format    string
-	graphType string
+	format     string
+	graphType  string
+	output     string
+	showTiming bool
+	showMemory bool
 }
 
 func validateGraphOptions(format, graphType string) (graphOptions, error) {

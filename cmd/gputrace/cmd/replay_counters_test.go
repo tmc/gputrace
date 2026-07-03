@@ -6,20 +6,7 @@ import (
 )
 
 func TestReplayCountersFailsClosedBeforeOpeningTraceWithoutSimulate(t *testing.T) {
-	oldSimulate := simulateOnlyFlag
-	oldOutput := counterOutputFlag
-	oldCounterSets := counterSetsFlag
-	t.Cleanup(func() {
-		simulateOnlyFlag = oldSimulate
-		counterOutputFlag = oldOutput
-		counterSetsFlag = oldCounterSets
-	})
-
-	simulateOnlyFlag = false
-	counterOutputFlag = ""
-	counterSetsFlag = nil
-
-	err := runReplayCounters(nil, []string{t.TempDir()})
+	err := runReplayCounters(nil, []string{t.TempDir()}, &replayCountersOptions{})
 	if err == nil {
 		t.Fatal("runReplayCounters succeeded without Metal bindings")
 	}

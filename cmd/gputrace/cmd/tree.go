@@ -10,32 +10,42 @@ import (
 	"github.com/tmc/gputrace/internal/trace"
 )
 
-var (
-	treeGroupBy string
-	treeVerbose bool
-	treeJSON    bool
-)
+var treeCmd = newTreeCommand(&treeOptions{
+	groupBy: "encoder",
+})
 
-var treeCmd = &cobra.Command{
-	Use:   "tree <trace-path>",
-	Short: "Display execution tree grouped by pipeline state or encoder",
-	Long: `Display a hierarchical view of GPU execution.
+type treeOptions struct {
+	groupBy string
+	verbose bool
+	json    bool
+}
+
+func newTreeCommand(opts *treeOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "tree <trace-path>",
+		Short: "Display execution tree grouped by pipeline state or encoder",
+		Long: `Display a hierarchical view of GPU execution.
 
 Grouping modes:
   - encoder:  Group by Encoder (Command Buffer), then Commands (default)
   - pipeline: Group by Compute Pipeline State, then Kernel`,
-	Args: cobra.ExactArgs(1),
-	RunE: runTree,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runTree(cmd, args, opts)
+		},
+	}
+
+	cmd.Flags().StringVar(&opts.groupBy, "group-by", opts.groupBy, "Grouping mode: encoder, pipeline")
+	cmd.Flags().BoolVarP(&opts.verbose, "verbose", "v", opts.verbose, "Show detailed information")
+	cmd.Flags().BoolVar(&opts.json, "json", opts.json, "Output in JSON format")
+	return cmd
 }
 
 func init() {
 	rootCmd.AddCommand(treeCmd)
-	treeCmd.Flags().StringVar(&treeGroupBy, "group-by", "encoder", "Grouping mode: encoder, pipeline")
-	treeCmd.Flags().BoolVarP(&treeVerbose, "verbose", "v", false, "Show detailed information")
-	treeCmd.Flags().BoolVar(&treeJSON, "json", false, "Output in JSON format")
 }
 
-func runTree(cmd *cobra.Command, args []string) error {
+func runTree(cmd *cobra.Command, args []string, opts *treeOptions) error {
 	tracePath := args[0]
 	t, err := trace.Open(tracePath)
 	if err != nil {
@@ -81,18 +91,18 @@ func runTree(cmd *cobra.Command, args []string) error {
 	// Scan main records (flattened)
 	scanForNames(flattened, addrToName)
 
-	if treeJSON {
+	if opts.json {
 		return renderTreeJSON(t, flattened, addrToName)
 	}
 
 	// 3. Render Tree based on grouping
-	switch treeGroupBy {
+	switch opts.groupBy {
 	case "encoder":
-		return renderEncoderTree(t, flattened, addrToName)
+		return renderEncoderTree(t, flattened, addrToName, opts)
 	case "pipeline":
-		return renderPipelineTree(t, flattened, addrToName)
+		return renderPipelineTree(t, flattened, addrToName, opts)
 	default:
-		return fmt.Errorf("unknown group-by mode: %s", treeGroupBy)
+		return fmt.Errorf("unknown group-by mode: %s", opts.groupBy)
 	}
 }
 
@@ -201,7 +211,7 @@ func renderTreeJSON(t *trace.Trace, records []trace.MTSPRecord, addrToName map[u
 	return nil
 }
 
-func renderEncoderTree(t *trace.Trace, records []trace.MTSPRecord, addrToName map[uint64]string) error {
+func renderEncoderTree(t *trace.Trace, records []trace.MTSPRecord, addrToName map[uint64]string, opts *treeOptions) error {
 	fmt.Println(Colorize("GpuTrace Execution Tree (Hierarchical)", ColorBold))
 
 	// Indentation state
@@ -277,7 +287,7 @@ func renderEncoderTree(t *trace.Trace, records []trace.MTSPRecord, addrToName ma
 			}
 
 		case trace.RecordTypeCtulul:
-			if ctulul, err := rec.ParseCtululRecord(); err == nil && treeVerbose {
+			if ctulul, err := rec.ParseCtululRecord(); err == nil && opts.verbose {
 				fmt.Printf("%s%s Set Buffer (Pipeline: %s)\n", indent, Colorize("•", ColorGray), Colorize(fmt.Sprintf("0x%x", ctulul.PipelineAddr), ColorCyan))
 			}
 
@@ -293,7 +303,7 @@ func renderEncoderTree(t *trace.Trace, records []trace.MTSPRecord, addrToName ma
 				encoderToPipeline[ct.PipelineAddr] = ct.FunctionAddr
 
 				// Display Buffer Bindings in Encoder View
-				if len(ct.BufferBindings) > 0 && treeVerbose {
+				if len(ct.BufferBindings) > 0 && opts.verbose {
 					indentStr := indent
 					fmt.Printf("%s%s Set Bindings (Pipeline: %s)\n", indentStr, Colorize("•", ColorGray), Colorize(fmt.Sprintf("0x%x", ct.FunctionAddr), ColorCyan))
 					for i, b := range ct.BufferBindings {
@@ -331,7 +341,7 @@ func renderEncoderTree(t *trace.Trace, records []trace.MTSPRecord, addrToName ma
 					funcName = "UnknownKernel"
 				}
 
-				if treeVerbose {
+				if opts.verbose {
 					fmt.Printf("%s%s %s [dispatchThreads:%d,%d,%d threadsPerThreadgroup:%d,%d,%d] (Index: ?)\n",
 						indent,
 						Colorize("▦", ColorBlue),
@@ -357,7 +367,7 @@ func renderEncoderTree(t *trace.Trace, records []trace.MTSPRecord, addrToName ma
 	return nil
 }
 
-func renderPipelineTree(t *trace.Trace, records []trace.MTSPRecord, addrToName map[uint64]string) error {
+func renderPipelineTree(t *trace.Trace, records []trace.MTSPRecord, addrToName map[uint64]string, opts *treeOptions) error {
 	// Re-flatten for pipeline view, but respecting hierarchy for context if needed.
 	// Actually, pipeline view is temporal, so flattening is fine if we just want sequential dispatches.
 	// But we want to implement it robustly.
@@ -466,7 +476,7 @@ func renderPipelineTree(t *trace.Trace, records []trace.MTSPRecord, addrToName m
 				name = "Unknown"
 			}
 			fmt.Printf("  %s %s (%s)\n", Colorize("▼", ColorBlue), Colorize(name, ColorGreen), Colorize(fmt.Sprintf("0x%x", k.FunctionAddr), ColorCyan))
-			if treeVerbose {
+			if opts.verbose {
 				for i, b := range k.BufferBindings {
 					bName := addrToName[b]
 					if bName == "" {
