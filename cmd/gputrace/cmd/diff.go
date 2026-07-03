@@ -24,6 +24,8 @@ type diffOptions struct {
 	ShowOccur     bool
 	Explain       bool
 	Quick         bool
+	Divergence    bool
+	DivergenceUs  int
 	ByEncoder     bool
 	MDOut         string
 	PerfettoOut   string
@@ -70,6 +72,8 @@ Examples:
 	cmd.Flags().BoolVar(&opts.ShowOccur, "show-occurrences", false, "Show function+occurrence alignment rows in text output")
 	cmd.Flags().BoolVar(&opts.Explain, "explain", false, "Print concise interpretation text")
 	cmd.Flags().BoolVar(&opts.Quick, "quick", false, "Quick triage report (totals, top deltas, outliers, unnamed, spike windows)")
+	cmd.Flags().BoolVar(&opts.Divergence, "divergence", false, "With --by encoder, compute first divergent encoder and tail slopes")
+	cmd.Flags().IntVar(&opts.DivergenceUs, "divergence-threshold-us", 20, "Encoder divergence threshold in microseconds")
 	cmd.Flags().BoolVar(&opts.ByEncoder, "by-encoder", false, "Encoder-focused report and dominance summary")
 	cmd.Flags().StringVar(&opts.MDOut, "md-out", "", "Write markdown report to path")
 	cmd.Flags().StringVar(&opts.PerfettoOut, "perfetto-out", "", "Write combined Perfetto/Chrome trace JSON with shared match IDs")
@@ -117,6 +121,10 @@ func runDiff(cmd *cobra.Command, args []string, opts diffOptions) error {
 		MinDeltaUs:   opts.MinDeltaUs,
 	})
 	report := difftrace.BuildReport(a, b, aligned, difftrace.ReportOptions{Limit: opts.Limit, MinDeltaUs: opts.MinDeltaUs})
+	if opts.Divergence {
+		divergence := difftrace.AnalyzeEncoderDivergence(a.Encoders, b.Encoders, opts.DivergenceUs)
+		report.EncoderDivergence = &divergence
+	}
 	if discoverNote != "" {
 		report.Warnings = append([]string{discoverNote}, report.Warnings...)
 	}
@@ -162,6 +170,9 @@ func runDiff(cmd *cobra.Command, args []string, opts diffOptions) error {
 		}
 	} else if opts.ByEncoder {
 		text = difftrace.RenderEncoderFocus(report, opts.Limit)
+	} else if opts.Divergence {
+		text = difftrace.RenderText(report, opts.By, opts.ShowMatches, opts.ShowUnmatched, opts.ShowOccur, opts.Explain, opts.Limit)
+		text += "\n" + difftrace.RenderEncoderDivergence(*report.EncoderDivergence)
 	} else {
 		text = difftrace.RenderText(report, opts.By, opts.ShowMatches, opts.ShowUnmatched, opts.ShowOccur, opts.Explain, opts.Limit)
 	}
@@ -178,6 +189,9 @@ func (o diffOptions) validate(args []string) error {
 	}
 	if o.MinDeltaUs < 0 {
 		return fmt.Errorf("--min-delta-us must be >= 0")
+	}
+	if o.DivergenceUs <= 0 {
+		return fmt.Errorf("--divergence-threshold-us must be > 0")
 	}
 	if o.OnlyEncoder < -1 {
 		return fmt.Errorf("--only-encoder must be >= -1")
@@ -231,6 +245,9 @@ func (o diffOptions) validate(args []string) error {
 	}
 	if o.ByEncoder && strings.TrimSpace(o.By) != "" {
 		return fmt.Errorf("--by-encoder cannot be combined with --by")
+	}
+	if o.Divergence && strings.TrimSpace(o.By) != "encoder" {
+		return fmt.Errorf("--divergence requires --by encoder")
 	}
 	return nil
 }
