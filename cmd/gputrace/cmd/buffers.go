@@ -24,6 +24,7 @@ var (
 	buffersInspect       string // Buffer name to inspect (e.g., MTLBuffer-12-0)
 	buffersInspectBytes  int    // Number of bytes to show in inspection
 	buffersInspectFormat string // Format for inspection: hex, float32, int32, etc.
+	buffersResources     bool
 )
 
 var buffersCmd = &cobra.Command{
@@ -59,6 +60,7 @@ func init() {
 	buffersCmd.Flags().StringVar(&buffersInspect, "inspect", "", "Inspect buffer contents (e.g., MTLBuffer-12-0)")
 	buffersCmd.Flags().IntVar(&buffersInspectBytes, "bytes", 256, "Number of bytes to show in inspection")
 	buffersCmd.Flags().StringVar(&buffersInspectFormat, "inspect-format", "hex", "Inspection format: hex, float32, int32, uint32, float16")
+	buffersCmd.Flags().BoolVar(&buffersResources, "resources", false, "Show device-resource buffer inventory")
 }
 
 func runBuffers(cmd *cobra.Command, args []string) error {
@@ -83,6 +85,9 @@ func runBuffers(cmd *cobra.Command, args []string) error {
 	// If --inspect is specified, handle buffer inspection
 	if buffersInspect != "" {
 		return inspectBuffer(tracePath, buffersInspect, opts.inspectBytes, opts.inspectFormat)
+	}
+	if buffersResources {
+		return formatBufferResourceInventory(tracePath, buffersFormat, trace)
 	}
 
 	// Extract buffer information
@@ -204,6 +209,59 @@ type BufferBindingInfo struct {
 	EncoderLabel string
 	Index        int
 	Offset       uint64
+}
+
+type BufferResourceInventory struct {
+	FinalBuffers int                  `json:"final_buffers"`
+	FinalBytes   uint64               `json:"final_bytes"`
+	Files        []BufferResourceFile `json:"files"`
+}
+
+type BufferResourceFile struct {
+	Filename         string                  `json:"filename"`
+	Kind             string                  `json:"kind"`
+	Records          int                     `json:"records"`
+	FinalNameRecords int                     `json:"final_name_records"`
+	SizeMatched      int                     `json:"size_matched"`
+	SizeBad          int                     `json:"size_bad"`
+	NoFinalFile      int                     `json:"no_final_file"`
+	SizeBins         []BufferResourceSizeBin `json:"size_bins,omitempty"`
+}
+
+type BufferResourceSizeBin struct {
+	Size                  uint64                       `json:"size"`
+	Records               int                          `json:"records"`
+	Bytes                 uint64                       `json:"bytes"`
+	Names                 int                          `json:"names,omitempty"`
+	SampleNames           []string                     `json:"sample_names,omitempty"`
+	SampleRecords         []BufferResourceSampleRecord `json:"sample_records,omitempty"`
+	FirstRecord           int                          `json:"first_record,omitempty"`
+	LastRecord            int                          `json:"last_record,omitempty"`
+	RecordMarkers         []BufferResourceMarkerCount  `json:"record_markers,omitempty"`
+	CommandBoundNames     int                          `json:"command_bound_names,omitempty"`
+	CommandBindingRecords int                          `json:"command_binding_records,omitempty"`
+	CommandEncoders       int                          `json:"command_encoders,omitempty"`
+}
+
+type BufferResourceMarkerCount struct {
+	Marker  string `json:"marker"`
+	Records int    `json:"records"`
+}
+
+type BufferResourceSampleRecord struct {
+	Name              string `json:"name"`
+	Marker            string `json:"marker"`
+	AddressBeforeName uint64 `json:"address_before_name,omitempty"`
+	Size              uint64 `json:"size,omitempty"`
+	PostSizeU32       uint32 `json:"post_size_u32,omitempty"`
+	CompanionMarker   string `json:"companion_marker,omitempty"`
+	CompanionAddr     uint64 `json:"companion_addr,omitempty"`
+	CompanionValue    uint64 `json:"companion_value,omitempty"`
+}
+
+type bufferCommandUse struct {
+	bindingRecords int
+	encoderIDs     map[int]struct{}
 }
 
 // extractBufferInfo scans the trace directory for buffer files.
@@ -589,6 +647,514 @@ func formatBuffersTable(buffers []BufferInfo, trace *gputrace.Trace) error {
 	}
 
 	return nil
+}
+
+func formatBufferResourceInventory(tracePath, format string, trace *gputrace.Trace) error {
+	inventory, err := extractBufferResourceInventory(tracePath, trace)
+	if err != nil {
+		return err
+	}
+
+	switch format {
+	case "json":
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(inventory)
+	case "csv":
+		fmt.Println("Filename,Kind,Records,FinalNameRecords,SizeMatched,SizeBad,NoFinalFile")
+		for _, file := range inventory.Files {
+			fmt.Printf("%s,%s,%d,%d,%d,%d,%d\n",
+				file.Filename,
+				file.Kind,
+				file.Records,
+				file.FinalNameRecords,
+				file.SizeMatched,
+				file.SizeBad,
+				file.NoFinalFile,
+			)
+		}
+		return nil
+	default:
+		fmt.Printf("%d final %s, %s\n\n",
+			inventory.FinalBuffers,
+			Pluralize(inventory.FinalBuffers, "buffer", "buffers"),
+			FormatBytes(inventory.FinalBytes),
+		)
+		fmt.Println(Colorize("Device Resource Buffers", ColorBold))
+		fmt.Println(TableSeparator(110))
+		fmt.Printf("%-36s %-10s %8s %12s %12s %8s %12s\n",
+			"File", "Kind", "Records", "FinalNames", "SizeMatched", "SizeBad", "NoFinalFile")
+		fmt.Println(TableSeparator(110))
+		for _, file := range inventory.Files {
+			fmt.Printf("%-36s %-10s %8d %12d %12d %8d %12d\n",
+				file.Filename,
+				file.Kind,
+				file.Records,
+				file.FinalNameRecords,
+				file.SizeMatched,
+				file.SizeBad,
+				file.NoFinalFile,
+			)
+		}
+		printBufferResourceSizeBins(inventory.Files)
+		return nil
+	}
+}
+
+func printBufferResourceSizeBins(files []BufferResourceFile) {
+	type row struct {
+		filename string
+		kind     string
+		bin      BufferResourceSizeBin
+	}
+	var rows []row
+	for _, file := range files {
+		for _, bin := range file.SizeBins {
+			rows = append(rows, row{filename: file.Filename, kind: file.Kind, bin: bin})
+		}
+	}
+	if len(rows) == 0 {
+		return
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].bin.Bytes != rows[j].bin.Bytes {
+			return rows[i].bin.Bytes > rows[j].bin.Bytes
+		}
+		if rows[i].bin.Size != rows[j].bin.Size {
+			return rows[i].bin.Size > rows[j].bin.Size
+		}
+		if rows[i].kind != rows[j].kind {
+			return rows[i].kind < rows[j].kind
+		}
+		return rows[i].filename < rows[j].filename
+	})
+
+	limit := 10
+	if len(rows) < limit {
+		limit = len(rows)
+	}
+	fmt.Println()
+	fmt.Println(Colorize("Top Matched Resource Size Bins", ColorBold))
+	fmt.Println(TableSeparator(100))
+	fmt.Printf("%-36s %-10s %12s %8s %7s %8s %8s %12s %8s %10s %8s\n",
+		"File", "Kind", "Size", "Records", "Names", "First", "Last", "Bytes", "CmdNames", "CmdRecords", "CmdEnc")
+	fmt.Println(TableSeparator(100))
+	for i := 0; i < limit; i++ {
+		row := rows[i]
+		fmt.Printf("%-36s %-10s %12d %8d %7d %8d %8d %12s %8d %10d %8d\n",
+			row.filename,
+			row.kind,
+			row.bin.Size,
+			row.bin.Records,
+			row.bin.Names,
+			row.bin.FirstRecord,
+			row.bin.LastRecord,
+			FormatBytes(row.bin.Bytes),
+			row.bin.CommandBoundNames,
+			row.bin.CommandBindingRecords,
+			row.bin.CommandEncoders,
+		)
+	}
+}
+
+func extractBufferResourceInventory(tracePath string, trace *gputrace.Trace) (*BufferResourceInventory, error) {
+	entries, err := os.ReadDir(tracePath)
+	if err != nil {
+		return nil, err
+	}
+
+	finalSizes := make(map[string]uint64)
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, "MTLBuffer-") || !strings.HasSuffix(name, "-0") {
+			continue
+		}
+		info, err := os.Lstat(filepath.Join(tracePath, name))
+		if err != nil {
+			return nil, fmt.Errorf("stat %s: %w", name, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 || info.IsDir() {
+			continue
+		}
+		finalSizes[name] = uint64(info.Size())
+	}
+
+	inventory := &BufferResourceInventory{
+		FinalBuffers: len(finalSizes),
+	}
+	for _, size := range finalSizes {
+		inventory.FinalBytes += size
+	}
+	commandUses := map[string]bufferCommandUse{}
+	if trace != nil {
+		commandUses, err = extractBufferCommandUses(trace, finalSizes)
+		if err != nil {
+			return nil, fmt.Errorf("extract command buffer uses: %w", err)
+		}
+	}
+
+	for _, entry := range entries {
+		name := entry.Name()
+		kind := ""
+		switch {
+		case strings.HasPrefix(name, "device-resources-"):
+			kind = "device"
+		case strings.HasPrefix(name, "delta-device-resources-"):
+			kind = "delta"
+		case strings.HasPrefix(name, "unused-device-resources-"):
+			kind = "unused"
+		default:
+			continue
+		}
+
+		data, err := os.ReadFile(filepath.Join(tracePath, name))
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", name, err)
+		}
+
+		inventory.Files = append(inventory.Files, scanBufferResourceFile(name, kind, data, finalSizes, commandUses))
+	}
+
+	sort.Slice(inventory.Files, func(i, j int) bool {
+		if inventory.Files[i].Kind != inventory.Files[j].Kind {
+			return inventory.Files[i].Kind < inventory.Files[j].Kind
+		}
+		return inventory.Files[i].Filename < inventory.Files[j].Filename
+	})
+
+	return inventory, nil
+}
+
+func scanBufferResourceFile(filename, kind string, data []byte, finalSizes map[string]uint64, commandUses map[string]bufferCommandUse) BufferResourceFile {
+	file := BufferResourceFile{
+		Filename: filename,
+		Kind:     kind,
+	}
+	sizeBins := make(map[uint64]int)
+	sizeNames := make(map[uint64]map[string]struct{})
+	sizeSpans := make(map[uint64]resourceRecordSpan)
+	sizeMarkers := make(map[uint64]map[string]int)
+	sizeSamples := make(map[uint64][]BufferResourceSampleRecord)
+	offset := 0
+	recordIdx := 0
+	for {
+		pos := bytes.Index(data[offset:], []byte("MTLBuffer-"))
+		if pos == -1 {
+			break
+		}
+		start := offset + pos
+		end := bytes.IndexByte(data[start:], 0)
+		if end == -1 || end > 100 {
+			offset = start + len("MTLBuffer-")
+			continue
+		}
+		name := string(data[start : start+end])
+		file.Records++
+		recordIdx++
+
+		want, ok := finalSizes[name]
+		if !ok {
+			file.NoFinalFile++
+			offset = start + end + 1
+			continue
+		}
+
+		file.FinalNameRecords++
+		if resourceRecordHasSize(data, start+end, want) {
+			file.SizeMatched++
+			sizeBins[want]++
+			if sizeNames[want] == nil {
+				sizeNames[want] = make(map[string]struct{})
+			}
+			sizeNames[want][name] = struct{}{}
+			if sizeMarkers[want] == nil {
+				sizeMarkers[want] = make(map[string]int)
+			}
+			sizeMarkers[want][resourceRecordMarker(data, start)]++
+			if len(sizeSamples[want]) < 5 {
+				sizeSamples[want] = append(sizeSamples[want], parseBufferResourceSample(data, start, start+end, want))
+			}
+			span := sizeSpans[want]
+			if span.first == 0 || recordIdx < span.first {
+				span.first = recordIdx
+			}
+			if recordIdx > span.last {
+				span.last = recordIdx
+			}
+			sizeSpans[want] = span
+		} else {
+			file.SizeBad++
+		}
+		offset = start + end + 1
+	}
+	file.SizeBins = makeBufferResourceSizeBins(sizeBins, sizeNames, sizeSpans, sizeMarkers, sizeSamples, commandUses)
+	return file
+}
+
+type resourceRecordSpan struct {
+	first int
+	last  int
+}
+
+func makeBufferResourceSizeBins(counts map[uint64]int, names map[uint64]map[string]struct{}, spans map[uint64]resourceRecordSpan, markers map[uint64]map[string]int, samples map[uint64][]BufferResourceSampleRecord, commandUses map[string]bufferCommandUse) []BufferResourceSizeBin {
+	bins := make([]BufferResourceSizeBin, 0, len(counts))
+	for size, records := range counts {
+		span := spans[size]
+		bin := BufferResourceSizeBin{
+			Size:          size,
+			Records:       records,
+			Bytes:         size * uint64(records),
+			Names:         len(names[size]),
+			SampleNames:   sampleBufferNames(names[size], 5),
+			SampleRecords: samples[size],
+			FirstRecord:   span.first,
+			LastRecord:    span.last,
+			RecordMarkers: makeBufferResourceMarkerCounts(markers[size]),
+		}
+		encoderIDs := make(map[int]struct{})
+		for name := range names[size] {
+			use := commandUses[name]
+			if use.bindingRecords == 0 {
+				continue
+			}
+			bin.CommandBoundNames++
+			bin.CommandBindingRecords += use.bindingRecords
+			for id := range use.encoderIDs {
+				encoderIDs[id] = struct{}{}
+			}
+		}
+		bin.CommandEncoders = len(encoderIDs)
+		bins = append(bins, bin)
+	}
+	sort.Slice(bins, func(i, j int) bool {
+		if bins[i].Bytes != bins[j].Bytes {
+			return bins[i].Bytes > bins[j].Bytes
+		}
+		return bins[i].Size > bins[j].Size
+	})
+	return bins
+}
+
+func makeBufferResourceMarkerCounts(counts map[string]int) []BufferResourceMarkerCount {
+	if len(counts) == 0 {
+		return nil
+	}
+	markers := make([]BufferResourceMarkerCount, 0, len(counts))
+	for marker, records := range counts {
+		markers = append(markers, BufferResourceMarkerCount{Marker: marker, Records: records})
+	}
+	sort.Slice(markers, func(i, j int) bool {
+		if markers[i].Records != markers[j].Records {
+			return markers[i].Records > markers[j].Records
+		}
+		return markers[i].Marker < markers[j].Marker
+	})
+	return markers
+}
+
+func resourceRecordMarker(data []byte, nameStart int) string {
+	marker, _ := resourceRecordMarkerAt(data, nameStart)
+	return marker
+}
+
+func resourceRecordMarkerAt(data []byte, nameStart int) (string, int) {
+	windowStart := nameStart - 64
+	if windowStart < 0 {
+		windowStart = 0
+	}
+	window := data[windowStart:nameStart]
+	markers := []string{
+		"CU<b>ulul",
+		"CtU<b>ulul",
+		"Cuw",
+	}
+	bestMarker := ""
+	bestPos := -1
+	for _, marker := range markers {
+		pos := bytes.LastIndex(window, []byte(marker))
+		if pos > bestPos {
+			bestMarker = marker
+			bestPos = pos
+		}
+	}
+	if bestMarker == "" {
+		return "unknown", -1
+	}
+	return bestMarker, windowStart + bestPos
+}
+
+func parseBufferResourceSample(data []byte, nameStart, nameEnd int, size uint64) BufferResourceSampleRecord {
+	name := string(data[nameStart:nameEnd])
+	marker, markerPos := resourceRecordMarkerAt(data, nameStart)
+	sample := BufferResourceSampleRecord{
+		Name:   name,
+		Marker: marker,
+		Size:   size,
+	}
+	if nameStart >= 8 {
+		sample.AddressBeforeName = binary.LittleEndian.Uint64(data[nameStart-8 : nameStart])
+	}
+	sizeOff := resourceRecordSizeOffset(data, nameEnd, size)
+	if sizeOff >= 0 && sizeOff+12 <= len(data) {
+		sample.PostSizeU32 = binary.LittleEndian.Uint32(data[sizeOff+8 : sizeOff+12])
+	}
+	if marker == "CU<b>ulul" {
+		searchEnd := nameEnd + 160
+		if searchEnd > len(data) {
+			searchEnd = len(data)
+		}
+		if nameEnd < searchEnd {
+			if pos := bytes.Index(data[nameEnd:searchEnd], []byte("Cuw")); pos >= 0 {
+				companion := nameEnd + pos
+				// Avoid crossing into an earlier record's marker window in synthetic tests.
+				if markerPos < 0 || companion > markerPos {
+					sample.CompanionMarker = "Cuw"
+					if companion+12 <= len(data) {
+						sample.CompanionAddr = binary.LittleEndian.Uint64(data[companion+4 : companion+12])
+					}
+					if companion+20 <= len(data) {
+						sample.CompanionValue = binary.LittleEndian.Uint64(data[companion+12 : companion+20])
+					}
+				}
+			}
+		}
+	}
+	return sample
+}
+
+func sampleBufferNames(names map[string]struct{}, limit int) []string {
+	if len(names) == 0 || limit <= 0 {
+		return nil
+	}
+	out := make([]string, 0, len(names))
+	for name := range names {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}
+
+func extractBufferCommandUses(trace *gputrace.Trace, finalSizes map[string]uint64) (map[string]bufferCommandUse, error) {
+	captureData, err := os.ReadFile(filepath.Join(trace.Path, "capture"))
+	if err != nil {
+		return nil, fmt.Errorf("read capture: %w", err)
+	}
+	addrToName := extractBufferAddressNames(captureData)
+	uses := make(map[string]bufferCommandUse)
+
+	commandBuffers, err := trace.ParseCommandBuffers()
+	if err != nil {
+		return nil, fmt.Errorf("parse command buffers: %w", err)
+	}
+	encoderIdx := 0
+	for cbIdx, cb := range commandBuffers {
+		var cbEnd int64
+		if cbIdx+1 < len(commandBuffers) {
+			cbEnd = commandBuffers[cbIdx+1].Offset
+		} else {
+			cbEnd = int64(len(captureData))
+		}
+		cbData := captureData[cb.Offset:cbEnd]
+		bindings, err := parseCommandBufferBindings(cbData)
+		if err != nil {
+			continue
+		}
+		dispatches, _ := trace.ParseDispatchInRegion(cbData, cb.Offset)
+		numEncoders := len(dispatches)
+		if numEncoders == 0 {
+			numEncoders = 1
+		}
+		bindingsPerEncoder := len(bindings) / numEncoders
+		if bindingsPerEncoder == 0 {
+			bindingsPerEncoder = 1
+		}
+
+		bindingIdx := 0
+		for encIdx := 0; encIdx < numEncoders; encIdx++ {
+			endBindingIdx := bindingIdx + bindingsPerEncoder
+			if encIdx == numEncoders-1 {
+				endBindingIdx = len(bindings)
+			}
+			for bindingIdx < endBindingIdx && bindingIdx < len(bindings) {
+				name, ok := addrToName[bindings[bindingIdx].BufferAddr]
+				if !ok {
+					bindingIdx++
+					continue
+				}
+				name = finalBufferFilename(name)
+				if _, ok := finalSizes[name]; !ok {
+					bindingIdx++
+					continue
+				}
+				use := uses[name]
+				use.bindingRecords++
+				if use.encoderIDs == nil {
+					use.encoderIDs = make(map[int]struct{})
+				}
+				use.encoderIDs[encoderIdx] = struct{}{}
+				uses[name] = use
+				bindingIdx++
+			}
+			encoderIdx++
+		}
+	}
+	return uses, nil
+}
+
+func extractBufferAddressNames(captureData []byte) map[uint64]string {
+	addrToName := make(map[uint64]string)
+	marker := []byte{0x43, 0x74, 0x55, 0x3c, 0x62, 0x3e, 0x75, 0x6c, 0x75, 0x6c}
+	offset := 0
+	for {
+		pos := bytes.Index(captureData[offset:], marker)
+		if pos == -1 {
+			break
+		}
+		absolutePos := offset + pos
+		if absolutePos+0x24 <= len(captureData) {
+			bufAddr := binary.LittleEndian.Uint64(captureData[absolutePos+0x14 : absolutePos+0x1c])
+			nameStart := absolutePos + 0x1c
+			if bytes.HasPrefix(captureData[nameStart:], []byte("MTLBuffer-")) {
+				nameEnd := bytes.IndexByte(captureData[nameStart:], 0)
+				if nameEnd > 0 && nameEnd < 100 {
+					addrToName[bufAddr] = string(captureData[nameStart : nameStart+nameEnd])
+				}
+			}
+		}
+		offset += pos + len(marker)
+	}
+	return addrToName
+}
+
+func finalBufferFilename(name string) string {
+	if !strings.HasPrefix(name, "MTLBuffer-") {
+		return name
+	}
+	rest := strings.TrimPrefix(name, "MTLBuffer-")
+	idEnd := strings.Index(rest, "-")
+	if idEnd < 0 {
+		return name
+	}
+	return "MTLBuffer-" + rest[:idEnd] + "-0"
+}
+
+func resourceRecordHasSize(data []byte, nameEnd int, want uint64) bool {
+	return resourceRecordSizeOffset(data, nameEnd, want) >= 0
+}
+
+func resourceRecordSizeOffset(data []byte, nameEnd int, want uint64) int {
+	for off := 1; off <= 24; off++ {
+		if nameEnd+off+8 > len(data) {
+			return -1
+		}
+		if binary.LittleEndian.Uint64(data[nameEnd+off:nameEnd+off+8]) == want {
+			return nameEnd + off
+		}
+	}
+	return -1
 }
 
 // formatBuffersJSON formats buffers as JSON.
