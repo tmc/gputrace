@@ -25,7 +25,7 @@ func LoadTraceData(path string, onlyEncoder int, onlyFunction *regexp.Regexp) (*
 		return out, nil
 	}
 
-	stats, err := counter.ParseStreamData(profilerDir)
+	stats, err := counter.ParseStreamData(profilerDir, nil)
 	if err != nil {
 		out.Warnings = append(out.Warnings, fmt.Sprintf("parse streamData failed for %s: %v", path, err))
 		return out, nil

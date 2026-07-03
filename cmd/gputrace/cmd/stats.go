@@ -128,7 +128,7 @@ func runStats(cmd *cobra.Command, args []string) error {
 	profilerDir := findProfilerDir(tracePath)
 	if profilerDir != "" {
 		hasProfilerData = true
-		if streamStats, err := counter.ParseStreamData(profilerDir); err == nil {
+		if streamStats, err := counter.ParseStreamData(profilerDir, nil); err == nil {
 			gpuTimeUs = streamStats.TotalTimeUs
 		}
 	}
@@ -142,7 +142,7 @@ func runStats(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  GPU Time:         (no profiler data)\n")
 	}
 	if hasProfilerData && profilerDir != "" {
-		if streamStats, err := counter.ParseStreamData(profilerDir); err == nil {
+		if streamStats, err := counter.ParseStreamData(profilerDir, nil); err == nil {
 			if streamStats.EffectiveGPUTimeNs != nil {
 				fmt.Printf("  Effective GPU:    %s\n", FormatDurationNs(*streamStats.EffectiveGPUTimeNs))
 			} else {
@@ -164,7 +164,7 @@ func runStats(cmd *cobra.Command, args []string) error {
 
 	// Top Kernels Section (if we have data)
 	if hasProfilerData && profilerDir != "" {
-		if streamStats, err := counter.ParseStreamData(profilerDir); err == nil && len(streamStats.Dispatches) > 0 {
+		if streamStats, err := counter.ParseStreamData(profilerDir, nil); err == nil && len(streamStats.Dispatches) > 0 {
 			fmt.Println(Colorize("Top Kernels (by time)", ColorBold))
 			fmt.Println(TableSeparator(40))
 

@@ -1133,7 +1133,7 @@ func enhanceFromStreamData(t *trace.Trace, stats *PerfCounterStats) error {
 	}
 
 	// Parse streamData
-	streamStats, err := ParseStreamData(perfDir)
+	streamStats, err := ParseStreamData(perfDir, nil)
 	if err != nil {
 		return fmt.Errorf("parse streamData: %w", err)
 	}

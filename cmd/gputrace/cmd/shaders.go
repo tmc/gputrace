@@ -245,7 +245,7 @@ func extractSIMDBasedMetrics(trace *gputrace.Trace, profilerDir string) (*gputra
 	}
 
 	// Parse profiler streamData to get function names per dispatch index
-	stats, err := counter.ParseStreamData(profilerDir)
+	stats, err := counter.ParseStreamData(profilerDir, nil)
 	if err != nil {
 		return nil, fmt.Errorf("parse streamData: %w", err)
 	}
@@ -418,7 +418,7 @@ func runShadersFromProfiler(tracePath string) error {
 	}
 
 	// Parse streamData for pipeline stats
-	stats, err := counter.ParseStreamData(profilerDir)
+	stats, err := counter.ParseStreamData(profilerDir, nil)
 	if err != nil {
 		return fmt.Errorf("parse streamData: %w", err)
 	}
