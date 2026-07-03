@@ -2,7 +2,9 @@ package replay
 
 import (
 	"fmt"
+	"io"
 	"sort"
+	"strings"
 
 	"github.com/tmc/gputrace/internal/counter"
 	"github.com/tmc/gputrace/internal/fmtutil"
@@ -382,39 +384,77 @@ type ReplayValidation struct {
 
 // FormatReplayPlan generates a human-readable report of the replay plan.
 func FormatReplayPlan(plan *ReplayPlan) string {
-	output := "=== Replay Plan ===\n\n"
+	var output strings.Builder
+	_ = WriteReplayPlan(&output, plan)
+	return output.String()
+}
 
-	output += fmt.Sprintf("Trace: %s\n\n", plan.TraceePath)
+// WriteReplayPlan writes a human-readable report of the replay plan.
+func WriteReplayPlan(w io.Writer, plan *ReplayPlan) error {
+	if _, err := fmt.Fprint(w, "=== Replay Plan ===\n\n"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "Trace: %s\n\n", plan.TraceePath); err != nil {
+		return err
+	}
 
-	output += "Execution Summary:\n"
-	output += fmt.Sprintf("  Command Queue: %s\n", plan.CommandQueue.Label)
-	output += fmt.Sprintf("  Command Buffers: %d\n", plan.CommandQueue.CommandBuffers)
-	output += fmt.Sprintf("  Total Encoders: %d\n", plan.TotalEncoders)
-	output += fmt.Sprintf("  Total Commands: %d\n", plan.TotalCommands)
-	output += fmt.Sprintf("    - Compute Dispatches: %d\n", plan.ComputeDispatches)
-	output += fmt.Sprintf("    - ICB Executions: %d\n", plan.ICBExecutions)
-	output += "\n"
+	if _, err := fmt.Fprint(w, "Execution Summary:\n"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  Command Queue: %s\n", plan.CommandQueue.Label); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  Command Buffers: %d\n", plan.CommandQueue.CommandBuffers); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  Total Encoders: %d\n", plan.TotalEncoders); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  Total Commands: %d\n", plan.TotalCommands); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "    - Compute Dispatches: %d\n", plan.ComputeDispatches); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "    - ICB Executions: %d\n", plan.ICBExecutions); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprint(w, "\n"); err != nil {
+		return err
+	}
 
 	// Show encoders
 	if len(plan.Encoders) > 0 {
-		output += "Encoders:\n"
+		if _, err := fmt.Fprint(w, "Encoders:\n"); err != nil {
+			return err
+		}
 		for i, encoder := range plan.Encoders {
 			label := encoder.Label
 			if label == "" {
 				label = "(unlabeled)"
 			}
-			output += fmt.Sprintf("  [%2d] %-20s  %3d commands\n",
-				i, fmtutil.TruncateString(label, 20), encoder.CommandCount)
+			if _, err := fmt.Fprintf(w, "  [%2d] %-20s  %3d commands\n",
+				i, fmtutil.TruncateString(label, 20), encoder.CommandCount); err != nil {
+				return err
+			}
 		}
-		output += "\n"
+		if _, err := fmt.Fprint(w, "\n"); err != nil {
+			return err
+		}
 	}
 
 	// Show command sequence
 	if len(plan.Commands) > 0 {
-		output += "Command Sequence (first 20):\n"
-		output += fmt.Sprintf("  %-4s %-8s %-20s %-40s\n",
-			"Seq", "Encoder", "Type", "Function/Target")
-		output += "  " + fmtutil.RepeatChar('-', 75) + "\n"
+		if _, err := fmt.Fprint(w, "Command Sequence (first 20):\n"); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "  %-4s %-8s %-20s %-40s\n",
+			"Seq", "Encoder", "Type", "Function/Target"); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "  %s\n", fmtutil.RepeatChar('-', 75)); err != nil {
+			return err
+		}
 
 		count := min(20, len(plan.Commands))
 		for i := 0; i < count; i++ {
@@ -431,25 +471,33 @@ func FormatReplayPlan(plan *ReplayPlan) string {
 				target = fmt.Sprintf("ICB@0x%x (count=%d)", cmd.ICBAddr, cmd.ICBCount)
 			}
 
-			output += fmt.Sprintf("  %-4d %-8d %-20s %-40s\n",
+			if _, err := fmt.Fprintf(w, "  %-4d %-8d %-20s %-40s\n",
 				cmd.SequenceNum,
 				cmd.EncoderIndex,
 				cmd.Type,
-				fmtutil.TruncateString(target, 40))
+				fmtutil.TruncateString(target, 40)); err != nil {
+				return err
+			}
 		}
 
 		if len(plan.Commands) > 20 {
-			output += fmt.Sprintf("  ... and %d more commands\n", len(plan.Commands)-20)
+			if _, err := fmt.Fprintf(w, "  ... and %d more commands\n", len(plan.Commands)-20); err != nil {
+				return err
+			}
 		}
-		output += "\n"
+		if _, err := fmt.Fprint(w, "\n"); err != nil {
+			return err
+		}
 	}
 
 	// Show state analysis if available
 	if plan.StateAnalysis != nil {
-		output += FormatReplayAnalysis(plan.StateAnalysis)
+		if _, err := fmt.Fprint(w, FormatReplayAnalysis(plan.StateAnalysis)); err != nil {
+			return err
+		}
 	}
 
-	return output
+	return nil
 }
 
 // FormatReplayValidation generates a human-readable validation report.
