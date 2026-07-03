@@ -248,7 +248,7 @@ func runSelectNavigatorItem(name string) error {
 
 	role := axString(el, "AXRole")
 	actions := axActionNames(el)
-	if collectProfileDebug {
+	if collectProfileOpts.debug {
 		fmt.Fprintf(os.Stderr, "Found element: role=%s, actions=%v\n", role, actions)
 	}
 
@@ -260,7 +260,7 @@ func runSelectNavigatorItem(name string) error {
 			targetEl = parent
 			role = axString(targetEl, "AXRole")
 			actions = axActionNames(targetEl)
-			if collectProfileDebug {
+			if collectProfileOpts.debug {
 				fmt.Fprintf(os.Stderr, "Using parent: role=%s, actions=%v\n", role, actions)
 			}
 		}
@@ -375,7 +375,7 @@ func runListTabs(cmd *cobra.Command, args []string) error {
 
 	appAX, err := FindXcodeApp()
 	if err != nil {
-		if collectProfileJSON {
+		if collectProfileOpts.json {
 			return outputJSONError("XCODE_NOT_RUNNING", "Xcode not running", "Start Xcode first")
 		}
 		return fmt.Errorf("Xcode not running: %w", err)
@@ -384,7 +384,7 @@ func runListTabs(cmd *cobra.Command, args []string) error {
 
 	windowAX, err := findTargetWindow(appAX, traceFile)
 	if err != nil {
-		if collectProfileJSON {
+		if collectProfileOpts.json {
 			return outputJSONError("NO_WINDOWS", err.Error(), "Open a trace file first")
 		}
 		return err
@@ -416,7 +416,7 @@ func runListTabs(cmd *cobra.Command, args []string) error {
 		})
 	}
 
-	if collectProfileJSON {
+	if collectProfileOpts.json {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(ListTabsOutput{

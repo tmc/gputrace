@@ -93,7 +93,7 @@ func runWaitReplay(cmd *cobra.Command, args []string) error {
 	}
 
 	traceFileName := filepath.Base(traceFile)
-	if err := waitForReplayComplete(appAX, traceFileName, windowAX, collectProfileTimeout); err != nil {
+	if err := waitForReplayComplete(appAX, traceFileName, windowAX, collectProfileOpts.timeout); err != nil {
 		return fmt.Errorf("wait failed: %w", err)
 	}
 

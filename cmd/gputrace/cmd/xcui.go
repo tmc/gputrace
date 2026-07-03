@@ -757,7 +757,7 @@ func axChildren(ax uintptr) []uintptr {
 		// Non-fatal errors like kAXErrorNotificationUnsupported (-25212)
 		// are expected for certain UI elements; return empty slice silently.
 		// Print debug info for API disabled error
-		if ret == -25211 && collectProfileDebug {
+		if ret == -25211 && collectProfileOpts.debug {
 			fmt.Fprintf(os.Stderr, "[DEBUG] axChildren: AXError %d (API disabled - no Accessibility permission)\n", ret)
 		}
 		return nil
@@ -1105,7 +1105,7 @@ func axWindowsFromCGHitTest(app uintptr) []uintptr {
 			}
 			addWindow(el)
 		}
-		if collectProfileDebug && len(windows) == 0 {
+		if collectProfileOpts.debug && len(windows) == 0 {
 			verboseLog("GetAllWindows: CG window %q did not yield an AX window by hit-test", cgWindow.title)
 		}
 	}

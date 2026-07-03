@@ -73,7 +73,7 @@ func runListWindows(cmd *cobra.Command, args []string) error {
 
 	appAX, err := FindXcodeApp()
 	if err != nil {
-		if collectProfileJSON {
+		if collectProfileOpts.json {
 			return outputJSONError("XCODE_NOT_RUNNING", "Xcode not running or not accessible", "Start Xcode first")
 		}
 		return fmt.Errorf("Xcode not running or not accessible: %w", err)
@@ -84,7 +84,7 @@ func runListWindows(cmd *cobra.Command, args []string) error {
 	if traceFile != "" {
 		w, err := findTargetWindow(appAX, traceFile)
 		if err != nil {
-			if collectProfileJSON {
+			if collectProfileOpts.json {
 				return outputJSONError("WINDOW_NOT_FOUND", err.Error(), "Check if the trace file is open")
 			}
 			return err
@@ -95,7 +95,7 @@ func runListWindows(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(windowPtrs) == 0 {
-		if collectProfileJSON {
+		if collectProfileOpts.json {
 			enc := json.NewEncoder(os.Stdout)
 			enc.SetIndent("", "  ")
 			return enc.Encode(ListWindowsOutput{Windows: []WindowInfo{}})
@@ -207,7 +207,7 @@ func runListWindows(cmd *cobra.Command, args []string) error {
 	}
 
 	// Output
-	if collectProfileJSON {
+	if collectProfileOpts.json {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(ListWindowsOutput{Windows: windowInfos})
@@ -362,7 +362,7 @@ func GetAllWindows(app uintptr) []uintptr {
 
 	for _, attr := range []string{"AXWindows", "AXVisibleChildren", "AXChildren"} {
 		els, ret := axArrayAttributeWithError(app, attr)
-		if ret != kAXErrorSuccess && collectProfileDebug {
+		if ret != kAXErrorSuccess && collectProfileOpts.debug {
 			verboseLog("GetAllWindows: %s failed: AXError %d", attr, ret)
 		}
 		for _, el := range els {
@@ -377,7 +377,7 @@ func GetAllWindows(app uintptr) []uintptr {
 		cfRelease(key)
 		if ret == kAXErrorSuccess {
 			addWindow(el)
-		} else if collectProfileDebug {
+		} else if collectProfileOpts.debug {
 			verboseLog("GetAllWindows: %s failed: AXError %d", attr, ret)
 		}
 	}

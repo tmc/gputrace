@@ -15,17 +15,17 @@ import (
 )
 
 func TestXcodeProfileStatusWriter(t *testing.T) {
-	oldJSON := collectProfileJSON
+	oldJSON := collectProfileOpts.json
 	t.Cleanup(func() {
-		collectProfileJSON = oldJSON
+		collectProfileOpts.json = oldJSON
 	})
 
-	collectProfileJSON = false
+	collectProfileOpts.json = false
 	if got := xcodeProfileStatusWriter(); got != os.Stdout {
 		t.Fatalf("plain status writer = %v, want stdout", got)
 	}
 
-	collectProfileJSON = true
+	collectProfileOpts.json = true
 	if got := xcodeProfileStatusWriter(); got != os.Stderr {
 		t.Fatalf("JSON status writer = %v, want stderr", got)
 	}
@@ -53,11 +53,11 @@ func TestEncodeXcodeProfileActionJSON(t *testing.T) {
 }
 
 func TestWriteXcodeProfileActionOutputJSON(t *testing.T) {
-	oldJSON := collectProfileJSON
+	oldJSON := collectProfileOpts.json
 	t.Cleanup(func() {
-		collectProfileJSON = oldJSON
+		collectProfileOpts.json = oldJSON
 	})
-	collectProfileJSON = true
+	collectProfileOpts.json = true
 
 	out, err := captureStdout(t, func() error {
 		return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
@@ -79,11 +79,11 @@ func TestWriteXcodeProfileActionOutputJSON(t *testing.T) {
 }
 
 func TestWriteXcodeProfileActionOutputPlainNoop(t *testing.T) {
-	oldJSON := collectProfileJSON
+	oldJSON := collectProfileOpts.json
 	t.Cleanup(func() {
-		collectProfileJSON = oldJSON
+		collectProfileOpts.json = oldJSON
 	})
-	collectProfileJSON = false
+	collectProfileOpts.json = false
 
 	out, err := captureStdout(t, func() error {
 		return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
@@ -100,12 +100,12 @@ func TestWriteXcodeProfileActionOutputPlainNoop(t *testing.T) {
 }
 
 func TestHiddenXcodeProfileUtilityCommandsRejectJSONBeforeRunE(t *testing.T) {
-	oldJSON := collectProfileJSON
+	oldJSON := collectProfileOpts.json
 	oldPreRunE := collectXcodeProfileCmd.PersistentPreRunE
 	oldSilenceUsage := rootCmd.SilenceUsage
 	oldSilenceErrors := rootCmd.SilenceErrors
 	t.Cleanup(func() {
-		collectProfileJSON = oldJSON
+		collectProfileOpts.json = oldJSON
 		collectXcodeProfileCmd.PersistentPreRunE = oldPreRunE
 		rootCmd.SilenceUsage = oldSilenceUsage
 		rootCmd.SilenceErrors = oldSilenceErrors
@@ -150,7 +150,7 @@ func TestHiddenXcodeProfileUtilityCommandsRejectJSONBeforeRunE(t *testing.T) {
 				command.RunE = oldRunE
 			}()
 
-			collectProfileJSON = false
+			collectProfileOpts.json = false
 			args := append([]string{"xcode-profile", "--json", tt.name}, tt.args...)
 			rootCmd.SetArgs(args)
 

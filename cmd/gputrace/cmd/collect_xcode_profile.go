@@ -33,23 +33,26 @@ type xcodeProfileActionOutput struct {
 	Warning         string `json:"warning,omitempty"`
 }
 
-// Shared flags for collect-xcode-profile subcommands
-var (
-	collectProfileOutput     string
-	collectProfileTimeout    time.Duration
-	collectProfileDebug      bool
-	collectProfileVerbose    bool
-	collectProfileNoBundle   bool
-	collectProfileBackground bool
-	collectProfileNoPrompt   bool
-	collectProfileJSON       bool
-	collectProfileWait       time.Duration
-	collectProfileForce      bool
-	collectProfilePprof      bool // Enable pprof debug endpoints
-)
+var collectProfileOpts = collectProfileOptions{
+	timeout: 5 * time.Minute,
+}
+
+type collectProfileOptions struct {
+	output     string
+	timeout    time.Duration
+	debug      bool
+	verbose    bool
+	noBundle   bool
+	background bool
+	noPrompt   bool
+	json       bool
+	wait       time.Duration
+	force      bool
+	pprof      bool
+}
 
 func xcodeProfileStatusWriter() io.Writer {
-	if collectProfileJSON {
+	if collectProfileOpts.json {
 		return os.Stderr
 	}
 	return os.Stdout
@@ -62,7 +65,7 @@ func encodeXcodeProfileJSON(w io.Writer, v interface{}) error {
 }
 
 func writeXcodeProfileActionOutput(output xcodeProfileActionOutput) error {
-	if !collectProfileJSON {
+	if !collectProfileOpts.json {
 		return nil
 	}
 	output.Success = true
@@ -140,12 +143,12 @@ Example:
 `,
 	Args: cobra.MaximumNArgs(1),
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-		if err := validateXcodeProfileOptions(collectProfileTimeout, collectProfileWait); err != nil {
+		if err := validateXcodeProfileOptions(collectProfileOpts.timeout, collectProfileOpts.wait); err != nil {
 			return err
 		}
 
 		// Start pprof server if requested
-		if collectProfilePprof {
+		if collectProfileOpts.pprof {
 			port := "6060"
 			// Use different port if running inside macgo app bundle
 			if exe, err := os.Executable(); err == nil && strings.Contains(exe, ".app/") {
@@ -160,7 +163,7 @@ Example:
 			}()
 		}
 
-		if collectProfileDebug || collectProfileVerbose {
+		if collectProfileOpts.debug || collectProfileOpts.verbose {
 			logProcessIdentity("pre-macgo")
 		}
 
@@ -169,7 +172,7 @@ Example:
 			return err
 		}
 
-		if collectProfileDebug || collectProfileVerbose {
+		if collectProfileOpts.debug || collectProfileOpts.verbose {
 			logProcessIdentity("post-macgo")
 		}
 
@@ -199,19 +202,19 @@ func init() {
 	rootCmd.AddCommand(collectXcodeProfileCmd)
 
 	// Persistent flags available to all subcommands
-	collectXcodeProfileCmd.PersistentFlags().DurationVar(&collectProfileTimeout, "timeout", 5*time.Minute, "Timeout for the operation")
-	collectXcodeProfileCmd.PersistentFlags().BoolVar(&collectProfileDebug, "debug", false, "Print debug information")
-	collectXcodeProfileCmd.PersistentFlags().BoolVarP(&collectProfileVerbose, "verbose", "v", false, "Print verbose status information")
-	collectXcodeProfileCmd.PersistentFlags().BoolVar(&collectProfileNoBundle, "no-bundle", false, "Skip macgo app bundle (use Terminal's Accessibility permission)")
-	collectXcodeProfileCmd.PersistentFlags().BoolVar(&collectProfileBackground, "background", false, "Run without bringing Xcode to foreground")
-	collectXcodeProfileCmd.PersistentFlags().BoolVar(&collectProfileNoPrompt, "no-prompt", false, "Don't prompt for permissions, exit with error instead")
-	collectXcodeProfileCmd.PersistentFlags().BoolVar(&collectProfileJSON, "json", false, "Output results in JSON format")
-	collectXcodeProfileCmd.PersistentFlags().DurationVar(&collectProfileWait, "wait", 0, "Wait for lock release (0=no wait, e.g. 5m)")
-	collectXcodeProfileCmd.PersistentFlags().BoolVar(&collectProfileForce, "force", false, "Override existing lock")
-	collectXcodeProfileCmd.PersistentFlags().BoolVar(&collectProfilePprof, "pprof", false, "Enable pprof debug endpoints (:6060 or :6061 in macgo)")
+	collectXcodeProfileCmd.PersistentFlags().DurationVar(&collectProfileOpts.timeout, "timeout", 5*time.Minute, "Timeout for the operation")
+	collectXcodeProfileCmd.PersistentFlags().BoolVar(&collectProfileOpts.debug, "debug", false, "Print debug information")
+	collectXcodeProfileCmd.PersistentFlags().BoolVarP(&collectProfileOpts.verbose, "verbose", "v", false, "Print verbose status information")
+	collectXcodeProfileCmd.PersistentFlags().BoolVar(&collectProfileOpts.noBundle, "no-bundle", false, "Skip macgo app bundle (use Terminal's Accessibility permission)")
+	collectXcodeProfileCmd.PersistentFlags().BoolVar(&collectProfileOpts.background, "background", false, "Run without bringing Xcode to foreground")
+	collectXcodeProfileCmd.PersistentFlags().BoolVar(&collectProfileOpts.noPrompt, "no-prompt", false, "Don't prompt for permissions, exit with error instead")
+	collectXcodeProfileCmd.PersistentFlags().BoolVar(&collectProfileOpts.json, "json", false, "Output results in JSON format")
+	collectXcodeProfileCmd.PersistentFlags().DurationVar(&collectProfileOpts.wait, "wait", 0, "Wait for lock release (0=no wait, e.g. 5m)")
+	collectXcodeProfileCmd.PersistentFlags().BoolVar(&collectProfileOpts.force, "force", false, "Override existing lock")
+	collectXcodeProfileCmd.PersistentFlags().BoolVar(&collectProfileOpts.pprof, "pprof", false, "Enable pprof debug endpoints (:6060 or :6061 in macgo)")
 
 	// Local flags for the main command
-	collectXcodeProfileCmd.Flags().StringVarP(&collectProfileOutput, "output", "o", "", "Output path for the exported trace (default: <input>-perfdata.gputrace)")
+	collectXcodeProfileCmd.Flags().StringVarP(&collectProfileOpts.output, "output", "o", "", "Output path for the exported trace (default: <input>-perfdata.gputrace)")
 }
 
 // acquireProfileLock checks if Xcode is currently running a profile by looking for
@@ -220,8 +223,8 @@ func init() {
 // Returns a no-op cleanup function for API compatibility.
 func acquireProfileLock() (func(), error) {
 	deadline := time.Now()
-	if collectProfileWait > 0 {
-		deadline = deadline.Add(collectProfileWait)
+	if collectProfileOpts.wait > 0 {
+		deadline = deadline.Add(collectProfileOpts.wait)
 	}
 
 	pollInterval := 2 * time.Second
@@ -234,7 +237,7 @@ func acquireProfileLock() (func(), error) {
 		}
 		status := xcodeProfileStatusWriter()
 
-		if collectProfileForce {
+		if collectProfileOpts.force {
 			fmt.Fprintf(status, "Warning: profiling appears to be running in %q, proceeding anyway (--force)\n", windowTitle)
 			break
 		}
@@ -251,15 +254,15 @@ func acquireProfileLock() (func(), error) {
 		}
 
 		// Check if we should wait
-		if collectProfileWait == 0 || time.Now().After(deadline) {
-			if collectProfileWait > 0 {
+		if collectProfileOpts.wait == 0 || time.Now().After(deadline) {
+			if collectProfileOpts.wait > 0 {
 				return nil, fmt.Errorf("timed out waiting for profiling to complete in %q", windowTitle)
 			}
 			return nil, fmt.Errorf("profiling is running in %q. Use --wait to wait or --force to proceed anyway", windowTitle)
 		}
 
 		// Wait for profiling to complete
-		fmt.Fprintf(status, "Waiting for profiling to complete in %q (timeout: %v)...\n", windowTitle, collectProfileWait)
+		fmt.Fprintf(status, "Waiting for profiling to complete in %q (timeout: %v)...\n", windowTitle, collectProfileOpts.wait)
 		time.Sleep(pollInterval)
 	}
 
@@ -309,7 +312,7 @@ func isProfilingRunning() (bool, string) {
 
 // verboseLog prints a diagnostic if verbose mode is enabled.
 func verboseLog(format string, args ...interface{}) {
-	if collectProfileVerbose || collectProfileDebug {
+	if collectProfileOpts.verbose || collectProfileOpts.debug {
 		fmt.Fprintf(os.Stderr, "[verbose] "+format+"\n", args...)
 	}
 }
@@ -318,7 +321,7 @@ func verboseLog(format string, args ...interface{}) {
 func setupMacgo() error {
 	verboseLog("setupMacgo: PID=%d", os.Getpid())
 
-	if collectProfileNoBundle || os.Getenv("GPUTRACE_SKIP_MACGO") != "" {
+	if collectProfileOpts.noBundle || os.Getenv("GPUTRACE_SKIP_MACGO") != "" {
 		verboseLog("setupMacgo: skipping macgo (--no-bundle or GPUTRACE_SKIP_MACGO)")
 		fmt.Fprintln(os.Stderr, "Skipping macgo (using current process identity)")
 		return nil
@@ -437,7 +440,7 @@ func checkPermissions() error {
 	}
 
 	if !osa.HasAccessibilityPermission() {
-		if collectProfileNoPrompt {
+		if collectProfileOpts.noPrompt {
 			return fmt.Errorf("accessibility permission not granted (use axperms -enable gputrace)")
 		}
 

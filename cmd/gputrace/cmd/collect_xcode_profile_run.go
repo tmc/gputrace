@@ -22,7 +22,7 @@ func init() {
 		SilenceUsage: true,
 		RunE:         runCollectXcodeProfileFull,
 	}
-	runCmd.Flags().StringVarP(&collectProfileOutput, "output", "o", "", "Output path for the exported trace")
+	runCmd.Flags().StringVarP(&collectProfileOpts.output, "output", "o", "", "Output path for the exported trace")
 	collectXcodeProfileCmd.AddCommand(runCmd)
 }
 
@@ -35,7 +35,7 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid input path: %w", err)
 	}
 
-	output := collectProfileOutput
+	output := collectProfileOpts.output
 	if output == "" {
 		output = defaultXcodeProfileOutputPath(inputPath)
 	}
@@ -63,7 +63,7 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(status, "  Input:  %s\n", inputPath)
 	fmt.Fprintf(status, "  Output: %s\n", outputPath)
 
-	ctx, cancel := context.WithTimeout(automationContext(), collectProfileTimeout)
+	ctx, cancel := context.WithTimeout(automationContext(), collectProfileOpts.timeout)
 	defer cancel()
 
 	// Validate trace bundle before opening in Xcode
@@ -131,7 +131,7 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 	} else if profilingInProgress {
 		// Profiling already running (e.g., from a prior attempt or --force) — just wait for it
 		fmt.Fprintln(status, "  Profiling already in progress, waiting for completion...")
-		if err := waitForReplayComplete(appAX, traceFileName, windowAX, collectProfileTimeout); err != nil {
+		if err := waitForReplayComplete(appAX, traceFileName, windowAX, collectProfileOpts.timeout); err != nil {
 			return fmt.Errorf("replay wait failed: %w", err)
 		}
 		fmt.Fprintln(status, "    Profiling completed")
@@ -144,7 +144,7 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 
 		// Step 4: Wait for replay
 		fmt.Fprintln(status, "  Step 4: Waiting for replay to complete...")
-		if err := waitForReplayComplete(appAX, traceFileName, windowAX, collectProfileTimeout); err != nil {
+		if err := waitForReplayComplete(appAX, traceFileName, windowAX, collectProfileOpts.timeout); err != nil {
 			return fmt.Errorf("replay wait failed: %w", err)
 		}
 		fmt.Fprintln(status, "    Replay completed")
@@ -545,8 +545,8 @@ func validateTraceBundle(path string) error {
 }
 
 func exportWaitTimeout() time.Duration {
-	if collectProfileTimeout > 30*time.Second {
-		return collectProfileTimeout
+	if collectProfileOpts.timeout > 30*time.Second {
+		return collectProfileOpts.timeout
 	}
 	return 30 * time.Second
 }
@@ -1141,7 +1141,7 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 		if freshApp, err := FindXcodeApp(); err == nil && freshApp != 0 {
 			appAX = freshApp
 		}
-		if collectProfileDebug || collectProfileVerbose {
+		if collectProfileOpts.debug || collectProfileOpts.verbose {
 			if err := debugCheckExportMenu(appAX); err != nil {
 				fmt.Fprintf(os.Stderr, "    Debug: Export menu check failed: %v\n", err)
 			}
@@ -1184,7 +1184,7 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 	}
 
 	if !sheetFound {
-		if collectProfileDebug {
+		if collectProfileOpts.debug {
 			windows := GetAllWindows(freshApp)
 			fmt.Fprintf(os.Stderr, "    Debug: Found %d windows\n", len(windows))
 			for i, w := range windows {
@@ -1237,7 +1237,7 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 		}
 	}
 
-	if collectProfileDebug {
+	if collectProfileOpts.debug {
 		DebugTextFields(windowAX)
 	}
 
@@ -1293,7 +1293,7 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 	if saveNameField != 0 {
 		if err := axSetValue(saveNameField, outputName); err != nil {
 			fmt.Fprintf(status, "    Warning: SetValue failed: %v (using default filename)\n", err)
-		} else if collectProfileDebug {
+		} else if collectProfileOpts.debug {
 			fmt.Fprintln(os.Stderr, "    [DEBUG] Set filename via AX (saveAsNameTextField)")
 		}
 	} else {
@@ -1302,7 +1302,7 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 	time.Sleep(300 * time.Millisecond)
 
 	// Debug: dump the export sheet state so we can see exactly what's happening
-	if collectProfileDebug {
+	if collectProfileOpts.debug {
 		fmt.Fprintln(os.Stderr, "    [DEBUG] Export sheet state after navigation:")
 		dumpExportSheetState(windowAX)
 	}
@@ -1323,7 +1323,7 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 		time.Sleep(300 * time.Millisecond)
 		saveBtn = findSaveButtonInSheet()
 		if saveBtn == 0 || !IsElementEnabled(saveBtn) {
-			if collectProfileDebug {
+			if collectProfileOpts.debug {
 				fmt.Fprintln(os.Stderr, "    [DEBUG] Export sheet state (Save disabled):")
 				dumpExportSheetState(windowAX)
 			}
