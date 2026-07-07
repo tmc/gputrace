@@ -33,6 +33,7 @@ type buffersCommandOptions struct {
 	inspectBytes  int
 	inspectFormat string
 	resources     bool
+	lifetime      bool
 }
 
 func newBuffersCommand(opts *buffersCommandOptions) *cobra.Command {
@@ -69,6 +70,7 @@ Examples:
 	cmd.Flags().IntVar(&opts.inspectBytes, "bytes", opts.inspectBytes, "Number of bytes to show in inspection")
 	cmd.Flags().StringVar(&opts.inspectFormat, "inspect-format", opts.inspectFormat, "Inspection format: hex, float32, int32, uint32, float16")
 	cmd.Flags().BoolVar(&opts.resources, "resources", opts.resources, "Show device-resource buffer inventory")
+	cmd.Flags().BoolVar(&opts.lifetime, "lifetime", opts.lifetime, "Show buffer lifetime and command attribution")
 	return cmd
 }
 
@@ -101,6 +103,9 @@ func runBuffers(cmd *cobra.Command, args []string, cmdOpts *buffersCommandOption
 	}
 	if cmdOpts.resources {
 		return formatBufferResourceInventory(tracePath, opts.format, trace)
+	}
+	if cmdOpts.lifetime {
+		return formatBufferLifetimeReport(tracePath, opts.format, trace)
 	}
 
 	// Extract buffer information
@@ -1196,6 +1201,264 @@ func resourceRecordSizeOffset(data []byte, nameEnd int, want uint64) int {
 		}
 	}
 	return -1
+}
+
+type BufferLifetimeReport struct {
+	Trace     string              `json:"trace"`
+	Resources int                 `json:"resources"`
+	Rows      []BufferLifetimeRow `json:"rows"`
+}
+
+type BufferLifetimeRow struct {
+	Name             string   `json:"name"`
+	Label            string   `json:"label,omitempty"`
+	Address          uint64   `json:"address,omitempty"`
+	Size             uint64   `json:"size,omitempty"`
+	AllocationOffset int64    `json:"allocation_offset,omitempty"`
+	FirstUseOffset   int64    `json:"first_use_offset,omitempty"`
+	LastUseOffset    int64    `json:"last_use_offset,omitempty"`
+	BindingRecords   int      `json:"binding_records"`
+	CommandBuffers   []int    `json:"command_buffers,omitempty"`
+	CommandLabels    []string `json:"command_labels,omitempty"`
+	Encoders         []int    `json:"encoders,omitempty"`
+	EncoderLabels    []string `json:"encoder_labels,omitempty"`
+}
+
+func formatBufferLifetimeReport(tracePath, format string, trace *gputrace.Trace) error {
+	report, err := extractBufferLifetimeReport(tracePath, trace)
+	if err != nil {
+		return err
+	}
+	switch format {
+	case "json":
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(report)
+	case "table":
+		fmt.Printf("%d resource %s\n\n", report.Resources, Pluralize(report.Resources, "row", "rows"))
+		fmt.Println(Colorize("Buffer Lifetime Attribution", ColorBold))
+		fmt.Println(TableSeparator(120))
+		fmt.Printf("%-24s %-18s %12s %8s %8s %8s %s\n", "Name", "Address", "Size", "Binds", "CBs", "Encs", "Label")
+		fmt.Println(TableSeparator(120))
+		for _, row := range report.Rows {
+			fmt.Printf("%-24s 0x%016x %12s %8d %8d %8d %s\n",
+				row.Name,
+				row.Address,
+				FormatBytes(row.Size),
+				row.BindingRecords,
+				len(row.CommandBuffers),
+				len(row.Encoders),
+				row.Label)
+		}
+		return nil
+	default:
+		return fmt.Errorf("invalid lifetime format %q (must be table or json)", format)
+	}
+}
+
+func extractBufferLifetimeReport(tracePath string, trace *gputrace.Trace) (*BufferLifetimeReport, error) {
+	capturePath := filepath.Join(tracePath, "capture")
+	captureData, err := os.ReadFile(capturePath)
+	if err != nil {
+		return nil, fmt.Errorf("buffer lifetime attribution requires full trace capture data: %w", err)
+	}
+
+	sizes, allocOffsets := collectBufferResourceRecords(tracePath)
+	for name, size := range collectFinalBufferSizes(tracePath) {
+		if _, ok := sizes[name]; !ok {
+			sizes[name] = size
+		}
+	}
+	addrToName := extractBufferAddressNames(captureData)
+	nameToAddr := make(map[string]uint64)
+	for addr, name := range addrToName {
+		nameToAddr[finalBufferFilename(name)] = addr
+	}
+	rows := make(map[string]*BufferLifetimeRow)
+	for name, size := range sizes {
+		row := &BufferLifetimeRow{
+			Name:             name,
+			Label:            bufferLabel(trace, nameToAddr[name], name),
+			Address:          nameToAddr[name],
+			Size:             size,
+			AllocationOffset: allocOffsets[name],
+		}
+		rows[name] = row
+	}
+
+	commandBuffers, err := trace.ParseCommandBuffers()
+	if err != nil {
+		return nil, fmt.Errorf("parse command buffers: %w", err)
+	}
+	encoders, _ := trace.ParseComputeEncoders()
+	encoderLabels := make(map[int]string)
+	for _, enc := range encoders {
+		encoderLabels[enc.Index] = enc.Label
+	}
+	encoderIdx := 0
+	for cbIdx, cb := range commandBuffers {
+		cbEnd := int64(len(captureData))
+		if cbIdx+1 < len(commandBuffers) {
+			cbEnd = commandBuffers[cbIdx+1].Offset
+		}
+		cbData := captureData[cb.Offset:cbEnd]
+		bindings, err := parseCommandBufferBindings(cbData)
+		if err != nil {
+			continue
+		}
+		dispatches, _ := trace.ParseDispatchInRegion(cbData, cb.Offset)
+		numEncoders := len(dispatches)
+		if numEncoders == 0 {
+			numEncoders = 1
+		}
+		bindingsPerEncoder := len(bindings) / numEncoders
+		if bindingsPerEncoder == 0 {
+			bindingsPerEncoder = 1
+		}
+		bindingIdx := 0
+		for encInCB := 0; encInCB < numEncoders; encInCB++ {
+			endBindingIdx := bindingIdx + bindingsPerEncoder
+			if encInCB == numEncoders-1 {
+				endBindingIdx = len(bindings)
+			}
+			for bindingIdx < endBindingIdx && bindingIdx < len(bindings) {
+				binding := bindings[bindingIdx]
+				name := finalBufferFilename(addrToName[binding.BufferAddr])
+				row := rows[name]
+				if row != nil {
+					applyLifetimeUse(row, cbIdx, cb.Label, encoderIdx, encoderLabels[encoderIdx], cb.Offset)
+					row.BindingRecords++
+				}
+				bindingIdx++
+			}
+			encoderIdx++
+		}
+	}
+
+	report := &BufferLifetimeReport{Trace: tracePath}
+	for _, row := range rows {
+		report.Rows = append(report.Rows, *row)
+	}
+	sort.Slice(report.Rows, func(i, j int) bool {
+		if report.Rows[i].BindingRecords != report.Rows[j].BindingRecords {
+			return report.Rows[i].BindingRecords > report.Rows[j].BindingRecords
+		}
+		return report.Rows[i].Name < report.Rows[j].Name
+	})
+	report.Resources = len(report.Rows)
+	return report, nil
+}
+
+func collectFinalBufferSizes(tracePath string) map[string]uint64 {
+	sizes := make(map[string]uint64)
+	entries, err := os.ReadDir(tracePath)
+	if err != nil {
+		return sizes
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, "MTLBuffer-") || !strings.HasSuffix(name, "-0") {
+			continue
+		}
+		info, err := os.Lstat(filepath.Join(tracePath, name))
+		if err != nil || info.Mode()&os.ModeSymlink != 0 || info.IsDir() {
+			continue
+		}
+		sizes[name] = uint64(info.Size())
+	}
+	return sizes
+}
+
+func collectBufferResourceRecords(tracePath string) (map[string]uint64, map[string]int64) {
+	sizes := make(map[string]uint64)
+	offsets := make(map[string]int64)
+	entries, err := os.ReadDir(tracePath)
+	if err != nil {
+		return sizes, offsets
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, "device-resources-") && !strings.HasPrefix(name, "delta-device-resources-") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(tracePath, name))
+		if err != nil {
+			continue
+		}
+		offset := 0
+		for {
+			pos := bytes.Index(data[offset:], []byte("MTLBuffer-"))
+			if pos == -1 {
+				break
+			}
+			start := offset + pos
+			end := bytes.IndexByte(data[start:], 0)
+			if end == -1 || end > 100 {
+				offset = start + len("MTLBuffer-")
+				continue
+			}
+			bufferName := string(data[start : start+end])
+			if size, ok := resourceRecordSize(data, start+end); ok {
+				sizes[bufferName] = size
+				if _, ok := offsets[bufferName]; !ok {
+					offsets[bufferName] = int64(start)
+				}
+			}
+			offset = start + end + 1
+		}
+	}
+	return sizes, offsets
+}
+
+func bufferLabel(trace *gputrace.Trace, address uint64, name string) string {
+	if trace != nil && address != 0 {
+		if label := trace.DeviceLabels[address]; label != "" {
+			return label
+		}
+	}
+	if strings.HasPrefix(name, "MTLBuffer-") {
+		return name
+	}
+	return ""
+}
+
+func applyLifetimeUse(row *BufferLifetimeRow, cbIdx int, cbLabel string, encIdx int, encLabel string, offset int64) {
+	if row.FirstUseOffset == 0 || offset < row.FirstUseOffset {
+		row.FirstUseOffset = offset
+	}
+	if offset > row.LastUseOffset {
+		row.LastUseOffset = offset
+	}
+	if !containsInt(row.CommandBuffers, cbIdx) {
+		row.CommandBuffers = append(row.CommandBuffers, cbIdx)
+	}
+	if cbLabel != "" && !containsString(row.CommandLabels, cbLabel) {
+		row.CommandLabels = append(row.CommandLabels, cbLabel)
+	}
+	if !containsInt(row.Encoders, encIdx) {
+		row.Encoders = append(row.Encoders, encIdx)
+	}
+	if encLabel != "" && !containsString(row.EncoderLabels, encLabel) {
+		row.EncoderLabels = append(row.EncoderLabels, encLabel)
+	}
+}
+
+func containsInt(values []int, want int) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 // formatBuffersJSON formats buffers as JSON.

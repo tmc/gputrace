@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/tmc/gputrace"
 )
 
 func TestValidateBuffersOptionsAcceptsKnownValues(t *testing.T) {
@@ -280,6 +282,73 @@ func TestExtractBufferResourceInventoryCountsSidecarBuffers(t *testing.T) {
 	}
 }
 
+func TestExtractBufferLifetimeReportAttributesCommands(t *testing.T) {
+	dir := t.TempDir()
+	tracePath := filepath.Join(dir, "trace.gputrace")
+	if err := os.Mkdir(tracePath, 0o755); err != nil {
+		t.Fatalf("mkdir trace: %v", err)
+	}
+	const addr = uint64(0x123456780000)
+	if err := os.WriteFile(filepath.Join(tracePath, "MTLBuffer-1-0"), make([]byte, 64), 0o644); err != nil {
+		t.Fatalf("write buffer: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tracePath, "device-resources-0x1"), appendBufferResourceRecord(nil, "MTLBuffer-1-0", 64), 0o644); err != nil {
+		t.Fatalf("write resources: %v", err)
+	}
+	capture := syntheticLifetimeCapture(addr, "MTLBuffer-1-0", "kernel_a")
+	if err := os.WriteFile(filepath.Join(tracePath, "capture"), capture, 0o644); err != nil {
+		t.Fatalf("write capture: %v", err)
+	}
+	trace := &gputrace.Trace{
+		Path:         tracePath,
+		CaptureData:  capture,
+		DeviceLabels: map[uint64]string{addr: "weights"},
+	}
+
+	report, err := extractBufferLifetimeReport(tracePath, trace)
+	if err != nil {
+		t.Fatalf("extractBufferLifetimeReport: %v", err)
+	}
+	if report.Resources != 1 {
+		t.Fatalf("Resources = %d, want 1", report.Resources)
+	}
+	row := report.Rows[0]
+	if row.Name != "MTLBuffer-1-0" || row.Address != addr || row.Size != 64 {
+		t.Fatalf("row identity = %+v", row)
+	}
+	if row.Label != "weights" {
+		t.Fatalf("Label = %q, want weights", row.Label)
+	}
+	if row.BindingRecords != 1 {
+		t.Fatalf("BindingRecords = %d, want 1", row.BindingRecords)
+	}
+	if len(row.CommandBuffers) != 1 || row.CommandBuffers[0] != 0 {
+		t.Fatalf("CommandBuffers = %+v, want [0]", row.CommandBuffers)
+	}
+	if len(row.Encoders) != 1 || row.Encoders[0] != 0 {
+		t.Fatalf("Encoders = %+v, want [0]", row.Encoders)
+	}
+	if len(row.EncoderLabels) != 1 || row.EncoderLabels[0] != "kernel_a" {
+		t.Fatalf("EncoderLabels = %+v, want [kernel_a]", row.EncoderLabels)
+	}
+}
+
+func TestExtractBufferLifetimeReportFailsClosedWithoutCapture(t *testing.T) {
+	dir := t.TempDir()
+	tracePath := filepath.Join(dir, "trace.gputrace")
+	if err := os.Mkdir(tracePath, 0o755); err != nil {
+		t.Fatalf("mkdir trace: %v", err)
+	}
+
+	_, err := extractBufferLifetimeReport(tracePath, &gputrace.Trace{Path: tracePath})
+	if err == nil {
+		t.Fatal("extractBufferLifetimeReport succeeded without capture")
+	}
+	if !strings.Contains(err.Error(), "requires full trace capture data") {
+		t.Fatalf("error = %q, want full trace capture message", err.Error())
+	}
+}
+
 func appendBufferResourceRecord(dst []byte, name string, size uint64) []byte {
 	dst = append(dst, []byte("CU<b>ulul")...)
 	dst = append(dst, 0, 0, 0, 0)
@@ -289,4 +358,29 @@ func appendBufferResourceRecord(dst []byte, name string, size uint64) []byte {
 	binary.LittleEndian.PutUint64(buf[:], size)
 	dst = append(dst, buf[:]...)
 	return dst
+}
+
+func syntheticLifetimeCapture(addr uint64, name, label string) []byte {
+	var out []byte
+	ctu := make([]byte, 0x40)
+	copy(ctu, []byte("CtU<b>ulul"))
+	binary.LittleEndian.PutUint64(ctu[0x14:0x1c], addr)
+	copy(ctu[0x1c:], []byte(name))
+	out = append(out, ctu...)
+
+	cuuu := make([]byte, 0x10)
+	copy(cuuu, []byte("CUUU"))
+	out = append(out, cuuu...)
+
+	cs := make([]byte, 12+len(label)+1)
+	copy(cs, []byte("CS\x00\x00"))
+	binary.LittleEndian.PutUint64(cs[4:12], 0xbeef)
+	copy(cs[12:], []byte(label))
+	out = append(out, cs...)
+
+	binding := make([]byte, 0x20)
+	copy(binding, []byte("Ctulul"))
+	binary.LittleEndian.PutUint64(binding[0x10:0x18], addr)
+	out = append(out, binding...)
+	return out
 }
