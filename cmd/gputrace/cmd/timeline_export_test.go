@@ -625,6 +625,180 @@ func TestXcodeParityStreamDataEvidenceReportsSafeNextSteps(t *testing.T) {
 	}
 }
 
+func TestXcodeParityTraceCountsReportEncoderDelta(t *testing.T) {
+	report := xcodeParityReport{
+		StreamData: &xcodebindings.StreamDataSummary{
+			EncoderInfoCount: 9,
+		},
+	}
+
+	report.applyTraceCounts(xcodeParityTraceCounts{RawComputeEncoders: 74})
+
+	if report.TraceCounts == nil {
+		t.Fatal("missing trace counts")
+	}
+	if got := report.TraceCounts.RawComputeEncoders; got != 74 {
+		t.Fatalf("raw compute encoders = %d, want 74", got)
+	}
+	if len(report.ReportingDeltas) != 1 {
+		t.Fatalf("len(reporting deltas) = %d, want 1", len(report.ReportingDeltas))
+	}
+	delta := report.ReportingDeltas[0]
+	if delta.Metric != "compute_encoders" || delta.Trace != 74 || delta.Xcode != 9 {
+		t.Fatalf("delta = %+v, want compute_encoders 74 vs 9", delta)
+	}
+	if !strings.Contains(delta.Status, "coalesced profiler encoders") {
+		t.Fatalf("delta status = %q, want coalesced profiler encoders", delta.Status)
+	}
+}
+
+func TestXcodeParityTraceCountsSkipMatchingEncoderCounts(t *testing.T) {
+	report := xcodeParityReport{
+		StreamData: &xcodebindings.StreamDataSummary{
+			EncoderInfoCount: 9,
+		},
+	}
+
+	report.applyTraceCounts(xcodeParityTraceCounts{RawComputeEncoders: 9})
+
+	if len(report.ReportingDeltas) != 0 {
+		t.Fatalf("reporting deltas = %+v, want none", report.ReportingDeltas)
+	}
+}
+
+func TestXcodeParityFeatureCoverageFromMetrics(t *testing.T) {
+	timeline := &Timeline{
+		Timing: &TimelineTiming{
+			EffectiveGPUTimeNs: ptrUint64(123),
+		},
+		CounterTracks: []CounterTrack{{
+			Name:    "ALU Utilization",
+			Unit:    "%",
+			Samples: []CounterSample{{Value: 12.5}},
+		}},
+		Events: []TimelineEvent{{
+			Category: "kernel",
+			Args: map[string]interface{}{
+				"xcode_cost_pct":      11.0,
+				"simd_groups":         4,
+				"allocated_registers": 16,
+				"uniform_registers":   8,
+				"spilled_bytes":       0,
+				"threadgroup_memory":  1024,
+				"instruction_count":   50,
+				"occupancy_pct":       75.0,
+				"alu_utilization_pct": 60.0,
+				"pipeline_id":         7,
+				"pipeline_state":      "kernel",
+			},
+		}},
+	}
+
+	coverage := coverageByFeature(featureCoverageFromMetrics(timelineXcodeMetricsArgs(timeline)))
+
+	for _, feature := range []string{
+		"shader_table.dispatch_rows",
+		"shader_table.cost",
+		"shader_table.simd_groups",
+		"shader_table.register_footprint",
+		"shader_table.memory",
+		"shader_table.instructions",
+		"shader_table.occupancy",
+		"shader_table.alu_utilization",
+		"pipeline_identity",
+		"counter_tracks.alu_utilization",
+		"timing.effective_gpu_time",
+	} {
+		if got := coverage[feature].Status; got != "covered" {
+			t.Fatalf("%s status = %q, want covered", feature, got)
+		}
+	}
+	if got := coverage["shader_table.high_register"].Status; got != "missing" {
+		t.Fatalf("high register status = %q, want missing", got)
+	}
+}
+
+func TestXcodeParityRefreshFeatureCoverageAddsStreamDataEvidence(t *testing.T) {
+	report := xcodeParityReport{
+		FeatureCoverage: []xcodeParityFeature{
+			{Feature: "shader_table.high_register", Status: "missing"},
+		},
+		TraceCounts: &xcodeParityTraceCounts{RawComputeEncoders: 74},
+		StreamData: &xcodebindings.StreamDataSummary{
+			EncoderInfoCount:       9,
+			GPUCommandInfoCount:    436,
+			PipelineStateInfoCount: 8,
+			FunctionInfoCount:      8,
+			SelectedValues: []xcodebindings.ValueSummary{
+				{Key: "Binaries", Count: 734},
+				{Key: "Derived Counter Sample Data", Count: 16},
+			},
+		},
+	}
+
+	report.refreshFeatureCoverage()
+	coverage := coverageByFeature(report.FeatureCoverage)
+
+	if got := coverage["stream_data.encoder_info"].Status; got != "covered" {
+		t.Fatalf("stream_data.encoder_info status = %q, want covered", got)
+	}
+	if got := coverage["stream_data.shader_binaries"].Status; got != "partial" {
+		t.Fatalf("shader binaries status = %q, want partial", got)
+	}
+	if got := coverage["shader_table.high_register"].Status; got != "partial" {
+		t.Fatalf("high register status = %q, want partial", got)
+	}
+	if got := coverage["stream_data.derived_counter_samples"].Status; got != "partial" {
+		t.Fatalf("derived counter sample status = %q, want partial", got)
+	}
+	if got := coverage["encoder_counts"].Status; got != "partial" {
+		t.Fatalf("encoder counts status = %q, want partial", got)
+	}
+	if got := coverage["encoder_counts"].Evidence; got != "raw=74 xcode=9" {
+		t.Fatalf("encoder counts evidence = %q, want raw=74 xcode=9", got)
+	}
+}
+
+func TestXcodeParityFeatureCoverageMarksProfilerFeaturesUnverifiedWithoutStreamData(t *testing.T) {
+	timeline := &Timeline{
+		Events: []TimelineEvent{{
+			Category: "kernel",
+			Args: map[string]interface{}{
+				"simd_groups": 4,
+			},
+		}},
+	}
+	report := buildXcodeParityReport("trace.gputrace", timeline, xcodebindingsReportForTest())
+
+	report.refreshFeatureCoverage()
+	coverage := coverageByFeature(report.FeatureCoverage)
+
+	if got := coverage["shader_table.dispatch_rows"].Status; got != "covered" {
+		t.Fatalf("dispatch rows status = %q, want covered", got)
+	}
+	if got := coverage["shader_table.simd_groups"].Status; got != "covered" {
+		t.Fatalf("simd groups status = %q, want covered", got)
+	}
+	if got := coverage["shader_table.high_register"].Status; got != "unverified" {
+		t.Fatalf("high register status = %q, want unverified", got)
+	}
+	if got := coverage["stream_data.encoder_info"].Status; got != "unverified" {
+		t.Fatalf("stream data status = %q, want unverified", got)
+	}
+}
+
+func coverageByFeature(features []xcodeParityFeature) map[string]xcodeParityFeature {
+	byFeature := make(map[string]xcodeParityFeature)
+	for _, feature := range features {
+		byFeature[feature.Feature] = feature
+	}
+	return byFeature
+}
+
+func ptrUint64(v uint64) *uint64 {
+	return &v
+}
+
 func xcodebindingsReportForTest() xcodebindings.Report {
 	return xcodebindings.Report{
 		Summary: map[string]int{
