@@ -7,6 +7,8 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -915,19 +917,66 @@ func axActionNames(ax uintptr) []string {
 // === Xcode Specifics ===
 
 func FindXcodeApp() (uintptr, error) {
-	// Use osascript to get PID easily (simpler than iterating all procs in Go for now)
-	out, err := exec.Command("pgrep", "-x", "Xcode").Output()
+	pid, err := findXcodePID()
 	if err != nil {
-		return 0, fmt.Errorf("Xcode not running")
+		return 0, err
 	}
-	var pid int32
-	fmt.Sscanf(string(out), "%d", &pid)
-
 	app := axCreateApplication(pid)
 	if app == 0 {
 		return 0, fmt.Errorf("failed to create AX object for Xcode")
 	}
 	return app, nil
+}
+
+func findXcodePID() (int32, error) {
+	out, err := exec.Command("pgrep", "-x", "Xcode").Output()
+	if err != nil {
+		return 0, fmt.Errorf("Xcode not running")
+	}
+	pids := strings.Fields(string(out))
+	if len(pids) == 0 {
+		return 0, fmt.Errorf("Xcode not running")
+	}
+
+	want := os.Getenv("GPUTRACE_XCODE_APP")
+	if want != "" {
+		wantBase := strings.TrimSuffix(filepath.Base(want), ".app")
+		wantPath := filepath.Clean(want)
+		for i := len(pids) - 1; i >= 0; i-- {
+			pid, ok := parsePID(pids[i])
+			if !ok {
+				continue
+			}
+			cmd := processCommand(pid)
+			if strings.Contains(cmd, wantPath+"/") || strings.Contains(cmd, "/"+wantBase+".app/") {
+				return pid, nil
+			}
+		}
+	}
+
+	for i := len(pids) - 1; i >= 0; i-- {
+		pid, ok := parsePID(pids[i])
+		if ok {
+			return pid, nil
+		}
+	}
+	return 0, fmt.Errorf("Xcode not running")
+}
+
+func parsePID(s string) (int32, bool) {
+	n, err := strconv.ParseInt(s, 10, 32)
+	if err != nil {
+		return 0, false
+	}
+	return int32(n), true
+}
+
+func processCommand(pid int32) string {
+	out, err := exec.Command("ps", "-p", strconv.Itoa(int(pid)), "-o", "command=").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // === Menu Interactions ===
