@@ -18,6 +18,7 @@ type BufferTimelineAnalysis struct {
 	PeakMemoryBytes  uint64
 	PeakMemoryMB     float64
 	TotalAllocations int
+	ResourceBytes    uint64
 	AverageLifetime  float64
 
 	// Timeline bounds (in record indices)
@@ -126,6 +127,7 @@ func ExtractBufferTimeline(t *trace.Trace) (*BufferTimelineAnalysis, error) {
 
 	// Compute summary statistics
 	analysis.computeStatistics()
+	analysis.applyResourceInventory(extractResourceBufferInventory(t))
 
 	return analysis, nil
 }
@@ -162,6 +164,20 @@ func (analysis *BufferTimelineAnalysis) computeStatistics() {
 	analysis.PeakMemoryMB = float64(maxConcurrentBytes) / (1024 * 1024)
 }
 
+func (analysis *BufferTimelineAnalysis) applyResourceInventory(inventory resourceBufferInventory) {
+	if inventory.Buffers == 0 {
+		return
+	}
+	analysis.ResourceBytes = inventory.Bytes
+	if inventory.Buffers > analysis.TotalBuffers {
+		analysis.TotalBuffers = inventory.Buffers
+	}
+	if inventory.Bytes > analysis.PeakMemoryBytes {
+		analysis.PeakMemoryBytes = inventory.Bytes
+		analysis.PeakMemoryMB = float64(inventory.Bytes) / (1024 * 1024)
+	}
+}
+
 // FormatBufferTimelineASCII generates an ASCII timeline visualization.
 func FormatBufferTimelineASCII(analysis *BufferTimelineAnalysis, width int) string {
 	var out strings.Builder
@@ -177,6 +193,9 @@ func FormatBufferTimelineASCII(analysis *BufferTimelineAnalysis, width int) stri
 		analysis.MinRecordIndex, analysis.MaxRecordIndex))
 	if analysis.PeakMemoryBytes > 0 {
 		out.WriteString(fmt.Sprintf("  Peak Memory:        %.2f MB\n", analysis.PeakMemoryMB))
+	}
+	if analysis.ResourceBytes > 0 {
+		out.WriteString(fmt.Sprintf("  Resource Bytes:     %d\n", analysis.ResourceBytes))
 	}
 	out.WriteString("\n")
 

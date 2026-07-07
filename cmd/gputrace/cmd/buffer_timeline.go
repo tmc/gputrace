@@ -147,6 +147,7 @@ type bufferTimelineJSON struct {
 	PeakMemoryBytes  uint64                     `json:"peak_memory_bytes"`
 	PeakMemoryMB     float64                    `json:"peak_memory_mb"`
 	TotalAllocations int                        `json:"total_allocations"`
+	ResourceBytes    uint64                     `json:"resource_bytes,omitempty"`
 	AverageLifetime  float64                    `json:"average_lifetime_records"`
 	MinRecordIndex   int                        `json:"min_record_index"`
 	MaxRecordIndex   int                        `json:"max_record_index"`
@@ -174,6 +175,7 @@ type bufferTimelineChromeTraceHeader struct {
 	TotalBuffers     int     `json:"total_buffers"`
 	PeakMemoryBytes  uint64  `json:"peak_memory_bytes"`
 	TotalAllocations int     `json:"total_allocations"`
+	ResourceBytes    uint64  `json:"resource_bytes,omitempty"`
 	AverageLifetime  float64 `json:"average_lifetime_records"`
 	MinRecordIndex   int     `json:"min_record_index"`
 	MaxRecordIndex   int     `json:"max_record_index"`
@@ -192,6 +194,7 @@ func formatBufferTimelineJSON(timeline *gputrace.BufferTimelineAnalysis) (string
 		PeakMemoryBytes:  timeline.PeakMemoryBytes,
 		PeakMemoryMB:     timeline.PeakMemoryMB,
 		TotalAllocations: timeline.TotalAllocations,
+		ResourceBytes:    timeline.ResourceBytes,
 		AverageLifetime:  timeline.AverageLifetime,
 		MinRecordIndex:   timeline.MinRecordIndex,
 		MaxRecordIndex:   timeline.MaxRecordIndex,
@@ -226,6 +229,7 @@ func formatBufferTimelineChrome(timeline *gputrace.BufferTimelineAnalysis) (stri
 			TotalBuffers:     timeline.TotalBuffers,
 			PeakMemoryBytes:  timeline.PeakMemoryBytes,
 			TotalAllocations: timeline.TotalAllocations,
+			ResourceBytes:    timeline.ResourceBytes,
 			AverageLifetime:  timeline.AverageLifetime,
 			MinRecordIndex:   timeline.MinRecordIndex,
 			MaxRecordIndex:   timeline.MaxRecordIndex,

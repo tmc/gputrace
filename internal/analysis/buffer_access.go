@@ -15,6 +15,7 @@ type BufferAccessAnalysis struct {
 	UnusedBuffers     int                          `json:"unused_buffers"`
 	ReadOnlyBuffers   int                          `json:"read_only_buffers"`
 	SharedBuffers     int                          `json:"shared_buffers"`
+	ResourceBytes     uint64                       `json:"resource_bytes,omitempty"`
 	AliasingDetected  bool                         `json:"aliasing_detected"`
 	AliasingInstances []BufferAlias                `json:"aliasing_instances,omitempty"`
 }
@@ -126,6 +127,7 @@ func AnalyzeBufferAccess(t *trace.Trace) (*BufferAccessAnalysis, error) {
 
 	// Compute summary statistics
 	analysis.computeStatistics()
+	analysis.applyResourceInventory(extractResourceBufferInventory(t))
 
 	return analysis, nil
 }
@@ -162,6 +164,18 @@ func (analysis *BufferAccessAnalysis) computeStatistics() {
 	}
 }
 
+func (analysis *BufferAccessAnalysis) applyResourceInventory(inventory resourceBufferInventory) {
+	if inventory.Buffers == 0 {
+		return
+	}
+	accessed := len(analysis.BufferAccesses)
+	analysis.ResourceBytes = inventory.Bytes
+	if inventory.Buffers > analysis.TotalBuffers {
+		analysis.TotalBuffers = inventory.Buffers
+		analysis.UnusedBuffers = inventory.Buffers - accessed
+	}
+}
+
 // FormatBufferAccessReport generates a human-readable report.
 func FormatBufferAccessReport(analysis *BufferAccessAnalysis, verbose bool) string {
 	report := "=== Buffer Access Analysis ===\n\n"
@@ -171,6 +185,9 @@ func FormatBufferAccessReport(analysis *BufferAccessAnalysis, verbose bool) stri
 	report += fmt.Sprintf("  Total Buffers:   %d\n", analysis.TotalBuffers)
 	report += fmt.Sprintf("  Shared Buffers:  %d (accessed by multiple encoders)\n", analysis.SharedBuffers)
 	report += fmt.Sprintf("  Unused Buffers:  %d\n", analysis.UnusedBuffers)
+	if analysis.ResourceBytes > 0 {
+		report += fmt.Sprintf("  Resource Bytes:   %d\n", analysis.ResourceBytes)
+	}
 	report += fmt.Sprintf("  Total Encoders:  %d\n", len(analysis.EncoderAccesses))
 	report += "\n"
 

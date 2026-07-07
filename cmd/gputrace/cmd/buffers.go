@@ -225,9 +225,11 @@ type BufferBindingInfo struct {
 }
 
 type BufferResourceInventory struct {
-	FinalBuffers int                  `json:"final_buffers"`
-	FinalBytes   uint64               `json:"final_bytes"`
-	Files        []BufferResourceFile `json:"files"`
+	FinalBuffers      int                  `json:"final_buffers"`
+	FinalBytes        uint64               `json:"final_bytes"`
+	FileBackedBuffers int                  `json:"file_backed_buffers,omitempty"`
+	FileBackedBytes   uint64               `json:"file_backed_bytes,omitempty"`
+	Files             []BufferResourceFile `json:"files"`
 }
 
 type BufferResourceFile struct {
@@ -793,11 +795,14 @@ func extractBufferResourceInventory(tracePath string, trace *gputrace.Trace) (*B
 	}
 
 	inventory := &BufferResourceInventory{
-		FinalBuffers: len(finalSizes),
+		FinalBuffers:      len(finalSizes),
+		FileBackedBuffers: len(finalSizes),
 	}
 	for _, size := range finalSizes {
 		inventory.FinalBytes += size
+		inventory.FileBackedBytes += size
 	}
+	sidecarSizes := make(map[string]uint64)
 	commandUses := map[string]bufferCommandUse{}
 	if trace != nil {
 		commandUses, err = extractBufferCommandUses(trace, finalSizes)
@@ -825,7 +830,14 @@ func extractBufferResourceInventory(tracePath string, trace *gputrace.Trace) (*B
 			return nil, fmt.Errorf("read %s: %w", name, err)
 		}
 
-		inventory.Files = append(inventory.Files, scanBufferResourceFile(name, kind, data, finalSizes, commandUses))
+		inventory.Files = append(inventory.Files, scanBufferResourceFile(name, kind, data, finalSizes, sidecarSizes, commandUses))
+	}
+	if len(sidecarSizes) > 0 {
+		inventory.FinalBuffers = len(sidecarSizes)
+		inventory.FinalBytes = 0
+		for _, size := range sidecarSizes {
+			inventory.FinalBytes += size
+		}
 	}
 
 	sort.Slice(inventory.Files, func(i, j int) bool {
@@ -838,7 +850,7 @@ func extractBufferResourceInventory(tracePath string, trace *gputrace.Trace) (*B
 	return inventory, nil
 }
 
-func scanBufferResourceFile(filename, kind string, data []byte, finalSizes map[string]uint64, commandUses map[string]bufferCommandUse) BufferResourceFile {
+func scanBufferResourceFile(filename, kind string, data []byte, finalSizes map[string]uint64, sidecarSizes map[string]uint64, commandUses map[string]bufferCommandUse) BufferResourceFile {
 	file := BufferResourceFile{
 		Filename: filename,
 		Kind:     kind,
@@ -864,6 +876,11 @@ func scanBufferResourceFile(filename, kind string, data []byte, finalSizes map[s
 		name := string(data[start : start+end])
 		file.Records++
 		recordIdx++
+		if finalSize, ok := finalSizes[name]; ok {
+			sidecarSizes[name] = finalSize
+		} else if size, ok := resourceRecordSize(data, start+end); ok {
+			sidecarSizes[name] = size
+		}
 
 		want, ok := finalSizes[name]
 		if !ok {
@@ -1156,6 +1173,17 @@ func finalBufferFilename(name string) string {
 
 func resourceRecordHasSize(data []byte, nameEnd int, want uint64) bool {
 	return resourceRecordSizeOffset(data, nameEnd, want) >= 0
+}
+
+func resourceRecordSize(data []byte, nameEnd int) (uint64, bool) {
+	if nameEnd+9 > len(data) {
+		return 0, false
+	}
+	size := binary.LittleEndian.Uint64(data[nameEnd+1 : nameEnd+9])
+	if size == 0 || size > 1<<30 {
+		return 0, false
+	}
+	return size, true
 }
 
 func resourceRecordSizeOffset(data []byte, nameEnd int, want uint64) int {

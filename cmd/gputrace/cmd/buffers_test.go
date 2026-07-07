@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"encoding/binary"
 	"encoding/csv"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -236,4 +238,55 @@ func TestFormatBuffersCSVEscapesFilenames(t *testing.T) {
 	if records[1][1] != buffers[0].Filename {
 		t.Fatalf("filename = %q, want %q", records[1][1], buffers[0].Filename)
 	}
+}
+
+func TestExtractBufferResourceInventoryCountsSidecarBuffers(t *testing.T) {
+	dir := t.TempDir()
+	tracePath := filepath.Join(dir, "trace.gputrace")
+	if err := os.Mkdir(tracePath, 0o755); err != nil {
+		t.Fatalf("mkdir trace: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tracePath, "MTLBuffer-1-0"), make([]byte, 64), 0o644); err != nil {
+		t.Fatalf("write buffer: %v", err)
+	}
+	data := appendBufferResourceRecord(nil, "MTLBuffer-1-0", 64)
+	data = appendBufferResourceRecord(data, "MTLBuffer-2-0", 128)
+	if err := os.WriteFile(filepath.Join(tracePath, "device-resources-0x1"), data, 0o644); err != nil {
+		t.Fatalf("write resources: %v", err)
+	}
+
+	inventory, err := extractBufferResourceInventory(tracePath, nil)
+	if err != nil {
+		t.Fatalf("extractBufferResourceInventory: %v", err)
+	}
+	if got := inventory.FinalBuffers; got != 2 {
+		t.Fatalf("FinalBuffers = %d, want 2", got)
+	}
+	if got := inventory.FinalBytes; got != 192 {
+		t.Fatalf("FinalBytes = %d, want 192", got)
+	}
+	if got := inventory.FileBackedBuffers; got != 1 {
+		t.Fatalf("FileBackedBuffers = %d, want 1", got)
+	}
+	if got := inventory.FileBackedBytes; got != 64 {
+		t.Fatalf("FileBackedBytes = %d, want 64", got)
+	}
+	if len(inventory.Files) != 1 {
+		t.Fatalf("len(Files) = %d, want 1", len(inventory.Files))
+	}
+	file := inventory.Files[0]
+	if file.Records != 2 || file.FinalNameRecords != 1 || file.NoFinalFile != 1 {
+		t.Fatalf("resource file summary = %+v, want 2 records, 1 final name, 1 missing final file", file)
+	}
+}
+
+func appendBufferResourceRecord(dst []byte, name string, size uint64) []byte {
+	dst = append(dst, []byte("CU<b>ulul")...)
+	dst = append(dst, 0, 0, 0, 0)
+	dst = append(dst, []byte(name)...)
+	dst = append(dst, 0)
+	var buf [8]byte
+	binary.LittleEndian.PutUint64(buf[:], size)
+	dst = append(dst, buf[:]...)
+	return dst
 }
