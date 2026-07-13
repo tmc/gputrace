@@ -28,7 +28,7 @@ does not instantiate profiler objects or parse capture data.
 
 ## Current Probe Results
 
-On the qwen-native trace, `gputrace xcode-parity --json` loads stream data
+On a profiler-only LLM inference trace, `gputrace xcode-parity --json` loads stream data
 through `GTShaderProfilerStreamData.dataFromArchivedDataURL:` and reports:
 
 - 436 GPU command records, 8 pipeline states, and 8 functions.
