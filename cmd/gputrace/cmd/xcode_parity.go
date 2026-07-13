@@ -420,19 +420,16 @@ func (r *xcodeParityReport) refreshFeatureCoverage() {
 	if r == nil {
 		return
 	}
-	if r.StreamData == nil {
-		r.markProfilerFeaturesUnverified()
-	}
-	r.upsertFeature(streamDataFeature("stream_data.encoder_info", r.StreamData != nil && r.StreamData.EncoderInfoCount > 0,
+	r.upsertFeature(featureFromBool("stream_data.encoder_info", r.StreamData != nil && r.StreamData.EncoderInfoCount > 0,
 		uintEvidence(r.StreamData, func(s *xcodebindings.StreamDataSummary) uint64 { return s.EncoderInfoCount }, "encoderInfo records"),
 		"load GTShaderProfiler streamData encoderInfoData"))
-	r.upsertFeature(streamDataFeature("stream_data.gpu_commands", r.StreamData != nil && r.StreamData.GPUCommandInfoCount > 0,
+	r.upsertFeature(featureFromBool("stream_data.gpu_commands", r.StreamData != nil && r.StreamData.GPUCommandInfoCount > 0,
 		uintEvidence(r.StreamData, func(s *xcodebindings.StreamDataSummary) uint64 { return s.GPUCommandInfoCount }, "gpuCommandInfo records"),
 		"load GTShaderProfiler streamData gpuCommandInfoData"))
-	r.upsertFeature(streamDataFeature("stream_data.pipeline_states", r.StreamData != nil && r.StreamData.PipelineStateInfoCount > 0,
+	r.upsertFeature(featureFromBool("stream_data.pipeline_states", r.StreamData != nil && r.StreamData.PipelineStateInfoCount > 0,
 		uintEvidence(r.StreamData, func(s *xcodebindings.StreamDataSummary) uint64 { return s.PipelineStateInfoCount }, "pipelineStateInfo records"),
 		"load GTShaderProfiler streamData pipelineStateInfoData"))
-	r.upsertFeature(streamDataFeature("stream_data.functions", r.StreamData != nil && r.StreamData.FunctionInfoCount > 0,
+	r.upsertFeature(featureFromBool("stream_data.functions", r.StreamData != nil && r.StreamData.FunctionInfoCount > 0,
 		uintEvidence(r.StreamData, func(s *xcodebindings.StreamDataSummary) uint64 { return s.FunctionInfoCount }, "functionInfo records"),
 		"load GTShaderProfiler streamData functionInfoData"))
 	if r.streamValueCount("Binaries") > 0 {
@@ -522,13 +519,6 @@ func profilerBackedFeature(feature string) bool {
 }
 
 func featureFromBool(feature string, ok bool, evidence, next string) xcodeParityFeature {
-	if ok {
-		return xcodeParityFeature{Feature: feature, Status: "covered", Evidence: evidence}
-	}
-	return xcodeParityFeature{Feature: feature, Status: "missing", Next: next}
-}
-
-func streamDataFeature(feature string, ok bool, evidence, next string) xcodeParityFeature {
 	if ok {
 		return xcodeParityFeature{Feature: feature, Status: "covered", Evidence: evidence}
 	}
