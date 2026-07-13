@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/tmc/gputrace"
+	"github.com/tmc/gputrace/internal/analysis"
 	"github.com/tmc/gputrace/internal/fmtutil"
 )
 
@@ -883,7 +884,7 @@ func scanBufferResourceFile(filename, kind string, data []byte, finalSizes map[s
 		recordIdx++
 		if finalSize, ok := finalSizes[name]; ok {
 			sidecarSizes[name] = finalSize
-		} else if size, ok := resourceRecordSize(data, start+end); ok {
+		} else if size, ok := analysis.ResourceBufferRecordSize(data, start+end); ok {
 			sidecarSizes[name] = size
 		}
 
@@ -1180,17 +1181,6 @@ func resourceRecordHasSize(data []byte, nameEnd int, want uint64) bool {
 	return resourceRecordSizeOffset(data, nameEnd, want) >= 0
 }
 
-func resourceRecordSize(data []byte, nameEnd int) (uint64, bool) {
-	if nameEnd+9 > len(data) {
-		return 0, false
-	}
-	size := binary.LittleEndian.Uint64(data[nameEnd+1 : nameEnd+9])
-	if size == 0 || size > 1<<30 {
-		return 0, false
-	}
-	return size, true
-}
-
 func resourceRecordSizeOffset(data []byte, nameEnd int, want uint64) int {
 	for off := 1; off <= 24; off++ {
 		if nameEnd+off+8 > len(data) {
@@ -1263,12 +1253,7 @@ func extractBufferLifetimeReport(tracePath string, trace *gputrace.Trace) (*Buff
 		return nil, fmt.Errorf("buffer lifetime attribution requires full trace capture data: %w", err)
 	}
 
-	sizes, allocOffsets := collectBufferResourceRecords(tracePath)
-	for name, size := range collectFinalBufferSizes(tracePath) {
-		if _, ok := sizes[name]; !ok {
-			sizes[name] = size
-		}
-	}
+	sizes, allocOffsets := analysis.ResourceBufferInventory(tracePath)
 	addrToName := extractBufferAddressNames(captureData)
 	nameToAddr := make(map[string]uint64)
 	for addr, name := range addrToName {
@@ -1347,67 +1332,6 @@ func extractBufferLifetimeReport(tracePath string, trace *gputrace.Trace) (*Buff
 	})
 	report.Resources = len(report.Rows)
 	return report, nil
-}
-
-func collectFinalBufferSizes(tracePath string) map[string]uint64 {
-	sizes := make(map[string]uint64)
-	entries, err := os.ReadDir(tracePath)
-	if err != nil {
-		return sizes
-	}
-	for _, entry := range entries {
-		name := entry.Name()
-		if !strings.HasPrefix(name, "MTLBuffer-") || !strings.HasSuffix(name, "-0") {
-			continue
-		}
-		info, err := os.Lstat(filepath.Join(tracePath, name))
-		if err != nil || info.Mode()&os.ModeSymlink != 0 || info.IsDir() {
-			continue
-		}
-		sizes[name] = uint64(info.Size())
-	}
-	return sizes
-}
-
-func collectBufferResourceRecords(tracePath string) (map[string]uint64, map[string]int64) {
-	sizes := make(map[string]uint64)
-	offsets := make(map[string]int64)
-	entries, err := os.ReadDir(tracePath)
-	if err != nil {
-		return sizes, offsets
-	}
-	for _, entry := range entries {
-		name := entry.Name()
-		if !strings.HasPrefix(name, "device-resources-") && !strings.HasPrefix(name, "delta-device-resources-") {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(tracePath, name))
-		if err != nil {
-			continue
-		}
-		offset := 0
-		for {
-			pos := bytes.Index(data[offset:], []byte("MTLBuffer-"))
-			if pos == -1 {
-				break
-			}
-			start := offset + pos
-			end := bytes.IndexByte(data[start:], 0)
-			if end == -1 || end > 100 {
-				offset = start + len("MTLBuffer-")
-				continue
-			}
-			bufferName := string(data[start : start+end])
-			if size, ok := resourceRecordSize(data, start+end); ok {
-				sizes[bufferName] = size
-				if _, ok := offsets[bufferName]; !ok {
-					offsets[bufferName] = int64(start)
-				}
-			}
-			offset = start + end + 1
-		}
-	}
-	return sizes, offsets
 }
 
 func bufferLabel(trace *gputrace.Trace, address uint64, name string) string {

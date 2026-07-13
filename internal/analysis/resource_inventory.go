@@ -19,33 +19,7 @@ func extractResourceBufferInventory(t *trace.Trace) resourceBufferInventory {
 	if t == nil || t.Path == "" {
 		return resourceBufferInventory{}
 	}
-	entries, err := os.ReadDir(t.Path)
-	if err != nil {
-		return resourceBufferInventory{}
-	}
-	sizes := make(map[string]uint64)
-	for _, entry := range entries {
-		name := entry.Name()
-		if !strings.HasPrefix(name, "MTLBuffer-") || !strings.HasSuffix(name, "-0") {
-			continue
-		}
-		info, err := os.Lstat(filepath.Join(t.Path, name))
-		if err != nil || info.Mode()&os.ModeSymlink != 0 || info.IsDir() {
-			continue
-		}
-		sizes[name] = uint64(info.Size())
-	}
-	for _, entry := range entries {
-		name := entry.Name()
-		if !strings.HasPrefix(name, "device-resources-") && !strings.HasPrefix(name, "delta-device-resources-") {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(t.Path, name))
-		if err != nil {
-			continue
-		}
-		addResourceBufferSizes(sizes, data)
-	}
+	sizes, _ := ResourceBufferInventory(t.Path)
 	var inv resourceBufferInventory
 	inv.Buffers = len(sizes)
 	for _, size := range sizes {
@@ -54,7 +28,42 @@ func extractResourceBufferInventory(t *trace.Trace) resourceBufferInventory {
 	return inv
 }
 
-func addResourceBufferSizes(sizes map[string]uint64, data []byte) {
+// ResourceBufferInventory returns buffer sizes and their first offsets in
+// device-resource sidecars. Final buffer files take precedence over sidecar
+// sizes when both are present.
+func ResourceBufferInventory(tracePath string) (sizes map[string]uint64, offsets map[string]int64) {
+	sizes = make(map[string]uint64)
+	offsets = make(map[string]int64)
+	entries, err := os.ReadDir(tracePath)
+	if err != nil {
+		return sizes, offsets
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, "device-resources-") && !strings.HasPrefix(name, "delta-device-resources-") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(tracePath, name))
+		if err != nil {
+			continue
+		}
+		addResourceBufferSizes(sizes, offsets, data)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, "MTLBuffer-") || !strings.HasSuffix(name, "-0") {
+			continue
+		}
+		info, err := os.Lstat(filepath.Join(tracePath, name))
+		if err != nil || info.Mode()&os.ModeSymlink != 0 || info.IsDir() {
+			continue
+		}
+		sizes[name] = uint64(info.Size())
+	}
+	return sizes, offsets
+}
+
+func addResourceBufferSizes(sizes map[string]uint64, offsets map[string]int64, data []byte) {
 	offset := 0
 	for {
 		pos := bytes.Index(data[offset:], []byte("MTLBuffer-"))
@@ -68,16 +77,21 @@ func addResourceBufferSizes(sizes map[string]uint64, data []byte) {
 			continue
 		}
 		name := string(data[start : start+end])
-		if _, ok := sizes[name]; !ok {
-			if size, ok := resourceBufferRecordSize(data, start+end); ok {
+		if size, ok := ResourceBufferRecordSize(data, start+end); ok {
+			if _, ok := sizes[name]; !ok {
 				sizes[name] = size
+			}
+			if _, ok := offsets[name]; !ok {
+				offsets[name] = int64(start)
 			}
 		}
 		offset = start + end + 1
 	}
 }
 
-func resourceBufferRecordSize(data []byte, nameEnd int) (uint64, bool) {
+// ResourceBufferRecordSize returns the size stored after a NUL-terminated
+// buffer name in a device-resource record.
+func ResourceBufferRecordSize(data []byte, nameEnd int) (uint64, bool) {
 	if nameEnd+9 > len(data) {
 		return 0, false
 	}
