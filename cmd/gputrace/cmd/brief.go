@@ -135,7 +135,7 @@ func newBriefHeader() briefHeader {
 		},
 		Legend: briefLegend{
 			AbsDeltaUs:     "abs(A_us - B_us) for the matched kernel",
-			PipelineHash:   "per-side pipeline object hash; keyed by pipeline ID (gputrace 80d8c2b), so identical function+threadgroup now yields the SAME hash across processes — a delta here means genuinely different pipeline objects",
+			PipelineHash:   "per-side pipeline object hash, keyed by pipeline ID; identical function+threadgroup yields the same hash across processes — a delta here means genuinely different pipeline objects",
 			StaticCounters: "per-pipeline static shader metrics (instructions/registers/loads/stores)",
 		},
 		FieldOrder: []string{
