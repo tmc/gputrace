@@ -98,6 +98,8 @@ mv ~/Downloads/trace-generator.gputrace "$CAPTURE_DIR/trace.gputrace"
 mv ~/Downloads/counters.csv "$CAPTURE_DIR/counters.csv"
 ```
 
+The source paths depend on where the browser or Xcode export saved the files.
+
 ### Method 2: Command Line (Experimental)
 
 ```bash
