@@ -1246,6 +1246,9 @@ func formatBufferLifetimeReport(tracePath, format string, trace *gputrace.Trace)
 	}
 }
 
+// extractBufferLifetimeReport attributes command-buffer bindings evenly among
+// its encoders. The per-encoder attribution is approximate when those encoders
+// have uneven binding counts.
 func extractBufferLifetimeReport(tracePath string, trace *gputrace.Trace) (*BufferLifetimeReport, error) {
 	capturePath := filepath.Join(tracePath, "capture")
 	captureData, err := os.ReadFile(capturePath)
