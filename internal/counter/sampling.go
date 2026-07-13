@@ -174,7 +174,7 @@ type EncoderCounterMetrics struct {
 	CacheHitRate    float64 // 0-100%
 	MemoryBandwidth uint64  // Bytes (total)
 
-	// Detailed memory bandwidth metrics (from gputrace-65)
+	// Detailed memory bandwidth metrics
 	BytesReadFromDeviceMemory      uint64  // Device memory read bytes
 	BytesWrittenToDeviceMemory     uint64  // Device memory write bytes
 	BufferDeviceMemoryBytesRead    uint64  // Buffer-specific read bytes
@@ -183,12 +183,12 @@ type EncoderCounterMetrics struct {
 	GPUReadBandwidthGBps           float64 // GPU read bandwidth (GB/s)
 	GPUWriteBandwidthGBps          float64 // GPU write bandwidth (GB/s)
 
-	// Shader Launch Limiters (from gputrace-67)
+	// Shader Launch Limiters
 	ComputeShaderLaunchLimiter  float64 // Compute shader launch limiter percentage
 	FragmentShaderLaunchLimiter float64 // Fragment shader launch limiter percentage
 	VertexShaderLaunchLimiter   float64 // Vertex shader launch limiter percentage
 
-	// Pipeline Limiters (from gputrace-67)
+	// Pipeline Limiters
 	ControlFlowLimiter           float64 // Control flow limiter percentage
 	InstructionThroughputLimiter float64 // Instruction throughput limiter percentage
 	IntegerAndComplexLimiter     float64 // Integer and complex instruction limiter percentage
@@ -196,24 +196,24 @@ type EncoderCounterMetrics struct {
 	F16Limiter                   float64 // FP16 instruction limiter percentage
 	F32Limiter                   float64 // FP32 instruction limiter percentage
 
-	// Memory Limiters (from gputrace-67)
+	// Memory Limiters
 	L1CacheLimiter        float64 // L1 cache limiter percentage
 	LastLevelCacheLimiter float64 // Last level cache limiter percentage
 	MMULimiter            float64 // MMU limiter percentage
 
-	// Texture Limiters (from gputrace-67)
+	// Texture Limiters
 	TextureFilteringLimiter float64 // Texture filtering limiter percentage
 	TextureWriteLimiter     float64 // Texture write limiter percentage
 	TextureReadLimiter      float64 // Texture read limiter percentage
 
-	// Buffer L1 Cache Metrics (gputrace-66)
+	// Buffer L1 Cache Metrics
 	BufferL1MissRate       float64 // Buffer L1 cache miss rate percentage (0-100)
 	BufferL1ReadAccesses   float64 // Buffer L1 read accesses count
 	BufferL1ReadBandwidth  float64 // Buffer L1 read bandwidth (GB/s)
 	BufferL1WriteAccesses  float64 // Buffer L1 write accesses count
 	BufferL1WriteBandwidth float64 // Buffer L1 write bandwidth (GB/s)
 
-	// Shader Utilization Metrics (gputrace-67)
+	// Shader Utilization Metrics
 	ComputeShaderUtilization  float64 // Compute shader utilization percentage (0-100)
 	FragmentShaderUtilization float64 // Fragment shader utilization percentage (0-100)
 	VertexShaderUtilization   float64 // Vertex shader utilization percentage (0-100)
@@ -506,7 +506,7 @@ func (cs *CounterSampler) getCounterSet(name string) *CounterSet {
 
 // PopulateEncoderMetricsFromBinaryParsing populates EncoderCounterMetrics from .gpuprofiler_raw parsing.
 //
-// This bridges the binary parsing approach (gputrace-44) with the replay counter sampling framework.
+// This bridges the binary parsing approach with the replay counter sampling framework.
 // Uses validated binary parsing to extract real counter data from Xcode Instruments captures.
 //
 // Purpose: Provide REAL counter data to the CSV export and validation pipeline while waiting
@@ -530,7 +530,7 @@ func PopulateEncoderMetricsFromPerfCounterStats(t *trace.Trace, stats *PerfCount
 
 	var profilingMetrics []*ProfilingMetrics
 	if t != nil {
-		// Also parse Kernel Occupancy from Profiling_f_*.raw files (gputrace-78)
+		// Also parse Kernel Occupancy from Profiling_f_*.raw files
 		var err error
 		profilingMetrics, err = ParseProfilingFiles(t)
 		if err != nil {
@@ -555,13 +555,13 @@ func PopulateEncoderMetricsFromPerfCounterStats(t *trace.Trace, stats *PerfCount
 			EncoderLabel: shaderMetric.ShaderName,
 			EncoderType:  "compute", // Most traces are compute-heavy
 
-			// From binary parsing (gputrace-44 validated approach)
+			// From binary parsing validated against Xcode CSV exports
 			ALUUtilization:     shaderMetric.ALUUtilization,  // 0-100% (from Counters files - heuristic)
 			ComputeUtilization: shaderMetric.ALUUtilization,  // Use ALU as compute utilization proxy
 			CacheHitRate:       90.0,                         // Default estimate (no field extraction yet)
 			MemoryBandwidth:    shaderMetric.MemoryBandwidth, // Bytes (total)
 
-			// Detailed memory bandwidth from gputrace-65
+			// Detailed memory bandwidth
 			BytesReadFromDeviceMemory:      shaderMetric.BytesReadFromDeviceMemory,
 			BytesWrittenToDeviceMemory:     shaderMetric.BytesWrittenToDeviceMemory,
 			BufferDeviceMemoryBytesRead:    shaderMetric.BufferDeviceMemoryBytesRead,
@@ -570,12 +570,12 @@ func PopulateEncoderMetricsFromPerfCounterStats(t *trace.Trace, stats *PerfCount
 			GPUReadBandwidthGBps:           shaderMetric.GPUReadBandwidthGBps,
 			GPUWriteBandwidthGBps:          shaderMetric.GPUWriteBandwidthGBps,
 
-			// Shader Launch Limiters from gputrace-67
+			// Shader Launch Limiters
 			ComputeShaderLaunchLimiter:  shaderMetric.ComputeShaderLaunchLimiter,
 			FragmentShaderLaunchLimiter: shaderMetric.FragmentShaderLaunchLimiter,
 			VertexShaderLaunchLimiter:   shaderMetric.VertexShaderLaunchLimiter,
 
-			// Pipeline Limiters from gputrace-67
+			// Pipeline Limiters
 			ControlFlowLimiter:           shaderMetric.ControlFlowLimiter,
 			InstructionThroughputLimiter: shaderMetric.InstructionThroughputLimiter,
 			IntegerAndComplexLimiter:     shaderMetric.IntegerAndComplexLimiter,
@@ -583,24 +583,24 @@ func PopulateEncoderMetricsFromPerfCounterStats(t *trace.Trace, stats *PerfCount
 			F16Limiter:                   shaderMetric.F16Limiter,
 			F32Limiter:                   shaderMetric.F32Limiter,
 
-			// Memory Limiters from gputrace-67
+			// Memory Limiters
 			L1CacheLimiter:        shaderMetric.L1CacheLimiter,
 			LastLevelCacheLimiter: shaderMetric.LastLevelCacheLimiter,
 			MMULimiter:            shaderMetric.MMULimiter,
 
-			// Texture Limiters from gputrace-67
+			// Texture Limiters
 			TextureFilteringLimiter: shaderMetric.TextureFilteringLimiter,
 			TextureWriteLimiter:     shaderMetric.TextureWriteLimiter,
 			TextureReadLimiter:      shaderMetric.TextureReadLimiter,
 
-			// Buffer L1 Cache Metrics from gputrace-66
+			// Buffer L1 Cache Metrics
 			BufferL1MissRate:       shaderMetric.BufferL1MissRate,
 			BufferL1ReadAccesses:   shaderMetric.BufferL1ReadAccesses,
 			BufferL1ReadBandwidth:  shaderMetric.BufferL1ReadBandwidth,
 			BufferL1WriteAccesses:  shaderMetric.BufferL1WriteAccesses,
 			BufferL1WriteBandwidth: shaderMetric.BufferL1WriteBandwidth,
 
-			// Shader Utilization Metrics from gputrace-67
+			// Shader Utilization Metrics
 			ComputeShaderUtilization:  shaderMetric.ComputeShaderUtilization,
 			FragmentShaderUtilization: shaderMetric.FragmentShaderUtilization,
 			VertexShaderUtilization:   shaderMetric.VertexShaderUtilization,
@@ -619,7 +619,7 @@ func PopulateEncoderMetricsFromPerfCounterStats(t *trace.Trace, stats *PerfCount
 			Duration:       estimateDurationNs(shaderMetric.TotalCycles),
 		}
 
-		// Override Kernel Occupancy with real data from Profiling files if available (gputrace-78)
+		// Override Kernel Occupancy with real data from Profiling files if available
 		// Profiling_f_*.raw files contain accurate Kernel Occupancy using frequency-based extraction
 		if profilingData, found := profilingByEncoder[i]; found {
 			metric.KernelOccupancy = profilingData.KernelOccupancy // Already in 0-100 percentage format

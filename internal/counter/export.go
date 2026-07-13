@@ -39,7 +39,7 @@ func NewCountersCSVExporter(trace *Trace) *CountersCSVExporter {
 }
 
 // ExportCountersCSV generates a Counters.csv file matching Xcode Instruments format.
-// Attempts to use REAL counter data from .gpuprofiler_raw parsing (gputrace-44).
+// Attempts to use REAL counter data from .gpuprofiler_raw parsing.
 // Falls back to synthetic values if binary data unavailable.
 func (e *CountersCSVExporter) ExportCountersCSV(w io.Writer) error {
 	_, err := e.ExportCountersCSVWithSummary(w)
@@ -58,7 +58,7 @@ func (e *CountersCSVExporter) ExportCountersCSVWithSummary(w io.Writer) (Counter
 		return summary, fmt.Errorf("write header: %w", err)
 	}
 
-	// Try to get REAL counter data from binary parsing (gputrace-44)
+	// Try to get REAL counter data from binary parsing
 	var encoderMetrics []EncoderCounterMetrics
 	var useBinaryData bool
 	if e.trace.HasPerfCounters() {
@@ -163,16 +163,16 @@ func (e *CountersCSVExporter) generateCounterRowFromBinaryData(index, functionIn
 	values := make(map[string]float64)
 
 	// Core metrics from binary parsing (validated 100% accurate)
-	values["Kernel Invocations"] = float64(metrics.DispatchCount) // 100% accurate from gputrace-44
-	values["ALU Utilization"] = metrics.ALUUtilization            // From CSV enhancement (gputrace-63)
-	values["Kernel Occupancy"] = metrics.KernelOccupancy          // From CSV enhancement (gputrace-63)
+	values["Kernel Invocations"] = float64(metrics.DispatchCount) // Validated against Xcode CSV exports.
+	values["ALU Utilization"] = metrics.ALUUtilization            // From CSV enhancement
+	values["Kernel Occupancy"] = metrics.KernelOccupancy          // From CSV enhancement
 
 	// Utilization metrics
 	values["Compute Shader Utilization"] = metrics.ComputeUtilization
 	values["Vertex Shader Utilization"] = metrics.VertexUtilization
 	values["Fragment Shader Utilization"] = metrics.FragmentUtilization
 
-	// Memory bandwidth - use real extracted values from gputrace-65
+	// Memory bandwidth uses values extracted from the counter files.
 	if metrics.BytesReadFromDeviceMemory > 0 || metrics.BytesWrittenToDeviceMemory > 0 {
 		values["Bytes Read From Device Memory"] = float64(metrics.BytesReadFromDeviceMemory)
 		values["Bytes Written To Device Memory"] = float64(metrics.BytesWrittenToDeviceMemory)
@@ -199,7 +199,7 @@ func (e *CountersCSVExporter) generateCounterRowFromBinaryData(index, functionIn
 		values["Kernel Texture Cache Miss Rate"] = missRate
 	}
 
-	// Buffer L1 Cache Metrics (gputrace-66)
+	// Buffer L1 Cache Metrics
 	if metrics.BufferL1MissRate > 0 {
 		values["Buffer L1 Miss Rate"] = metrics.BufferL1MissRate
 	}
@@ -216,7 +216,7 @@ func (e *CountersCSVExporter) generateCounterRowFromBinaryData(index, functionIn
 		values["L1 Write Bandwidth"] = metrics.BufferL1WriteBandwidth
 	}
 
-	// Shader Utilization Metrics (gputrace-67)
+	// Shader Utilization Metrics
 	if metrics.ComputeShaderUtilization > 0 {
 		values["Compute Shader Utilization"] = metrics.ComputeShaderUtilization
 	}
@@ -342,7 +342,7 @@ func (e *CountersCSVExporter) generateSyntheticCountersSimple() map[string]float
 }
 
 // getCountersCSVHeader returns the header row for Counters.csv (247 columns).
-// Uses the complete 241-metric list from file_mapping.go (gputrace-114).
+// Uses the complete 241-metric list from file_mapping.go.
 func getCountersCSVHeader() []string {
 	header := make([]string, 247)
 

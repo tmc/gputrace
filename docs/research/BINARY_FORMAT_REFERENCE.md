@@ -282,7 +282,7 @@ func exportToCSV(encoders []CSVEncoderMetrics) {
 
 ## Counter File Mapping
 
-The 40 counter files (0-39) map to different performance metrics. Based on gputrace-114 investigation:
+The 40 counter files (0-39) map to different performance metrics. The mapping derives from Xcode CSV column order:
 
 ### File Index to Metric Mapping
 
@@ -427,7 +427,7 @@ func validateCounters(trace *trace.Trace) {
 }
 ```
 
-### Validation Results (gputrace-114)
+### Validation Results
 
 **File 0 validation:**
 - 6 encoders extracted ✓

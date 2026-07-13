@@ -1184,7 +1184,7 @@ func applyCounterDataToMetrics(metrics *ShaderMetrics, name string, counterData 
 	if matchedEncoder.KernelALUPerformance > 0 {
 		// Use dampened instruction count as the weight (power of 0.30)
 		// This exponent is empirically tuned to match Xcode Instruments cost percentages
-		// For 06-six-encoders (gputrace-86):
+		// For 06-six-encoders:
 		//   - complex_math: Target 53.14%, Formula gives 53.86% (0.72% error) ✓
 		//   - simple_subtract: Target 9.40%, Formula gives 9.31% (0.09% error) ✓
 		//

@@ -64,7 +64,7 @@ for i := 0; i < len(data)-8; i += 4 {
 }
 ```
 
-### 3. Buffer L1 Cache Metrics (gputrace-66)
+### 3. Buffer L1 Cache Metrics
 
 | Column | Metric Name | Data Type | Value Range | Extraction Method |
 |--------|-------------|-----------|-------------|-------------------|
@@ -143,7 +143,7 @@ for i, val := range limiters {
 | 93 | Texture Write Limiter | float32 | 0.01-0.04% |
 | 94 | Texture Read Limiter | float32 | 0.01-0.04% |
 
-### 8. Shader Utilization Metrics (gputrace-67)
+### 8. Shader Utilization Metrics
 
 | Column | Metric Name | Data Type | Value Range | Complementary To |
 |--------|-------------|-----------|-------------|------------------|

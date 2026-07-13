@@ -130,7 +130,7 @@ func TestExportSixEncoders(t *testing.T) {
 		encoderLabel := row[colIdx["Encoder Label"]]
 		t.Logf("\nEncoder %d: %s", i-1, encoderLabel)
 
-		// gputrace-81: Check key validated metrics (using colIdx for correct columns)
+		// Check key validated metrics using colIdx for the correct columns.
 		aluIdx := colIdx["ALU Utilization"]
 		invIdx := colIdx["Kernel Invocations"]
 		occIdx := colIdx["Kernel Occupancy"]

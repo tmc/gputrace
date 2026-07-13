@@ -43,28 +43,28 @@ type (
 	TraceStatistics        = analysis.TraceStatistics
 	TimingMetricsExtractor = timing.TimingMetricsExtractor
 
-	// Buffer access analysis types (gputrace-93)
+	// Buffer access analysis types
 	BufferAccessAnalysis = analysis.BufferAccessAnalysis
 	BufferAccessInfo     = analysis.BufferAccessInfo
 	EncoderAccessInfo    = analysis.EncoderAccessInfo
 	BufferAlias          = analysis.BufferAlias
 
-	// Buffer timeline types (gputrace-94)
+	// Buffer timeline types
 	BufferTimelineAnalysis = analysis.BufferTimelineAnalysis
 	BufferLifecycle        = analysis.BufferLifecycle
 
 	// Encoder timing from profiler data (streamData plist)
 	EncoderTimingInfo = counter.EncoderTimingInfo
 
-	// Counter sampling types (gputrace-104)
+	// Counter sampling types
 	CounterSamplingConfig = counter.CounterSamplingConfig
 
-	// Timing metrics types (gputrace-106)
+	// Timing metrics types
 	TimingMetrics       = timing.TimingMetrics
 	KernelTiming        = timing.KernelTiming
 	CommandBufferTiming = timing.CommandBufferTiming
 
-	// Insights types (gputrace-97)
+	// Insights types
 	PerformanceInsight = analysis.PerformanceInsight
 	InsightsReport     = analysis.InsightsReport
 	InsightType        = analysis.InsightType
@@ -104,7 +104,7 @@ const (
 	MagicBPList = trace.MagicBPList
 )
 
-// Re-export insight type constants (gputrace-97)
+// Re-export insight type constants
 const (
 	InsightBottleneck   = analysis.InsightBottleneck
 	InsightOptimization = analysis.InsightOptimization
@@ -112,7 +112,7 @@ const (
 	InsightInfo         = analysis.InsightInfo
 )
 
-// Re-export insight severity constants (gputrace-97)
+// Re-export insight severity constants
 const (
 	SeverityCritical = analysis.SeverityCritical
 	SeverityHigh     = analysis.SeverityHigh
@@ -141,54 +141,54 @@ var (
 	NewTimingMetricsExtractor     = timing.NewTimingMetricsExtractor
 	ParsePerfCounters             = counter.ParsePerfCounters
 
-	// Buffer access analysis functions (gputrace-93)
+	// Buffer access analysis functions
 	AnalyzeBufferAccess      = analysis.AnalyzeBufferAccess
 	FormatBufferAccessReport = analysis.FormatBufferAccessReport
 
-	// Buffer timeline functions (gputrace-94)
+	// Buffer timeline functions
 	ExtractBufferTimeline       = analysis.ExtractBufferTimeline
 	FormatBufferTimelineASCII   = analysis.FormatBufferTimelineASCII
 	FormatBufferTimelineSummary = analysis.FormatBufferTimelineSummary
 
-	// Buffer diff functions (gputrace-95)
+	// Buffer diff functions
 	ExtractBufferSizes = analysis.ExtractBufferSizes
 	CompareBuffers     = analysis.CompareBuffers
 	FormatBufferDiff   = analysis.FormatBufferDiff
 
-	// Counter export functions (gputrace-101)
+	// Counter export functions
 	NewCountersCSVExporter = counter.NewCountersCSVExporter
 
-	// Counter sampling functions (gputrace-104)
+	// Counter sampling functions
 	FormatCounterSamplingSimulation = replay.FormatCounterSamplingSimulation
 	FormatCounterSamplingResult     = counter.FormatCounterSamplingResult
 
-	// Replay engine functions (gputrace-103, gputrace-104)
+	// Replay engine functions
 	NewReplayEngine = replay.NewReplayEngine
 
-	// Shader source attribution functions (gputrace-105)
+	// Shader source attribution functions
 	ExtractShaderSourceAttribution    = shader.ExtractShaderSourceAttribution
 	FormatShaderSourceAttribution     = shader.FormatShaderSourceAttribution
 	FormatShaderSourceAttributionHTML = shader.FormatShaderSourceAttributionHTML
 
-	// Timing metrics functions (gputrace-106)
+	// Timing metrics functions
 	FormatTimingMetrics     = timing.FormatTimingMetrics
 	ExportTimingMetricsJSON = timing.ExportTimingMetricsJSON
 	ExportTimingMetricsCSV  = timing.ExportTimingMetricsCSV
 	CompareTraces           = timing.CompareTraces
 	FormatTimingComparison  = timing.FormatTimingComparison
 
-	// Timing profiler functions (gputrace-107)
+	// Timing profiler functions
 	NewTimingExtractorProfilerRaw = timing.NewTimingExtractorProfilerRaw
 
-	// Shader export functions (gputrace-98)
+	// Shader export functions
 	ExportShaderMetricsCSV  = shader.ExportShaderMetricsCSV
 	ExportShaderMetricsJSON = shader.ExportShaderMetricsJSON
 
-	// Correlation functions (gputrace-96)
+	// Correlation functions
 	CorrelateShaderMetrics  = shader.CorrelateShaderMetrics
 	FormatCorrelationReport = shader.FormatCorrelationReport
 
-	// Insights functions (gputrace-97)
+	// Insights functions
 	GenerateInsights     = analysis.GenerateInsights
 	FormatInsightsReport = analysis.FormatInsightsReport
 )

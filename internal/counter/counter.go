@@ -66,14 +66,14 @@ type ShaderHardwareMetrics struct {
 	TextureWriteLimiter     float64 // Texture write limiter percentage
 	TextureReadLimiter      float64 // Texture read limiter percentage
 
-	// Buffer L1 Cache Metrics (gputrace-66)
+	// Buffer L1 Cache Metrics
 	BufferL1MissRate       float64 // Buffer L1 cache miss rate percentage (0-100)
 	BufferL1ReadAccesses   float64 // Buffer L1 read accesses count
 	BufferL1ReadBandwidth  float64 // Buffer L1 read bandwidth (GB/s)
 	BufferL1WriteAccesses  float64 // Buffer L1 write accesses count
 	BufferL1WriteBandwidth float64 // Buffer L1 write bandwidth (GB/s)
 
-	// Shader Utilization Metrics (gputrace-67)
+	// Shader Utilization Metrics
 	ComputeShaderUtilization  float64 // Compute shader utilization percentage (0-100)
 	FragmentShaderUtilization float64 // Fragment shader utilization percentage (0-100)
 	VertexShaderUtilization   float64 // Vertex shader utilization percentage (0-100)
@@ -209,7 +209,7 @@ func ParsePerfCounters(t *trace.Trace) (*PerfCounterStats, error) {
 		stats.ShaderMetrics = append(stats.ShaderMetrics, *metric)
 	}
 
-	// Try CSV enhancement (gputrace-63): Use Xcode-exported CSV as ground truth
+	// Try CSV enhancement: Use Xcode-exported CSV as ground truth
 	// CSV is the most accurate source, so apply it first
 	csvApplied := false
 	if csvData, err := ImportCountersCSV(t); err == nil {
@@ -219,7 +219,7 @@ func ParsePerfCounters(t *trace.Trace) (*PerfCounterStats, error) {
 		}
 	}
 
-	// Apply deterministic metric extraction (gputrace-115)
+	// Apply deterministic metric extraction
 	// Only if CSV wasn't applied, as CSV is more reliable
 	if !csvApplied {
 		if err := extractDeterministicMetrics(perfDir, stats); err == nil {
@@ -499,7 +499,7 @@ func parseCounterRecord(data []byte, offset int64) *CounterRecord {
 			}
 		}
 
-		// Buffer L1 Cache Metrics (gputrace-66)
+		// Buffer L1 Cache Metrics
 		// Search for float32 values in reasonable ranges for cache metrics
 		// Miss Rate: 0-100% (e.g., 25.15%, 66.67%)
 		// Accesses: typically 10-100 (e.g., 19.95, 58.62)
@@ -526,7 +526,7 @@ func parseCounterRecord(data []byte, offset int64) *CounterRecord {
 			}
 		}
 
-		// Shader Utilization Metrics (gputrace-67)
+		// Shader Utilization Metrics
 		// Utilization values are complementary to limiters
 		// Search for float32 values in utilization range (0-100%)
 		// Note: Utilization and limiter values often appear in same range but at different offsets
@@ -626,7 +626,7 @@ func intBitsToFloat32(bits uint32) float32 {
 
 // groupRecordsByEncoder groups records by encoder for aggregation.
 //
-// Strategy (gputrace-75):
+// Strategy:
 // 1. Metadata records (2.3-2.9 KB) mark encoder boundaries
 // 2. Following sample records (464 bytes) belong to that encoder
 // 3. Each metadata record represents a unique encoder in sequence
@@ -668,7 +668,7 @@ func groupRecordsByEncoder(records []*CounterRecord) []*EncoderGroup {
 
 // aggregateEncoderMetrics aggregates metrics from sample records within an encoder group.
 //
-// Aggregation rules (gputrace-76):
+// Aggregation rules:
 //   - Deterministic metrics (Kernel Invocations): Use FIRST/REPRESENTATIVE
 //     value (not sum). These are constant across samples for the same encoder.
 //   - Timing metrics (ALU Utilization, Occupancy): AVERAGE across samples
@@ -809,8 +809,7 @@ var counterConfigs = []counterConfig{
 
 // extractDeterministicMetrics extracts metrics deterministically using file-to-counter mapping.
 //
-// This function implements gputrace-115: Replace heuristic extraction with deterministic
-// approach. For each metric, we:
+// It replaces heuristic extraction with a deterministic approach. For each metric, we:
 // 1. Look up which Counters_f_X file contains it
 // 2. Parse that specific file
 // 3. Aggregate samples correctly (AVERAGE for percentages, SUM for counts)
@@ -841,7 +840,7 @@ func extractDeterministicMetrics(perfDir string, stats *PerfCounterStats) error 
 
 // extractFloatMetricFromFile extracts a float64 metric from a specific counter file.
 //
-// Strategy for gputrace-115:
+// Strategy:
 // 1. Read the designated Counters_f_N.raw file
 // 2. Group records by encoder (metadata + sample records)
 // 3. Extract float32 values from sample records

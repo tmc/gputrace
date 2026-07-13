@@ -28,7 +28,7 @@ gputrace buffers trace.gputrace --min-size 1MB
 gputrace buffers trace.gputrace --format json
 ```
 
-**Corresponds to:** gputrace-27 dependency (Buffer bindings visualization)
+This command provides buffer bindings visualization.
 
 ### 2. Buffer Bindings Analysis (`gputrace buffers --bindings`)
 
@@ -54,7 +54,7 @@ Buffer: MTLBuffer-45-0 (1.00 MB)
     [1] Encoder 15: vv_Add
 ```
 
-**Corresponds to:** gputrace-27 dependency
+This command provides buffer bindings analysis.
 
 ### 3. Buffer Content Inspection (`gputrace buffers --inspect`)
 
@@ -72,7 +72,7 @@ gputrace buffers trace.gputrace --inspect MTLBuffer-45-0
 gputrace buffers trace.gputrace --inspect MTLBuffer-45-0 --inspect-format float32 --bytes 512
 ```
 
-**Corresponds to:** gputrace-29 dependency (Buffer content inspection)
+This command provides buffer content inspection.
 
 ### 4. Buffer Diff (`gputrace buffers diff`)
 
@@ -112,7 +112,7 @@ Summary:
   Total Delta: -560 KB (-16.3%)
 ```
 
-**Corresponds to:** gputrace-30 dependency (Buffer diff command)
+This command compares buffer sizes between traces.
 
 ### 5. Buffer Access Pattern Analysis (`gputrace buffer-access`)
 
@@ -151,7 +151,7 @@ Optimization Opportunities:
   ℹ 6 buffers could benefit from pooling
 ```
 
-**Corresponds to:** gputrace-28 dependency (Buffer access pattern analysis)
+This command provides buffer access pattern analysis.
 
 ### 6. Buffer Timeline Visualization (`gputrace buffer-timeline`)
 
@@ -205,17 +205,17 @@ MTLBuffer-45-0     1.00 MB        26.50
 MTLBuffer-48-0   256.00 KB        26.50
 ```
 
-**Corresponds to:** gputrace-31 dependency (Buffer timeline visualization)
+This command provides buffer timeline visualization.
 
-## Feature Mapping to Dependencies
+## Feature Status
 
-| Dependency | Feature | Status | Lines of Code |
-|------------|---------|--------|---------------|
-| gputrace-27 | Buffer bindings visualization | ✅ Complete | Integrated in buffers.go (847) |
-| gputrace-28 | Buffer access pattern analysis | ✅ Complete | 515 LOC (cmd + lib) |
-| gputrace-29 | Buffer content inspection | ✅ Complete | Integrated in buffers.go |
-| gputrace-30 | Buffer diff command | ✅ Complete | 260 LOC (cmd + lib) |
-| gputrace-31 | Buffer timeline visualization | ✅ Complete | 584 LOC (cmd + lib) |
+| Feature | Status | Lines of Code |
+|---------|--------|---------------|
+| Buffer bindings visualization | ✅ Complete | Integrated in buffers.go (847) |
+| Buffer access pattern analysis | ✅ Complete | 515 LOC (cmd + lib) |
+| Buffer content inspection | ✅ Complete | Integrated in buffers.go |
+| Buffer diff command | ✅ Complete | 260 LOC (cmd + lib) |
+| Buffer timeline visualization | ✅ Complete | 584 LOC (cmd + lib) |
 
 **Total:** All 5 dependent features are implemented (2,206 LOC)
 
@@ -431,11 +431,11 @@ For typical traces (<100 buffers):
 **Epic Status: COMPLETE ✅**
 
 All 5 dependent features have been fully implemented:
-- ✅ gputrace-27: Buffer bindings visualization
-- ✅ gputrace-28: Buffer access pattern analysis
-- ✅ gputrace-29: Buffer content inspection
-- ✅ gputrace-30: Buffer diff command
-- ✅ gputrace-31: Buffer timeline visualization
+- ✅ Buffer bindings visualization
+- ✅ Buffer access pattern analysis
+- ✅ Buffer content inspection
+- ✅ Buffer diff command
+- ✅ Buffer timeline visualization
 
 **Total Implementation:**
 - 6 buffer-related commands

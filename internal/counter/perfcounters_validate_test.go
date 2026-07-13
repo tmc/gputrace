@@ -7,7 +7,7 @@ import (
 )
 
 // TestValidateALUUtilization validates ALU Utilization extraction against CSV ground truth.
-// This test addresses gputrace-63 and gputrace-77.
+// It compares parsed values with Xcode CSV ground truth.
 func TestValidateALUUtilization(t *testing.T) {
 	testCases := []struct {
 		name      string
@@ -104,7 +104,7 @@ func TestValidateALUUtilization(t *testing.T) {
 }
 
 // TestValidateKernelOccupancy validates Kernel Occupancy extraction against CSV ground truth.
-// This test addresses gputrace-64 and gputrace-78.
+// It compares parsed values with Xcode CSV ground truth.
 func TestValidateKernelOccupancy(t *testing.T) {
 	testCases := []struct {
 		name      string
@@ -201,7 +201,7 @@ func TestValidateKernelOccupancy(t *testing.T) {
 }
 
 // TestValidateBufferL1Cache validates Buffer L1 Cache metrics extraction against CSV ground truth.
-// This test addresses gputrace-66.
+// It compares parsed values with Xcode CSV ground truth.
 func TestValidateBufferL1Cache(t *testing.T) {
 	testCases := []struct {
 		name      string
@@ -331,7 +331,7 @@ func TestValidateBufferL1Cache(t *testing.T) {
 }
 
 // TestValidateBothMetrics runs a comprehensive validation comparing both ALU and Occupancy.
-// This provides detailed diagnostics for gputrace-63, 64, 77, 78.
+// This provides detailed diagnostics for both extraction paths.
 func TestValidateBothMetrics(t *testing.T) {
 	tracePath := filepath.Join("..", "..", "testdata", "traces", "06-six-encoders", "06-six-encoders-run1-perf.gputrace")
 	csvPath := filepath.Join("..", "..", "testdata", "traces", "06-six-encoders", "06-six-encoders-run1 Counters.csv")
@@ -428,7 +428,7 @@ func TestValidateBothMetrics(t *testing.T) {
 	t.Logf("The heuristic approach scans for float32 values in expected ranges:")
 	t.Logf("  - ALU Utilization: 0.0-5.0 range")
 	t.Logf("  - Kernel Occupancy: 0.0-2.0 range (excluding ALU matches)")
-	t.Logf("\nLimitation: Without file-to-counter mapping (gputrace-114),")
+	t.Logf("\nLimitation: Without file-to-counter mapping,")
 	t.Logf("we cannot distinguish which of 40 Counters_f_*.raw files contain")
 	t.Logf("ALU vs Occupancy vs other metrics with similar value ranges.")
 }
@@ -452,7 +452,7 @@ func TestDiagnoseCounterFiles(t *testing.T) {
 	t.Logf("Found %d counter files\n", len(files))
 
 	// Sample a few files
-	sampleFiles := []int{0, 13, 18, 27} // Based on gputrace-77 notes mentioning files 18-27 for ALU
+	sampleFiles := []int{0, 13, 18, 27} // Sample metadata and likely ALU counter files.
 
 	for _, idx := range sampleFiles {
 		if idx >= len(files) {
@@ -479,7 +479,7 @@ func TestDiagnoseCounterFiles(t *testing.T) {
 }
 
 // TestValidateMemoryBandwidth validates Memory Bandwidth extraction against CSV ground truth.
-// This test addresses gputrace-65.
+// It compares parsed values with Xcode CSV ground truth.
 func TestValidateMemoryBandwidth(t *testing.T) {
 	testCases := []struct {
 		name      string

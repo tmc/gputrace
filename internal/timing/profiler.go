@@ -70,7 +70,7 @@ func (te *TimingExtractorProfilerRaw) findProfilerDir() (string, error) {
 //
 // This is the same data source Xcode Instruments uses to calculate shader cost percentages.
 //
-// Timing extraction strategy (gputrace-108):
+// Timing extraction strategy:
 // 1. Try kdebug events first (highest accuracy ~0.95)
 // 2. Fall back to shader limiter heuristic (lower accuracy ~0.3)
 func (te *TimingExtractorProfilerRaw) ExtractTimingFromProfilerRaw() ([]*EncoderTiming, error) {
@@ -79,7 +79,7 @@ func (te *TimingExtractorProfilerRaw) ExtractTimingFromProfilerRaw() ([]*Encoder
 		return nil, fmt.Errorf("no .gpuprofiler_raw directory found")
 	}
 
-	// STRATEGY 1: Try kdebug timing first (gputrace-108 improvement)
+	// STRATEGY 1: Try kdebug timing first for actual GPU execution timestamps.
 	// This provides actual GPU execution timestamps with high confidence
 	kdebugTimings, kdebugErr := te.extractTimingFromKDebug()
 	if kdebugErr == nil && len(kdebugTimings) > 0 {
@@ -233,7 +233,7 @@ func (te *TimingExtractorProfilerRaw) estimateRecordSize(data []byte, offset int
 
 // parseCounterRecord attempts to extract timing data from a counter record.
 //
-// NOTE: This is a FALLBACK method used when kdebug timing is unavailable (gputrace-108).
+// NOTE: This is a FALLBACK method used when kdebug timing is unavailable.
 //
 // The .gpuprofiler_raw files contain performance counter samples, not direct timing data.
 // Xcode Instruments calculates shader timing by analyzing:
@@ -376,7 +376,7 @@ func (te *TimingExtractorProfilerRaw) ProfilerRawTimingReport(timings []*Encoder
 	return report
 }
 
-// extractTimingFromKDebug extracts timing data from kdebug events (gputrace-108).
+// extractTimingFromKDebug extracts timing data from kdebug events.
 //
 // KDebug events provide actual GPU execution timestamps from the kernel,
 // which are much more accurate than shader limiter heuristics.
