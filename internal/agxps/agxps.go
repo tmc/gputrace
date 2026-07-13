@@ -20,9 +20,8 @@ import (
 	"unsafe"
 
 	"github.com/tmc/apple/private/xcode/gtshaderprofiler"
+	"github.com/tmc/gputrace/internal/xcodepath"
 )
-
-const gtShaderProfilerPath = "/Applications/Xcode.app/Contents/PlugIns/GPUDebugger.ideplugin/Contents/Frameworks/GTShaderProfiler.framework/Versions/A/GTShaderProfiler"
 
 var (
 	loadMu sync.Mutex
@@ -67,7 +66,7 @@ func Init() error {
 	if loaded {
 		return nil
 	}
-	if _, err := os.Stat(gtShaderProfilerPath); err != nil {
+	if _, err := os.Stat(xcodepath.GTShaderProfiler()); err != nil {
 		return fmt.Errorf("gtshaderprofiler not available: %w", err)
 	}
 	loaded = true

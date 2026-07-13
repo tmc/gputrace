@@ -10,9 +10,8 @@ import (
 	"github.com/ebitengine/purego"
 	"github.com/tmc/apple/objc"
 	"github.com/tmc/apple/objectivec"
+	"github.com/tmc/gputrace/internal/xcodepath"
 )
-
-const frameworkPath = "/Applications/Xcode.app/Contents/PlugIns/GPUDebugger.ideplugin/Contents/Frameworks/GTShaderProfiler.framework/Versions/A/GTShaderProfiler"
 
 // Report describes the GTShaderProfiler Objective-C surface gputrace needs for
 // Xcode parity.
@@ -53,6 +52,7 @@ type Gap struct {
 // RTLD_GLOBAL so Objective-C classes become visible, but does not instantiate
 // any GTShaderProfiler class.
 func Probe() Report {
+	frameworkPath := xcodepath.GTShaderProfiler()
 	report := Report{
 		FrameworkPath: frameworkPath,
 		Framework:     fileExists(frameworkPath),
@@ -192,6 +192,7 @@ func Probe() Report {
 }
 
 func loadFramework() error {
+	frameworkPath := xcodepath.GTShaderProfiler()
 	if _, err := os.Stat(frameworkPath); err != nil {
 		return err
 	}
