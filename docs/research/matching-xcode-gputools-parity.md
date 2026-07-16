@@ -14,7 +14,7 @@ Xcode Instruments provides comprehensive GPU profiling through several interconn
 | Feature | Xcode | gputrace | Status |
 |---------|-------|----------|--------|
 | **Trace Capture** |
-| Capture GPU trace | Yes | Yes (`gputrace capture`) | Done |
+| Capture GPU trace | Yes | Yes (workload-side programmatic capture; see `mlxprof -run` and `testdata/trace-generator`) | Done |
 | Capture with profiling | Yes | Yes (`--profile`) | Done |
 | Capture from Xcode project | Yes | Yes (`gputrace xcui`) | Done |
 | **Timing Analysis** |

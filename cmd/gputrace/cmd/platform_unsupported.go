@@ -69,13 +69,6 @@ Subcommands:
 }
 
 func init() {
-	rootCmd.AddCommand(&cobra.Command{
-		Use:   "capture -- command [args...]",
-		Short: "Capture GPU trace from a command",
-		Long:  "Capture GPU trace from a command. This command is only supported on darwin.",
-		RunE:  darwinOnlyRun,
-	})
-
 	collectXcodeProfileCmd.PersistentFlags().Duration("timeout", 5*time.Minute, "Timeout for the operation")
 	collectXcodeProfileCmd.PersistentFlags().Bool("debug", false, "Print debug information")
 	collectXcodeProfileCmd.PersistentFlags().BoolP("verbose", "v", false, "Print verbose status information")

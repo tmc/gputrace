@@ -48,7 +48,6 @@ Visualization & Export:
   insights         - Actionable performance insights
 
 Capture & Automation:
-  capture          - Capture GPU trace from a command
   xcode-profile    - Xcode GPU profiler automation
   xcode-bindings   - Inspect private Xcode GTShaderProfiler bindings
   xcode-parity     - Audit Xcode metric parity for a trace
