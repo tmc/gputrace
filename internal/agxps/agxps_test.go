@@ -78,7 +78,7 @@ func TestGPUCreation(t *testing.T) {
 
 	t.Log("Testing GPU creation...")
 	for _, g := range gpuGens {
-		gpu, err := CreateGPU(g.gen, g.variant, g.rev)
+		gpu, err := NewGPU(g.gen, g.variant, g.rev)
 		if err != nil {
 			t.Logf("  %s (gen=%d): failed - %v", g.name, g.gen, err)
 			continue
@@ -106,7 +106,7 @@ func TestParserWithGPU(t *testing.T) {
 	}
 
 	// Create GPU for M2 (gen=14) which we know works
-	gpu, err := CreateGPU(14, 0, 0)
+	gpu, err := NewGPU(14, 0, 0)
 	if err != nil {
 		t.Skipf("Failed to create GPU: %v", err)
 	}

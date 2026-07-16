@@ -388,8 +388,8 @@ func TraceInstructionStats(trace uintptr) InstructionTraceStats {
 	}
 }
 
-// CreateCliqueTimeStats creates a time stats object for a specific clique.
-func CreateCliqueTimeStats(profileData ProfileData, cliqueIndex uint64) uintptr {
+// NewCliqueTimeStats creates a time stats object for a specific clique.
+func NewCliqueTimeStats(profileData ProfileData, cliqueIndex uint64) uintptr {
 	if profileData == 0 {
 		return 0
 	}
@@ -403,8 +403,8 @@ func CreateCliqueTimeStats(profileData ProfileData, cliqueIndex uint64) uintptr 
 	return uintptr(ref)
 }
 
-// CreateGPU creates a GPU handle for the given generation, variant, and revision.
-func CreateGPU(gen, variant, rev uint32) (GPU, error) {
+// NewGPU creates a GPU handle for the given generation, variant, and revision.
+func NewGPU(gen, variant, rev uint32) (GPU, error) {
 	gpuHandle, err := gtshaderprofiler.Agxps_gpu_create(uint(gen), uint(variant), uint(rev))
 	if err != nil {
 		return 0, fmt.Errorf("create GPU: %w", err)
