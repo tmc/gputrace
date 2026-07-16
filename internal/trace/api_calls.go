@@ -5,8 +5,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -50,8 +48,7 @@ type CommandBufferCalls struct {
 
 // ParseAPICallList extracts all API calls from the trace.
 func (t *Trace) ParseAPICallList() (*APICallList, error) {
-	capturePath := filepath.Join(t.Path, "capture")
-	data, err := os.ReadFile(capturePath)
+	data, err := t.readCaptureFile()
 	if err != nil {
 		return nil, fmt.Errorf("read capture: %w", err)
 	}

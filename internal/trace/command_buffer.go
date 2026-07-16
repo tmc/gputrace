@@ -63,9 +63,7 @@ type XDICIndex struct {
 // ParseCommandBuffers extracts all command buffers from the trace by finding CUUU markers.
 // CUUU markers indicate Metal Command buffer records.
 func (t *Trace) ParseCommandBuffers() ([]*CommandBuffer, error) {
-	capturePath := filepath.Join(t.Path, "capture")
-
-	data, err := os.ReadFile(capturePath)
+	data, err := t.readCaptureFile()
 	if err != nil {
 		return nil, fmt.Errorf("read capture file: %w", err)
 	}
@@ -409,9 +407,7 @@ func (t *Trace) findGPUProfilerDir() string {
 
 // ParseDispatchCalls extracts all compute kernel dispatch calls from the trace.
 func (t *Trace) ParseDispatchCalls() ([]*DispatchCall, error) {
-	capturePath := filepath.Join(t.Path, "capture")
-
-	data, err := os.ReadFile(capturePath)
+	data, err := t.readCaptureFile()
 	if err != nil {
 		return nil, fmt.Errorf("read capture file: %w", err)
 	}
