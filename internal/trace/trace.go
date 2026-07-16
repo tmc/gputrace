@@ -147,7 +147,7 @@ func (t *Trace) parseMetadata() error {
 	metadataPath := filepath.Join(t.Path, "metadata")
 	data, err := os.ReadFile(metadataPath)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrMissingMetadata, err)
+		return fmt.Errorf("%w: %w", ErrMissingMetadata, err)
 	}
 
 	var plistData map[string]interface{}
