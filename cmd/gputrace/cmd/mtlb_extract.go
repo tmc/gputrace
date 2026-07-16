@@ -113,14 +113,10 @@ func runMTLBExtract(cmd *cobra.Command, args []string, opts *mtlbExtractOptions)
 }
 
 func mtlbExtractStatusWriter(outputPath string) *os.File {
-	if mtlbExtractOutputPathIsStdout(outputPath) {
+	if outputPathIsExplicitStdout(outputPath) {
 		return os.Stderr
 	}
 	return os.Stdout
-}
-
-func mtlbExtractOutputPathIsStdout(path string) bool {
-	return path == "-" || path == "/dev/stdout"
 }
 
 func copyFile(src, dst string) (err error) {
@@ -130,7 +126,7 @@ func copyFile(src, dst string) (err error) {
 	}
 	defer in.Close()
 
-	if mtlbExtractOutputPathIsStdout(dst) {
+	if outputPathIsExplicitStdout(dst) {
 		_, err = io.Copy(os.Stdout, in)
 		return err
 	}

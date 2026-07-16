@@ -215,21 +215,17 @@ func runPprof(cmd *cobra.Command, args []string, opts *pprofOptions) error {
 }
 
 func pprofCurrentStatusWriter(opts *pprofOptions) *os.File {
-	if !opts.all && pprofOutputPathIsStdout(opts.output) {
+	if !opts.all && outputPathIsExplicitStdout(opts.output) {
 		return os.Stderr
 	}
 	return os.Stdout
 }
 
 func pprofStatusWriter(outputPath string) *os.File {
-	if pprofOutputPathIsStdout(outputPath) {
+	if outputPathIsExplicitStdout(outputPath) {
 		return os.Stderr
 	}
 	return os.Stdout
-}
-
-func pprofOutputPathIsStdout(path string) bool {
-	return path == "-" || path == "/dev/stdout"
 }
 
 // generateSourceLinesPprof generates a pprof profile with per-source-line samples.
@@ -274,7 +270,7 @@ func generateSourceLinesPprof(tracePath string, opts *pprofOptions) error {
 
 	// Write profile
 	w := os.Stdout
-	if !pprofOutputPathIsStdout(outputPath) {
+	if !outputPathIsExplicitStdout(outputPath) {
 		f, err := os.Create(outputPath)
 		if err != nil {
 			return fmt.Errorf("failed to create output file: %w", err)
