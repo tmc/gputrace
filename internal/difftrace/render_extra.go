@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/tmc/gputrace/internal/fmtutil"
 )
 
 // RenderQuick renders the quick triage report.
@@ -26,7 +28,7 @@ func RenderQuick(report Report, limit int) string {
 		if i >= limit {
 			break
 		}
-		fmt.Fprintf(&b, "%-52s %8d %8d %+10d\n", truncate(f.FunctionName, 52), f.DispatchCountA, f.DispatchCountB, f.TotalDeltaUs)
+		fmt.Fprintf(&b, "%-52s %8d %8d %+10d\n", fmtutil.TruncateString(f.FunctionName, 52), f.DispatchCountA, f.DispatchCountB, f.TotalDeltaUs)
 	}
 
 	fmt.Fprintf(&b, "\nTop Dispatch Outliers\n")
@@ -35,7 +37,7 @@ func RenderQuick(report Report, limit int) string {
 		if i >= limit {
 			break
 		}
-		fmt.Fprintf(&b, "%-7d %-7d %-7d %-8d %-8d %-40s %8d %8d %+9d\n", m.SourceIndexA, m.SourceIndexB, m.EncoderIndex, m.PipelineIDA, m.PipelineIDB, truncate(safeFunctionName(m.FunctionName), 40), m.DurationAUs, m.DurationBUs, m.DeltaUs)
+		fmt.Fprintf(&b, "%-7d %-7d %-7d %-8d %-8d %-40s %8d %8d %+9d\n", m.SourceIndexA, m.SourceIndexB, m.EncoderIndex, m.PipelineIDA, m.PipelineIDB, fmtutil.TruncateString(safeFunctionName(m.FunctionName), 40), m.DurationAUs, m.DurationBUs, m.DeltaUs)
 	}
 
 	fmt.Fprintf(&b, "\nUnnamed Dispatch Summary\n")
@@ -44,7 +46,7 @@ func RenderQuick(report Report, limit int) string {
 		if i >= limit {
 			break
 		}
-		fmt.Fprintf(&b, "%-10d %-24s %8d %8d %10d %10d %+10d\n", u.PipelineID, truncate(u.KernelID, 24), u.DispatchCountA, u.DispatchCountB, u.TotalAUs, u.TotalBUs, u.TotalDeltaUs)
+		fmt.Fprintf(&b, "%-10d %-24s %8d %8d %10d %10d %+10d\n", u.PipelineID, fmtutil.TruncateString(u.KernelID, 24), u.DispatchCountA, u.DispatchCountB, u.TotalAUs, u.TotalBUs, u.TotalDeltaUs)
 	}
 
 	fmt.Fprintf(&b, "\nSpike Windows\n")
@@ -79,7 +81,7 @@ func RenderEncoderFocus(report Report, limit int) string {
 			if j >= 3 {
 				break
 			}
-			fmt.Fprintf(&b, "  top %-2d a=%-6d b=%-6d pipe=%-6d fn=%-28s delta=%+7d\n", j+1, m.SourceIndexA, m.SourceIndexB, m.PipelineIDA, truncate(safeFunctionName(m.FunctionName), 28), m.DeltaUs)
+			fmt.Fprintf(&b, "  top %-2d a=%-6d b=%-6d pipe=%-6d fn=%-28s delta=%+7d\n", j+1, m.SourceIndexA, m.SourceIndexB, m.PipelineIDA, fmtutil.TruncateString(safeFunctionName(m.FunctionName), 28), m.DeltaUs)
 		}
 	}
 	if len(report.EncoderReports) > 0 {

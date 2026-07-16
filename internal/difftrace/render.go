@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/tmc/gputrace/internal/fmtutil"
 )
 
 // RenderText renders a human-readable report.
@@ -38,7 +40,7 @@ func RenderText(report Report, by string, showMatches, showUnmatched, showOccurr
 			if i >= limit {
 				break
 			}
-			fmt.Fprintf(&b, "%-52s %8d %8d %10d %10d %+10d\n", truncate(f.FunctionName, 52), f.DispatchCountA, f.DispatchCountB, f.TotalAUs, f.TotalBUs, f.TotalDeltaUs)
+			fmt.Fprintf(&b, "%-52s %8d %8d %10d %10d %+10d\n", fmtutil.TruncateString(f.FunctionName, 52), f.DispatchCountA, f.DispatchCountB, f.TotalAUs, f.TotalBUs, f.TotalDeltaUs)
 		}
 	}
 
@@ -60,7 +62,7 @@ func RenderText(report Report, by string, showMatches, showUnmatched, showOccurr
 			if i >= limit {
 				break
 			}
-			fmt.Fprintf(&b, "%-10d %-44s %8d %8d %+10d\n", p.PipelineID, truncate(p.FunctionName, 44), p.DispatchCountA, p.DispatchCountB, p.TotalDeltaUs)
+			fmt.Fprintf(&b, "%-10d %-44s %8d %8d %+10d\n", p.PipelineID, fmtutil.TruncateString(p.FunctionName, 44), p.DispatchCountA, p.DispatchCountB, p.TotalDeltaUs)
 		}
 	}
 
@@ -72,7 +74,7 @@ func RenderText(report Report, by string, showMatches, showUnmatched, showOccurr
 				break
 			}
 			fmt.Fprintf(&b, "%-44s %-21s %8d %8d %9d %-8d %-8d %-16s %-16s %+8d %+8d %+8d %+8d\n",
-				truncate(p.FunctionName, 44), truncate(p.ThreadgroupSig, 21), p.AUs, p.BUs, p.AbsDeltaUs,
+				fmtutil.TruncateString(p.FunctionName, 44), fmtutil.TruncateString(p.ThreadgroupSig, 21), p.AUs, p.BUs, p.AbsDeltaUs,
 				p.APipelineID, p.BPipelineID, p.APipelineHash, p.BPipelineHash,
 				p.StaticCounterDelta.Instructions, p.StaticCounterDelta.Registers, p.StaticCounterDelta.Loads, p.StaticCounterDelta.Stores)
 		}
@@ -85,7 +87,7 @@ func RenderText(report Report, by string, showMatches, showUnmatched, showOccurr
 			if i >= limit {
 				break
 			}
-			fmt.Fprintf(&b, "%-7d %-7d %-7d %-9d %-44s %8d %8d %+9d\n", m.SourceIndexA, m.SourceIndexB, m.EncoderIndex, m.PipelineIDA, truncate(safeFunctionName(m.FunctionName), 44), m.DurationAUs, m.DurationBUs, m.DeltaUs)
+			fmt.Fprintf(&b, "%-7d %-7d %-7d %-9d %-44s %8d %8d %+9d\n", m.SourceIndexA, m.SourceIndexB, m.EncoderIndex, m.PipelineIDA, fmtutil.TruncateString(safeFunctionName(m.FunctionName), 44), m.DurationAUs, m.DurationBUs, m.DeltaUs)
 		}
 	}
 
@@ -96,7 +98,7 @@ func RenderText(report Report, by string, showMatches, showUnmatched, showOccurr
 			if i >= limit*4 {
 				break
 			}
-			fmt.Fprintf(&b, "%-44s %-7d %-7d %-7d %-7d %8d %8d %+9d\n", truncate(m.FunctionName, 44), m.OccurrenceOrdinalA, m.OccurrenceOrdinalB, m.SourceIndexA, m.SourceIndexB, m.LeftUs, m.RightUs, m.DeltaUs)
+			fmt.Fprintf(&b, "%-44s %-7d %-7d %-7d %-7d %8d %8d %+9d\n", fmtutil.TruncateString(m.FunctionName, 44), m.OccurrenceOrdinalA, m.OccurrenceOrdinalB, m.SourceIndexA, m.SourceIndexB, m.LeftUs, m.RightUs, m.DeltaUs)
 		}
 	}
 
@@ -118,7 +120,7 @@ func RenderText(report Report, by string, showMatches, showUnmatched, showOccurr
 			if i >= limit {
 				break
 			}
-			fmt.Fprintf(&b, "%-10d %-24s %8d %8d %10d %10d %+10d\n", u.PipelineID, truncate(u.KernelID, 24), u.DispatchCountA, u.DispatchCountB, u.TotalAUs, u.TotalBUs, u.TotalDeltaUs)
+			fmt.Fprintf(&b, "%-10d %-24s %8d %8d %10d %10d %+10d\n", u.PipelineID, fmtutil.TruncateString(u.KernelID, 24), u.DispatchCountA, u.DispatchCountB, u.TotalAUs, u.TotalBUs, u.TotalDeltaUs)
 		}
 	}
 
@@ -129,7 +131,7 @@ func RenderText(report Report, by string, showMatches, showUnmatched, showOccurr
 			if i >= limit {
 				break
 			}
-			fmt.Fprintf(&b, "%-7d %-7d %-7d %-44s %8d %8d %+9d %8.2f\n", m.SourceIndexA, m.SourceIndexB, m.EncoderIndex, truncate(safeFunctionName(m.FunctionName), 44), m.DurationAUs, m.DurationBUs, m.DeltaUs, m.Confidence)
+			fmt.Fprintf(&b, "%-7d %-7d %-7d %-44s %8d %8d %+9d %8.2f\n", m.SourceIndexA, m.SourceIndexB, m.EncoderIndex, fmtutil.TruncateString(safeFunctionName(m.FunctionName), 44), m.DurationAUs, m.DurationBUs, m.DeltaUs, m.Confidence)
 		}
 	}
 	if showUnmatched || sections["unmatched"] {
@@ -139,7 +141,7 @@ func RenderText(report Report, by string, showMatches, showUnmatched, showOccurr
 			if i >= limit*4 {
 				break
 			}
-			fmt.Fprintf(&b, "%-6s %-7d %-7d %-10d %-24s %-24s %8d\n", u.Trace, u.SourceIndex, u.EncoderIndex, u.PipelineID, truncate(u.FunctionName, 24), truncate(u.KernelID, 24), u.DurationUs)
+			fmt.Fprintf(&b, "%-6s %-7d %-7d %-10d %-24s %-24s %8d\n", u.Trace, u.SourceIndex, u.EncoderIndex, u.PipelineID, fmtutil.TruncateString(u.FunctionName, 24), fmtutil.TruncateString(u.KernelID, 24), u.DurationUs)
 		}
 	}
 
@@ -262,15 +264,6 @@ func parseViews(by string) map[string]bool {
 	return out
 }
 
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	if n <= 3 {
-		return s[:n]
-	}
-	return s[:n-3] + "..."
-}
 
 func itoa(v int) string {
 	return strconv.Itoa(v)
