@@ -221,17 +221,25 @@ func plistInt(v any) (int, bool) {
 	}
 }
 
+// readCaptureFile reads the trace's capture data, falling back to
+// unsorted-capture when the primary capture file is absent. Some bundles
+// (e.g. certain profiler exports) retain only unsorted-capture.
+func (t *Trace) readCaptureFile() ([]byte, error) {
+	data, err := os.ReadFile(filepath.Join(t.Path, "capture"))
+	if err != nil {
+		data, err = os.ReadFile(filepath.Join(t.Path, "unsorted-capture"))
+		if err != nil {
+			return nil, err
+		}
+	}
+	return data, nil
+}
+
 // loadCaptureData loads the main capture file.
 func (t *Trace) loadCaptureData() error {
-	capturePath := filepath.Join(t.Path, "capture")
-	data, err := os.ReadFile(capturePath)
+	data, err := t.readCaptureFile()
 	if err != nil {
-		// Try unsorted-capture as fallback
-		capturePath = filepath.Join(t.Path, "unsorted-capture")
-		data, err = os.ReadFile(capturePath)
-		if err != nil {
-			return err
-		}
+		return err
 	}
 
 	// Verify MTSP magic
