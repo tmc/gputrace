@@ -25,26 +25,6 @@ type StatusOutput struct {
 	CurrentTab               string `json:"current_tab,omitempty"`
 }
 
-func init() {
-	opts := &checkStatusOptions{}
-	checkStatusCmd := &cobra.Command{
-		Use:   "check-status [trace_file]",
-		Short: "Check profiling status",
-		Long: `Returns the current profiling status:
-  - initializing: Trace loading, Replay button disabled
-  - replay-ready: Ready to start replay
-  - running: Profiling/replay in progress
-  - complete: Performance data available
-  - unknown: Unable to determine status`,
-		Args: cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runCheckStatus(cmd, args, opts)
-		},
-	}
-	checkStatusCmd.Flags().BoolVar(&opts.debug, "debug", false, "Print debug info")
-	collectXcodeProfileCmd.AddCommand(checkStatusCmd)
-}
-
 func runCheckStatus(cmd *cobra.Command, args []string, opts *checkStatusOptions) error {
 	traceFile := ""
 	if len(args) > 0 {

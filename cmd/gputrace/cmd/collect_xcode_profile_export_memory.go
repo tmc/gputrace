@@ -10,40 +10,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func init() {
-	collectXcodeProfileCmd.AddCommand(newXcodeExportMemoryCommand(&xcodeExportMemoryOptions{}))
-}
-
 type xcodeExportMemoryOptions struct {
 	force bool
-}
-
-func newXcodeExportMemoryCommand(opts *xcodeExportMemoryOptions) *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "xcode-export-memory [trace_file]",
-		Short: "Export memory report from Xcode's Performance view",
-		Long: `Triggers Xcode's Export Memory Report dialog and accepts the default save location.
-
-This command:
-1. Finds the Xcode window for the specified trace (or first window)
-2. Clicks Editor > Export Memory Report... menu via AX
-3. Clicks Save to accept the default filename/location
-
-The file is saved to wherever Xcode's save dialog defaults to.
-
-Use --force to automatically replace existing files.
-
-Example:
-  gputrace xp xcode-export-memory
-  gputrace xp xcode-export-memory MyTrace.gputrace
-  gputrace xp xcode-export-memory --force`,
-		Args: cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runXcodeExportMemory(cmd, args, opts)
-		},
-	}
-	cmd.Flags().BoolVarP(&opts.force, "force", "f", opts.force, "Replace existing file if it exists")
-	return cmd
 }
 
 func runXcodeExportMemory(cmd *cobra.Command, args []string, opts *xcodeExportMemoryOptions) error {

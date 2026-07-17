@@ -9,39 +9,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func init() {
-	listMenusCmd := &cobra.Command{
-		Use:    "list-menus [menu-name]",
-		Short:  "List menu bar items and their contents",
-		Hidden: true,
-		Long: `Lists the menu bar items in Xcode and optionally shows the items in a specific menu.
-
-Examples:
-  gputrace xp list-menus              # List all menu bar items
-  gputrace xp list-menus Editor       # List items in the Editor menu
-  gputrace xp list-menus "Editor"     # Same as above`,
-		Args: unsupportedXcodeProfileJSONArgs("list-menus", cobra.MaximumNArgs(1)),
-		RunE: runListMenus,
-	}
-	documentUnsupportedXcodeProfileJSON(listMenusCmd)
-	collectXcodeProfileCmd.AddCommand(listMenusCmd)
-
-	clickMenuCmd := &cobra.Command{
-		Use:    "click-menu <menu> <item>",
-		Short:  "Click a menu item",
-		Hidden: true,
-		Long: `Clicks a menu item in Xcode's menu bar.
-
-Examples:
-  gputrace xp click-menu Editor "Export Encoder Counters…"
-  gputrace xp click-menu File Export`,
-		Args: unsupportedXcodeProfileJSONArgs("click-menu", cobra.ExactArgs(2)),
-		RunE: runClickMenu,
-	}
-	documentUnsupportedXcodeProfileJSON(clickMenuCmd)
-	collectXcodeProfileCmd.AddCommand(clickMenuCmd)
-}
-
 func runListMenus(cmd *cobra.Command, args []string) error {
 	if err := rejectUnsupportedXcodeProfileJSON("list-menus"); err != nil {
 		return err

@@ -102,119 +102,51 @@ func validateXcodeProfileOptions(timeout, wait time.Duration) error {
 	return nil
 }
 
-var collectXcodeProfileCmd = &cobra.Command{
-	Use:     "xcode-profile [trace_file]",
-	Aliases: []string{"xp", "collect-xcode-profile"},
-	Short:   "Interact with Xcode GPU trace viewer",
-	Long: `Control and extract information from Xcode's GPU trace viewer.
+func collectXcodeProfilePreRun(cmd *cobra.Command, args []string) error {
+	if err := validateXcodeProfileOptions(collectProfileOpts.timeout, collectProfileOpts.wait); err != nil {
+		return err
+	}
 
-This command uses Accessibility APIs to control Xcode's UI and extract data.
-
-Workflow:
-  run               Run full automation (open, replay, export)
-  open              Open a trace file in Xcode
-  close             Close the trace window
-  export            Export the trace with performance data
-  run-profile       Start profiling in Xcode
-  wait-profile      Wait for profiling to complete
-
-Status:
-  check-status      Check profiling status (ready, running, complete)
-  check-permissions Check required permissions (Accessibility, Screen Recording)
-
-Navigation:
-  select-tab        Select a tab by name
-  show-performance  Click Show Performance button
-  show-summary      Select Summary tab
-  show-counters     Select Counters tab
-  show-memory       Click the Show Memory button
-  show-dependencies Click Show Dependencies button
-
-Data Export:
-  xcode-export-counters  Export GPU counters from Performance view to CSV
-  xcode-export-memory    Export memory report from Performance view
-  vertex-output          Extract vertex shader output from Xcode GPU debugger
-  performance            Performance data commands
-
-Example:
-  gputrace xcode-profile my_capture.gputrace -o my_capture-perfdata.gputrace
-  gputrace xp run my_capture.gputrace -o output.gputrace
-  gputrace xp check-status --json
-`,
-	Args: cobra.MaximumNArgs(1),
-	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-		if err := validateXcodeProfileOptions(collectProfileOpts.timeout, collectProfileOpts.wait); err != nil {
-			return err
+	// Start pprof server if requested
+	if collectProfileOpts.pprof {
+		port := "6060"
+		// Use different port if running inside macgo app bundle
+		if exe, err := os.Executable(); err == nil && strings.Contains(exe, ".app/") {
+			port = "6061"
 		}
-
-		// Start pprof server if requested
-		if collectProfileOpts.pprof {
-			port := "6060"
-			// Use different port if running inside macgo app bundle
-			if exe, err := os.Executable(); err == nil && strings.Contains(exe, ".app/") {
-				port = "6061"
+		addr := ":" + port
+		fmt.Fprintf(os.Stderr, "[pprof] starting debug server on http://localhost%s/debug/pprof/\n", addr)
+		go func() {
+			if err := http.ListenAndServe(addr, nil); err != nil {
+				fmt.Fprintf(os.Stderr, "[pprof] server error: %v\n", err)
 			}
-			addr := ":" + port
-			fmt.Fprintf(os.Stderr, "[pprof] starting debug server on http://localhost%s/debug/pprof/\n", addr)
-			go func() {
-				if err := http.ListenAndServe(addr, nil); err != nil {
-					fmt.Fprintf(os.Stderr, "[pprof] server error: %v\n", err)
-				}
-			}()
-		}
+		}()
+	}
 
-		if collectProfileOpts.debug || collectProfileOpts.verbose {
-			logProcessIdentity("pre-macgo")
-		}
+	if collectProfileOpts.debug || collectProfileOpts.verbose {
+		logProcessIdentity("pre-macgo")
+	}
 
-		// Setup macgo and verify Accessibility permission for all subcommands
-		if err := setupMacgo(); err != nil {
-			return err
-		}
+	// Setup macgo and verify Accessibility permission for all subcommands
+	if err := setupMacgo(); err != nil {
+		return err
+	}
 
-		if collectProfileOpts.debug || collectProfileOpts.verbose {
-			logProcessIdentity("post-macgo")
-		}
+	if collectProfileOpts.debug || collectProfileOpts.verbose {
+		logProcessIdentity("post-macgo")
+	}
 
-		// Check and request permissions with polling (Accessibility & Automation)
-		if err := checkPermissions(); err != nil {
-			return err
-		}
+	// Check and request permissions with polling (Accessibility & Automation)
+	if err := checkPermissions(); err != nil {
+		return err
+	}
 
-		// Double-Check: Verify we actually have Accessibility permission by testing AX API
-		if err := verifyAccessibilityPermission(); err != nil {
-			logProcessIdentity("ax-failed")
-			return err
-		}
-		return nil
-	},
-	RunE: func(cmd *cobra.Command, args []string) error {
-		// If no args and no subcommand, show help
-		if len(args) == 0 {
-			return cmd.Help()
-		}
-		// Run full automation for backwards compatibility
-		return runCollectXcodeProfileFull(cmd, args)
-	},
-}
-
-func init() {
-	rootCmd.AddCommand(collectXcodeProfileCmd)
-
-	// Persistent flags available to all subcommands
-	collectXcodeProfileCmd.PersistentFlags().DurationVar(&collectProfileOpts.timeout, "timeout", 5*time.Minute, "Timeout for the operation")
-	collectXcodeProfileCmd.PersistentFlags().BoolVar(&collectProfileOpts.debug, "debug", false, "Print debug information")
-	collectXcodeProfileCmd.PersistentFlags().BoolVarP(&collectProfileOpts.verbose, "verbose", "v", false, "Print verbose status information")
-	collectXcodeProfileCmd.PersistentFlags().BoolVar(&collectProfileOpts.noBundle, "no-bundle", false, "Skip macgo app bundle (use Terminal's Accessibility permission)")
-	collectXcodeProfileCmd.PersistentFlags().BoolVar(&collectProfileOpts.background, "background", false, "Run without bringing Xcode to foreground")
-	collectXcodeProfileCmd.PersistentFlags().BoolVar(&collectProfileOpts.noPrompt, "no-prompt", false, "Don't prompt for permissions, exit with error instead")
-	collectXcodeProfileCmd.PersistentFlags().BoolVar(&collectProfileOpts.json, "json", false, "Output results in JSON format")
-	collectXcodeProfileCmd.PersistentFlags().DurationVar(&collectProfileOpts.wait, "wait", 0, "Wait for lock release (0=no wait, e.g. 5m)")
-	collectXcodeProfileCmd.PersistentFlags().BoolVar(&collectProfileOpts.force, "force", false, "Override existing lock")
-	collectXcodeProfileCmd.PersistentFlags().BoolVar(&collectProfileOpts.pprof, "pprof", false, "Enable pprof debug endpoints (:6060 or :6061 in macgo)")
-
-	// Local flags for the main command
-	collectXcodeProfileCmd.Flags().StringVarP(&collectProfileOpts.output, "output", "o", "", "Output path for the exported trace (default: <input>-perfdata.gputrace)")
+	// Double-Check: Verify we actually have Accessibility permission by testing AX API
+	if err := verifyAccessibilityPermission(); err != nil {
+		logProcessIdentity("ax-failed")
+		return err
+	}
+	return nil
 }
 
 // acquireProfileLock checks if Xcode is currently running a profile by looking for

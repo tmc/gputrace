@@ -18,25 +18,6 @@ type PermissionsOutput struct {
 	AllGranted      bool `json:"all_granted"`
 }
 
-func init() {
-	checkPermissionsCmd := &cobra.Command{
-		Use:   "check-permissions",
-		Short: "Check required permissions",
-		Long: `Check if gputrace has the required permissions:
-  - Accessibility: Required for UI automation via AX APIs
-  - Screen Recording: Required for screenshots
-
-Use --json for machine-readable output.
-Use --no-prompt to check without triggering permission dialogs.`,
-		// Override PersistentPreRunE to only setup macgo, skip permission checks
-		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			return setupMacgo()
-		},
-		RunE: runCheckPermissions,
-	}
-	collectXcodeProfileCmd.AddCommand(checkPermissionsCmd)
-}
-
 func runCheckPermissions(cmd *cobra.Command, args []string) error {
 	output := PermissionsOutput{}
 

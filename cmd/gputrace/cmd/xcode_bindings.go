@@ -14,29 +14,6 @@ type xcodeBindingsOptions struct {
 	json bool
 }
 
-var xcodeBindingsCmd = newXcodeBindingsCommand(&xcodeBindingsOptions{})
-
-func newXcodeBindingsCommand(opts *xcodeBindingsOptions) *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "xcode-bindings",
-		Short: "Inspect private Xcode GTShaderProfiler bindings",
-		Long: `Inspect the private GTShaderProfiler binding surface used for Xcode parity.
-
-The command checks class and selector availability only. It does not construct
-GTShaderProfiler objects or parse trace data, so it is safe to run as a
-capability probe before enabling deeper profiler adapters.`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runXcodeBindings(cmd, args, opts)
-		},
-	}
-	cmd.Flags().BoolVar(&opts.json, "json", false, "Output in JSON format")
-	return cmd
-}
-
-func init() {
-	rootCmd.AddCommand(xcodeBindingsCmd)
-}
-
 func runXcodeBindings(cmd *cobra.Command, args []string, opts *xcodeBindingsOptions) error {
 	report := xcodebindings.Probe()
 	w := cmd.OutOrStdout()

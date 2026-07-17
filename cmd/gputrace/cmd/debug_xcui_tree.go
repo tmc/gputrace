@@ -13,22 +13,6 @@ type debugTreeOptions struct {
 	verbose bool
 }
 
-func init() {
-	opts := &debugTreeOptions{}
-	debugTreeCmd := &cobra.Command{
-		Use:    "debug-tree [trace_file]",
-		Short:  "Print UI tree to find key elements",
-		Hidden: true,
-		Long:   `Prints the Accessibility tree structure showing paths to key buttons like Replay, Stop, Show Performance.`,
-		Args:   cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDebugTree(cmd, args, opts)
-		},
-	}
-	debugTreeCmd.Flags().BoolVarP(&opts.verbose, "verbose", "v", false, "Print verbose progress info")
-	collectXcodeProfileCmd.AddCommand(debugTreeCmd)
-}
-
 func runDebugTree(cmd *cobra.Command, args []string, opts *debugTreeOptions) error {
 	traceFile := ""
 	if len(args) > 0 {

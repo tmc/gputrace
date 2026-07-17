@@ -9,30 +9,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func init() {
-	runProfileCmd := &cobra.Command{
-		Use:     "run-profile [trace_file]",
-		Aliases: []string{"run-replay"},
-		Short:   "Start profiling in Xcode",
-		Long: `Clicks the Profile button if available, otherwise falls back to Replay button.
-The Profile button starts profiling directly without needing additional checkboxes.`,
-		Args: cobra.MaximumNArgs(1),
-		RunE: runReplay,
-	}
-
-	waitReplayCmd := &cobra.Command{
-		Use:     "wait-profile [trace_file]",
-		Aliases: []string{"wait-replay"},
-		Short:   "Wait for profiling to complete",
-		Long:    `Polls Xcode until profiling completes (Show Performance button appears or Replay re-enabled).`,
-		Args:    cobra.MaximumNArgs(1),
-		RunE:    runWaitReplay,
-	}
-
-	collectXcodeProfileCmd.AddCommand(runProfileCmd)
-	collectXcodeProfileCmd.AddCommand(waitReplayCmd)
-}
-
 func runReplay(cmd *cobra.Command, args []string) error {
 	traceFile := ""
 	if len(args) > 0 {

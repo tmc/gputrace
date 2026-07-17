@@ -11,45 +11,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func init() {
-	collectXcodeProfileCmd.AddCommand(newScreenshotCommand(&screenshotOptions{}))
-}
-
 type screenshotOptions struct {
 	output   string
 	noPrompt bool
-}
-
-func newScreenshotCommand(opts *screenshotOptions) *cobra.Command {
-	cmd := &cobra.Command{
-		Use:    "screenshot [trace_file]",
-		Short:  "Capture a screenshot of the Xcode window",
-		Hidden: true,
-		Long: `Captures a screenshot of the current Xcode GPU trace window.
-
-Uses CoreGraphics APIs to capture the specific window by ID, so the window
-does not need to be in front or visible on screen.
-
-If no output path is specified, saves to /tmp/xcode-screenshot-<timestamp>.png
-
-Use --no-prompt to trigger a TCC database entry for Screen Recording permission
-without prompting the user. This is useful for pre-registering the app so permission
-can be granted later via System Settings > Privacy & Security or MDM.
-
-Examples:
-  gputrace xp screenshot
-  gputrace xp screenshot MyTrace.gputrace
-  gputrace xp screenshot MyTrace.gputrace -o ~/Desktop/trace-view.png
-  gputrace xp screenshot --no-prompt
-`,
-		Args: cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runScreenshot(cmd, args, opts)
-		},
-	}
-	cmd.Flags().StringVarP(&opts.output, "output", "o", opts.output, "Output path for screenshot")
-	cmd.Flags().BoolVar(&opts.noPrompt, "no-prompt", opts.noPrompt, "Trigger TCC entry without prompting")
-	return cmd
 }
 
 func runScreenshot(cmd *cobra.Command, args []string, opts *screenshotOptions) error {

@@ -16,22 +16,6 @@ type openTraceOptions struct {
 	foreground bool
 }
 
-func init() {
-	opts := &openTraceOptions{}
-	openCmd := &cobra.Command{
-		Use:   "open <trace_file>",
-		Short: "Open a trace file in Xcode",
-		Long: `Opens a GPU trace file in Xcode and waits for the window to be ready.
-By default, opens in background without stealing focus. Use --foreground to bring Xcode to front.`,
-		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runOpenTrace(cmd, args, opts)
-		},
-	}
-	openCmd.Flags().BoolVar(&opts.foreground, "foreground", false, "Bring Xcode to foreground (default: open in background)")
-	collectXcodeProfileCmd.AddCommand(openCmd)
-}
-
 func runOpenTrace(cmd *cobra.Command, args []string, opts *openTraceOptions) error {
 	inputPath, err := filepath.Abs(args[0])
 	if err != nil {

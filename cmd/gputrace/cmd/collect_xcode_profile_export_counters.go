@@ -14,40 +14,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func init() {
-	collectXcodeProfileCmd.AddCommand(newXcodeExportCountersCommand(&xcodeExportCountersOptions{}))
-}
-
 type xcodeExportCountersOptions struct {
 	force bool
-}
-
-func newXcodeExportCountersCommand(opts *xcodeExportCountersOptions) *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "xcode-export-counters [trace_file]",
-		Short: "Export GPU counters from Xcode's Performance view to CSV",
-		Long: `Triggers Xcode's Export GPU Counters dialog and accepts the default save location.
-
-This command:
-1. Finds the Xcode window for the specified trace (or first window)
-2. Clicks Editor > Export GPU Counters... menu via AX
-3. Clicks Save to accept the default filename/location
-
-The file is saved to wherever Xcode's save dialog defaults to.
-
-Use --force to automatically replace existing files.
-
-Example:
-  gputrace xp xcode-export-counters
-  gputrace xp xcode-export-counters MyTrace.gputrace
-  gputrace xp xcode-export-counters --force`,
-		Args: cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runXcodeExportCounters(cmd, args, opts)
-		},
-	}
-	cmd.Flags().BoolVarP(&opts.force, "force", "f", opts.force, "Replace existing file if it exists")
-	return cmd
 }
 
 func runXcodeExportCounters(cmd *cobra.Command, args []string, opts *xcodeExportCountersOptions) error {

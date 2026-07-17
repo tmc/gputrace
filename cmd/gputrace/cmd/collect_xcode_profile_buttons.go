@@ -17,46 +17,6 @@ type ListButtonsOutput struct {
 	Buttons []ButtonInfo `json:"buttons"`
 }
 
-func init() {
-	listButtonsCmd := &cobra.Command{
-		Use:    "list-buttons",
-		Short:  "List buttons using XCUIAutomation and AX",
-		Long:   `Lists all buttons in Xcode using both XCUIAutomation framework and Accessibility APIs.`,
-		Hidden: true,
-		RunE:   runListButtons,
-	}
-	collectXcodeProfileCmd.AddCommand(listButtonsCmd)
-
-	clickButtonCmd := &cobra.Command{
-		Use:    "click-button <name>",
-		Short:  "Click a button by name in any Xcode window/dialog",
-		Hidden: true,
-		Args:   cobra.ExactArgs(1),
-		RunE:   runClickButton,
-	}
-	collectXcodeProfileCmd.AddCommand(clickButtonCmd)
-
-	clickCancelCmd := &cobra.Command{
-		Use:    "click-cancel",
-		Short:  "Click Cancel button in any Xcode dialog",
-		Hidden: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runClickButton(cmd, []string{"Cancel"})
-		},
-	}
-	collectXcodeProfileCmd.AddCommand(clickCancelCmd)
-
-	clickReplaceCmd := &cobra.Command{
-		Use:    "click-replace",
-		Short:  "Click Replace button in any Xcode dialog",
-		Hidden: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runClickButton(cmd, []string{"Replace"})
-		},
-	}
-	collectXcodeProfileCmd.AddCommand(clickReplaceCmd)
-}
-
 func runClickButton(cmd *cobra.Command, args []string) error {
 	buttonName := args[0]
 	status := xcodeProfileStatusWriter()

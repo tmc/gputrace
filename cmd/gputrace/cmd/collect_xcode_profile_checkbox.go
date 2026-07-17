@@ -39,46 +39,14 @@ func rejectUnsupportedXcodeProfileJSON(command string) error {
 
 func unsupportedXcodeProfileJSONArgs(command string, validate cobra.PositionalArgs) cobra.PositionalArgs {
 	return func(cmd *cobra.Command, args []string) error {
+		if jsonOutput, err := cmd.Flags().GetBool("json"); err == nil && jsonOutput {
+			return fmt.Errorf("%s does not support --json", command)
+		}
 		if err := rejectUnsupportedXcodeProfileJSON(command); err != nil {
 			return err
 		}
 		return validate(cmd, args)
 	}
-}
-
-func init() {
-	ensureOpts := &checkboxOptions{}
-	ensureCheckedCmd := &cobra.Command{
-		Use:    "ensure-checked <checkbox_title>",
-		Short:  "Ensure a checkbox is checked",
-		Hidden: true,
-		Long: `Finds a checkbox by title in an Xcode window and ensures it is checked.
-
-Example:
-  gputrace collect-xcode-profile ensure-checked "Profile after replay"
-  gputrace collect-xcode-profile ensure-checked "Profile after replay" --trace my.gputrace`,
-		Args: unsupportedXcodeProfileJSONArgs("ensure-checked", cobra.ExactArgs(1)),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runEnsureChecked(cmd, args, ensureOpts)
-		},
-	}
-	documentUnsupportedXcodeProfileJSON(ensureCheckedCmd)
-	ensureCheckedCmd.Flags().StringVar(&ensureOpts.trace, "trace", "", "Target window by trace filename")
-	collectXcodeProfileCmd.AddCommand(ensureCheckedCmd)
-
-	toggleOpts := &checkboxOptions{}
-	toggleCheckboxCmd := &cobra.Command{
-		Use:    "toggle-checkbox <checkbox_title>",
-		Short:  "Toggle a checkbox",
-		Hidden: true,
-		Args:   unsupportedXcodeProfileJSONArgs("toggle-checkbox", cobra.ExactArgs(1)),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runToggleCheckbox(cmd, args, toggleOpts)
-		},
-	}
-	documentUnsupportedXcodeProfileJSON(toggleCheckboxCmd)
-	toggleCheckboxCmd.Flags().StringVar(&toggleOpts.trace, "trace", "", "Target window by trace filename")
-	collectXcodeProfileCmd.AddCommand(toggleCheckboxCmd)
 }
 
 func runEnsureChecked(cmd *cobra.Command, args []string, opts *checkboxOptions) error {

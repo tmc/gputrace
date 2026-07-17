@@ -49,18 +49,6 @@ type ListWindowsOutput struct {
 	Windows []WindowInfo `json:"windows"`
 }
 
-func init() {
-	listCmd := &cobra.Command{
-		Use:    "list-windows [trace_file]",
-		Short:  "List Xcode windows",
-		Hidden: true,
-		Long:   `Lists Xcode windows with their titles, checkboxes, and buttons. Optionally filter by trace filename.`,
-		Args:   cobra.MaximumNArgs(1),
-		RunE:   runListWindows,
-	}
-	collectXcodeProfileCmd.AddCommand(listCmd)
-}
-
 func runListWindows(cmd *cobra.Command, args []string) error {
 	traceFile := ""
 	if len(args) > 0 {

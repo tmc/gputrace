@@ -14,18 +14,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func init() {
-	runCmd := &cobra.Command{
-		Use:          "run <trace_file>",
-		Short:        "Run full automation (open, replay, export)",
-		Args:         cobra.ExactArgs(1),
-		SilenceUsage: true,
-		RunE:         runCollectXcodeProfileFull,
-	}
-	runCmd.Flags().StringVarP(&collectProfileOpts.output, "output", "o", "", "Output path for the exported trace")
-	collectXcodeProfileCmd.AddCommand(runCmd)
-}
-
 func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 	cleanupCancel := StartAutomationCancelListener(true)
 	defer cleanupCancel()

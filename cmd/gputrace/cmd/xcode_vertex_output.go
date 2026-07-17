@@ -40,42 +40,10 @@ func (e *drawCallNotFoundError) Error() string {
 	return fmt.Sprintf("draw call #%d not found in outline (%d rows)", e.DrawCall, len(e.Rows))
 }
 
-func init() {
-	collectXcodeProfileCmd.AddCommand(newVertexOutputCommand(&vertexOutputOptions{
-		drawCall: 21,
-		format:   "text",
-	}))
-}
-
 type vertexOutputOptions struct {
 	drawCall int
 	output   string
 	format   string
-}
-
-func newVertexOutputCommand(opts *vertexOutputOptions) *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "vertex-output <trace.gputrace>",
-		Short: "Extract vertex shader output from Xcode GPU debugger",
-		Long: `Opens a .gputrace in Xcode, navigates to a specific draw call,
-and extracts the vertex shader output table via Accessibility APIs.
-
-This automates what you'd normally do manually:
-  1. Open trace in Xcode
-  2. Switch to Debug navigator
-  3. Expand the draw call tree
-  4. Click the target draw call
-  5. Read the vertex output table from the editor area`,
-		Args:         cobra.ExactArgs(1),
-		SilenceUsage: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runVertexOutput(cmd, args, opts)
-		},
-	}
-	cmd.Flags().IntVar(&opts.drawCall, "draw", opts.drawCall, "Draw call number to inspect")
-	cmd.Flags().StringVarP(&opts.output, "output", "o", opts.output, "Output file path (default: stdout)")
-	cmd.Flags().StringVar(&opts.format, "format", opts.format, "Output format: text, json")
-	return cmd
 }
 
 func runVertexOutput(cmd *cobra.Command, args []string, opts *vertexOutputOptions) error {

@@ -12,35 +12,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func init() {
-	exportCmd := &cobra.Command{
-		Use:   "export [output_path]",
-		Short: "Export the trace from Xcode",
-		Long: `Triggers File > Export in Xcode and saves to the specified path.
-If no path is specified, it defaults to the trace file path with -perfdata suffix, inferred from the Xcode window.`,
-		Args: cobra.MaximumNArgs(1),
-		RunE: runExport,
-	}
-	collectXcodeProfileCmd.AddCommand(exportCmd)
-
-	openExportCmd := &cobra.Command{
-		Use:    "open-export [output_path]",
-		Short:  "Open the export dialog and set the output path",
-		Hidden: true,
-		Long: `Opens the Export dialog in Xcode and sets the output path.
-
-If output_path is specified, navigates to that directory and sets the filename.
-If no path specified, uses the original trace name with -perfdata suffix.
-
-Examples:
-  gputrace xp open-export                              # Uses -perfdata suffix in current dialog location
-  gputrace xp open-export /tmp/my-trace.gputrace       # Navigates to /tmp and sets filename`,
-		Args: cobra.MaximumNArgs(1),
-		RunE: runOpenExport,
-	}
-	collectXcodeProfileCmd.AddCommand(openExportCmd)
-}
-
 func runExport(cmd *cobra.Command, args []string) error {
 	status := xcodeProfileStatusWriter()
 	var outputPath string
@@ -270,16 +241,6 @@ func runOpenExport(cmd *cobra.Command, args []string) error {
 	return writeOutput()
 }
 
-func init() {
-	clickSaveCmd := &cobra.Command{
-		Use:    "click-save",
-		Short:  "Click the Save button in an open export dialog",
-		Hidden: true,
-		RunE:   runClickSave,
-	}
-	collectXcodeProfileCmd.AddCommand(clickSaveCmd)
-}
-
 func runClickSave(cmd *cobra.Command, args []string) error {
 	status := xcodeProfileStatusWriter()
 	if err := setupMacgo(); err != nil {
@@ -328,28 +289,6 @@ func runClickSave(cmd *cobra.Command, args []string) error {
 		Target: target,
 		Output: filename,
 	})
-}
-
-func init() {
-	sendKeyCmd := &cobra.Command{
-		Use:    "send-key <key>",
-		Short:  "Send a keyboard shortcut (for debugging)",
-		Hidden: true,
-		Args:   unsupportedXcodeProfileJSONArgs("send-key", cobra.ExactArgs(1)),
-		RunE:   runSendKey,
-	}
-	documentUnsupportedXcodeProfileJSON(sendKeyCmd)
-	collectXcodeProfileCmd.AddCommand(sendKeyCmd)
-
-	checkGoToFolderCmd := &cobra.Command{
-		Use:    "check-goto-folder",
-		Short:  "Check if Go to Folder dialog is open",
-		Hidden: true,
-		Args:   unsupportedXcodeProfileJSONArgs("check-goto-folder", cobra.NoArgs),
-		RunE:   runCheckGoToFolder,
-	}
-	documentUnsupportedXcodeProfileJSON(checkGoToFolderCmd)
-	collectXcodeProfileCmd.AddCommand(checkGoToFolderCmd)
 }
 
 func runSendKey(cmd *cobra.Command, args []string) error {
@@ -459,18 +398,6 @@ func runCheckGoToFolder(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func init() {
-	debugFileBrowserCmd := &cobra.Command{
-		Use:    "debug-file-browser",
-		Short:  "Debug: list file browser elements in export dialog",
-		Hidden: true,
-		Args:   unsupportedXcodeProfileJSONArgs("debug-file-browser", cobra.NoArgs),
-		RunE:   runDebugFileBrowser,
-	}
-	documentUnsupportedXcodeProfileJSON(debugFileBrowserCmd)
-	collectXcodeProfileCmd.AddCommand(debugFileBrowserCmd)
-}
-
 func runDebugFileBrowser(cmd *cobra.Command, args []string) error {
 	status := xcodeProfileStatusWriter()
 	if err := setupMacgo(); err != nil {
@@ -534,34 +461,6 @@ func runDebugFileBrowser(cmd *cobra.Command, args []string) error {
 
 	fmt.Fprintf(status, "Found %d elements with content\n", count)
 	return nil
-}
-
-func init() {
-	setExportPathCmd := &cobra.Command{
-		Use:    "set-export-path <absolute_path>",
-		Short:  "Set the export path (note: directory navigation limited)",
-		Hidden: true,
-		Args:   cobra.ExactArgs(1),
-		RunE:   runSetExportPath,
-	}
-	collectXcodeProfileCmd.AddCommand(setExportPathCmd)
-
-	setFilenameCmd := &cobra.Command{
-		Use:    "set-export-filename <filename>",
-		Short:  "Set the export filename (recommended)",
-		Hidden: true,
-		Args:   cobra.ExactArgs(1),
-		RunE:   runSetExportFilename,
-	}
-	collectXcodeProfileCmd.AddCommand(setFilenameCmd)
-
-	sendEnterCmd := &cobra.Command{
-		Use:    "send-enter",
-		Short:  "Send Enter key to Xcode",
-		Hidden: true,
-		RunE:   runSendEnter,
-	}
-	collectXcodeProfileCmd.AddCommand(sendEnterCmd)
 }
 
 func runSetExportPath(cmd *cobra.Command, args []string) error {

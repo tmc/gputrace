@@ -20,26 +20,6 @@ type xcodeParityOptions struct {
 	json bool
 }
 
-var xcodeParityCmd = newXcodeParityCommand(&xcodeParityOptions{})
-
-func newXcodeParityCommand(opts *xcodeParityOptions) *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "xcode-parity <trace.gputrace>",
-		Short: "Audit Xcode metric parity for a trace",
-		Long: `Audit Xcode metric parity for a trace.
-
-The report compares the trace's timeline metadata against the private
-GTShaderProfiler binding surface and lists the remaining adapter work for any
-missing Xcode-style fields.`,
-		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runXcodeParity(cmd, args, opts)
-		},
-	}
-	cmd.Flags().BoolVar(&opts.json, "json", false, "Output in JSON format")
-	return cmd
-}
-
 type xcodeParityReport struct {
 	Trace          string                           `json:"trace"`
 	KernelEvents   int                              `json:"kernel_events"`
@@ -59,10 +39,6 @@ type xcodeParityGap struct {
 	Binding string `json:"binding"`
 	Status  string `json:"status"`
 	Next    string `json:"next"`
-}
-
-func init() {
-	rootCmd.AddCommand(xcodeParityCmd)
 }
 
 func runXcodeParity(cmd *cobra.Command, args []string, opts *xcodeParityOptions) error {

@@ -8,17 +8,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func init() {
-	closeCmd := &cobra.Command{
-		Use:   "close [trace_file]",
-		Short: "Close the trace window in Xcode",
-		Long:  `Closes the Xcode window for the specified trace file, or the first window if no file specified.`,
-		Args:  cobra.MaximumNArgs(1),
-		RunE:  runCloseTrace,
-	}
-	collectXcodeProfileCmd.AddCommand(closeCmd)
-}
-
 func runCloseTrace(cmd *cobra.Command, args []string) error {
 	traceFile := ""
 	if len(args) > 0 {
