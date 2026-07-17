@@ -38,3 +38,13 @@ func TestAutomationCancelListenerPropagatesParentCancellation(t *testing.T) {
 		t.Fatalf("checkAutomationCanceled = %v, want %v", err, want)
 	}
 }
+
+func TestWaitForAutomationCancellation(t *testing.T) {
+	want := errors.New("canceled while waiting")
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(want)
+
+	if err := waitForAutomation(ctx, time.Hour); !errors.Is(err, want) {
+		t.Fatalf("waitForAutomation = %v, want %v", err, want)
+	}
+}

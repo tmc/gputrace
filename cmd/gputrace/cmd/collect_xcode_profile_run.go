@@ -35,7 +35,7 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 	}
 
 	// Acquire lock to prevent concurrent profiling
-	unlock, err := acquireProfileLock()
+	unlock, err := acquireProfileLock(ctx)
 	if err != nil {
 		return err
 	}
@@ -263,10 +263,10 @@ func findTraceWindowByButtons(appAX uintptr) uintptr {
 
 // closeXcodeWindow closes the specified Xcode window
 // closeAllXcodeWindows closes all open Xcode windows to clear stale GPU trace sessions.
-func closeAllXcodeWindows() {
+func closeAllXcodeWindows(ctx context.Context) error {
 	appAX, err := FindXcodeApp()
 	if err != nil {
-		return
+		return nil
 	}
 	defer cfRelease(appAX)
 
@@ -274,8 +274,11 @@ func closeAllXcodeWindows() {
 	verboseLog("closeAllXcodeWindows: closing %d windows", len(windows))
 	for _, w := range windows {
 		closeXcodeWindow(w)
-		time.Sleep(500 * time.Millisecond)
+		if err := waitForAutomation(ctx, 500*time.Millisecond); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func closeXcodeWindow(windowAX uintptr) {

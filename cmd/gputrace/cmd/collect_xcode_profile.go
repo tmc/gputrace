@@ -3,6 +3,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -153,7 +154,7 @@ func collectXcodeProfilePreRun(cmd *cobra.Command, args []string) error {
 // the Stop button in any window. If a profile is running, it waits (if --wait is set)
 // or returns an error.
 // Returns a no-op cleanup function for API compatibility.
-func acquireProfileLock() (func(), error) {
+func acquireProfileLock(ctx context.Context) (func(), error) {
 	deadline := time.Now()
 	if collectProfileOpts.wait > 0 {
 		deadline = deadline.Add(collectProfileOpts.wait)
@@ -179,8 +180,12 @@ func acquireProfileLock() (func(), error) {
 		if firstAttempt {
 			verboseLog("acquireProfileLock: detected stale GPU trace window %q, closing all Xcode windows and retrying", windowTitle)
 			fmt.Fprintf(status, "  Closing stale Xcode GPU trace window %q...\n", windowTitle)
-			closeAllXcodeWindows()
-			time.Sleep(2 * time.Second)
+			if err := closeAllXcodeWindows(ctx); err != nil {
+				return nil, err
+			}
+			if err := waitForAutomation(ctx, 2*time.Second); err != nil {
+				return nil, err
+			}
 			firstAttempt = false
 			continue
 		}
@@ -195,7 +200,9 @@ func acquireProfileLock() (func(), error) {
 
 		// Wait for profiling to complete
 		fmt.Fprintf(status, "Waiting for profiling to complete in %q (timeout: %v)...\n", windowTitle, collectProfileOpts.wait)
-		time.Sleep(pollInterval)
+		if err := waitForAutomation(ctx, pollInterval); err != nil {
+			return nil, err
+		}
 	}
 
 	// No-op cleanup - we're not holding any external lock
