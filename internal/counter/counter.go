@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/tmc/gputrace/internal/command"
+	"github.com/tmc/gputrace/internal/profilerraw"
 	"github.com/tmc/gputrace/internal/trace"
 )
 
@@ -274,30 +275,21 @@ func parseCounterFileWithMetrics(path string) (*counterFileStats, []*ShaderHardw
 
 	stats := &counterFileStats{}
 
-	// Find all records starting with 0x4E marker
-	recordStarts := findRecordBoundaries(data)
-	stats.TotalRecords = len(recordStarts)
-	if len(recordStarts) == 0 {
+	rawRecords := profilerraw.Records(data)
+	stats.TotalRecords = len(rawRecords)
+	if len(rawRecords) == 0 {
 		return nil, nil, fmt.Errorf("no counter record markers found")
 	}
 
 	// Parse all records
-	records := make([]*CounterRecord, 0, len(recordStarts))
-	for i, offset := range recordStarts {
-		// Determine record size
-		var recordSize int
-		if i+1 < len(recordStarts) {
-			recordSize = recordStarts[i+1] - offset
-		} else {
-			recordSize = len(data) - offset
-		}
-
+	records := make([]*CounterRecord, 0, len(rawRecords))
+	for _, raw := range rawRecords {
 		// Skip if record is too small
-		if recordSize < 16 {
+		if len(raw.Data) < 16 {
 			continue
 		}
 
-		record := parseCounterRecord(data[offset:offset+recordSize], int64(offset))
+		record := parseCounterRecord(raw.Data, raw.Offset)
 		if record != nil {
 			records = append(records, record)
 		}
@@ -866,11 +858,10 @@ func extractFloatMetricFromFile(perfDir string, cfg counterConfig, encoderMetric
 		return fmt.Errorf("read %s: %w", filePath, err)
 	}
 
-	// Find all records
-	recordStarts := findRecordBoundaries(data)
+	records := profilerraw.Records(data)
 
 	// Group records by encoder and extract per-encoder values
-	encoderValues := extractEncoderFloatValues(data, recordStarts, cfg.MinValue, cfg.MaxValue)
+	encoderValues := extractEncoderFloatValues(records, cfg.MinValue, cfg.MaxValue)
 
 	// Apply aggregated values to encoder metrics
 	for i, metric := range encoderMetrics {
@@ -914,11 +905,10 @@ func extractByteCounterFromFile(perfDir string, cfg counterConfig, encoderMetric
 		return fmt.Errorf("read %s: %w", filePath, err)
 	}
 
-	// Find all records
-	recordStarts := findRecordBoundaries(data)
+	records := profilerraw.Records(data)
 
 	// Group records by encoder and extract per-encoder byte values
-	encoderValues := extractEncoderByteValues(data, recordStarts)
+	encoderValues := extractEncoderByteValues(records)
 
 	// Apply summed values to encoder metrics
 	for i, metric := range encoderMetrics {
@@ -941,21 +931,13 @@ func extractByteCounterFromFile(perfDir string, cfg counterConfig, encoderMetric
 // extractEncoderFloatValues groups float values by encoder from counter file data.
 //
 // Returns slice of slices: encoderValues[encoderIdx][sampleIdx] = value
-func extractEncoderFloatValues(data []byte, recordStarts []int, minVal, maxVal float64) [][]float64 {
+func extractEncoderFloatValues(records []profilerraw.Record, minVal, maxVal float64) [][]float64 {
 	encoderValues := make([][]float64, 0)
 	var currentEncoderValues []float64
 
-	for i, offset := range recordStarts {
-		// Determine record size
-		var recordSize int
-		if i+1 < len(recordStarts) {
-			recordSize = recordStarts[i+1] - offset
-		} else {
-			recordSize = len(data) - offset
-		}
-
+	for _, record := range records {
 		// Metadata records (2300-2900 bytes) mark encoder boundaries
-		if recordSize >= 2300 && recordSize <= 2900 {
+		if len(record.Data) >= 2300 && len(record.Data) <= 2900 {
 			// Save previous encoder's values
 			if len(currentEncoderValues) > 0 {
 				encoderValues = append(encoderValues, currentEncoderValues)
@@ -965,14 +947,12 @@ func extractEncoderFloatValues(data []byte, recordStarts []int, minVal, maxVal f
 		}
 
 		// Sample records (464 bytes) contain metric values
-		if recordSize != 464 {
+		if len(record.Data) != 464 {
 			continue
 		}
 
-		recordData := data[offset : offset+recordSize]
-
 		// Extract float32 values in the valid range
-		candidates := findAllFloatsInRange(recordData, minVal, maxVal, 5)
+		candidates := findAllFloatsInRange(record.Data, minVal, maxVal, 5)
 		for _, val := range candidates {
 			if val > 0.0001 { // Filter near-zero noise
 				currentEncoderValues = append(currentEncoderValues, val)
@@ -991,21 +971,13 @@ func extractEncoderFloatValues(data []byte, recordStarts []int, minVal, maxVal f
 // extractEncoderByteValues groups uint64 byte values by encoder from counter file data.
 //
 // Returns slice of slices: encoderValues[encoderIdx][sampleIdx] = value
-func extractEncoderByteValues(data []byte, recordStarts []int) [][]uint64 {
+func extractEncoderByteValues(records []profilerraw.Record) [][]uint64 {
 	encoderValues := make([][]uint64, 0)
 	var currentEncoderValues []uint64
 
-	for i, offset := range recordStarts {
-		// Determine record size
-		var recordSize int
-		if i+1 < len(recordStarts) {
-			recordSize = recordStarts[i+1] - offset
-		} else {
-			recordSize = len(data) - offset
-		}
-
+	for _, record := range records {
 		// Metadata records (2300-2900 bytes) mark encoder boundaries
-		if recordSize >= 2300 && recordSize <= 2900 {
+		if len(record.Data) >= 2300 && len(record.Data) <= 2900 {
 			// Save previous encoder's values
 			if len(currentEncoderValues) > 0 {
 				encoderValues = append(encoderValues, currentEncoderValues)
@@ -1015,15 +987,13 @@ func extractEncoderByteValues(data []byte, recordStarts []int) [][]uint64 {
 		}
 
 		// Sample records (464 bytes) contain metric values
-		if recordSize != 464 {
+		if len(record.Data) != 464 {
 			continue
 		}
 
-		recordData := data[offset : offset+recordSize]
-
 		// Extract uint64 values that look like byte counts
 		// Look for values in reasonable byte count range (1KB - 1GB per sample)
-		byteVals := extractByteCountCandidates(recordData)
+		byteVals := extractByteCountCandidates(record.Data)
 		currentEncoderValues = append(currentEncoderValues, byteVals...)
 	}
 
@@ -1083,21 +1053,6 @@ func averageValues(values []float64) float64 {
 		sum += v
 	}
 	return sum / float64(len(values))
-}
-
-// findRecordBoundaries finds the start positions of all records in counter data.
-// Records appear to start with the 0x4E marker.
-func findRecordBoundaries(data []byte) []int {
-	boundaries := make([]int, 0, 20000)
-
-	for i := 0; i < len(data)-4; i++ {
-		// Look for 0x4E 0x00 0x00 0x00 pattern
-		if data[i] == 0x4E && data[i+1] == 0x00 && data[i+2] == 0x00 && data[i+3] == 0x00 {
-			boundaries = append(boundaries, i)
-		}
-	}
-
-	return boundaries
 }
 
 // enhanceFromStreamData enhances metrics with native pipeline compilation stats from streamData.

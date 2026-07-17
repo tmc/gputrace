@@ -10,6 +10,7 @@ import (
 	"sort"
 
 	"github.com/tmc/gputrace/internal/fmtutil"
+	"github.com/tmc/gputrace/internal/profilerraw"
 	"github.com/tmc/gputrace/internal/trace"
 )
 
@@ -154,81 +155,17 @@ func (te *TimingExtractorProfilerRaw) parseCounterFileForTiming(path string) ([]
 		return nil, fmt.Errorf("read counter file: %w", err)
 	}
 
-	// Find record boundaries
-	records := te.findCounterRecords(data)
+	records := profilerraw.Records(data)
 
 	// Parse each record for timing data
 	var timings []*ProfilerRawTiming
-	for _, record := range records {
-		if timing := te.parseCounterRecord(record); timing != nil {
+	for i := range records {
+		if timing := te.parseCounterRecord(&records[i]); timing != nil {
 			timings = append(timings, timing)
 		}
 	}
 
 	return timings, nil
-}
-
-// ProfilerCounterRecord represents a single record from a .gpuprofiler_raw counter file.
-type ProfilerCounterRecord struct {
-	Offset int64
-	Data   []byte
-}
-
-// findCounterRecords locates all records in the counter data.
-// Records start with 0x4E 0x00 0x00 0x00 marker.
-func (te *TimingExtractorProfilerRaw) findCounterRecords(data []byte) []*ProfilerCounterRecord {
-	var records []*ProfilerCounterRecord
-
-	i := 0
-	for i < len(data)-4 {
-		// Look for record marker: 0x4E 0x00 0x00 0x00
-		if data[i] == 0x4E && data[i+1] == 0x00 && data[i+2] == 0x00 && data[i+3] == 0x00 {
-			// Try to determine record size
-			// Heuristic: Read size field at offset+4 (if present)
-			recordSize := te.estimateRecordSize(data, i)
-
-			if i+recordSize <= len(data) {
-				record := &ProfilerCounterRecord{
-					Offset: int64(i),
-					Data:   data[i : i+recordSize],
-				}
-				records = append(records, record)
-				i += recordSize
-			} else {
-				i += 4
-			}
-		} else {
-			i++
-		}
-	}
-
-	return records
-}
-
-// estimateRecordSize attempts to determine the size of a counter record.
-// The format is not fully understood, so we use heuristics.
-func (te *TimingExtractorProfilerRaw) estimateRecordSize(data []byte, offset int) int {
-	// Check if there's a size field after the marker
-	if offset+8 <= len(data) {
-		// Try reading uint32 at offset+4
-		potentialSize := binary.LittleEndian.Uint32(data[offset+4 : offset+8])
-
-		// Sanity check: size should be reasonable (< 100KB)
-		if potentialSize > 0 && potentialSize < 100000 {
-			return int(potentialSize) + 8 // Include header
-		}
-	}
-
-	// Fallback: Look for next record marker
-	searchStart := offset + 4
-	for i := searchStart; i < len(data)-4 && i < offset+100000; i++ {
-		if data[i] == 0x4E && data[i+1] == 0x00 && data[i+2] == 0x00 && data[i+3] == 0x00 {
-			return i - offset
-		}
-	}
-
-	// Default minimum size
-	return 69
 }
 
 // parseCounterRecord attempts to extract timing data from a counter record.
@@ -248,7 +185,7 @@ func (te *TimingExtractorProfilerRaw) estimateRecordSize(data []byte, offset int
 // For better accuracy, use kdebug events when available (confidence ~0.95).
 //
 // Returns nil if no usable timing proxy data found in this record.
-func (te *TimingExtractorProfilerRaw) parseCounterRecord(record *ProfilerCounterRecord) *ProfilerRawTiming {
+func (te *TimingExtractorProfilerRaw) parseCounterRecord(record *profilerraw.Record) *ProfilerRawTiming {
 	data := record.Data
 
 	// Only process sample records (464 bytes) which contain performance metrics
