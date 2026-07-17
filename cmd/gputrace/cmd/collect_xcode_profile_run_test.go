@@ -3,10 +3,13 @@
 package cmd
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestWaitForExportedTraceRequiresProfilerData(t *testing.T) {
@@ -16,7 +19,7 @@ func TestWaitForExportedTraceRequiresProfilerData(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := waitForExportedTrace([]string{bundle}, 0)
+	_, err := waitForExportedTrace(context.Background(), []string{bundle}, 0)
 	if err == nil {
 		t.Fatal("waitForExportedTrace succeeded without profiler data")
 	}
@@ -32,12 +35,23 @@ func TestWaitForExportedTraceRequiresProfilerData(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := waitForExportedTrace([]string{bundle}, 0)
+	got, err := waitForExportedTrace(context.Background(), []string{bundle}, 0)
 	if err != nil {
 		t.Fatalf("waitForExportedTrace failed: %v", err)
 	}
 	if got != bundle {
 		t.Fatalf("path = %q, want %q", got, bundle)
+	}
+}
+
+func TestWaitForExportedTraceStopsOnCancellation(t *testing.T) {
+	want := errors.New("stop export wait")
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(want)
+
+	_, err := waitForExportedTrace(ctx, []string{t.TempDir()}, time.Hour)
+	if !errors.Is(err, want) {
+		t.Fatalf("waitForExportedTrace error = %v, want %v", err, want)
 	}
 }
 

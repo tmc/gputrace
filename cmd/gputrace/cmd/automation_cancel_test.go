@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -8,28 +10,31 @@ import (
 
 func TestAutomationCancelListenerCancelsOnSignal(t *testing.T) {
 	signals := make(chan os.Signal, 1)
-	cleanup := startAutomationCancelListener(false, signals, nil)
+	ctx, cleanup := startAutomationCancelListener(context.Background(), false, signals, nil)
 	defer cleanup()
 
 	signals <- os.Interrupt
 
-	deadline := time.After(2 * time.Second)
-	for !IsAutomationCanceled() {
-		select {
-		case <-deadline:
-			t.Fatal("listener did not mark automation canceled")
-		default:
-			time.Sleep(10 * time.Millisecond)
-		}
-	}
-
 	select {
-	case <-automationContext().Done():
-	case <-deadline:
+	case <-ctx.Done():
+	case <-time.After(2 * time.Second):
 		t.Fatal("listener did not cancel automation context")
 	}
 
-	if err := CheckCancelAndReturn(); err == nil {
-		t.Fatal("CheckCancelAndReturn succeeded after cancellation")
+	if err := checkAutomationCanceled(ctx); !errors.Is(err, errAutomationCanceled) {
+		t.Fatalf("checkAutomationCanceled = %v, want %v", err, errAutomationCanceled)
+	}
+}
+
+func TestAutomationCancelListenerPropagatesParentCancellation(t *testing.T) {
+	parent, cancel := context.WithCancelCause(context.Background())
+	ctx, cleanup := startAutomationCancelListener(parent, false, make(chan os.Signal), nil)
+	defer cleanup()
+
+	want := errors.New("parent canceled")
+	cancel(want)
+	<-ctx.Done()
+	if err := checkAutomationCanceled(ctx); !errors.Is(err, want) {
+		t.Fatalf("checkAutomationCanceled = %v, want %v", err, want)
 	}
 }

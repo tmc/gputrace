@@ -15,8 +15,10 @@ import (
 )
 
 func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
-	cleanupCancel := StartAutomationCancelListener(true)
+	automationCtx, cleanupCancel := StartAutomationCancelListener(cmd.Context(), true)
 	defer cleanupCancel()
+	ctx, cancel := context.WithTimeout(automationCtx, collectProfileOpts.timeout)
+	defer cancel()
 
 	inputPath, err := filepath.Abs(args[0])
 	if err != nil {
@@ -51,9 +53,6 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(status, "  Input:  %s\n", inputPath)
 	fmt.Fprintf(status, "  Output: %s\n", outputPath)
 
-	ctx, cancel := context.WithTimeout(automationContext(), collectProfileOpts.timeout)
-	defer cancel()
-
 	// Validate trace bundle before opening in Xcode
 	if _, err := os.Stat(inputPath); os.IsNotExist(err) {
 		return fmt.Errorf("trace file does not exist: %s", inputPath)
@@ -69,9 +68,11 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 	if output, err := openCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to open trace in Xcode: %w\n    output: %s", err, string(output))
 	}
-	time.Sleep(2 * time.Second)
+	if err := waitForAutomation(ctx, 2*time.Second); err != nil {
+		return err
+	}
 
-	if err := CheckCancelAndReturn(); err != nil {
+	if err := checkAutomationCanceled(ctx); err != nil {
 		return err
 	}
 
@@ -89,12 +90,12 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 	defer cfRelease(appAX)
 
 	traceFileName := filepath.Base(inputPath)
-	windowAX, err := waitForWindow(appAX, traceFileName, 30*time.Second)
+	windowAX, err := waitForWindow(ctx, appAX, traceFileName, 30*time.Second)
 	if err != nil {
 		return fmt.Errorf("Xcode window not found: %w", err)
 	}
 
-	if err := CheckCancelAndReturn(); err != nil {
+	if err := checkAutomationCanceled(ctx); err != nil {
 		return err
 	}
 
@@ -119,7 +120,7 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 	} else if profilingInProgress {
 		// Profiling already running (e.g., from a prior attempt or --force) — just wait for it
 		fmt.Fprintln(status, "  Profiling already in progress, waiting for completion...")
-		if err := waitForReplayComplete(appAX, traceFileName, windowAX, collectProfileOpts.timeout); err != nil {
+		if err := waitForReplayComplete(ctx, appAX, traceFileName, windowAX, collectProfileOpts.timeout); err != nil {
 			return fmt.Errorf("replay wait failed: %w", err)
 		}
 		fmt.Fprintln(status, "    Profiling completed")
@@ -132,13 +133,13 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 
 		// Step 4: Wait for replay
 		fmt.Fprintln(status, "  Step 4: Waiting for replay to complete...")
-		if err := waitForReplayComplete(appAX, traceFileName, windowAX, collectProfileOpts.timeout); err != nil {
+		if err := waitForReplayComplete(ctx, appAX, traceFileName, windowAX, collectProfileOpts.timeout); err != nil {
 			return fmt.Errorf("replay wait failed: %w", err)
 		}
 		fmt.Fprintln(status, "    Replay completed")
 	}
 
-	if err := CheckCancelAndReturn(); err != nil {
+	if err := checkAutomationCanceled(ctx); err != nil {
 		return err
 	}
 
@@ -164,7 +165,9 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 	} else if shown {
 		// Xcode only enables "Embed performance data" after the Performance view
 		// has been opened. Give the view time to settle before opening Export.
-		time.Sleep(1 * time.Second)
+		if err := waitForAutomation(ctx, time.Second); err != nil {
+			return err
+		}
 	}
 
 	// Export step
@@ -174,7 +177,7 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 	} else if freshWindow := findTraceWindowByButtons(appAX); freshWindow != 0 {
 		windowAX = freshWindow
 	}
-	activateXcodeQuick()
+	activateXcodeQuick(ctx)
 	axAction(windowAX, "AXRaise")
 	time.Sleep(300 * time.Millisecond)
 
@@ -190,13 +193,13 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	if err := exportTrace(appAX, windowAX, outputPath); err != nil {
+	if err := exportTrace(ctx, appAX, windowAX, outputPath); err != nil {
 		return fmt.Errorf("export failed: %w", err)
 	}
 
 	verboseLog("exportTrace: searching for output in: %v", candidatePaths)
 
-	finalPath, err := waitForExportedTrace(candidatePaths, exportWaitTimeout())
+	finalPath, err := waitForExportedTrace(ctx, candidatePaths, exportWaitTimeout())
 	if err != nil {
 		return err
 	}
@@ -302,9 +305,12 @@ func closeXcodeWindow(windowAX uintptr) {
 	verboseLog("closeXcodeWindow: AXCloseButton not found")
 }
 
-func waitForWindow(appAX uintptr, traceFileName string, timeout time.Duration) (uintptr, error) {
+func waitForWindow(ctx context.Context, appAX uintptr, traceFileName string, timeout time.Duration) (uintptr, error) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
+		if err := checkAutomationCanceled(ctx); err != nil {
+			return 0, err
+		}
 		var windowAX uintptr
 		// Try to find window by trace file name first
 		if traceFileName != "" {
@@ -339,7 +345,9 @@ func waitForWindow(appAX uintptr, traceFileName string, timeout time.Duration) (
 			// axPressWithFallbackWindow will raise on demand.
 			return windowAX, nil
 		}
-		time.Sleep(1 * time.Second)
+		if err := waitForAutomation(ctx, time.Second); err != nil {
+			return 0, err
+		}
 	}
 	// Collect diagnostic info about what windows exist
 	children := GetAllWindows(appAX)
@@ -579,10 +587,13 @@ func uniquePaths(paths []string) []string {
 	return out
 }
 
-func waitForExportedTrace(candidatePaths []string, timeout time.Duration) (string, error) {
+func waitForExportedTrace(ctx context.Context, candidatePaths []string, timeout time.Duration) (string, error) {
 	deadline := time.Now().Add(timeout)
 	var foundWithoutProfiler []string
 	for {
+		if err := checkAutomationCanceled(ctx); err != nil {
+			return "", err
+		}
 		for _, p := range candidatePaths {
 			info, err := os.Stat(p)
 			if err != nil {
@@ -599,7 +610,9 @@ func waitForExportedTrace(candidatePaths []string, timeout time.Duration) (strin
 		if time.Now().After(deadline) {
 			break
 		}
-		time.Sleep(1 * time.Second)
+		if err := waitForAutomation(ctx, time.Second); err != nil {
+			return "", err
+		}
 	}
 
 	if len(foundWithoutProfiler) > 0 {
@@ -764,7 +777,7 @@ func isTargetedShowPerformanceFound(button uintptr) bool {
 	return button == targetedShowPerformanceFound
 }
 
-func waitForReplayComplete(appAX uintptr, traceFileName string, initialWindowAX uintptr, timeout time.Duration) error {
+func waitForReplayComplete(ctx context.Context, appAX uintptr, traceFileName string, initialWindowAX uintptr, timeout time.Duration) error {
 	start := time.Now()
 	currentWindow := initialWindowAX
 	windowTitle := axString(currentWindow, "AXTitle")
@@ -862,6 +875,9 @@ func waitForReplayComplete(appAX uintptr, traceFileName string, initialWindowAX 
 	// stale state from a prior run).
 	sawReplayEnabled := false
 	for time.Since(start) < 30*time.Second {
+		if err := checkAutomationCanceled(ctx); err != nil {
+			return err
+		}
 		replayBtn, err := findButtonOrFail("Replay")
 		if err != nil {
 			return err
@@ -900,7 +916,9 @@ func waitForReplayComplete(appAX uintptr, traceFileName string, initialWindowAX 
 		if replayBtn != 0 && !replayEnabled && !sawReplayEnabled {
 			verboseLog("waitForReplayComplete: Replay disabled but never saw enabled state, waiting for transition")
 		}
-		time.Sleep(500 * time.Millisecond)
+		if err := waitForAutomation(ctx, 500*time.Millisecond); err != nil {
+			return err
+		}
 	}
 
 	if !profilingStarted {
@@ -915,12 +933,17 @@ func waitForReplayComplete(appAX uintptr, traceFileName string, initialWindowAX 
 	if elapsed < minWait {
 		sleepTime := minWait - elapsed
 		verboseLog("waitForReplayComplete: minimum wait %.1fs", sleepTime.Seconds())
-		time.Sleep(sleepTime)
+		if err := waitForAutomation(ctx, sleepTime); err != nil {
+			return err
+		}
 	}
 
 	// Now wait for profiling to complete
 	lastStatus := ""
 	for time.Since(start) < timeout {
+		if err := checkAutomationCanceled(ctx); err != nil {
+			return err
+		}
 		// Check for completion indicators (only in target window):
 
 		// 1. Show Performance button appears (most reliable - profiling complete, ready to view)
@@ -962,7 +985,9 @@ func waitForReplayComplete(appAX uintptr, traceFileName string, initialWindowAX 
 		if profilingStarted && replayEnabled {
 			// Replay button re-enabled - wait for Show Performance to appear
 			// (indicates profiler data is ready, not just that replay finished)
-			time.Sleep(2 * time.Second)
+			if err := waitForAutomation(ctx, 2*time.Second); err != nil {
+				return err
+			}
 			// Use targeted traversal first
 			if currentWindow != 0 && hasShowPerformance(currentWindow) {
 				verboseLog("waitForReplayComplete: Replay enabled, Show Performance available (targeted) - complete")
@@ -994,7 +1019,9 @@ func waitForReplayComplete(appAX uintptr, traceFileName string, initialWindowAX 
 		if !stopEnabled && captureEnabled {
 			// Additional check: wait for Show Performance button to appear
 			// before declaring complete (indicates profiler data is ready)
-			time.Sleep(2 * time.Second)
+			if err := waitForAutomation(ctx, 2*time.Second); err != nil {
+				return err
+			}
 			showPerfBtn, err = findButtonOrFail("Show Performance")
 			if err != nil {
 				return err
@@ -1022,7 +1049,9 @@ func waitForReplayComplete(appAX uintptr, traceFileName string, initialWindowAX 
 			fmt.Fprintf(os.Stderr, "    Profiling... (%.0fs, status: %s)\n", elapsed, status)
 			lastStatus = status
 		}
-		time.Sleep(2 * time.Second)
+		if err := waitForAutomation(ctx, 2*time.Second); err != nil {
+			return err
+		}
 	}
 	return fmt.Errorf("timed out waiting for replay completion")
 }
@@ -1111,9 +1140,12 @@ func dumpExportSheetState(windowAX uintptr) {
 	}
 }
 
-func exportTrace(appAX, windowAX uintptr, outputPath string) error {
+func exportTrace(ctx context.Context, appAX, windowAX uintptr, outputPath string) error {
+	if err := checkAutomationCanceled(ctx); err != nil {
+		return err
+	}
 	status := xcodeProfileStatusWriter()
-	activateXcodeQuick()
+	activateXcodeQuick(ctx)
 	axAction(windowAX, "AXRaise")
 	time.Sleep(300 * time.Millisecond)
 
@@ -1140,7 +1172,9 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 	}
 
 	fmt.Fprintln(status, "    Waiting for export sheet...")
-	time.Sleep(500 * time.Millisecond) // Give dialog time to appear
+	if err := waitForAutomation(ctx, 500*time.Millisecond); err != nil {
+		return err
+	}
 
 	// Refresh app reference since the UI might have changed
 	freshApp, err := FindXcodeApp()
@@ -1153,6 +1187,9 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 	var saveWindow uintptr
 	sheetFound := false
 	for i := 0; i < 30; i++ {
+		if err := checkAutomationCanceled(ctx); err != nil {
+			return err
+		}
 		windows := GetAllWindows(freshApp)
 		for _, w := range windows {
 			// Detect export sheet by looking for Save button or AXSheet role
@@ -1168,7 +1205,9 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 		if sheetFound {
 			break
 		}
-		time.Sleep(500 * time.Millisecond)
+		if err := waitForAutomation(ctx, 500*time.Millisecond); err != nil {
+			return err
+		}
 	}
 
 	if !sheetFound {
@@ -1324,7 +1363,7 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 	if err := axPressWithFallback(saveBtn); err != nil {
 		return fmt.Errorf("failed to click Save: %w", err)
 	}
-	replaced, err := pressReplaceIfPresent(windowAX, 5*time.Second)
+	replaced, err := pressReplaceIfPresent(ctx, windowAX, 5*time.Second)
 	if err != nil {
 		return fmt.Errorf("confirm replace: %w", err)
 	}
@@ -1334,7 +1373,9 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 
 	// Wait for export to complete — GPU trace exports can be large and slow
 	fmt.Fprintln(status, "    Waiting for export to write...")
-	time.Sleep(5 * time.Second)
+	if err := waitForAutomation(ctx, 5*time.Second); err != nil {
+		return err
+	}
 
 	// Check if file was saved to expected location
 	if _, err := os.Stat(outputPath); err == nil {
@@ -1352,9 +1393,12 @@ func exportTrace(appAX, windowAX uintptr, outputPath string) error {
 	return nil
 }
 
-func pressReplaceIfPresent(windowAX uintptr, timeout time.Duration) (bool, error) {
+func pressReplaceIfPresent(ctx context.Context, windowAX uintptr, timeout time.Duration) (bool, error) {
 	deadline := time.Now().Add(timeout)
 	for {
+		if err := checkAutomationCanceled(ctx); err != nil {
+			return false, err
+		}
 		replaceBtn := findButtonBFS(windowAX, "Replace", 3000)
 		if replaceBtn != 0 {
 			if !IsElementEnabled(replaceBtn) {
@@ -1363,13 +1407,17 @@ func pressReplaceIfPresent(windowAX uintptr, timeout time.Duration) (bool, error
 			if err := axPressWithFallback(replaceBtn); err != nil {
 				return false, err
 			}
-			time.Sleep(500 * time.Millisecond)
+			if err := waitForAutomation(ctx, 500*time.Millisecond); err != nil {
+				return false, err
+			}
 			return true, nil
 		}
 		if time.Now().After(deadline) {
 			return false, nil
 		}
-		time.Sleep(100 * time.Millisecond)
+		if err := waitForAutomation(ctx, 100*time.Millisecond); err != nil {
+			return false, err
+		}
 	}
 }
 

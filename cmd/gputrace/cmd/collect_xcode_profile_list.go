@@ -70,7 +70,7 @@ func runListWindows(cmd *cobra.Command, args []string) error {
 
 	var windowPtrs []uintptr
 	if traceFile != "" {
-		w, err := findTargetWindow(appAX, traceFile)
+		w, err := findTargetWindow(cmd.Context(), appAX, traceFile)
 		if err != nil {
 			if collectProfileOpts.json {
 				return outputJSONError("WINDOW_NOT_FOUND", err.Error(), "Check if the trace file is open")

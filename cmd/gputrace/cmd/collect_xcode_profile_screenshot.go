@@ -45,7 +45,7 @@ func runScreenshot(cmd *cobra.Command, args []string, opts *screenshotOptions) e
 	defer cfRelease(appAX)
 
 	// Find the target window (prefer trace windows)
-	windowAX, err := findTargetWindow(appAX, traceFile)
+	windowAX, err := findTargetWindow(cmd.Context(), appAX, traceFile)
 	if err != nil {
 		return err
 	}

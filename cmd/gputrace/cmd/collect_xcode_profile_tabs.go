@@ -3,6 +3,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -38,7 +39,7 @@ func runSelectTab(cmd *cobra.Command, args []string) error {
 	defer cfRelease(appAX)
 
 	// Try to find a trace window first (empty string falls back to first available)
-	windowAX, err := findTargetWindow(appAX, "")
+	windowAX, err := findTargetWindow(cmd.Context(), appAX, "")
 	if err != nil {
 		return err
 	}
@@ -92,7 +93,7 @@ func runSelectTab(cmd *cobra.Command, args []string) error {
 }
 
 // runSelectNavigatorItem selects an item in the Debug navigator by name.
-func runSelectNavigatorItem(name string) error {
+func runSelectNavigatorItem(ctx context.Context, name string) error {
 	status := xcodeProfileStatusWriter()
 
 	if err := setupMacgo(); err != nil {
@@ -105,7 +106,7 @@ func runSelectNavigatorItem(name string) error {
 	}
 	defer cfRelease(appAX)
 
-	windowAX, err := findTargetWindow(appAX, "")
+	windowAX, err := findTargetWindow(ctx, appAX, "")
 	if err != nil {
 		return err
 	}
@@ -259,7 +260,7 @@ func runListTabs(cmd *cobra.Command, args []string) error {
 	}
 	defer cfRelease(appAX)
 
-	windowAX, err := findTargetWindow(appAX, traceFile)
+	windowAX, err := findTargetWindow(cmd.Context(), appAX, traceFile)
 	if err != nil {
 		if collectProfileOpts.json {
 			return outputJSONError("NO_WINDOWS", err.Error(), "Open a trace file first")
@@ -344,7 +345,7 @@ func runShowPerformance(cmd *cobra.Command, args []string) error {
 	}
 	defer cfRelease(appAX)
 
-	windowAX, err := findTargetWindow(appAX, "")
+	windowAX, err := findTargetWindow(cmd.Context(), appAX, "")
 	if err != nil {
 		return err
 	}

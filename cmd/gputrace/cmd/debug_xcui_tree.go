@@ -30,7 +30,7 @@ func runDebugTree(cmd *cobra.Command, args []string, opts *debugTreeOptions) err
 	defer cfRelease(appAX)
 
 	// Find target window (prefer trace windows)
-	windowAX, err := findTargetWindow(appAX, traceFile)
+	windowAX, err := findTargetWindow(cmd.Context(), appAX, traceFile)
 	if err != nil {
 		return err
 	}

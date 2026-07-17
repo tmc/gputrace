@@ -3,6 +3,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -91,7 +92,7 @@ func runPerformanceShow(cmd *cobra.Command, args []string) error {
 	}
 	defer cfRelease(appAX)
 
-	windowAX, err := findTargetWindow(appAX, "")
+	windowAX, err := findTargetWindow(cmd.Context(), appAX, "")
 	if err != nil {
 		if collectProfileOpts.json {
 			return outputJSONError("NO_WINDOWS", "no trace window found", "Open a trace file first")
@@ -150,7 +151,7 @@ func runPerformanceStatus(cmd *cobra.Command, args []string) error {
 	}
 	defer cfRelease(appAX)
 
-	windowAX, err := findTargetWindow(appAX, "")
+	windowAX, err := findTargetWindow(cmd.Context(), appAX, "")
 	if err != nil {
 		if collectProfileOpts.json {
 			return outputJSONError("NO_WINDOWS", "no trace window found", "Open a trace file first")
@@ -203,7 +204,7 @@ func runPerformanceSummary(cmd *cobra.Command, args []string) error {
 	}
 	defer cfRelease(appAX)
 
-	windowAX, err := findTargetWindow(appAX, "")
+	windowAX, err := findTargetWindow(cmd.Context(), appAX, "")
 	if err != nil {
 		if collectProfileOpts.json {
 			return outputJSONError("NO_WINDOWS", "no trace window found", "Open a trace file first")
@@ -493,7 +494,7 @@ func runPerformanceMemory(cmd *cobra.Command, args []string) error {
 	}
 	defer cfRelease(appAX)
 
-	windowAX, err := findTargetWindow(appAX, "")
+	windowAX, err := findTargetWindow(cmd.Context(), appAX, "")
 	if err != nil {
 		if collectProfileOpts.json {
 			return outputJSONError("NO_WINDOWS", "no trace window found", "Open a trace file first")
@@ -764,7 +765,7 @@ func normalizeMemoryMetricName(label string) string {
 }
 
 // runPerformanceView clicks the appropriate tab button in the performance view.
-func runPerformanceView(viewName string) error {
+func runPerformanceView(ctx context.Context, viewName string) error {
 	status := xcodeProfileStatusWriter()
 
 	if err := setupMacgo(); err != nil {
@@ -780,7 +781,7 @@ func runPerformanceView(viewName string) error {
 	}
 	defer cfRelease(appAX)
 
-	windowAX, err := findTargetWindow(appAX, "")
+	windowAX, err := findTargetWindow(ctx, appAX, "")
 	if err != nil {
 		if collectProfileOpts.json {
 			return outputJSONError("NO_WINDOWS", "no trace window found", "Open a trace file first")

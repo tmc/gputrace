@@ -3,6 +3,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -66,7 +67,7 @@ func runEnsureChecked(cmd *cobra.Command, args []string, opts *checkboxOptions) 
 	}
 	defer cfRelease(appAX)
 
-	windowAX, err := findTargetWindow(appAX, opts.trace)
+	windowAX, err := findTargetWindow(cmd.Context(), appAX, opts.trace)
 	if err != nil {
 		return err
 	}
@@ -116,7 +117,7 @@ func runToggleCheckbox(cmd *cobra.Command, args []string, opts *checkboxOptions)
 	}
 	defer cfRelease(appAX)
 
-	windowAX, err := findTargetWindow(appAX, opts.trace)
+	windowAX, err := findTargetWindow(cmd.Context(), appAX, opts.trace)
 	if err != nil {
 		return err
 	}
@@ -141,7 +142,7 @@ func runToggleCheckbox(cmd *cobra.Command, args []string, opts *checkboxOptions)
 
 // findTargetWindow finds the appropriate Xcode window based on trace filename.
 // If traceFile is empty, it looks for the first .gputrace window.
-func findTargetWindow(appAX uintptr, traceFile string) (uintptr, error) {
+func findTargetWindow(ctx context.Context, appAX uintptr, traceFile string) (uintptr, error) {
 	if traceFile != "" {
 		// Extract just the filename for matching
 		baseName := filepath.Base(traceFile)
@@ -162,7 +163,7 @@ func findTargetWindow(appAX uintptr, traceFile string) (uintptr, error) {
 	}
 
 	// Fall back to waiting for any window
-	windowAX, err := waitForWindow(appAX, "", 10*time.Second)
+	windowAX, err := waitForWindow(ctx, appAX, "", 10*time.Second)
 	if err != nil {
 		return 0, err
 	}

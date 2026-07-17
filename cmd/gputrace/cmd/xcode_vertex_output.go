@@ -84,7 +84,7 @@ func runVertexOutput(cmd *cobra.Command, args []string, opts *vertexOutputOption
 	defer cfRelease(appAX)
 
 	traceFileName := filepath.Base(inputPath)
-	windowAX, err := waitForWindow(appAX, traceFileName, 30*time.Second)
+	windowAX, err := waitForWindow(cmd.Context(), appAX, traceFileName, 30*time.Second)
 	if err != nil {
 		return fmt.Errorf("window not found: %w", err)
 	}
@@ -103,7 +103,7 @@ func runVertexOutput(cmd *cobra.Command, args []string, opts *vertexOutputOption
 	if stopBtn != 0 && IsElementEnabled(stopBtn) && !hasPerfData {
 		// Already replaying, wait for completion
 		fmt.Fprintln(statusOut, "    Replay in progress, waiting...")
-		if err := waitForReplayComplete(appAX, traceFileName, windowAX, 120*time.Second); err != nil {
+		if err := waitForReplayComplete(cmd.Context(), appAX, traceFileName, windowAX, 120*time.Second); err != nil {
 			return fmt.Errorf("replay wait failed: %w", err)
 		}
 		time.Sleep(2 * time.Second)
@@ -115,7 +115,7 @@ func runVertexOutput(cmd *cobra.Command, args []string, opts *vertexOutputOption
 		}
 		fmt.Fprintln(statusOut, "    Waiting for replay to complete...")
 		time.Sleep(3 * time.Second)
-		if err := waitForReplayComplete(appAX, traceFileName, windowAX, 120*time.Second); err != nil {
+		if err := waitForReplayComplete(cmd.Context(), appAX, traceFileName, windowAX, 120*time.Second); err != nil {
 			return fmt.Errorf("replay wait failed: %w", err)
 		}
 		time.Sleep(2 * time.Second)

@@ -32,7 +32,7 @@ func runClickButton(cmd *cobra.Command, args []string) error {
 	defer cfRelease(appAX)
 
 	// Activate Xcode first
-	activateXcodeQuick()
+	activateXcodeQuick(cmd.Context())
 
 	// Search all windows for the button (dialogs may be separate windows)
 	windows := GetAllWindows(appAX)

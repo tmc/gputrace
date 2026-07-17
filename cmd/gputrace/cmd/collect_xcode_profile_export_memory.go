@@ -82,7 +82,7 @@ func runXcodeExportMemory(cmd *cobra.Command, args []string, opts *xcodeExportMe
 	}
 
 	// Activate Xcode and focus the trace window
-	activateXcodeQuick()
+	activateXcodeQuick(cmd.Context())
 	time.Sleep(100 * time.Millisecond)
 	// Also perform AXRaise again after activation to ensure this window is focused
 	axAction(windowAX, "AXRaise")

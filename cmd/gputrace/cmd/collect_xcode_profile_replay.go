@@ -28,7 +28,7 @@ func runReplay(cmd *cobra.Command, args []string) error {
 	}
 	defer cfRelease(appAX)
 
-	windowAX, err := findTargetWindow(appAX, traceFile)
+	windowAX, err := findTargetWindow(cmd.Context(), appAX, traceFile)
 	if err != nil {
 		return fmt.Errorf("window not found: %w", err)
 	}
@@ -63,13 +63,13 @@ func runWaitReplay(cmd *cobra.Command, args []string) error {
 	}
 	defer cfRelease(appAX)
 
-	windowAX, err := findTargetWindow(appAX, traceFile)
+	windowAX, err := findTargetWindow(cmd.Context(), appAX, traceFile)
 	if err != nil {
 		return fmt.Errorf("window not found: %w", err)
 	}
 
 	traceFileName := filepath.Base(traceFile)
-	if err := waitForReplayComplete(appAX, traceFileName, windowAX, collectProfileOpts.timeout); err != nil {
+	if err := waitForReplayComplete(cmd.Context(), appAX, traceFileName, windowAX, collectProfileOpts.timeout); err != nil {
 		return fmt.Errorf("wait failed: %w", err)
 	}
 

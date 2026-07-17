@@ -137,7 +137,7 @@ func platformXcodeProfileRun(name string) func(*cobra.Command, []string) error {
 		case "performance/memory":
 			return runPerformanceMemory(cmd, args)
 		case "navigator/summary", "navigator/dependencies", "navigator/performance", "navigator/memory":
-			return runSelectNavigatorItem(name[len("navigator/"):])
+			return runSelectNavigatorItem(cmd.Context(), name[len("navigator/"):])
 		case "xcode-bindings":
 			jsonOutput, _ := cmd.Flags().GetBool("json")
 			return runXcodeBindings(cmd, args, &xcodeBindingsOptions{json: jsonOutput})
@@ -147,7 +147,7 @@ func platformXcodeProfileRun(name string) func(*cobra.Command, []string) error {
 		}
 		const prefix = "performance/"
 		if len(name) > len(prefix) && name[:len(prefix)] == prefix {
-			return runPerformanceView(name[len(prefix):])
+			return runPerformanceView(cmd.Context(), name[len(prefix):])
 		}
 		return fmt.Errorf("unknown Xcode automation command %q", name)
 	}

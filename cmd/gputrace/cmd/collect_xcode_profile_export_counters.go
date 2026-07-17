@@ -91,7 +91,7 @@ func runXcodeExportCounters(cmd *cobra.Command, args []string, opts *xcodeExport
 	}
 
 	// Activate Xcode and focus the trace window
-	activateXcodeQuick()
+	activateXcodeQuick(cmd.Context())
 	time.Sleep(100 * time.Millisecond)
 	// Also perform AXRaise again after activation to ensure this window is focused
 	axAction(windowAX, "AXRaise")
@@ -200,11 +200,11 @@ saveClicked:
 
 // activateXcodeQuick activates Xcode using osascript with a timeout.
 // Respects --background flag and does nothing if set.
-func activateXcodeQuick() {
+func activateXcodeQuick(parent context.Context) {
 	if collectProfileOpts.background {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 2*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "osascript", "-e", `tell application "Xcode" to activate`)
 	_ = cmd.Run() // Ignore errors - best effort

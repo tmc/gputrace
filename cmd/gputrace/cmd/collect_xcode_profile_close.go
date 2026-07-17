@@ -25,7 +25,7 @@ func runCloseTrace(cmd *cobra.Command, args []string) error {
 	defer cfRelease(appAX)
 
 	var windowAX uintptr
-	windowAX, err = findTargetWindow(appAX, traceFile)
+	windowAX, err = findTargetWindow(cmd.Context(), appAX, traceFile)
 	if err != nil {
 		return err
 	}

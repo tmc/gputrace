@@ -34,7 +34,7 @@ func runExport(cmd *cobra.Command, args []string) error {
 	}
 	defer cfRelease(appAX)
 
-	windowAX, err := waitForWindow(appAX, "", 10*time.Second)
+	windowAX, err := waitForWindow(cmd.Context(), appAX, "", 10*time.Second)
 	if err != nil {
 		return fmt.Errorf("Xcode window not found: %w", err)
 	}
@@ -60,7 +60,7 @@ func runExport(cmd *cobra.Command, args []string) error {
 		verboseLog("runExport: window AXDocument=%q", doc)
 	}
 
-	if err := exportTrace(appAX, windowAX, outputPath); err != nil {
+	if err := exportTrace(cmd.Context(), appAX, windowAX, outputPath); err != nil {
 		return fmt.Errorf("export failed: %w", err)
 	}
 
@@ -106,7 +106,7 @@ func runOpenExport(cmd *cobra.Command, args []string) error {
 	}
 	defer cfRelease(appAX)
 
-	windowAX, err := findTargetWindow(appAX, "")
+	windowAX, err := findTargetWindow(cmd.Context(), appAX, "")
 	if err != nil {
 		return fmt.Errorf("window not found: %w", err)
 	}
@@ -178,7 +178,7 @@ func runOpenExport(cmd *cobra.Command, args []string) error {
 
 	// Re-fetch window to get fresh reference after sheet appeared
 	// Use findTargetWindow to get the trace window, not just any window
-	freshWindow, err := findTargetWindow(appAX, "")
+	freshWindow, err := findTargetWindow(cmd.Context(), appAX, "")
 	if err != nil || freshWindow == 0 {
 		warning = "could not get window reference"
 		fmt.Fprintln(status, "  Warning: could not get window reference")
@@ -253,7 +253,7 @@ func runClickSave(cmd *cobra.Command, args []string) error {
 	}
 	defer cfRelease(appAX)
 
-	windowAX, err := findTargetWindow(appAX, "")
+	windowAX, err := findTargetWindow(cmd.Context(), appAX, "")
 	if err != nil {
 		return fmt.Errorf("window not found: %w", err)
 	}
@@ -342,7 +342,7 @@ func runCheckGoToFolder(cmd *cobra.Command, args []string) error {
 	}
 	defer cfRelease(appAX)
 
-	windowAX, err := findTargetWindow(appAX, "")
+	windowAX, err := findTargetWindow(cmd.Context(), appAX, "")
 	if err != nil {
 		return fmt.Errorf("window not found: %w", err)
 	}
@@ -410,7 +410,7 @@ func runDebugFileBrowser(cmd *cobra.Command, args []string) error {
 	}
 	defer cfRelease(appAX)
 
-	windowAX, err := findTargetWindow(appAX, "")
+	windowAX, err := findTargetWindow(cmd.Context(), appAX, "")
 	if err != nil {
 		return fmt.Errorf("window not found: %w", err)
 	}
@@ -480,7 +480,7 @@ func runSetExportPath(cmd *cobra.Command, args []string) error {
 	}
 	defer cfRelease(appAX)
 
-	windowAX, err := findTargetWindow(appAX, "")
+	windowAX, err := findTargetWindow(cmd.Context(), appAX, "")
 	if err != nil {
 		return fmt.Errorf("window not found: %w", err)
 	}
@@ -543,7 +543,7 @@ func runSetExportFilename(cmd *cobra.Command, args []string) error {
 	}
 	defer cfRelease(appAX)
 
-	windowAX, err := findTargetWindow(appAX, "")
+	windowAX, err := findTargetWindow(cmd.Context(), appAX, "")
 	if err != nil {
 		return fmt.Errorf("window not found: %w", err)
 	}
