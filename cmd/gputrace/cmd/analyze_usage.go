@@ -11,22 +11,30 @@ import (
 	"github.com/tmc/gputrace/internal/trace"
 )
 
-var analyzeUsageCmd = &cobra.Command{
-	Use:    "analyze-usage <trace-path>",
-	Short:  "Analyze buffer usage across kernels",
-	Hidden: true,
-	Args:   cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		format, err := cmd.Flags().GetString("format")
-		if err != nil {
-			return err
-		}
-		return runAnalyzeUsage(cmd, args, format)
-	},
+type analyzeUsageOptions struct {
+	format string
+}
+
+var analyzeUsageCmd = newAnalyzeUsageCommand(&analyzeUsageOptions{format: "text"})
+
+func newAnalyzeUsageCommand(opts *analyzeUsageOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:    "analyze-usage <trace-path>",
+		Short:  "Analyze buffer usage across kernels",
+		Hidden: true,
+		Args:   cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if _, err := normalizeAnalyzeFormat(opts.format); err != nil {
+				return err
+			}
+			return runAnalyzeUsage(cmd, args, opts)
+		},
+	}
+	cmd.Flags().StringVar(&opts.format, "format", opts.format, "Output format (text, dot, json)")
+	return cmd
 }
 
 func init() {
-	analyzeUsageCmd.Flags().String("format", "text", "Output format (text, dot, json)")
 	rootCmd.AddCommand(analyzeUsageCmd)
 }
 
@@ -57,8 +65,8 @@ type analyzeBufferUsageJSON struct {
 	Kernels    []analyzeKernelUsageJSON `json:"kernels"`
 }
 
-func runAnalyzeUsage(cmd *cobra.Command, args []string, outputFormat string) error {
-	format, err := normalizeAnalyzeFormat(outputFormat)
+func runAnalyzeUsage(cmd *cobra.Command, args []string, opts *analyzeUsageOptions) error {
+	format, err := normalizeAnalyzeFormat(opts.format)
 	if err != nil {
 		return err
 	}

@@ -8,10 +8,15 @@ import (
 	"github.com/tmc/gputrace"
 )
 
-var buffersDiffCmd = &cobra.Command{
-	Use:   "diff <trace1.gputrace> <trace2.gputrace>",
-	Short: "Compare buffers between two GPU traces",
-	Long: `Compare Metal buffer usage between two GPU traces.
+type buffersDiffOptions struct{}
+
+var buffersDiffCmd = newBuffersDiffCommand(new(buffersDiffOptions))
+
+func newBuffersDiffCommand(opts *buffersDiffOptions) *cobra.Command {
+	return &cobra.Command{
+		Use:   "diff <trace1.gputrace> <trace2.gputrace>",
+		Short: "Compare buffers between two GPU traces",
+		Long: `Compare Metal buffer usage between two GPU traces.
 
 This command shows:
   - Buffers added in trace2
@@ -31,25 +36,33 @@ Examples:
 
   # Compare before/after optimization
   gputrace buffers diff before.gputrace after.gputrace`,
-	Args: cobra.ExactArgs(2),
-	RunE: runBuffersDiff,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateBuffersDiffArgs(args); err != nil {
+				return err
+			}
+			return runBuffersDiff(cmd, args, opts)
+		},
+	}
 }
 
 func init() {
 	buffersCmd.AddCommand(buffersDiffCmd)
 }
 
-func runBuffersDiff(cmd *cobra.Command, args []string) error {
-	trace1Path := args[0]
-	trace2Path := args[1]
-
-	// Verify both trace files exist
-	if err := checkTraceFile(trace1Path); err != nil {
+func validateBuffersDiffArgs(args []string) error {
+	if err := checkTraceFile(args[0]); err != nil {
 		return fmt.Errorf("trace1: %w", err)
 	}
-	if err := checkTraceFile(trace2Path); err != nil {
+	if err := checkTraceFile(args[1]); err != nil {
 		return fmt.Errorf("trace2: %w", err)
 	}
+	return nil
+}
+
+func runBuffersDiff(cmd *cobra.Command, args []string, _ *buffersDiffOptions) error {
+	trace1Path := args[0]
+	trace2Path := args[1]
 
 	// Open both traces
 	trace1, err := gputrace.Open(trace1Path)

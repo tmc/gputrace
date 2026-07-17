@@ -147,3 +147,13 @@ func TestAnalyzeUsageFormat(t *testing.T) {
 		})
 	}
 }
+
+func TestAnalyzeUsageCommandValidatesFormatBeforeOpeningTrace(t *testing.T) {
+	cmd := newAnalyzeUsageCommand(&analyzeUsageOptions{format: "yaml"})
+	cmd.SetArgs([]string{"missing.gputrace"})
+
+	err := cmd.Execute()
+	if err == nil || err.Error() != `unknown analyze-usage format "yaml"` {
+		t.Fatalf("Execute error = %v, want format error", err)
+	}
+}

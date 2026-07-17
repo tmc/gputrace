@@ -12,11 +12,16 @@ import (
 	"github.com/tmc/gputrace"
 )
 
-var perfcountersValidateCmd = &cobra.Command{
-	Use:   "perfcounters-validate <trace.gputrace> <reference.csv>",
-	Short:  "Validate extracted perfcounter data against Xcode Instruments CSV",
-	Hidden: true,
-	Long: `Compare extracted performance counter data against reference CSV from Xcode Instruments.
+type perfcountersValidateOptions struct{}
+
+var perfcountersValidateCmd = newPerfcountersValidateCommand(new(perfcountersValidateOptions))
+
+func newPerfcountersValidateCommand(opts *perfcountersValidateOptions) *cobra.Command {
+	return &cobra.Command{
+		Use:    "perfcounters-validate <trace.gputrace> <reference.csv>",
+		Short:  "Validate extracted perfcounter data against Xcode Instruments CSV",
+		Hidden: true,
+		Long: `Compare extracted performance counter data against reference CSV from Xcode Instruments.
 
 This command is critical for validating the binary parsing implementation:
 - Extracts metrics from .gpuprofiler_raw binary files
@@ -24,32 +29,37 @@ This command is critical for validating the binary parsing implementation:
 - Reports accuracy for key metrics (Kernel Invocations, ALU Utilization, Occupancy)
 
 Used to validate replay engine accuracy by cross-checking against ground truth.`,
-	Args: cobra.ExactArgs(2),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		tracePath := args[0]
-		csvPath := args[1]
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runPerfcountersValidate(cmd, args, opts)
+		},
+	}
+}
 
-		// Load trace
-		trace, err := gputrace.Open(tracePath)
-		if err != nil {
-			return fmt.Errorf("open trace: %w", err)
-		}
+func runPerfcountersValidate(cmd *cobra.Command, args []string, _ *perfcountersValidateOptions) error {
+	tracePath := args[0]
+	csvPath := args[1]
 
-		// Parse performance counters
-		stats, err := gputrace.ParsePerfCounters(trace)
-		if err != nil {
-			return fmt.Errorf("parse perfcounters: %w", err)
-		}
+	// Load trace
+	trace, err := gputrace.Open(tracePath)
+	if err != nil {
+		return fmt.Errorf("open trace: %w", err)
+	}
 
-		// Load reference CSV
-		refData, err := loadReferenceCSV(csvPath)
-		if err != nil {
-			return fmt.Errorf("load reference CSV: %w", err)
-		}
+	// Parse performance counters
+	stats, err := gputrace.ParsePerfCounters(trace)
+	if err != nil {
+		return fmt.Errorf("parse perfcounters: %w", err)
+	}
 
-		// Validate metrics
-		return validateMetrics(stats, refData)
-	},
+	// Load reference CSV
+	refData, err := loadReferenceCSV(csvPath)
+	if err != nil {
+		return fmt.Errorf("load reference CSV: %w", err)
+	}
+
+	// Validate metrics
+	return validateMetrics(stats, refData)
 }
 
 func init() {

@@ -9,25 +9,33 @@ import (
 	"github.com/tmc/gputrace/internal/trace"
 )
 
-var mtlbCmd = &cobra.Command{
-	Use:   "mtlb <trace-path/mtlb-file>",
-	Short: "Inspect and analyze Metal Library Binary (MTLB) files",
-	Long: `Inspect and analyze Metal Library Binary (MTLB) files.
+type mtlbOptions struct{}
+
+var mtlbCmd = newMTLBCommand(new(mtlbOptions))
+
+func newMTLBCommand(opts *mtlbOptions) *cobra.Command {
+	return &cobra.Command{
+		Use:   "mtlb <trace-path/mtlb-file>",
+		Short: "Inspect and analyze Metal Library Binary (MTLB) files",
+		Long: `Inspect and analyze Metal Library Binary (MTLB) files.
 
 Can inspect:
 1. A single .gputrace bundle (scans for embedded MTLB files)
 2. A direct path to an MTLB file (sidecar)
 
 Displays header info, function table, and extraction stats.`,
-	Args: cobra.ExactArgs(1),
-	RunE: runMtlb,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runMTLB(cmd, args, opts)
+		},
+	}
 }
 
 func init() {
 	rootCmd.AddCommand(mtlbCmd)
 }
 
-func runMtlb(cmd *cobra.Command, args []string) error {
+func runMTLB(cmd *cobra.Command, args []string, _ *mtlbOptions) error {
 	path := args[0]
 
 	// Check if it's a trace bundle
