@@ -15,6 +15,9 @@
 package gputrace
 
 import (
+	"io"
+
+	"github.com/google/pprof/profile"
 	"github.com/tmc/gputrace/internal/analysis"
 	"github.com/tmc/gputrace/internal/command"
 	"github.com/tmc/gputrace/internal/counter"
@@ -121,77 +124,225 @@ const (
 	SeverityInfo     = analysis.SeverityInfo
 )
 
-// Re-export functions
-var (
-	ExtractTimingData             = timing.ExtractTimingData
-	ExtractStore0Timing           = timing.ExtractStore0Timing
-	ConvertStore0ToEncoderTimings = timing.ConvertStore0ToEncoderTimings
-	GenerateSyntheticTiming       = timing.GenerateSyntheticTiming
-	ExtractShaderMetrics          = shader.ExtractShaderMetrics
-	NewShaderSourceMapper         = shader.NewShaderSourceMapper
-	FormatShadersSimple           = shader.FormatShadersSimple
-	FormatShadersXcodeStyle       = shader.FormatShadersXcodeStyle
-	ParseDetailedCommandBuffer    = command.ParseDetailedCommandBuffer
-	DumpCommandBuffer             = command.DumpCommandBuffer
-	ToPprof                       = export.ToPprof
-	ToPprofWithSource             = export.ToPprofWithSource
-	ToPprofWithMetrics            = export.ToPprofWithMetrics
-	ParseXcodeCountersCSV         = counter.ParseXcodeCountersCSV
-	ExtractStatistics             = analysis.ExtractStatistics
-	NewTimingMetricsExtractor     = timing.NewTimingMetricsExtractor
-	ParsePerfCounters             = counter.ParsePerfCounters
+// ExtractTimingData extracts encoder timing data from t.
+func ExtractTimingData(t *Trace) ([]*EncoderTiming, error) {
+	return timing.ExtractTimingData(t)
+}
 
-	// Buffer access analysis functions (gputrace-93)
-	AnalyzeBufferAccess      = analysis.AnalyzeBufferAccess
-	FormatBufferAccessReport = analysis.FormatBufferAccessReport
+// ExtractStore0Timing extracts timing data from the store0 capture stream.
+func ExtractStore0Timing(t *Trace) (*timing.Store0TimingData, error) {
+	return timing.ExtractStore0Timing(t)
+}
 
-	// Buffer timeline functions (gputrace-94)
-	ExtractBufferTimeline       = analysis.ExtractBufferTimeline
-	FormatBufferTimelineASCII   = analysis.FormatBufferTimelineASCII
-	FormatBufferTimelineSummary = analysis.FormatBufferTimelineSummary
+// ConvertStore0ToEncoderTimings converts store0 timing data to encoder timings.
+func ConvertStore0ToEncoderTimings(t *Trace, store0Data *timing.Store0TimingData) []*EncoderTiming {
+	return timing.ConvertStore0ToEncoderTimings(t, store0Data)
+}
 
-	// Buffer diff functions (gputrace-95)
-	ExtractBufferSizes = analysis.ExtractBufferSizes
-	CompareBuffers     = analysis.CompareBuffers
-	FormatBufferDiff   = analysis.FormatBufferDiff
+// GenerateSyntheticTiming generates synthetic timing data for t.
+func GenerateSyntheticTiming(t *Trace) []*EncoderTiming {
+	return timing.GenerateSyntheticTiming(t)
+}
 
-	// Counter export functions (gputrace-101)
-	NewCountersCSVExporter = counter.NewCountersCSVExporter
+// ExtractShaderMetrics extracts shader metrics from t.
+func ExtractShaderMetrics(t *Trace) (*ShaderMetricsReport, error) {
+	return shader.ExtractShaderMetrics(t)
+}
 
-	// Counter sampling functions (gputrace-104)
-	FormatCounterSamplingSimulation = replay.FormatCounterSamplingSimulation
-	FormatCounterSamplingResult     = counter.FormatCounterSamplingResult
+// NewShaderSourceMapper returns a source mapper that searches searchPaths.
+func NewShaderSourceMapper(searchPaths ...string) *ShaderSourceMapper {
+	return shader.NewShaderSourceMapper(searchPaths...)
+}
 
-	// Replay engine functions (gputrace-103, gputrace-104)
-	NewReplayEngine = replay.NewReplayEngine
+// FormatShadersSimple writes a simple shader report to w.
+func FormatShadersSimple(w io.Writer, report *ShaderMetricsReport) error {
+	return shader.FormatShadersSimple(w, report)
+}
 
-	// Shader source attribution functions (gputrace-105)
-	ExtractShaderSourceAttribution    = shader.ExtractShaderSourceAttribution
-	FormatShaderSourceAttribution     = shader.FormatShaderSourceAttribution
-	FormatShaderSourceAttributionHTML = shader.FormatShaderSourceAttributionHTML
+// FormatShadersXcodeStyle writes an Xcode-style shader report to w.
+func FormatShadersXcodeStyle(w io.Writer, report *ShaderMetricsReport, t *Trace, showEstimates bool) error {
+	return shader.FormatShadersXcodeStyle(w, report, t, showEstimates)
+}
 
-	// Timing metrics functions (gputrace-106)
-	FormatTimingMetrics     = timing.FormatTimingMetrics
-	ExportTimingMetricsJSON = timing.ExportTimingMetricsJSON
-	ExportTimingMetricsCSV  = timing.ExportTimingMetricsCSV
-	CompareTraces           = timing.CompareTraces
-	FormatTimingComparison  = timing.FormatTimingComparison
+// ParseDetailedCommandBuffer parses command buffer cbIndex from t.
+func ParseDetailedCommandBuffer(t *Trace, cbIndex int) (*command.DetailedCommandBuffer, error) {
+	return command.ParseDetailedCommandBuffer(t, cbIndex)
+}
 
-	// Timing profiler functions (gputrace-107)
-	NewTimingExtractorProfilerRaw = timing.NewTimingExtractorProfilerRaw
+// DumpCommandBuffer writes command buffer cbIndex from t to w.
+func DumpCommandBuffer(t *Trace, w io.Writer, cbIndex int) error {
+	return command.DumpCommandBuffer(t, w, cbIndex)
+}
 
-	// Shader export functions (gputrace-98)
-	ExportShaderMetricsCSV  = shader.ExportShaderMetricsCSV
-	ExportShaderMetricsJSON = shader.ExportShaderMetricsJSON
+// ToPprof converts timing data to a pprof profile.
+func ToPprof(t *Trace, timings []*EncoderTiming) (*profile.Profile, error) {
+	return export.ToPprof(t, timings)
+}
 
-	// Correlation functions (gputrace-96)
-	CorrelateShaderMetrics  = shader.CorrelateShaderMetrics
-	FormatCorrelationReport = shader.FormatCorrelationReport
+// ToPprofWithSource converts timing data and source mappings to a pprof profile.
+func ToPprofWithSource(t *Trace, timings []*EncoderTiming, mapper *ShaderSourceMapper) (*profile.Profile, error) {
+	return export.ToPprofWithSource(t, timings, mapper)
+}
 
-	// Insights functions (gputrace-97)
-	GenerateInsights     = analysis.GenerateInsights
-	FormatInsightsReport = analysis.FormatInsightsReport
-)
+// ToPprofWithMetrics converts counter metrics to a pprof profile.
+func ToPprofWithMetrics(t *Trace, mapper *ShaderSourceMapper, stats *PerfCounterStats) (*profile.Profile, error) {
+	return export.ToPprofWithMetrics(t, mapper, stats)
+}
+
+// ParseXcodeCountersCSV parses an Xcode counters CSV file for t.
+func ParseXcodeCountersCSV(t *Trace, csvPath string) (*XcodeCounterData, error) {
+	return counter.ParseXcodeCountersCSV(t, csvPath)
+}
+
+// ExtractStatistics extracts summary statistics from t.
+func ExtractStatistics(t *Trace) (*TraceStatistics, error) {
+	return analysis.ExtractStatistics(t)
+}
+
+// NewTimingMetricsExtractor returns a timing metrics extractor for t.
+func NewTimingMetricsExtractor(t *Trace) *TimingMetricsExtractor {
+	return timing.NewTimingMetricsExtractor(t)
+}
+
+// ParsePerfCounters parses performance counters from t.
+func ParsePerfCounters(t *Trace) (*PerfCounterStats, error) {
+	return counter.ParsePerfCounters(t)
+}
+
+// AnalyzeBufferAccess analyzes buffer access in t.
+func AnalyzeBufferAccess(t *Trace) (*BufferAccessAnalysis, error) {
+	return analysis.AnalyzeBufferAccess(t)
+}
+
+// FormatBufferAccessReport formats a buffer access report.
+func FormatBufferAccessReport(a *BufferAccessAnalysis, verbose bool) string {
+	return analysis.FormatBufferAccessReport(a, verbose)
+}
+
+// ExtractBufferTimeline extracts the buffer timeline from t.
+func ExtractBufferTimeline(t *Trace) (*BufferTimelineAnalysis, error) {
+	return analysis.ExtractBufferTimeline(t)
+}
+
+// FormatBufferTimelineASCII formats a buffer timeline with the given width.
+func FormatBufferTimelineASCII(a *BufferTimelineAnalysis, width int) string {
+	return analysis.FormatBufferTimelineASCII(a, width)
+}
+
+// FormatBufferTimelineSummary formats a buffer timeline summary.
+func FormatBufferTimelineSummary(a *BufferTimelineAnalysis) string {
+	return analysis.FormatBufferTimelineSummary(a)
+}
+
+// ExtractBufferSizes extracts buffer size information from t.
+func ExtractBufferSizes(t *Trace) (*analysis.BufferSizeInfo, error) {
+	return analysis.ExtractBufferSizes(t)
+}
+
+// CompareBuffers compares two sets of buffer size information.
+func CompareBuffers(info1, info2 *analysis.BufferSizeInfo) *analysis.BufferDiff {
+	return analysis.CompareBuffers(info1, info2)
+}
+
+// FormatBufferDiff formats a buffer comparison.
+func FormatBufferDiff(diff *analysis.BufferDiff, trace1Path, trace2Path string) string {
+	return analysis.FormatBufferDiff(diff, trace1Path, trace2Path)
+}
+
+// NewCountersCSVExporter returns a counter CSV exporter for t.
+func NewCountersCSVExporter(t *Trace) *counter.CountersCSVExporter {
+	return counter.NewCountersCSVExporter(t)
+}
+
+// FormatCounterSamplingSimulation formats a counter sampling simulation.
+func FormatCounterSamplingSimulation(sim *replay.CounterSamplingSimulation) string {
+	return replay.FormatCounterSamplingSimulation(sim)
+}
+
+// FormatCounterSamplingResult formats a counter sampling result.
+func FormatCounterSamplingResult(result *counter.CounterSamplingResult) string {
+	return counter.FormatCounterSamplingResult(result)
+}
+
+// NewReplayEngine returns a replay engine for t.
+func NewReplayEngine(t *Trace) *replay.ReplayEngine {
+	return replay.NewReplayEngine(t)
+}
+
+// ExtractShaderSourceAttribution extracts source attribution for shaderName.
+func ExtractShaderSourceAttribution(t *Trace, shaderName string) (*shader.ShaderSourceAttribution, error) {
+	return shader.ExtractShaderSourceAttribution(t, shaderName)
+}
+
+// FormatShaderSourceAttribution formats shader source attribution.
+func FormatShaderSourceAttribution(attr *shader.ShaderSourceAttribution, showHints bool) string {
+	return shader.FormatShaderSourceAttribution(attr, showHints)
+}
+
+// FormatShaderSourceAttributionHTML formats shader source attribution as HTML.
+func FormatShaderSourceAttributionHTML(attr *shader.ShaderSourceAttribution) string {
+	return shader.FormatShaderSourceAttributionHTML(attr)
+}
+
+// FormatTimingMetrics formats timing metrics.
+func FormatTimingMetrics(metrics *TimingMetrics) string {
+	return timing.FormatTimingMetrics(metrics)
+}
+
+// ExportTimingMetricsJSON writes timing metrics as JSON.
+func ExportTimingMetricsJSON(w io.Writer, metrics *TimingMetrics) error {
+	return timing.ExportTimingMetricsJSON(w, metrics)
+}
+
+// ExportTimingMetricsCSV writes timing metrics as CSV.
+func ExportTimingMetricsCSV(w io.Writer, metrics *TimingMetrics) error {
+	return timing.ExportTimingMetricsCSV(w, metrics)
+}
+
+// CompareTraces compares baseline and current timing metrics.
+func CompareTraces(baseline, current *TimingMetrics) *timing.TimingComparison {
+	return timing.CompareTraces(baseline, current)
+}
+
+// FormatTimingComparison formats a timing comparison.
+func FormatTimingComparison(comp *timing.TimingComparison) string {
+	return timing.FormatTimingComparison(comp)
+}
+
+// NewTimingExtractorProfilerRaw returns a raw profiler timing extractor for t.
+func NewTimingExtractorProfilerRaw(t *Trace) *timing.TimingExtractorProfilerRaw {
+	return timing.NewTimingExtractorProfilerRaw(t)
+}
+
+// ExportShaderMetricsCSV writes shader metrics as CSV.
+func ExportShaderMetricsCSV(w io.Writer, report *ShaderMetricsReport) error {
+	return shader.ExportShaderMetricsCSV(w, report)
+}
+
+// ExportShaderMetricsJSON writes shader metrics as JSON.
+func ExportShaderMetricsJSON(w io.Writer, report *ShaderMetricsReport) error {
+	return shader.ExportShaderMetricsJSON(w, report)
+}
+
+// CorrelateShaderMetrics correlates shader metrics for t.
+func CorrelateShaderMetrics(t *Trace) (*shader.ShaderCorrelationReport, error) {
+	return shader.CorrelateShaderMetrics(t)
+}
+
+// FormatCorrelationReport formats a shader correlation report.
+func FormatCorrelationReport(report *shader.ShaderCorrelationReport) string {
+	return shader.FormatCorrelationReport(report)
+}
+
+// GenerateInsights generates performance insights for t.
+func GenerateInsights(t *Trace) (*InsightsReport, error) {
+	return analysis.GenerateInsights(t)
+}
+
+// FormatInsightsReport formats a performance insights report.
+func FormatInsightsReport(report *InsightsReport) string {
+	return analysis.FormatInsightsReport(report)
+}
 
 // Open opens and parses a .gputrace bundle.
 func Open(path string) (*Trace, error) {
