@@ -16,10 +16,38 @@ import (
 type MetalReplayEngine struct {
 	*ReplayEngine
 	Bridge         *MetalBridge
+	GPUToolsReplay *GPUToolsReplay
 	MetalBuffers   map[uint64]*MetalBufferHandle   // trace address -> Metal buffer
 	MetalFunctions map[uint64]*MetalFunctionHandle // trace address -> Metal function
 	MetalPipelines map[uint64]*MetalPipelineHandle // trace address -> Metal pipeline
 	MTLBLibraries  []*metallib.MetalLibrary        // Pre-compiled Metal libraries loaded from trace
+}
+
+// EnableGPUToolsReplay loads the private headless replay entry points.
+//
+// The normal Metal commit path remains the default. Callers that have the
+// matching private-framework ABI can use GPUToolsReplayCommandBuffer to
+// invoke the loaded dispatch and commit functions explicitly.
+func (mre *MetalReplayEngine) EnableGPUToolsReplay() error {
+	replay, err := OpenGPUToolsReplay()
+	if err != nil {
+		return err
+	}
+	mre.GPUToolsReplay = replay
+	return nil
+}
+
+// GPUToolsReplayCommandBuffer dispatches and commits a command buffer through
+// the optional private replay surface. The argument slices are ABI-specific
+// values owned by the caller and must match the current macOS release.
+func (mre *MetalReplayEngine) GPUToolsReplayCommandBuffer(cmd *MetalCommandBufferHandle, dispatchArgs, commitArgs []uintptr) error {
+	if mre == nil || mre.GPUToolsReplay == nil {
+		return fmt.Errorf("GPUToolsReplay is not enabled")
+	}
+	if cmd == nil || cmd.ID() == 0 {
+		return fmt.Errorf("GPUToolsReplay command buffer is nil")
+	}
+	return mre.GPUToolsReplay.ExecuteCommandBuffer(cmd.ID(), dispatchArgs, commitArgs)
 }
 
 // NewMetalReplayEngine creates a replay engine with Metal execution support.
@@ -249,6 +277,16 @@ func (mre *MetalReplayEngine) ExecuteReplayPlan(plan *ReplayPlan) (*MetalReplayR
 		Success:       true,
 		EncodersRun:   0,
 		DispatchesRun: 0,
+	}
+	if plan == nil {
+		result.Success = false
+		result.Error = "replay plan is nil"
+		return result, fmt.Errorf("replay plan is nil")
+	}
+	if len(plan.Commands) == 0 {
+		result.Success = false
+		result.Error = "replay plan contains no executable commands"
+		return result, fmt.Errorf("replay plan contains no executable commands")
 	}
 
 	if err := validateReplayPlanForMetalExecution(plan); err != nil {
