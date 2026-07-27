@@ -446,31 +446,33 @@ func (r *MTSPRecord) parseCSuwuwRecord() {
 	marker := []byte("CSuwuw")
 	idx := bytes.Index(r.Data, marker)
 	if idx != -1 {
-		// Based on analysis, address seems to effectively follow the marker,
-		// possibly with alignment padding.
-		// In examined traces, address starts 9 bytes after marker start?
-		// 0x84: CSuwuw... 0x8D: Address. Difference is 9 bytes.
-		// Address is 8 bytes.
-		// String starts after address.
+		r.Address, r.Label = parseCSuwuwAt(r.Data, idx)
+	}
+}
 
-		addrStart := idx + 9
-		if addrStart+8 <= len(r.Data) {
-			r.Address = binary.LittleEndian.Uint64(r.Data[addrStart : addrStart+8])
-
-			// String likely follows address, maybe with padding/nulls
-			strStart := addrStart + 8
-			// Skip nulls
-			for strStart < len(r.Data) && r.Data[strStart] == 0 {
-				strStart++
-			}
-
-			if strStart < len(r.Data) {
-				if end := bytes.IndexByte(r.Data[strStart:], 0); end != -1 {
-					r.Label = string(r.Data[strStart : strStart+end])
-				}
-			}
+func parseCSuwuwAt(data []byte, marker int) (uint64, string) {
+	// Older sidecars put one additional padding byte before the address.
+	for _, addrStart := range []int{marker + 8, marker + 9} {
+		if addrStart+8 > len(data) {
+			continue
+		}
+		strStart := addrStart + 8
+		for strStart < len(data) && data[strStart] == 0 {
+			strStart++
+		}
+		if strStart >= len(data) {
+			continue
+		}
+		end := bytes.IndexByte(data[strStart:], 0)
+		if end <= 0 {
+			continue
+		}
+		label := string(data[strStart : strStart+end])
+		if isPrintable(label) {
+			return binary.LittleEndian.Uint64(data[addrStart : addrStart+8]), label
 		}
 	}
+	return 0, ""
 }
 
 // parseCSRecord parses a CS (Command Submission) record.
@@ -573,7 +575,6 @@ func isHexString(data []byte) bool {
 func isHex(b byte) bool {
 	return (b >= '0' && b <= '9') || (b >= 'A' && b <= 'F') || (b >= 'a' && b <= 'f')
 }
-
 
 // AnalyzeMTSPRecords provides a detailed analysis of MTSP records.
 func (t *Trace) AnalyzeMTSPRecords() (string, error) {
