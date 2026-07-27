@@ -42,12 +42,16 @@ type xcodeParityGap struct {
 }
 
 func runXcodeParity(cmd *cobra.Command, args []string, opts *xcodeParityOptions) error {
-	timeline, err := timelineForParity(args[0])
+	tracePath, err := parityTracePath(args[0])
+	if err != nil {
+		return err
+	}
+	timeline, err := timelineForParity(tracePath)
 	if err != nil {
 		return err
 	}
 	report := buildXcodeParityReport(args[0], timeline, xcodebindings.Probe())
-	if streamPath := streamDataPathForTrace(args[0]); streamPath != "" {
+	if streamPath := streamDataPathForTrace(tracePath); streamPath != "" {
 		if summary, err := xcodebindings.ProbeStreamData(streamPath); err == nil {
 			report.StreamData = &summary
 			report.applyStreamDataEvidence()
@@ -100,6 +104,31 @@ func runXcodeParity(cmd *cobra.Command, args []string, opts *xcodeParityOptions)
 		}
 	}
 	return nil
+}
+
+func parityTracePath(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil || !info.IsDir() {
+		return path, nil
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return "", fmt.Errorf("read parity trace directory: %w", err)
+	}
+	var traces []string
+	for _, entry := range entries {
+		if entry.IsDir() && filepath.Ext(entry.Name()) == ".gputrace" {
+			traces = append(traces, filepath.Join(path, entry.Name()))
+		}
+	}
+	if len(traces) == 1 {
+		return traces[0], nil
+	}
+	if len(traces) == 0 {
+		return "", fmt.Errorf("no .gputrace directory found in %s", path)
+	}
+	sort.Strings(traces)
+	return "", fmt.Errorf("multiple .gputrace directories found in %s: %v", path, traces)
 }
 
 func streamDataPathForTrace(tracePath string) string {
@@ -211,8 +240,8 @@ func (r *xcodeParityReport) applyStreamDataEvidence() {
 	}
 	if r.streamValueCount("Binaries") > 0 {
 		r.updateGap("high_register",
-			"binary blobs present in Xcode streamData; adapter missing",
-			"build a safe parent-aware GTMioShaderBinaryData adapter or offline binary decoder; the nil-parent constructor path is unsafe")
+			"binary blobs present in Xcode streamData; parent-enumeration adapter present",
+			"map enumerated parent-owned binaries to kernel events and apply pipeline shader metrics; the nil-parent constructor path remains disabled")
 	}
 	if r.streamValueCount("Derived Counter Sample Data") > 0 {
 		next := "decode Derived Counter Sample Data and map ALU utilization into dispatch timeline and pprof samples"
