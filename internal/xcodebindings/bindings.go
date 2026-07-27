@@ -96,6 +96,10 @@ func Probe() Report {
 			selectors: []Selector{
 				{Name: "initWithGPUGeneration:variant:rev:config:options:", Kind: "instance"},
 				{Name: "parseData", Kind: "instance"},
+				{Name: "addBufferAtUSCIndex:buffer:length:", Kind: "instance"},
+				{Name: "addBufferAtRDESourceIndex:rdeBufferIndex:buffer:length:", Kind: "instance"},
+				{Name: "getBufferAtUSCIndex:buffer:length:", Kind: "instance"},
+				{Name: "getBufferAtRDESourceIndex:rdeBufferIndex:buffer:length:", Kind: "instance"},
 				{Name: "loadCounters:", Kind: "instance"},
 				{Name: "loadAPSCounters:counterSet:", Kind: "instance"},
 				{Name: "loadRDECounters:", Kind: "instance"},
@@ -126,6 +130,7 @@ func Probe() Report {
 		{
 			name: "GTMioShaderBinaryData",
 			selectors: []Selector{
+				{Name: "initWithBinaryData:parent:index:", Kind: "instance"},
 				{Name: "cost", Kind: "instance"},
 				{Name: "duration", Kind: "instance"},
 				{Name: "instructionInfoCount", Kind: "instance"},
@@ -160,28 +165,28 @@ func Probe() Report {
 		{
 			Metric:  "high_register",
 			Binding: "GTMioShaderBinaryData.liveRegisterForInstructionAtIndex:",
-			Status:  gapStatus(report, "GTMioShaderBinaryData", "liveRegisterForInstructionAtIndex:"),
-			Next:    "map streamData pipeline or shader binary records to kernel events, then compute max live register per kernel",
+			Status:  "parent-validated adapter present; exporter integration missing",
+			Next:    "map streamData pipeline or shader binary records to kernel events, then apply ApplyShaderBinaryMetrics",
 		},
 		{
 			Metric:    "occupancy_pct",
 			Binding:   "XRGPUAPSDataProcessor derived counters",
-			Status:    gapStatus(report, "XRGPUAPSDataProcessor", "getAPSDerivedCounterData:timestamps:sampleCount:counterIndex:count:"),
-			Next:      "wrap derived counter buffers with typed storage and attach values to encoder or dispatch samples",
+			Status:    "caller-owned buffer adapter present; counter mapping missing",
+			Next:      "resolve the occupancy counter type and attach validated values to encoder or dispatch samples",
 			Signature: "counter buffer methods need caller-owned numeric buffers and count validation",
 		},
 		{
 			Metric:    "alu_utilization_pct",
 			Binding:   "XRGPUAPSDataProcessor derived counters",
-			Status:    gapStatus(report, "XRGPUAPSDataProcessor", "getAPSDerivedCounterData:timestamps:sampleCount:counterIndex:count:"),
+			Status:    "caller-owned buffer adapter present; counter mapping missing",
 			Next:      "resolve the Xcode counter type for ALU utilization and feed it through timeline and pprof exporters",
 			Signature: "counter buffer methods need caller-owned numeric buffers and count validation",
 		},
 		{
 			Metric:    "counter_values",
 			Binding:   "GTMioCounterData.values",
-			Status:    gapStatus(report, "GTMioCounterData", "values"),
-			Next:      "replace generated []objc.ID use with a typed numeric slice wrapper based on sampleCount and valueType",
+			Status:    "typed numeric adapter present; exporter integration missing",
+			Next:      "use CounterDataValues in the counter export path",
 			Signature: "generated Values method is not safe for numeric counter storage",
 		},
 	}
@@ -220,19 +225,4 @@ func selectorPresent(cls objc.Class, kind, name string) (present bool) {
 	default:
 		return objectivec.Class_getInstanceMethod(cls, sel) != 0
 	}
-}
-
-func gapStatus(report Report, className, selector string) string {
-	for _, class := range report.Classes {
-		if class.Name != className || !class.Present {
-			continue
-		}
-		for _, sel := range class.Selectors {
-			if sel.Name == selector && sel.Present {
-				return "binding present; adapter missing"
-			}
-		}
-		return "selector missing"
-	}
-	return "class missing"
 }

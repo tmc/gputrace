@@ -77,6 +77,15 @@ type ObjectSummary struct {
 // ProbeStreamData loads a streamData archive through GTShaderProfilerStreamData
 // and returns metadata that does not require walking private object graphs.
 func ProbeStreamData(path string) (StreamDataSummary, error) {
+	var summary StreamDataSummary
+	var err error
+	objc.AutoreleasePool(func() {
+		summary, err = probeStreamData(path)
+	})
+	return summary, err
+}
+
+func probeStreamData(path string) (StreamDataSummary, error) {
 	summary := StreamDataSummary{Path: path}
 	if err := loadFramework(); err != nil {
 		return summary, fmt.Errorf("load GTShaderProfiler.framework: %w", err)
@@ -165,11 +174,13 @@ func objectSamples(array objc.ID, limit uint64) []ObjectSummary {
 	}
 	samples := make([]ObjectSummary, 0, limit)
 	for i := uint64(0); i < limit; i++ {
-		id := objc.Send[objc.ID](array, objc.Sel("objectAtIndex:"), uint(i))
-		if id == 0 {
-			continue
-		}
-		samples = append(samples, summarizeObject(id, i, 1))
+		objc.AutoreleasePool(func() {
+			id := objc.Send[objc.ID](array, objc.Sel("objectAtIndex:"), uint(i))
+			if id == 0 {
+				return
+			}
+			samples = append(samples, summarizeObject(id, i, 1))
+		})
 	}
 	return samples
 }
@@ -205,10 +216,12 @@ func childSamples(id objc.ID, limit uint64, depth int) []ObjectSummary {
 	}
 	children := make([]ObjectSummary, 0, limit)
 	for i := uint64(0); i < limit; i++ {
-		child := objc.Send[objc.ID](id, objc.Sel("objectAtIndex:"), uint(i))
-		if child != 0 {
-			children = append(children, summarizeObject(child, i, depth))
-		}
+		objc.AutoreleasePool(func() {
+			child := objc.Send[objc.ID](id, objc.Sel("objectAtIndex:"), uint(i))
+			if child != 0 {
+				children = append(children, summarizeObject(child, i, depth))
+			}
+		})
 	}
 	return children
 }
@@ -323,11 +336,13 @@ func dictionaryKeys(id objc.ID, limit uint64) []string {
 	}
 	out := make([]string, 0, limit)
 	for i := uint64(0); i < limit; i++ {
-		key := objc.Send[objc.ID](keys, objc.Sel("objectAtIndex:"), uint(i))
-		if key == 0 {
-			continue
-		}
-		out = append(out, objc.IDToString(key))
+		objc.AutoreleasePool(func() {
+			key := objc.Send[objc.ID](keys, objc.Sel("objectAtIndex:"), uint(i))
+			if key == 0 {
+				return
+			}
+			out = append(out, objc.IDToString(key))
+		})
 	}
 	return out
 }
@@ -386,10 +401,12 @@ func dictionaryKeyCounts(array objc.ID) []KeyCount {
 	}
 	counts := make(map[string]int)
 	for i := uint64(0); i < count; i++ {
-		id := objc.Send[objc.ID](array, objc.Sel("objectAtIndex:"), uint(i))
-		for _, key := range dictionaryKeys(id, 256) {
-			counts[key]++
-		}
+		objc.AutoreleasePool(func() {
+			id := objc.Send[objc.ID](array, objc.Sel("objectAtIndex:"), uint(i))
+			for _, key := range dictionaryKeys(id, 256) {
+				counts[key]++
+			}
+		})
 	}
 	out := make([]KeyCount, 0, len(counts))
 	for key, count := range counts {
@@ -407,8 +424,13 @@ func dictionaryKeyCounts(array objc.ID) []KeyCount {
 func dictionaryNumberInArray(array objc.ID, key string) (uint64, bool) {
 	count := arrayCount(array)
 	for i := uint64(0); i < count; i++ {
-		id := objc.Send[objc.ID](array, objc.Sel("objectAtIndex:"), uint(i))
-		if value, ok := dictionaryNumber(id, key); ok {
+		var value uint64
+		var ok bool
+		objc.AutoreleasePool(func() {
+			id := objc.Send[objc.ID](array, objc.Sel("objectAtIndex:"), uint(i))
+			value, ok = dictionaryNumber(id, key)
+		})
+		if ok {
 			return value, true
 		}
 	}
@@ -419,26 +441,28 @@ func selectedValues(array objc.ID, arrayName, key string) []ValueSummary {
 	count := arrayCount(array)
 	var out []ValueSummary
 	for i := uint64(0); i < count; i++ {
-		id := objc.Send[objc.ID](array, objc.Sel("objectAtIndex:"), uint(i))
-		value := dictionaryObject(id, key)
-		if value == 0 {
-			continue
-		}
-		summary := ValueSummary{
-			Array:       arrayName,
-			Index:       i,
-			Key:         key,
-			Class:       className(value),
-			Description: fmtutil.TruncateStringPlain(objectivec.Object{ID: value}.Description(), 120),
-			Keys:        dictionaryKeys(value, 24),
-			Bytes:       dataLength(value),
-			Count:       arrayCount(value),
-			Children:    childSamples(value, 4, 2),
-		}
-		if number, ok := dictionaryNumber(id, key); ok {
-			summary.Number = number
-		}
-		out = append(out, summary)
+		objc.AutoreleasePool(func() {
+			id := objc.Send[objc.ID](array, objc.Sel("objectAtIndex:"), uint(i))
+			value := dictionaryObject(id, key)
+			if value == 0 {
+				return
+			}
+			summary := ValueSummary{
+				Array:       arrayName,
+				Index:       i,
+				Key:         key,
+				Class:       className(value),
+				Description: fmtutil.TruncateStringPlain(objectivec.Object{ID: value}.Description(), 120),
+				Keys:        dictionaryKeys(value, 24),
+				Bytes:       dataLength(value),
+				Count:       arrayCount(value),
+				Children:    childSamples(value, 4, 2),
+			}
+			if number, ok := dictionaryNumber(id, key); ok {
+				summary.Number = number
+			}
+			out = append(out, summary)
+		})
 	}
 	return out
 }
