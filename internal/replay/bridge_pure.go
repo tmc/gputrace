@@ -269,6 +269,14 @@ type MetalCommandBufferHandle struct {
 	cmdBuffer metal.MTLCommandBuffer
 }
 
+// ID returns the Objective-C command-buffer object ID.
+func (h *MetalCommandBufferHandle) ID() objc.ID {
+	if h == nil || h.cmdBuffer == nil {
+		return 0
+	}
+	return h.cmdBuffer.GetID()
+}
+
 // CreateComputeEncoder creates a compute command encoder.
 func (h *MetalCommandBufferHandle) CreateComputeEncoder() *MetalComputeEncoderHandle {
 	encoderID := objc.Send[objc.ID](h.cmdBuffer.GetID(), objc.Sel("computeCommandEncoder"))
