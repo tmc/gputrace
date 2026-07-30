@@ -20,3 +20,16 @@ Start with:
 - [BUFFER_FEATURES_STATUS.md](./BUFFER_FEATURES_STATUS.md) - buffer features status
 - [BUFFER_FILE_ANALYSIS.md](./BUFFER_FILE_ANALYSIS.md) - buffer file analysis
 - [matching-xcode-gputools-parity.md](./matching-xcode-gputools-parity.md) - feature parity tracking
+
+Private-framework binding notes:
+
+- [GTMIO_SURFACE.md](./GTMIO_SURFACE.md) - `GTShaderProfiler.framework` class and selector surface
+- [GTMIO_CAPABILITY_MATRIX.md](./GTMIO_CAPABILITY_MATRIX.md) - what each binding can supply
+- [GTMIO_INIT_SMOKE.md](./GTMIO_INIT_SMOKE.md) - initializer smoke results
+- [GTShaderProfiler_BINDING_GAPS.md](./GTShaderProfiler_BINDING_GAPS.md) - unbound selectors and known gaps
+- [PRIVATE_BINDING_ERGONOMICS.md](./PRIVATE_BINDING_ERGONOMICS.md) - calling conventions for private bindings
+- [UPSTREAM_OBJC_REQUESTS.md](./UPSTREAM_OBJC_REQUESTS.md) - requests against `github.com/tmc/apple`
+- [XCODE_PARITY_LOOP.md](./XCODE_PARITY_LOOP.md) - the capture/compare loop behind `gputrace xcode-parity`
+
+The tables in `matching-xcode-gputools-parity.md` are maintained by hand and
+drift; `gputrace xcode-parity` reports live coverage for a given trace.
