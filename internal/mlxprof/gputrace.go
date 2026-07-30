@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/google/pprof/profile"
@@ -93,7 +94,7 @@ func FromGPUTrace(tracePath string, shaderSearchPaths ...string) (*GPUTraceProfi
 	var stats *gputrace.PerfCounterStats
 	if s, err := gputrace.ParsePerfCounters(trace); err == nil {
 		stats = s
-		fmt.Fprintf(os.Stderr, "Loaded performance counters with confidence %.2f\n", stats.ConfidenceLevel)
+		fmt.Fprintf(os.Stderr, "Counter source: parsed capture records (decoder confidence %.2f)\n", stats.ConfidenceLevel)
 	} else {
 		// Only log if verbose? Or just ignore silently as it's optional.
 		// fmt.Printf("Note: No performance counters: %v\n", err)
@@ -257,26 +258,16 @@ func (p *GPUTraceProfiler) WriteTextReport(path string) error {
 	fmt.Fprintf(w, "========================\n\n")
 	fmt.Fprintf(w, "Trace: %s\n", p.trace.Path)
 	fmt.Fprintf(w, "Command Queue: %s\n", p.trace.CommandQueueLabel)
-	fmt.Fprintf(w, "Encoders: %d\n", len(p.timings))
-	fmt.Fprintf(w, "Kernel Names: %d\n\n", len(p.trace.KernelNames))
+	fmt.Fprintf(w, "Timed Rows: %d\n", len(p.timings))
+	if p.streamStats != nil && len(p.streamStats.Dispatches) > 0 {
+		fmt.Fprintf(w, "Profiler Dispatches: %d\n", len(p.streamStats.Dispatches))
+	}
+	fmt.Fprintf(w, "Discovered Library Functions: %d (not necessarily dispatched)\n\n", len(p.trace.KernelNames))
 
 	p.writeTimingSummary(w)
 	fmt.Fprintln(w)
 
-	fmt.Fprintf(w, "Encoder Breakdown:\n")
-	fmt.Fprintf(w, "%-30s %12s %12s %8s\n", "Label", "Duration (ms)", "Duration (ns)", "Percent")
-	fmt.Fprintf(w, "%s\n", strings.Repeat("-", 80))
-	for _, t := range p.timings {
-		fmt.Fprintf(w, "%-30s %12.2f %12d %7.1f%%\n",
-			t.Label, t.DurationMs, t.DurationNs, t.Percentage)
-	}
-
-	if len(p.trace.KernelNames) > 0 {
-		fmt.Fprintf(w, "\nKernel Names:\n")
-		for i, name := range p.trace.KernelNames {
-			fmt.Fprintf(w, "  %d. %s\n", i+1, name)
-		}
-	}
+	p.writeObservedTimingBreakdown(w)
 
 	return nil
 }
@@ -319,13 +310,16 @@ func (p *GPUTraceProfiler) FprintSummary(w io.Writer) {
 	fmt.Fprintf(w, "=========================\n\n")
 	fmt.Fprintf(w, "Trace: %s\n", p.trace.Path)
 	fmt.Fprintf(w, "Command Queue: %s\n", p.trace.CommandQueueLabel)
-	fmt.Fprintf(w, "Encoders: %d\n", len(p.timings))
-	fmt.Fprintf(w, "Kernels: %d\n\n", len(p.trace.KernelNames))
+	fmt.Fprintf(w, "Timed Rows: %d\n", len(p.timings))
+	if p.streamStats != nil && len(p.streamStats.Dispatches) > 0 {
+		fmt.Fprintf(w, "Profiler Dispatches: %d\n", len(p.streamStats.Dispatches))
+	}
+	fmt.Fprintf(w, "Discovered Library Functions: %d (not necessarily dispatched)\n\n", len(p.trace.KernelNames))
 
 	p.writeTimingSummary(w)
 	fmt.Fprintln(w)
 
-	fmt.Fprintf(w, "Top Encoders:\n")
+	fmt.Fprintf(w, "Top Observed Timing Rows:\n")
 	for i, t := range p.timings {
 		if i >= 10 {
 			break
@@ -341,7 +335,11 @@ func (p *GPUTraceProfiler) writeTimingSummary(w io.Writer) {
 		totalMs += t.DurationMs
 	}
 
-	fmt.Fprintf(w, "Total GPU Time: %.2f ms\n", totalMs)
+	metric := "Attributed timing span"
+	if p.timingSource == TimingSourceProfiler {
+		metric = "Encoder span"
+	}
+	fmt.Fprintf(w, "%s: %.2f ms\n", metric, totalMs)
 	if source := p.timingSourceDisplay(); source != "" {
 		fmt.Fprintf(w, "Timing Source: %s\n", source)
 	}
@@ -354,6 +352,10 @@ func (p *GPUTraceProfiler) writeTimingSummary(w io.Writer) {
 		if p.streamStats.CommandBufferActiveNs > 0 {
 			fmt.Fprintf(w, "CB Active Time: %.2f ms\n", float64(p.streamStats.CommandBufferActiveNs)/1e6)
 		}
+		if p.streamStats.TotalDispatchTimeUs > 0 {
+			fmt.Fprintf(w, "Dispatch Span: %.2f ms\n", float64(p.streamStats.TotalDispatchTimeUs)/1000)
+			fmt.Fprintln(w, "Dispatch Attribution: cumulative offsets may include boundary or gap time")
+		}
 		if p.streamStats.CommandBufferWallNs > 0 {
 			fmt.Fprintf(w, "CB Wall Time: %.2f ms\n", float64(p.streamStats.CommandBufferWallNs)/1e6)
 		}
@@ -363,6 +365,71 @@ func (p *GPUTraceProfiler) writeTimingSummary(w io.Writer) {
 			fmt.Fprintf(w, "StreamData Timing Source: %s\n", p.streamStats.TimingSource)
 		}
 	}
+}
+
+func (p *GPUTraceProfiler) writeObservedTimingBreakdown(w io.Writer) {
+	if p.streamStats != nil && len(p.streamStats.Dispatches) > 0 {
+		type functionTiming struct {
+			name  string
+			count int
+			us    int
+		}
+		byName := make(map[string]*functionTiming)
+		totalUs := 0
+		for _, dispatch := range p.streamStats.Dispatches {
+			name := dispatch.FunctionName
+			if name == "" {
+				name = fmt.Sprintf("(pipeline_%d)", dispatch.PipelineIndex)
+			}
+			row := byName[name]
+			if row == nil {
+				row = &functionTiming{name: name}
+				byName[name] = row
+			}
+			row.count++
+			row.us += dispatch.DurationUs
+			totalUs += dispatch.DurationUs
+		}
+		rows := make([]*functionTiming, 0, len(byName))
+		for _, row := range byName {
+			rows = append(rows, row)
+		}
+		sort.Slice(rows, func(i, j int) bool {
+			if rows[i].us != rows[j].us {
+				return rows[i].us > rows[j].us
+			}
+			return rows[i].name < rows[j].name
+		})
+		fmt.Fprintln(w, "Function Dispatch-Span Breakdown:")
+		fmt.Fprintf(w, "%-48s %10s %12s %8s\n", "Function", "Dispatches", "Span (µs)", "Share")
+		fmt.Fprintln(w, strings.Repeat("-", 84))
+		for _, row := range rows {
+			share := 0.0
+			if totalUs > 0 {
+				share = float64(row.us) / float64(totalUs) * 100
+			}
+			fmt.Fprintf(w, "%-48s %10d %12d %7.1f%%\n", truncateReportLabel(row.name, 48), row.count, row.us, share)
+		}
+		return
+	}
+
+	fmt.Fprintln(w, "Observed Timing Breakdown:")
+	fmt.Fprintf(w, "%-30s %12s %12s %8s\n", "Label", "Duration (ms)", "Duration (ns)", "Percent")
+	fmt.Fprintln(w, strings.Repeat("-", 80))
+	for _, t := range p.timings {
+		fmt.Fprintf(w, "%-30s %12.2f %12d %7.1f%%\n",
+			t.Label, t.DurationMs, t.DurationNs, t.Percentage)
+	}
+}
+
+func truncateReportLabel(s string, width int) string {
+	if len(s) <= width {
+		return s
+	}
+	if width <= 3 {
+		return s[:width]
+	}
+	return s[:width-3] + "..."
 }
 
 // Close closes any resources held by the profiler.
