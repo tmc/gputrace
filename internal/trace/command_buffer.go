@@ -3,6 +3,7 @@ package trace
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -255,46 +256,52 @@ func isActualFunctionName(name string) bool {
 	return true
 }
 
-// CountComputeEncoders returns the number of unique compute encoders (Cuw) in the trace.
+// ComputeEncoderCount describes an authoritative compute-encoder count.
+type ComputeEncoderCount struct {
+	Count     int
+	Available bool
+	Source    string
+}
+
+const (
+	// ComputeEncoderSourceStreamData identifies Xcode profiler encoder metadata.
+	ComputeEncoderSourceStreamData = "profiler streamData encoderInfoData"
+	// ComputeEncoderSourceUnavailable explains why raw capture records are not counted.
+	ComputeEncoderSourceUnavailable = "unavailable: raw capture lacks command-buffer-scoped encoder lifecycle evidence"
+)
+
+// ErrComputeEncoderCountUnavailable reports that the trace lacks an
+// authoritative command-buffer-scoped or profiler encoder count.
+var ErrComputeEncoderCountUnavailable = errors.New("compute encoder count unavailable")
+
+// InspectComputeEncoderCount returns the best authoritative compute-encoder count.
+//
+// Cuw records describe buffer writes or updates. Their addresses are not encoder
+// identities and must not be counted as compute encoders. CS records similarly
+// describe observed submissions, not encoder lifetimes. Raw counts remain
+// unavailable until the capture parser can identify encoder creation and end
+// events within command-buffer boundaries.
+func (t *Trace) InspectComputeEncoderCount() ComputeEncoderCount {
+	if n := t.countEncodersFromStreamData(); n > 0 {
+		return ComputeEncoderCount{
+			Count:     n,
+			Available: true,
+			Source:    ComputeEncoderSourceStreamData,
+		}
+	}
+	return ComputeEncoderCount{Source: ComputeEncoderSourceUnavailable}
+}
+
+// CountComputeEncoders returns the authoritative compute-encoder count.
+//
+// It returns ErrComputeEncoderCountUnavailable when the trace has no
+// authoritative source. Call InspectComputeEncoderCount for provenance.
 func (t *Trace) CountComputeEncoders() (int, error) {
-	records, err := t.ParseMTSPRecords()
-	if err != nil {
-		return 0, err
+	count := t.InspectComputeEncoderCount()
+	if !count.Available {
+		return 0, ErrComputeEncoderCountUnavailable
 	}
-
-	uniqueEncoders := make(map[uint64]struct{})
-	cuwRecordCount := 0
-
-	for _, rec := range records {
-		if rec.Type == RecordTypeCuw {
-			cuwRecordCount++
-			cuw, err := rec.ParseCuwRecord()
-			if err == nil {
-				uniqueEncoders[cuw.BufferAddr] = struct{}{}
-			}
-		}
-	}
-
-	// Fallback logic: if Cuw records yield 0 or 1 encoder, try other sources
-	// and return the highest count. Python Metal traces often have only 1 Cuw
-	// record despite having many encoders.
-	if len(uniqueEncoders) <= 1 {
-		best := len(uniqueEncoders)
-
-		// Try CS records from capture data
-		if encoders, err := t.ParseComputeEncoders(); err == nil && len(encoders) > best {
-			best = len(encoders)
-		}
-
-		// Try streamData's encoderInfoData (works for profiler-only and Python traces)
-		if n := t.countEncodersFromStreamData(); n > best {
-			best = n
-		}
-
-		return best, nil
-	}
-
-	return len(uniqueEncoders), nil
+	return count.Count, nil
 }
 
 // countEncodersFromStreamData counts encoders from the streamData plist's encoderInfoData.

@@ -2,6 +2,7 @@ package trace
 
 import (
 	"encoding/binary"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -65,5 +66,28 @@ func TestParseCommandBuffersUnsortedCaptureFallback(t *testing.T) {
 				t.Errorf("label = %q, want %q", cbs[0].Label, "MultipleEncoders")
 			}
 		})
+	}
+}
+
+func TestInspectComputeEncoderCountDoesNotTreatRawAddressesAsEncoders(t *testing.T) {
+	tr := writeCaptureOnlyBundle(t, "capture")
+
+	got := tr.InspectComputeEncoderCount()
+	if got.Available {
+		t.Fatalf("InspectComputeEncoderCount() = %+v, want unavailable", got)
+	}
+	if got.Count != 0 {
+		t.Fatalf("InspectComputeEncoderCount().Count = %d, want 0", got.Count)
+	}
+	if got.Source != ComputeEncoderSourceUnavailable {
+		t.Fatalf("InspectComputeEncoderCount().Source = %q, want %q", got.Source, ComputeEncoderSourceUnavailable)
+	}
+
+	count, err := tr.CountComputeEncoders()
+	if !errors.Is(err, ErrComputeEncoderCountUnavailable) {
+		t.Fatalf("CountComputeEncoders error = %v, want %v", err, ErrComputeEncoderCountUnavailable)
+	}
+	if count != 0 {
+		t.Fatalf("CountComputeEncoders() = %d, want 0", count)
 	}
 }

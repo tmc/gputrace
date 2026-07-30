@@ -142,6 +142,15 @@ func Open(path string) (*Trace, error) {
 	return trace, nil
 }
 
+// ReadMetadata reads bundle metadata without loading captured resources.
+func ReadMetadata(path string) (*Metadata, error) {
+	t := &Trace{Path: path}
+	if err := t.parseMetadata(); err != nil {
+		return nil, err
+	}
+	return t.Metadata, nil
+}
+
 // parseMetadata reads and parses the metadata plist file.
 func (t *Trace) parseMetadata() error {
 	metadataPath := filepath.Join(t.Path, "metadata")
