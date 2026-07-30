@@ -31,8 +31,6 @@ Timing & Profiling:
   profiler         - Profiler spans, active time, dispatches, and pipelines
   pprof            - pprof format export
   correlate        - Correlate timing with hardware metrics
-  counters         - Counter collection planning
-  replay-counters  - Replay counter collection or simulate its plan
 
 Command Buffers & Encoders:
   command-buffers  - Command buffer analysis
@@ -42,8 +40,6 @@ Buffer Analysis:
   buffers          - Buffer listing and properties
   buffer-access    - Buffer access patterns
   buffer-timeline  - Buffer allocation timeline
-  dependencies     - Resource dependency analysis
-  fences           - Fence and synchronization analysis
 
 Visualization & Export:
   timeline         - Text timeline and Chrome/Perfetto export
@@ -62,6 +58,10 @@ Utilities:
   mtlb             - Metal Library Binary inspection
   clear-buffers    - Destructively zero captured buffers
   version          - Print gputrace build version
+
+Hidden commands are runnable but omitted from Available Commands because their
+output is experimental or heuristic: counters, replay-counters, dependencies,
+fences, export-counters, perfcounters-validate.
 
 For more information about a specific command:
   gputrace [command] --help`,
