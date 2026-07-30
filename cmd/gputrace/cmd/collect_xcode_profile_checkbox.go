@@ -144,14 +144,13 @@ func runToggleCheckbox(cmd *cobra.Command, args []string, opts *checkboxOptions)
 // If traceFile is empty, it looks for the first .gputrace window.
 func findTargetWindow(ctx context.Context, appAX uintptr, traceFile string) (uintptr, error) {
 	if traceFile != "" {
-		// Extract just the filename for matching
 		baseName := filepath.Base(traceFile)
-		windowAX := GetWindowByTitle(appAX, baseName)
-		if windowAX == 0 {
-			if diagnostic := xcodeWindowVisibilityDiagnostic(appAX); diagnostic != "" {
-				return 0, fmt.Errorf("no AX-visible Xcode window found for trace %q (%s)", baseName, diagnostic)
-			}
-			return 0, fmt.Errorf("no Xcode window found for trace %q", baseName)
+		if windowAX := getPreferredTraceWindow(appAX, traceFile); windowAX != 0 {
+			return windowAX, nil
+		}
+		windowAX, err := waitForWindow(ctx, appAX, traceFile, 10*time.Second)
+		if err != nil {
+			return 0, fmt.Errorf("find Xcode GPU trace window for %q: %w", baseName, err)
 		}
 		return windowAX, nil
 	}

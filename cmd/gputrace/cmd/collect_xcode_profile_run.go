@@ -5,6 +5,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,18 +13,57 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	gputraceTrace "github.com/tmc/gputrace/internal/trace"
+	"github.com/tmc/gputrace/internal/tracebundle"
 )
 
-func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
-	automationCtx, cleanupCancel := StartAutomationCancelListener(cmd.Context(), true)
-	defer cleanupCancel()
-	ctx, cancel := context.WithTimeout(automationCtx, collectProfileOpts.timeout)
-	defer cancel()
+var xcodeProfileAutomationStartHook = func() {}
 
+func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 	inputPath, err := filepath.Abs(args[0])
 	if err != nil {
 		return fmt.Errorf("invalid input path: %w", err)
 	}
+	if _, err := os.Stat(inputPath); os.IsNotExist(err) {
+		return fmt.Errorf("trace file does not exist: %s", inputPath)
+	}
+	payload, err := tracebundle.InspectPayload(inputPath)
+	if err != nil {
+		return err
+	}
+
+	status := xcodeProfileStatusWriter()
+	if payload.HasProfilerStream {
+		profilerDir := findProfilerDir(inputPath)
+		if profilerDir == "" && filepath.Ext(inputPath) == ".gpuprofiler_raw" {
+			profilerDir = inputPath
+		}
+		if _, err := readExportTraceSignature(inputPath, profilerDir); err != nil {
+			return fmt.Errorf("verify embedded performance data: %w", err)
+		}
+		fmt.Fprintln(status, "Performance data already embedded; verified non-empty streamData.")
+		fmt.Fprintf(status, "Using existing trace: %s\n", inputPath)
+		writeXcodePayloadStatus(status, payload)
+		output := xcodeProfileActionOutput{
+			Action: "run",
+			Input:  inputPath,
+			Output: inputPath,
+			Source: inputPath,
+			Reused: true,
+		}
+		applyXcodePayload(&output, payload)
+		return writeXcodeProfileActionOutput(output)
+	}
+	if err := validateTraceBundle(inputPath); err != nil {
+		return err
+	}
+
+	xcodeProfileAutomationStartHook()
+	automationCtx, cleanupCancel := StartAutomationCancelListener(cmd.Context(), true)
+	defer cleanupCancel()
+	ctx, cancel := context.WithTimeout(automationCtx, collectProfileOpts.timeout)
+	defer cancel()
 
 	output := collectProfileOpts.output
 	if output == "" {
@@ -48,18 +88,15 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	status := xcodeProfileStatusWriter()
+	crashReportDir := diagnosticReportDirectory()
+	crashBaseline, err := snapshotXcodeCrashReports(crashReportDir)
+	if err != nil {
+		return fmt.Errorf("snapshot Xcode crash reports: %w", err)
+	}
+
 	fmt.Fprint(status, Colorize("Collect Profile: Automating Xcode GPU trace...\n", ColorBold))
 	fmt.Fprintf(status, "  Input:  %s\n", inputPath)
 	fmt.Fprintf(status, "  Output: %s\n", outputPath)
-
-	// Validate trace bundle before opening in Xcode
-	if _, err := os.Stat(inputPath); os.IsNotExist(err) {
-		return fmt.Errorf("trace file does not exist: %s", inputPath)
-	}
-	if err := validateTraceBundle(inputPath); err != nil {
-		return err
-	}
 
 	// Step 1: Open File in Xcode
 	fmt.Fprintln(status, "  Step 1: Opening trace in Xcode...")
@@ -83,14 +120,18 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 
 	// Step 2: Wait for Xcode window via AX
 	fmt.Fprintln(status, "  Step 2: Waiting for Xcode window...")
-	appAX, err := FindXcodeApp()
+	appAX, xcodeIdentity, err := findSelectedXcodeApp(ctx, requestedXcodeAppPath())
 	if err != nil {
-		return fmt.Errorf("Xcode not found via AX: %w", err)
+		return fmt.Errorf("selected Xcode app not found via AX: %w", err)
 	}
 	defer cfRelease(appAX)
+	fmt.Fprintf(status, "    Xcode process: PID %d, app %s, bundle %s\n",
+		xcodeIdentity.PID, xcodeIdentity.AppPath, xcodeIdentity.BundleID)
+	crashContext, stopCrashMonitor := startXcodeCrashMonitor(ctx, crashReportDir, crashBaseline, xcodeIdentity)
+	defer stopCrashMonitor()
+	ctx = crashContext
 
-	traceFileName := filepath.Base(inputPath)
-	windowAX, err := waitForWindow(ctx, appAX, traceFileName, 30*time.Second)
+	windowAX, err := waitForWindow(ctx, appAX, inputPath, 30*time.Second)
 	if err != nil {
 		return fmt.Errorf("Xcode window not found: %w", err)
 	}
@@ -120,7 +161,7 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 	} else if profilingInProgress {
 		// Profiling already running (e.g., from a prior attempt or --force) — just wait for it
 		fmt.Fprintln(status, "  Profiling already in progress, waiting for completion...")
-		if err := waitForReplayComplete(ctx, appAX, traceFileName, windowAX, collectProfileOpts.timeout); err != nil {
+		if err := waitForReplayComplete(ctx, appAX, inputPath, windowAX, collectProfileOpts.timeout); err != nil {
 			return fmt.Errorf("replay wait failed: %w", err)
 		}
 		fmt.Fprintln(status, "    Profiling completed")
@@ -133,7 +174,7 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 
 		// Step 4: Wait for replay
 		fmt.Fprintln(status, "  Step 4: Waiting for replay to complete...")
-		if err := waitForReplayComplete(ctx, appAX, traceFileName, windowAX, collectProfileOpts.timeout); err != nil {
+		if err := waitForReplayComplete(ctx, appAX, inputPath, windowAX, collectProfileOpts.timeout); err != nil {
 			return fmt.Errorf("replay wait failed: %w", err)
 		}
 		fmt.Fprintln(status, "    Replay completed")
@@ -145,7 +186,7 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 
 	// Verify performance data is actually available after replay.
 	if !alreadyHasPerfData {
-		if freshWindow := getPreferredTraceWindow(appAX, traceFileName); freshWindow != 0 {
+		if freshWindow := getPreferredTraceWindow(appAX, inputPath); freshWindow != 0 {
 			windowAX = freshWindow
 		} else if freshWindow := findTraceWindowByButtons(appAX); freshWindow != 0 {
 			windowAX = freshWindow
@@ -155,7 +196,7 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	if freshWindow := getPreferredTraceWindow(appAX, traceFileName); freshWindow != 0 {
+	if freshWindow := getPreferredTraceWindow(appAX, inputPath); freshWindow != 0 {
 		windowAX = freshWindow
 	} else if freshWindow := findTraceWindowByButtons(appAX); freshWindow != 0 {
 		windowAX = freshWindow
@@ -172,7 +213,7 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 
 	// Export step
 	fmt.Fprintln(status, "  Exporting trace...")
-	if freshWindow := getPreferredTraceWindow(appAX, traceFileName); freshWindow != 0 {
+	if freshWindow := getPreferredTraceWindow(appAX, inputPath); freshWindow != 0 {
 		windowAX = freshWindow
 	} else if freshWindow := findTraceWindowByButtons(appAX); freshWindow != 0 {
 		windowAX = freshWindow
@@ -203,13 +244,28 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := verifyExportTraceIdentity(inputPath, finalPath); err != nil {
+		if removeErr := os.RemoveAll(finalPath); removeErr != nil {
+			return fmt.Errorf("%w; remove mismatched export: %v", err, removeErr)
+		}
+		return err
+	}
+	exportedPayload, err := tracebundle.InspectPayload(finalPath)
+	if err != nil {
+		return fmt.Errorf("inspect exported trace payload: %w", err)
+	}
+	if err := requireSelfContainedExport(finalPath, exportedPayload); err != nil {
+		writeXcodePayloadStatus(status, exportedPayload)
+		return err
+	}
+	writeXcodePayloadStatus(status, exportedPayload)
 
 	// Close the Xcode window after export completes
 	// Re-fetch window reference since it may have become stale during export
 	// (window title may change or become empty after profiling)
 	if freshWindow := findTraceWindowByButtons(appAX); freshWindow != 0 {
 		closeXcodeWindow(freshWindow)
-	} else if freshWindow := getPreferredTraceWindow(appAX, traceFileName); freshWindow != 0 {
+	} else if freshWindow := getPreferredTraceWindow(appAX, inputPath); freshWindow != 0 {
 		closeXcodeWindow(freshWindow)
 	} else {
 		closeXcodeWindow(windowAX) // Try original reference as fallback
@@ -221,29 +277,35 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 		if err := copyPath(finalPath, outputPath); err != nil {
 			warning := fmt.Sprintf("file saved to %s; copy to %s failed: %v", finalPath, outputPath, err)
 			fmt.Fprintf(status, Colorize("\nNote: File saved to %s (copy to %s failed: %v)\n", ColorYellow), finalPath, outputPath, err)
-			return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+			actionOutput := xcodeProfileActionOutput{
 				Action:          "run",
 				Input:           inputPath,
 				Output:          finalPath,
 				RequestedOutput: outputPath,
 				Warning:         warning,
-			})
+			}
+			applyXcodePayload(&actionOutput, exportedPayload)
+			return writeXcodeProfileActionOutput(actionOutput)
 		}
 		fmt.Fprintf(status, Colorize("\nDone! Output saved to: %s (copied from %s)\n", ColorGreen), outputPath, finalPath)
-		return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+		actionOutput := xcodeProfileActionOutput{
 			Action: "run",
 			Input:  inputPath,
 			Output: outputPath,
 			Source: finalPath,
 			Copied: true,
-		})
+		}
+		applyXcodePayload(&actionOutput, exportedPayload)
+		return writeXcodeProfileActionOutput(actionOutput)
 	}
 	fmt.Fprintf(status, Colorize("\nDone! Output saved to: %s\n", ColorGreen), outputPath)
-	return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+	actionOutput := xcodeProfileActionOutput{
 		Action: "run",
 		Input:  inputPath,
 		Output: outputPath,
-	})
+	}
+	applyXcodePayload(&actionOutput, exportedPayload)
+	return writeXcodeProfileActionOutput(actionOutput)
 }
 
 // findTraceWindowByButtons finds an Xcode window with trace-related buttons
@@ -375,41 +437,45 @@ func waitForWindow(ctx context.Context, appAX uintptr, traceFileName string, tim
 // When multiple windows match (e.g., document window + trace viewer), prefer the one
 // with GPU trace UI elements (Replay button, profiling status).
 func getPreferredTraceWindow(appAX uintptr, traceFileName string) uintptr {
-	titleLower := strings.ToLower(traceFileName)
-	allWindows := GetAllWindows(appAX)
-	for _, child := range allWindows {
-		title := axString(child, "AXTitle")
-		doc := axString(child, "AXDocument")
-		verboseLog("getPreferredTraceWindow: visible window: title=%q doc=%q", title, doc)
+	traceIdentity := strings.ToLower(filepath.Clean(traceFileName))
+	traceBase := strings.ToLower(filepath.Base(traceFileName))
+	allWindows := deduplicateAXWindows(GetAllWindows(appAX))
+	for _, window := range allWindows {
+		verboseLog("getPreferredTraceWindow: visible window: title=%q doc=%q", window.Title, window.Document)
 	}
 	verboseLog("getPreferredTraceWindow: %d total Xcode windows, looking for %q", len(allWindows), traceFileName)
 
+	exactWindows := exactTraceWindows(allWindows, traceIdentity)
 	var matchingWindows []uintptr
-	for _, child := range allWindows {
-		// Check AXTitle
-		windowTitle := strings.ToLower(axString(child, "AXTitle"))
-		if strings.Contains(windowTitle, titleLower) {
-			matchingWindows = append(matchingWindows, child)
-			continue
+	if len(exactWindows) == 0 {
+		for _, window := range allWindows {
+			child := window.Element
+			windowTitle := strings.ToLower(window.Title)
+			windowDoc := strings.ToLower(filepath.Clean(window.Document))
+			if traceBase != "" && strings.Contains(windowTitle, traceBase) {
+				matchingWindows = append(matchingWindows, child)
+				continue
+			}
+			if traceBase != "" && strings.Contains(windowDoc, traceBase) {
+				matchingWindows = append(matchingWindows, child)
+			}
 		}
-		// Check AXDocument (file path)
-		windowDoc := strings.ToLower(axString(child, "AXDocument"))
-		if strings.Contains(windowDoc, titleLower) {
-			matchingWindows = append(matchingWindows, child)
-		}
+	} else {
+		matchingWindows = exactWindows
 	}
 
 	// Second pass: try matching without extension (Xcode sometimes strips it)
 	if len(matchingWindows) == 0 {
-		baseName := strings.ToLower(strings.TrimSuffix(traceFileName, filepath.Ext(traceFileName)))
-		if baseName != titleLower {
-			for _, child := range allWindows {
-				windowTitle := strings.ToLower(axString(child, "AXTitle"))
+		baseName := strings.TrimSuffix(traceBase, filepath.Ext(traceBase))
+		if baseName != traceBase {
+			for _, window := range allWindows {
+				child := window.Element
+				windowTitle := strings.ToLower(window.Title)
 				if strings.Contains(windowTitle, baseName) {
 					matchingWindows = append(matchingWindows, child)
 					continue
 				}
-				windowDoc := strings.ToLower(axString(child, "AXDocument"))
+				windowDoc := strings.ToLower(window.Document)
 				if strings.Contains(windowDoc, baseName) {
 					matchingWindows = append(matchingWindows, child)
 				}
@@ -426,8 +492,9 @@ func getPreferredTraceWindow(appAX uintptr, traceFileName string) uintptr {
 	// buttons is almost certainly our trace window.
 	if len(matchingWindows) == 0 {
 		verboseLog("getPreferredTraceWindow: no title/doc match, scanning for windows with GPU trace UI elements")
-		for _, child := range allWindows {
-			title := axString(child, "AXTitle")
+		for _, window := range allWindows {
+			child := window.Element
+			title := window.Title
 			// Skip windows that are clearly source editors (common extensions)
 			titleLow := strings.ToLower(title)
 			if isSourceEditorWindow(titleLow) {
@@ -455,32 +522,100 @@ func getPreferredTraceWindow(appAX uintptr, traceFileName string) uintptr {
 		return matchingWindows[0]
 	}
 
-	// Multiple matches - prefer windows with GPU trace UI (Replay button)
+	// Multiple matches - prefer a uniquely active profiling window. Do not
+	// choose an arbitrary untitled Summary window: it may belong to another
+	// trace and carry a stale Show Performance sentinel.
+	var activeWindows []uintptr
 	for _, w := range matchingWindows {
-		title := axString(w, "AXTitle")
-		// Check for Replay button (fast shallow search)
-		replayBtn := findButtonBFS(w, "Replay", 500)
-		if replayBtn != 0 {
-			verboseLog("getPreferredTraceWindow: selected window %q (has Replay button)", title)
-			return w
-		}
-		// Check for Export button (indicates profiling data ready)
-		exportBtn := findButtonBFS(w, "Export", 500)
-		if exportBtn != 0 {
-			verboseLog("getPreferredTraceWindow: selected window %q (has Export button)", title)
-			return w
-		}
-		// Check for Show Performance button
-		showPerfBtn := findButtonBFS(w, "Show Performance", 500)
-		if showPerfBtn != 0 {
-			verboseLog("getPreferredTraceWindow: selected window %q (has Show Performance button)", title)
-			return w
+		if stopBtn := findButtonBFS(w, "Stop GPU workload", 500); stopBtn != 0 && IsElementEnabled(stopBtn) {
+			activeWindows = append(activeWindows, w)
 		}
 	}
+	if len(activeWindows) == 1 {
+		verboseLog("getPreferredTraceWindow: selected unique active GPU window %q", axString(activeWindows[0], "AXTitle"))
+		return activeWindows[0]
+	}
+	if len(activeWindows) > 1 {
+		verboseLog("getPreferredTraceWindow: %d active GPU windows are ambiguous", len(activeWindows))
+		return 0
+	}
 
-	// No window with trace UI found - return first match
-	verboseLog("getPreferredTraceWindow: no window with trace UI, using first match")
-	return matchingWindows[0]
+	verboseLog("getPreferredTraceWindow: multiple inactive GPU windows are ambiguous")
+	return 0
+}
+
+type xcodeAXWindow struct {
+	Element  uintptr
+	Title    string
+	Document string
+	X        int
+	Y        int
+	Width    int
+	Height   int
+}
+
+func deduplicateAXWindows(elements []uintptr) []xcodeAXWindow {
+	windows := make([]xcodeAXWindow, 0, len(elements))
+	for _, element := range elements {
+		x, y := axPosition(element)
+		width, height := axSize(element)
+		windows = append(windows, xcodeAXWindow{
+			Element:  element,
+			Title:    axString(element, "AXTitle"),
+			Document: axString(element, "AXDocument"),
+			X:        x,
+			Y:        y,
+			Width:    width,
+			Height:   height,
+		})
+	}
+	return deduplicateXcodeWindows(windows)
+}
+
+func deduplicateXcodeWindows(windows []xcodeAXWindow) []xcodeAXWindow {
+	seenElements := make(map[uintptr]bool)
+	seenLogical := make(map[string]bool)
+	out := make([]xcodeAXWindow, 0, len(windows))
+	for _, window := range windows {
+		if window.Element != 0 && seenElements[window.Element] {
+			continue
+		}
+		if window.Element != 0 {
+			seenElements[window.Element] = true
+		}
+
+		title := strings.ToLower(strings.TrimSpace(window.Title))
+		document := strings.ToLower(filepath.Clean(window.Document))
+		if window.Document == "" {
+			document = ""
+		}
+		logical := fmt.Sprintf("%s\x00%s\x00%d,%d,%d,%d",
+			title, document, window.X, window.Y, window.Width, window.Height)
+		hasLogicalIdentity := title != "" || document != "" ||
+			window.X != 0 || window.Y != 0 || window.Width != 0 || window.Height != 0
+		if hasLogicalIdentity && seenLogical[logical] {
+			continue
+		}
+		if hasLogicalIdentity {
+			seenLogical[logical] = true
+		}
+		out = append(out, window)
+	}
+	return out
+}
+
+func exactTraceWindows(windows []xcodeAXWindow, traceIdentity string) []uintptr {
+	if traceIdentity == "" || traceIdentity == "." {
+		return nil
+	}
+	var matches []uintptr
+	for _, window := range windows {
+		document := strings.ToLower(filepath.Clean(window.Document))
+		if document != "." && (document == traceIdentity || strings.Contains(document, traceIdentity)) {
+			matches = append(matches, window.Element)
+		}
+	}
+	return matches
 }
 
 // isSourceEditorWindow returns true if the window title looks like a source code editor
@@ -495,15 +630,25 @@ func isSourceEditorWindow(titleLower string) bool {
 	return false
 }
 
-// hasGPUTraceUI checks whether a window contains GPU trace UI elements
-// (Replay, Profile, Export, or Show Performance buttons).
+// hasGPUTraceUI checks whether a window contains GPU trace UI elements.
 func hasGPUTraceUI(windowAX uintptr) bool {
-	for _, name := range []string{"Replay", "Profile", "Export", "Show Performance"} {
+	for _, name := range gpuTraceStateButtonNames() {
 		if btn := findButtonBFS(windowAX, name, 500); btn != 0 {
 			return true
 		}
 	}
 	return false
+}
+
+func gpuTraceStateButtonNames() []string {
+	return []string{
+		"Stop GPU workload",
+		"Capture GPU workload",
+		"Replay",
+		"Profile",
+		"Export",
+		"Show Performance",
+	}
 }
 
 // validateTraceBundle checks whether a .gputrace bundle contains enough data
@@ -591,50 +736,319 @@ func uniquePaths(paths []string) []string {
 }
 
 func waitForExportedTrace(ctx context.Context, candidatePaths []string, timeout time.Duration) (string, error) {
+	return waitForExportedTraceWithReader(ctx, candidatePaths, timeout, readExportTraceSignature)
+}
+
+type exportCandidate struct {
+	Path     string
+	Identity string
+	info     os.FileInfo
+}
+
+func canonicalExportCandidates(paths []string) []exportCandidate {
+	var candidates []exportCandidate
+	for _, path := range uniquePaths(paths) {
+		path = filepath.Clean(path)
+		resolved := path
+		if target, err := filepath.EvalSymlinks(path); err == nil {
+			resolved = filepath.Clean(target)
+		}
+		info, _ := os.Stat(path)
+
+		duplicate := false
+		for _, candidate := range candidates {
+			if resolved == candidate.Identity ||
+				(info != nil && candidate.info != nil && os.SameFile(info, candidate.info)) {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			continue
+		}
+		candidates = append(candidates, exportCandidate{
+			Path:     path,
+			Identity: resolved,
+			info:     info,
+		})
+	}
+	return candidates
+}
+
+type exportCandidateStability struct {
+	signature exportTraceSignature
+	samples   int
+	set       bool
+}
+
+func waitForExportedTraceWithReader(
+	ctx context.Context,
+	candidatePaths []string,
+	timeout time.Duration,
+	readSignature func(string, string) (exportTraceSignature, error),
+) (string, error) {
 	deadline := time.Now().Add(timeout)
 	var foundWithoutProfiler []string
+	var foundIncomplete []string
+	stability := make(map[string]exportCandidateStability)
 	for {
 		if err := checkAutomationCanceled(ctx); err != nil {
 			return "", err
 		}
-		for _, p := range candidatePaths {
+		for _, candidate := range canonicalExportCandidates(candidatePaths) {
+			p := candidate.Path
 			info, err := os.Stat(p)
 			if err != nil {
 				continue
 			}
 			if !info.IsDir() {
+				delete(stability, candidate.Identity)
 				continue
 			}
-			if findProfilerDir(p) != "" {
-				return p, nil
+			profilerDir := findProfilerDir(p)
+			if profilerDir == "" {
+				foundWithoutProfiler = append(foundWithoutProfiler, p)
+				delete(stability, candidate.Identity)
+				continue
 			}
-			foundWithoutProfiler = append(foundWithoutProfiler, p)
+			signature, err := readSignature(p, profilerDir)
+			if err != nil {
+				foundIncomplete = append(foundIncomplete, p)
+				delete(stability, candidate.Identity)
+				continue
+			}
+			state := stability[candidate.Identity]
+			if state.set && signature == state.signature {
+				state.samples++
+				if state.samples >= 2 {
+					return p, nil
+				}
+			} else {
+				state.samples = 0
+			}
+			state.signature = signature
+			state.set = true
+			stability[candidate.Identity] = state
 		}
 		if time.Now().After(deadline) {
 			break
 		}
-		if err := waitForAutomation(ctx, time.Second); err != nil {
+		if err := waitForAutomation(ctx, 250*time.Millisecond); err != nil {
 			return "", err
 		}
 	}
 
+	if len(foundIncomplete) > 0 {
+		return "", fmt.Errorf("export profiler data did not stabilize with non-empty streamData: %s", strings.Join(uniquePaths(foundIncomplete), ", "))
+	}
 	if len(foundWithoutProfiler) > 0 {
 		return "", fmt.Errorf("export wrote a bundle without .gpuprofiler_raw: %s; Xcode did not embed performance data", strings.Join(uniquePaths(foundWithoutProfiler), ", "))
 	}
 	return "", fmt.Errorf("export did not write a perfdata bundle within %s; checked: %s", timeout.Round(time.Second), strings.Join(candidatePaths, ", "))
 }
 
+type exportTraceSignature struct {
+	Files          int
+	Bytes          int64
+	StreamDataSize int64
+}
+
+type exportSheetState struct {
+	Filename            string
+	DirectoryCandidates []string
+	SaveEnabled         bool
+	GoToFolderSheetOpen bool
+	GoToFolderPath      string
+}
+
+func readExportSheetState(window uintptr) exportSheetState {
+	var state exportSheetState
+	if field := FindSaveAsTextField(window); field != 0 {
+		state.Filename = axString(field, "AXValue")
+	}
+	if save := findButtonBFS(window, "Save", 500); save != 0 {
+		state.SaveEnabled = IsElementEnabled(save)
+	}
+	goToSheet := findElementBounded(window, 600, func(element uintptr) bool {
+		return axString(element, "AXRole") == "AXSheet" &&
+			axString(element, "AXIdentifier") == "GoToWindow"
+	})
+	state.GoToFolderSheetOpen = goToSheet != 0
+	if goToSheet != 0 {
+		if pathField := findElementBounded(goToSheet, 200, func(element uintptr) bool {
+			return axString(element, "AXRole") == "AXTextField" &&
+				axString(element, "AXIdentifier") == "PathTextField"
+		}); pathField != 0 {
+			state.GoToFolderPath = strings.TrimSpace(axString(pathField, "AXValue"))
+		}
+	}
+	findElementBounded(window, 1000, func(element uintptr) bool {
+		role := axString(element, "AXRole")
+		subrole := axString(element, "AXSubrole")
+		identifier := strings.ToLower(axString(element, "AXIdentifier"))
+		description := strings.ToLower(axString(element, "AXDescription"))
+		// The GoToWindow input is a requested path, not evidence that the
+		// parent save panel committed that directory.
+		if identifier == "pathtextfield" {
+			return false
+		}
+		isLocation := role == "AXPopUpButton" || subrole == "AXPathButton" ||
+			strings.Contains(identifier, "path") || strings.Contains(identifier, "location") ||
+			strings.Contains(description, "where") || strings.Contains(description, "location")
+		// AXURL and AXDocument are useful full-path evidence even when Xcode
+		// does not identify the owning element as a location control.
+		for _, attribute := range []string{"AXURL", "AXDocument"} {
+			value := strings.TrimSpace(axString(element, attribute))
+			if value != "" {
+				state.DirectoryCandidates = append(state.DirectoryCandidates, value)
+			}
+		}
+		if !isLocation {
+			return false
+		}
+		for _, attribute := range []string{"AXValue", "AXTitle"} {
+			value := strings.TrimSpace(axString(element, attribute))
+			if value != "" {
+				state.DirectoryCandidates = append(state.DirectoryCandidates, value)
+			}
+		}
+		return false
+	})
+	state.DirectoryCandidates = uniquePaths(state.DirectoryCandidates)
+	return state
+}
+
+func exportSheetDirectoryMatches(state exportSheetState, directory string) bool {
+	want := filepath.Clean(directory)
+	for _, candidate := range state.DirectoryCandidates {
+		value := candidate
+		if strings.HasPrefix(value, "file://") {
+			if parsed, err := url.Parse(value); err == nil {
+				value = parsed.Path
+			}
+		}
+		if decoded, err := url.PathUnescape(value); err == nil {
+			value = decoded
+		}
+		if filepath.IsAbs(value) && filepath.Clean(value) == want {
+			return true
+		}
+	}
+	return false
+}
+
+func needsDirectExportLocation(remainingPath string, state exportSheetState, directory string) bool {
+	return remainingPath != "" || !exportSheetDirectoryMatches(state, directory)
+}
+
+func goToFolderNavigationComplete(state exportSheetState, directory string) bool {
+	return !state.GoToFolderSheetOpen && state.SaveEnabled &&
+		exportSheetDirectoryMatches(state, directory)
+}
+
+// goToFolderNavigationCompleteAfterExactEntry accepts a basename-only save
+// panel location only after the caller observed the exact absolute path in the
+// open Go To Folder field and then committed it. The ordered proof
+// distinguishes identical basenames such as /Users/tmc/tmp and /private/tmp.
+func goToFolderNavigationCompleteAfterExactEntry(state exportSheetState, directory string) bool {
+	if goToFolderNavigationComplete(state, directory) {
+		return true
+	}
+	if state.GoToFolderSheetOpen || !state.SaveEnabled {
+		return false
+	}
+	wantBase := filepath.Base(filepath.Clean(directory))
+	for _, candidate := range state.DirectoryCandidates {
+		if !filepath.IsAbs(candidate) && filepath.Clean(candidate) == wantBase {
+			return true
+		}
+	}
+	return false
+}
+
+func goToFolderConfirmationReady(state exportSheetState, directory string) bool {
+	if !state.GoToFolderSheetOpen {
+		return exportSheetDirectoryMatches(state, directory)
+	}
+	return filepath.IsAbs(state.GoToFolderPath) &&
+		filepath.Clean(state.GoToFolderPath) == filepath.Clean(directory)
+}
+
+func waitForExportDirectoryState(ctx context.Context, window uintptr, directory string, timeout time.Duration) (exportSheetState, error) {
+	deadline := time.Now().Add(timeout)
+	var state exportSheetState
+	for {
+		state = readExportSheetState(window)
+		if exportSheetDirectoryMatches(state, directory) {
+			return state, nil
+		}
+		if time.Now().After(deadline) {
+			return state, fmt.Errorf("save sheet did not expose requested directory %q", directory)
+		}
+		if err := waitForAutomation(ctx, 100*time.Millisecond); err != nil {
+			return state, err
+		}
+	}
+}
+
+func formatExportSheetState(state exportSheetState) string {
+	return fmt.Sprintf("filename=%q directory_candidates=%q save_enabled=%t go_to_folder_open=%t go_to_folder_path=%q",
+		state.Filename, state.DirectoryCandidates, state.SaveEnabled,
+		state.GoToFolderSheetOpen, state.GoToFolderPath)
+}
+
+func readExportTraceSignature(bundle, profilerDir string) (exportTraceSignature, error) {
+	streamInfo, err := os.Stat(filepath.Join(profilerDir, "streamData"))
+	if err != nil {
+		return exportTraceSignature{}, err
+	}
+	if streamInfo.Size() == 0 {
+		return exportTraceSignature{}, fmt.Errorf("streamData is empty")
+	}
+
+	var signature exportTraceSignature
+	signature.StreamDataSize = streamInfo.Size()
+	err = filepath.WalkDir(bundle, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		signature.Files++
+		signature.Bytes += info.Size()
+		return nil
+	})
+	if err != nil {
+		return exportTraceSignature{}, err
+	}
+	return signature, nil
+}
+
+func verifyExportTraceIdentity(inputPath, outputPath string) error {
+	input, err := gputraceTrace.ReadMetadata(inputPath)
+	if err != nil {
+		return fmt.Errorf("read input trace identity: %w", err)
+	}
+	output, err := gputraceTrace.ReadMetadata(outputPath)
+	if err != nil {
+		return fmt.Errorf("read exported trace identity: %w", err)
+	}
+	if input.UUID == "" || output.UUID == "" {
+		return fmt.Errorf("trace identity is missing (input UUID %q, exported UUID %q)", input.UUID, output.UUID)
+	}
+	if input.UUID != output.UUID {
+		return fmt.Errorf("exported trace UUID %s does not match requested trace UUID %s", output.UUID, input.UUID)
+	}
+	return nil
+}
+
 func windowMatchesTraceFile(window uintptr, traceFileName string) bool {
-	if traceFileName == "" {
-		return true
-	}
-	name := strings.ToLower(traceFileName)
-	title := strings.ToLower(axString(window, "AXTitle"))
-	if strings.Contains(title, name) {
-		return true
-	}
-	doc := strings.ToLower(axString(window, "AXDocument"))
-	return strings.Contains(doc, name)
+	return selectionForWindow(traceFileName, window).Bound
 }
 
 func clickReplayButton(windowAX uintptr) error {
@@ -794,6 +1208,8 @@ func waitForReplayComplete(ctx context.Context, appAX uintptr, traceFileName str
 	// Returns (button, xcodeRunning)
 	// Note: depth of 2000 required for deep UI hierarchies (e.g., Show Performance in summary panel)
 	const buttonSearchDepth = 5000
+	var targetPID int32
+	_ = axUIElementGetPid(appAX, &targetPID)
 
 	// tryWindowForButton checks a single window for a button (or Show Performance via targeted traversal).
 	tryWindowForButton := func(w uintptr, name string) uintptr {
@@ -822,16 +1238,25 @@ func waitForReplayComplete(ctx context.Context, appAX uintptr, traceFileName str
 			}
 		}
 		// 3. Re-fetch Xcode app and search all windows (handles stale appAX and title changes)
-		freshApp, err := FindXcodeApp()
-		if err != nil {
-			verboseLog("waitForReplayComplete: failed to re-fetch Xcode app: %v", err)
+		freshApp := uintptr(0)
+		if targetPID != 0 {
+			freshApp = axCreateApplication(targetPID)
+		}
+		if freshApp == 0 {
+			verboseLog("waitForReplayComplete: failed to re-fetch target Xcode PID %d", targetPID)
 			return 0, false
 		}
 		consecutiveXcodeFailures = 0
 		allWindows := GetAllWindows(freshApp)
 
-		// First pass: title-matched windows. Second pass: all windows.
-		for pass := range 2 {
+		// When a trace identity was supplied, never fall through to an
+		// unrelated untitled GPU window. A stale completed Summary window may
+		// expose the same app-global controls and Show Performance sentinel.
+		passes := 1
+		if traceFileName == "" {
+			passes = 2
+		}
+		for pass := range passes {
 			for _, w := range allWindows {
 				if pass == 0 && !windowMatchesTraceFile(w, traceFileName) {
 					continue
@@ -1271,65 +1696,71 @@ func exportTrace(ctx context.Context, appAX, windowAX uintptr, outputPath string
 		DebugTextFields(windowAX)
 	}
 
-	// Try to navigate to the output directory using the path popup button
-	navigatedToDir := false
+	// Try the shallow path popup first. Nested file-browser crawling is
+	// intentionally avoided because large AX trees can stall for minutes.
 	remainingPath := ""
 	if outputDir != "" && outputDir != "." {
 		fmt.Fprintf(status, "    Navigating to directory: %s\n", outputDir)
-		// First try via path popup (more reliable than Cmd+Shift+G)
 		var popupErr error
 		remainingPath, popupErr = navigateViaPathPopup(windowAX, outputDir)
 		if popupErr != nil {
 			verboseLog("exportTrace: path popup navigation failed: %v", popupErr)
-			// Fall back to Cmd+Shift+G
-			if err := NavigateToFolderInSaveDialog(windowAX, outputDir); err != nil {
-				verboseLog("exportTrace: Cmd+Shift+G navigation failed: %v", err)
-				fmt.Fprintln(status, "    Note: Directory navigation failed, using default location")
-			} else {
-				navigatedToDir = true
-			}
-		} else {
-			navigatedToDir = true
-			if remainingPath != "" {
-				verboseLog("exportTrace: navigated partially, remaining path: %s", remainingPath)
-			} else {
-				verboseLog("exportTrace: navigated to directory successfully")
-			}
+		} else if remainingPath != "" {
+			verboseLog("exportTrace: navigated partially, remaining path: %s", remainingPath)
 		}
 	}
 
-	// If there's a remaining path (couldn't fully navigate), try Cmd+Shift+G as final fallback
-	// Note: putting "/" in filename creates ":"-named files due to macOS HFS legacy behavior
-	if remainingPath != "" {
-		fmt.Fprintf(status, "    Partial navigation, using Cmd+Shift+G to navigate to: %s\n", outputDir)
-		// Ensure directory exists before trying to navigate
-		if err := os.MkdirAll(outputDir, 0755); err != nil {
-			verboseLog("exportTrace: failed to create output directory: %v", err)
-		}
-		// Try Cmd+Shift+G to navigate to full path
+	// A popup result is not proof of the destination: the control may display
+	// only "tmp" after partial navigation. Unless the sheet exposes the exact
+	// absolute directory, use the bounded direct-location fallback.
+	directoryState := readExportSheetState(windowAX)
+	directoryVerifiedByExactEntry := false
+	if needsDirectExportLocation(remainingPath, directoryState, outputDir) {
+		fmt.Fprintf(status, "    Using direct location for: %s\n", outputDir)
 		if err := NavigateToFolderInSaveDialog(windowAX, outputDir); err != nil {
-			verboseLog("exportTrace: Cmd+Shift+G fallback also failed: %v", err)
-			fmt.Fprintf(status, "    Warning: Could not navigate to %s, file may save to wrong location\n", outputDir)
-		} else {
-			navigatedToDir = true
-			remainingPath = ""
-			fmt.Fprintln(status, "    Successfully navigated via Cmd+Shift+G")
+			return fmt.Errorf("establish export directory %s: %w; sheet state: %s",
+				outputDir, err, formatExportSheetState(readExportSheetState(windowAX)))
+		}
+		directoryVerifiedByExactEntry = true
+	}
+	if directoryVerifiedByExactEntry {
+		if !goToFolderNavigationCompleteAfterExactEntry(readExportSheetState(windowAX), outputDir) {
+			return fmt.Errorf("export directory lost exact-entry proof; sheet state: %s",
+				formatExportSheetState(readExportSheetState(windowAX)))
+		}
+	} else {
+		directoryState, err = waitForExportDirectoryState(ctx, windowAX, outputDir, 2*time.Second)
+		if err != nil {
+			return fmt.Errorf("export directory was not established: %w; sheet state: %s",
+				err, formatExportSheetState(directoryState))
 		}
 	}
+	fmt.Fprintf(status, "    Verified export directory: %s\n", outputDir)
 
 	// Set just the filename (never include path prefix - macOS converts "/" to ":")
 	fmt.Fprintf(status, "    Setting filename: %s\n", outputName)
 	saveNameField := findInAllWindows(FindSaveAsTextField)
 	if saveNameField != 0 {
-		if err := axSetValue(saveNameField, outputName); err != nil {
-			fmt.Fprintf(status, "    Warning: SetValue failed: %v (using default filename)\n", err)
-		} else if collectProfileOpts.debug {
-			fmt.Fprintln(os.Stderr, "    [DEBUG] Set filename via AX (saveAsNameTextField)")
+		if err := setSaveName(saveNameField, outputName); err != nil {
+			return err
+		}
+		if collectProfileOpts.debug {
+			fmt.Fprintln(os.Stderr, "    [DEBUG] Set and verified filename via AX (saveAsNameTextField)")
 		}
 	} else {
-		fmt.Fprintln(status, "    Warning: saveAsNameTextField not found (using default filename)")
+		return fmt.Errorf("saveAsNameTextField not found")
 	}
 	time.Sleep(300 * time.Millisecond)
+	finalSheetState := readExportSheetState(windowAX)
+	directoryVerified := exportSheetDirectoryMatches(finalSheetState, outputDir)
+	if directoryVerifiedByExactEntry {
+		directoryVerified = goToFolderNavigationCompleteAfterExactEntry(finalSheetState, outputDir)
+	}
+	if finalSheetState.Filename != outputName || !directoryVerified {
+		return fmt.Errorf("export destination verification failed: requested_directory=%q requested_filename=%q; sheet state: %s",
+			outputDir, outputName, formatExportSheetState(finalSheetState))
+	}
+	fmt.Fprintf(status, "    Verified export filename: %s\n", outputName)
 
 	// Debug: dump the export sheet state so we can see exactly what's happening
 	if collectProfileOpts.debug {
@@ -1346,19 +1777,12 @@ func exportTrace(ctx context.Context, appAX, windowAX uintptr, outputPath string
 	}
 
 	if !IsElementEnabled(saveBtn) {
-		// Save disabled — usually means a child sheet (e.g. Go to Folder) is still
-		// open. Try dismissing any lingering sheets and re-querying.
-		verboseLog("exportTrace: Save disabled, checking for lingering child sheets")
-		dismissGoToFolderSheet(windowAX)
-		time.Sleep(300 * time.Millisecond)
-		saveBtn = findSaveButtonInSheet()
-		if saveBtn == 0 || !IsElementEnabled(saveBtn) {
-			if collectProfileOpts.debug {
-				fmt.Fprintln(os.Stderr, "    [DEBUG] Export sheet state (Save disabled):")
-				dumpExportSheetState(windowAX)
-			}
-			return fmt.Errorf("Save button disabled in export sheet")
+		if collectProfileOpts.debug {
+			fmt.Fprintln(os.Stderr, "    [DEBUG] Export sheet state (Save disabled):")
+			dumpExportSheetState(windowAX)
 		}
+		return fmt.Errorf("Save button disabled in export sheet: %s",
+			formatExportSheetState(readExportSheetState(windowAX)))
 	}
 
 	// Click Save button
@@ -1374,26 +1798,59 @@ func exportTrace(ctx context.Context, appAX, windowAX uintptr, outputPath string
 		fmt.Fprintln(status, "    Confirmed replacement")
 	}
 
-	// Wait for export to complete — GPU trace exports can be large and slow
-	fmt.Fprintln(status, "    Waiting for export to write...")
-	if err := waitForAutomation(ctx, 5*time.Second); err != nil {
+	if err := waitForExportSheetDismissed(ctx, windowAX, 5*time.Second); err != nil {
 		return err
 	}
+	fmt.Fprintln(status, "    Export accepted; assembling bundle...")
 
 	// Check if file was saved to expected location
 	if _, err := os.Stat(outputPath); err == nil {
 		return nil // File found at expected path
 	}
 
-	// If we didn't navigate, the file is likely in an alternate location
-	// The caller will check alternate locations and copy if needed
-	if !navigatedToDir {
-		verboseLog("exportTrace: file not at %s, may be in Xcode's default export location", outputPath)
-	}
-
 	// Return nil to let caller handle searching alternate locations
 	// Caller is responsible for finding and copying the file
 	return nil
+}
+
+func setSaveName(field uintptr, name string) error {
+	for attempt := 0; attempt < 3; attempt++ {
+		if err := axSetValue(field, name); err != nil {
+			if attempt == 2 {
+				return fmt.Errorf("set export filename: %w", err)
+			}
+			continue
+		}
+		axAction(field, "AXConfirm")
+		time.Sleep(150 * time.Millisecond)
+		if got := axString(field, "AXValue"); got == name {
+			return nil
+		}
+	}
+	return fmt.Errorf("export filename did not update to %q (still %q)", name, axString(field, "AXValue"))
+}
+
+func waitForExportSheetDismissed(ctx context.Context, window uintptr, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		sheet := findElement(window, func(el uintptr) bool {
+			return axString(el, "AXRole") == "AXSheet" &&
+				(axString(el, "AXIdentifier") == "save-panel" || axString(el, "AXDescription") == "export")
+		})
+		if sheet == 0 {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			save := findButtonBFS(sheet, "Save", 500)
+			if save != 0 && IsElementEnabled(save) {
+				return fmt.Errorf("export save sheet is still open with Save enabled")
+			}
+			return fmt.Errorf("export save sheet did not dismiss")
+		}
+		if err := waitForAutomation(ctx, 200*time.Millisecond); err != nil {
+			return err
+		}
+	}
 }
 
 func pressReplaceIfPresent(ctx context.Context, windowAX uintptr, timeout time.Duration) (bool, error) {
@@ -1431,7 +1888,7 @@ func pressReplaceIfPresent(ctx context.Context, windowAX uintptr, timeout time.D
 func navigateViaPathPopup(windowAX uintptr, targetPath string) (remainingPath string, err error) {
 	// Look for a path control or popup button that shows the current location
 	// Common identifiers: "Where:" popup, path bar, location dropdown
-	pathPopup := findElement(windowAX, func(el uintptr) bool {
+	pathPopup := findElementBounded(windowAX, 600, func(el uintptr) bool {
 		role := axString(el, "AXRole")
 		if role == "AXPopUpButton" {
 			// Check if this is the "Where:" location popup
@@ -1448,7 +1905,7 @@ func navigateViaPathPopup(windowAX uintptr, targetPath string) (remainingPath st
 
 	if pathPopup == 0 {
 		// Try to find any popup button that might be the location selector
-		pathPopup = findElement(windowAX, func(el uintptr) bool {
+		pathPopup = findElementBounded(windowAX, 600, func(el uintptr) bool {
 			role := axString(el, "AXRole")
 			subrole := axString(el, "AXSubrole")
 			return role == "AXPopUpButton" && subrole == "AXPathButton"
@@ -1510,7 +1967,7 @@ func navigateViaPathPopup(windowAX uintptr, targetPath string) (remainingPath st
 	}
 	var allMenuItems []menuItemRef
 	if popupMenu != 0 {
-		findElement(popupMenu, func(el uintptr) bool {
+		findElementBounded(popupMenu, 300, func(el uintptr) bool {
 			role := axString(el, "AXRole")
 			if role == "AXMenuItem" {
 				title := axString(el, "AXTitle")
@@ -1567,16 +2024,12 @@ func navigateViaPathPopup(windowAX uintptr, targetPath string) (remainingPath st
 			remainingParts := pathParts[i+1:]
 			if len(remainingParts) > 0 {
 				verboseLog("navigateViaPathPopup: remaining path components: %v", remainingParts)
-				// Try file browser navigation first (may work for some dialogs)
-				if err := navigateThroughFileBrowser(windowAX, remainingParts); err != nil {
-					verboseLog("navigateViaPathPopup: file browser navigation failed: %v", err)
-					// Return the remaining path - caller will try Cmd+Shift+G as fallback
-					remaining := strings.Join(remainingParts, "/")
-					verboseLog("navigateViaPathPopup: returning remaining path %q for caller fallback", remaining)
-					return remaining, nil
-				}
-				// File browser navigation succeeded
-				return "", nil
+				// Do not crawl the file browser for nested components. Large
+				// save-panel AX trees can make that search take minutes, and a
+				// double-click does not prove the location changed. Return the
+				// remainder so the caller uses the bounded direct-location
+				// fallback.
+				return strings.Join(remainingParts, "/"), nil
 			}
 			return "", nil // We clicked something and no remaining parts
 		}
@@ -1610,6 +2063,19 @@ func navigateViaPathPopup(windowAX uintptr, targetPath string) (remainingPath st
 	// Close popup if we didn't find what we need
 	sendEscape()
 	return "", fmt.Errorf("could not find 'Other...' option in path popup (available: %v)", menuItemTitles)
+}
+
+func findElementBounded(root uintptr, maxVisit int, match func(uintptr) bool) uintptr {
+	queue := []uintptr{root}
+	for visited := 0; len(queue) > 0 && visited < maxVisit; visited++ {
+		element := queue[0]
+		queue = queue[1:]
+		if match(element) {
+			return element
+		}
+		queue = append(queue, axChildren(element)...)
+	}
+	return 0
 }
 
 // navigateThroughFileBrowser navigates through folders in a save dialog's file browser.

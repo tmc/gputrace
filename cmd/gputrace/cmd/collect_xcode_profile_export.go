@@ -4,12 +4,14 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/tmc/gputrace/internal/tracebundle"
 )
 
 func runExport(cmd *cobra.Command, args []string) error {
@@ -40,11 +42,11 @@ func runExport(cmd *cobra.Command, args []string) error {
 	}
 
 	doc := axString(windowAX, "AXDocument")
+	if err := requireStandaloneExportTarget(doc); err != nil {
+		return err
+	}
 	// If no output path specified, try to infer from window document
 	if outputPath == "" {
-		if doc == "" {
-			return fmt.Errorf("output path not specified and could not be inferred from Xcode window (AXDocument empty)")
-		}
 		// e.g. /path/to/trace.gputrace -> /path/to/trace-perfdata.gputrace
 		ext := filepath.Ext(doc) // .gputrace
 		if ext == "" {
@@ -64,19 +66,78 @@ func runExport(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("export failed: %w", err)
 	}
 
-	warning := ""
-	if _, err := os.Stat(outputPath); err == nil {
-		fmt.Fprintf(status, Colorize("Exported to: %s\n", ColorGreen), outputPath)
-	} else {
-		warning = "output file not found at expected location"
-		fmt.Fprint(status, Colorize("Note: Output file not found at expected location.\n", ColorYellow))
+	candidates := exportCandidatePaths(doc, outputPath)
+	finalPath, err := waitForExportedTrace(cmd.Context(), []string{outputPath}, exportWaitTimeout())
+	if err != nil {
+		if alternates := existingExportCandidates(candidates, outputPath); len(alternates) > 0 {
+			return fmt.Errorf("export did not appear at requested location %s; Xcode wrote candidate output at %s; preserving it for recovery: %w",
+				outputPath, strings.Join(alternates, ", "), err)
+		}
+		return err
 	}
-	return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
-		Action:  "export",
-		Target:  doc,
-		Output:  outputPath,
-		Warning: warning,
-	})
+	payload, err := finalizeStandaloneExport(status, doc, finalPath)
+	if err != nil {
+		return err
+	}
+	if err := requireExportedTrace(outputPath); err != nil {
+		return err
+	}
+	fmt.Fprintf(status, Colorize("Exported to: %s\n", ColorGreen), outputPath)
+	actionOutput := xcodeProfileActionOutput{
+		Action: "export",
+		Target: doc,
+		Output: outputPath,
+	}
+	applyXcodePayload(&actionOutput, payload)
+	return writeXcodeProfileActionOutput(actionOutput)
+}
+
+func finalizeStandaloneExport(w io.Writer, targetPath, outputPath string) (tracebundle.Payload, error) {
+	if err := requireStandaloneExportTarget(targetPath); err != nil {
+		return tracebundle.Payload{}, err
+	}
+	if err := verifyExportTraceIdentity(targetPath, outputPath); err != nil {
+		return tracebundle.Payload{}, err
+	}
+	payload, err := tracebundle.InspectPayload(outputPath)
+	if err != nil {
+		return tracebundle.Payload{}, fmt.Errorf("inspect exported trace payload: %w", err)
+	}
+	writeXcodePayloadStatus(w, payload)
+	if err := requireSelfContainedExport(outputPath, payload); err != nil {
+		return payload, err
+	}
+	return payload, nil
+}
+
+func requireStandaloneExportTarget(targetPath string) error {
+	if targetPath != "" {
+		return nil
+	}
+	return fmt.Errorf(
+		"cannot verify standalone export identity: selected Xcode window has no AXDocument binding; use a combined xp run or explicitly bind the source trace before export",
+	)
+}
+
+func existingExportCandidates(candidates []string, requested string) []string {
+	var found []string
+	requested = filepath.Clean(requested)
+	for _, candidate := range uniquePaths(candidates) {
+		if filepath.Clean(candidate) == requested {
+			continue
+		}
+		if _, err := os.Stat(candidate); err == nil {
+			found = append(found, candidate)
+		}
+	}
+	return found
+}
+
+func requireExportedTrace(path string) error {
+	if _, err := os.Stat(path); err != nil {
+		return fmt.Errorf("export completed but output not found at expected location %s: %w", path, err)
+	}
+	return nil
 }
 
 // isExportDialogOpen checks if an export/save dialog is already open on the window.

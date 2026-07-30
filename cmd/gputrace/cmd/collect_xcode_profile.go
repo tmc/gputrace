@@ -22,16 +22,86 @@ import (
 )
 
 type xcodeProfileActionOutput struct {
-	Success         bool   `json:"success"`
-	Action          string `json:"action"`
-	Target          string `json:"target,omitempty"`
-	Method          string `json:"method,omitempty"`
-	Input           string `json:"input,omitempty"`
-	Output          string `json:"output,omitempty"`
-	Source          string `json:"source,omitempty"`
-	RequestedOutput string `json:"requested_output,omitempty"`
-	Copied          bool   `json:"copied,omitempty"`
-	Warning         string `json:"warning,omitempty"`
+	Success          bool   `json:"success"`
+	Action           string `json:"action"`
+	Target           string `json:"target,omitempty"`
+	Method           string `json:"method,omitempty"`
+	Input            string `json:"input,omitempty"`
+	Output           string `json:"output,omitempty"`
+	Source           string `json:"source,omitempty"`
+	RequestedOutput  string `json:"requested_output,omitempty"`
+	Copied           bool   `json:"copied,omitempty"`
+	Reused           bool   `json:"reused,omitempty"`
+	RequestedTrace   string `json:"requested_trace,omitempty"`
+	SelectedTitle    string `json:"selected_title,omitempty"`
+	SelectedDocument string `json:"selected_document,omitempty"`
+	Phase            string `json:"phase,omitempty"`
+	Evidence         string `json:"evidence,omitempty"`
+	TargetBound      *bool  `json:"target_bound,omitempty"`
+	PayloadClass     string `json:"payload_class,omitempty"`
+	SelfContained    *bool  `json:"self_contained,omitempty"`
+	ProfilerTimingAvailable *bool `json:"profiler_timing_available,omitempty"`
+	StructuralAnalysisAvailable *bool `json:"structural_analysis_available,omitempty"`
+	Warning          string `json:"warning,omitempty"`
+}
+
+type xcodeWindowSelection struct {
+	RequestedTrace string
+	Title          string
+	Document       string
+	Bound          bool
+	Evidence       string
+}
+
+func newXcodeWindowSelection(requestedTrace, title, document string) xcodeWindowSelection {
+	selection := xcodeWindowSelection{
+		RequestedTrace: requestedTrace,
+		Title:          title,
+		Document:       document,
+	}
+	if requestedTrace == "" {
+		selection.Bound = true
+		selection.Evidence = "no trace was requested; selected the available GPU trace window"
+		return selection
+	}
+
+	requestedClean := strings.ToLower(filepath.Clean(requestedTrace))
+	requestedBase := strings.ToLower(filepath.Base(requestedTrace))
+	documentClean := strings.ToLower(filepath.Clean(document))
+	titleLower := strings.ToLower(title)
+	switch {
+	case document != "" && documentClean == requestedClean:
+		selection.Bound = true
+		selection.Evidence = "AXDocument exactly matches the requested trace"
+	case document != "" && requestedBase != "" && strings.Contains(documentClean, requestedBase):
+		selection.Bound = true
+		selection.Evidence = "AXDocument contains the requested trace filename"
+	case title != "" && requestedBase != "" && strings.Contains(titleLower, requestedBase):
+		selection.Bound = true
+		selection.Evidence = "window title contains the requested trace filename"
+	default:
+		selection.Evidence = "selected GPU trace window has no title or AXDocument match for the requested trace"
+	}
+	return selection
+}
+
+func selectionForWindow(requestedTrace string, window uintptr) xcodeWindowSelection {
+	return newXcodeWindowSelection(
+		requestedTrace,
+		axString(window, "AXTitle"),
+		axString(window, "AXDocument"),
+	)
+}
+
+func boolPointer(value bool) *bool {
+	return &value
+}
+
+func requireBoundSelection(selection xcodeWindowSelection) error {
+	if selection.RequestedTrace != "" && !selection.Bound {
+		return fmt.Errorf("selected Xcode window is not bound to requested trace %q: %s", selection.RequestedTrace, selection.Evidence)
+	}
+	return nil
 }
 
 var collectProfileOpts = collectProfileOptions{
@@ -268,23 +338,7 @@ func setupMacgo() error {
 
 	os.Setenv("MACGO_SERVICES_VERSION", "1")
 
-	cfg := &macgo.Config{
-		AppName:  "gputrace",
-		BundleID: "com.tmc.gputrace",
-		Permissions: []macgo.Permission{
-			macgo.Accessibility,
-		},
-		Custom: []string{
-			"com.apple.security.automation.apple-events",
-		},
-		AdHocSign: true,
-		DevMode:   true,
-		UIMode:    macgo.UIModeAccessory,
-		Info: map[string]interface{}{
-			"NSAppleEventsUsageDescription":   "gputrace needs to control Xcode to automate GPU trace operations.",
-			"NSAccessibilityUsageDescription": "gputrace needs Accessibility access to control Xcode's UI for GPU trace automation.",
-		},
-	}
+	cfg := xcodeProfileMacgoConfig()
 
 	verboseLog("setupMacgo: calling macgo.Start with BundleID=%s, UIMode=Accessory, DevMode=true", cfg.BundleID)
 
@@ -300,6 +354,31 @@ func setupMacgo() error {
 	}
 	verboseLog("setupMacgo: macgo.Start completed successfully")
 	return nil
+}
+
+func xcodeProfileMacgoConfig() *macgo.Config {
+	return &macgo.Config{
+		AppName:  "gputrace",
+		BundleID: "com.tmc.gputrace",
+		Permissions: []macgo.Permission{
+			macgo.Accessibility,
+		},
+		Custom: []string{
+			"com.apple.security.automation.apple-events",
+		},
+		AdHocSign: true,
+		DevMode:   true,
+		// Xcode automation is a synchronous CLI operation. LaunchServices
+		// returns after launching the wrapper and loses the child command's
+		// exit status. Direct bundle execution waits for the child and forwards
+		// its nonzero status while retaining the signed bundle identity.
+		ForceDirectExecution: true,
+		UIMode:               macgo.UIModeAccessory,
+		Info: map[string]interface{}{
+			"NSAppleEventsUsageDescription":   "gputrace needs to control Xcode to automate GPU trace operations.",
+			"NSAccessibilityUsageDescription": "gputrace needs Accessibility access to control Xcode's UI for GPU trace automation.",
+		},
+	}
 }
 
 // logProcessIdentity prints diagnostic info about the current process's TCC identity.

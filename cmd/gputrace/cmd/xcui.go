@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -1516,12 +1517,10 @@ func NavigateToFolderInSaveDialog(window uintptr, folderPath string) error {
 	if pathBar != 0 {
 		verboseLog("NavigateToFolderInSaveDialog: found path bar, setting value directly")
 		if err := axSetValue(pathBar, folderPath); err == nil {
-			// Confirm with Return key via AXConfirm or similar
 			sleepMs(300)
-			// Try to confirm the value
-			axPerformAction(pathBar, mkString("AXConfirm"))
-			sleepMs(500)
-			return nil
+			if err := axAction(pathBar, "AXConfirm"); err == nil {
+				return waitForGoToFolderNavigation(window, folderPath, 3*time.Second)
+			}
 		}
 		verboseLog("NavigateToFolderInSaveDialog: direct path bar set failed, trying Cmd+Shift+G")
 	}
@@ -1529,7 +1528,10 @@ func NavigateToFolderInSaveDialog(window uintptr, folderPath string) error {
 	// Method 2: Use Cmd+Shift+G to open Go to Folder.
 	// Ensure Xcode is frontmost and the window with the save dialog is raised —
 	// CGEventPostToPid is unreliable for keyboard shortcuts in sheets.
-	pid := getXcodePID()
+	var pid int32
+	if axUIElementGetPid(window, &pid) != kAXErrorSuccess {
+		pid = getXcodePID()
+	}
 	if pid == 0 {
 		return fmt.Errorf("could not find Xcode PID")
 	}
@@ -1580,18 +1582,25 @@ func NavigateToFolderInSaveDialog(window uintptr, folderPath string) error {
 		return fmt.Errorf("Go to Folder UI did not appear")
 	}
 
-	// Find the path text field
-	pathField := findElement(goToSheet, func(el uintptr) bool {
-		role := axString(el, "AXRole")
-		if role == "AXTextField" || role == "AXComboBox" {
-			if axBool(el, "AXFocused") {
-				return true
-			}
-		}
-		return false
+	// Prefer the exact path field used by the GoToWindow sheet. A generic
+	// focused-field search can select the parent save panel's name field.
+	pathField := findElementBounded(goToSheet, 200, func(el uintptr) bool {
+		return axString(el, "AXRole") == "AXTextField" &&
+			axString(el, "AXIdentifier") == "PathTextField"
 	})
 	if pathField == 0 {
-		pathField = findElement(goToSheet, func(el uintptr) bool {
+		pathField = findElementBounded(goToSheet, 200, func(el uintptr) bool {
+			role := axString(el, "AXRole")
+			if role == "AXTextField" || role == "AXComboBox" {
+				if axBool(el, "AXFocused") {
+					return true
+				}
+			}
+			return false
+		})
+	}
+	if pathField == 0 {
+		pathField = findElementBounded(goToSheet, 200, func(el uintptr) bool {
 			return axString(el, "AXRole") == "AXComboBox"
 		})
 	}
@@ -1602,58 +1611,179 @@ func NavigateToFolderInSaveDialog(window uintptr, folderPath string) error {
 		return fmt.Errorf("path text field not found")
 	}
 
-	verboseLog("NavigateToFolderInSaveDialog: setting path: %s", folderPath)
-	if err := axSetValue(pathField, folderPath); err != nil {
-		return fmt.Errorf("failed to set folder path: %w", err)
+	// AXValue updates the visible string but does not notify Xcode 26's
+	// GoToWindow controller: its native suggestions remain stale and Return is
+	// ignored. Enter the path through the focused text editor so AppKit receives
+	// the same edit and commit events as manual input.
+	if err := focusAXElement(pathField); err != nil {
+		return err
 	}
-	sleepMs(300)
-
-	// Click Go button or send Return to confirm the path
-	goBtn := findButtonBFS(goToSheet, "Go", 100)
-	if goBtn != 0 {
-		verboseLog("NavigateToFolderInSaveDialog: clicking Go button")
-		axPressWithFallback(goBtn)
-	} else {
-		// Send Return via CGEventPost (frontmost app) — sendKeyToPid is unreliable
-		verboseLog("NavigateToFolderInSaveDialog: sending Return to confirm path")
-		axuiautomation.SendReturn()
+	verboseLog("NavigateToFolderInSaveDialog: typing path through native field editor: %s", folderPath)
+	if err := typeGoToFolderPath(folderPath); err != nil {
+		return err
 	}
-	sleepMs(500)
+	entryState, ok := waitForGoToFolderConfirmationState(window, folderPath, 2*time.Second)
+	if !ok {
+		return fmt.Errorf("Go to Folder field did not expose exact requested path %q; sheet state: %s",
+			folderPath, formatExportSheetState(entryState))
+	}
+	if err := confirmFocusedXcodeField(); err != nil {
+		return err
+	}
+	if _, ok := waitForGoToFolderNavigationStateAfterExactEntry(window, folderPath, 2*time.Second); ok {
+		return nil
+	}
 
-	// The Go to Folder sheet (GoToWindow) is a folder browser that doesn't
-	// auto-close after navigation. It blocks the Save button in the parent
-	// save panel. Dismiss it via its Close button.
-	dismissGoToFolderSheet(window)
+	// Some AppKit folder browsers use the first Return to resolve the path and
+	// a second Return to commit the resolved folder. Reacquire and refocus the
+	// exact field before the one bounded retry.
+	goToSheet = findExactGoToFolderSheet(window)
+	if goToSheet != 0 {
+		pathField = findElementBounded(goToSheet, 200, func(element uintptr) bool {
+			return axString(element, "AXRole") == "AXTextField" &&
+				axString(element, "AXIdentifier") == "PathTextField"
+		})
+		if pathField != 0 {
+			if err := focusAXElement(pathField); err != nil {
+				return err
+			}
+			verboseLog("NavigateToFolderInSaveDialog: sending one focused Return after path resolution")
+			if err := confirmFocusedXcodeField(); err != nil {
+				return err
+			}
+			if _, ok := waitForGoToFolderNavigationStateAfterExactEntry(window, folderPath, 2*time.Second); ok {
+				return nil
+			}
+		}
+	}
+	state := readExportSheetState(window)
+	return fmt.Errorf("Go to Folder did not commit requested directory %q after native text entry; sheet state: %s",
+		folderPath, formatExportSheetState(state))
+}
 
+const typeGoToFolderPathScript = `
+on run argv
+	tell application "System Events"
+		tell process "Xcode"
+			set frontmost to true
+			keystroke "a" using command down
+			-- Let System Events release Command before editing the field.
+			delay 0.2
+			-- Type the path body first so the leading slash is not consumed as
+			-- Command-/. Then move to the start and insert it separately.
+			keystroke (item 1 of argv)
+			key code 123 using command down
+			delay 0.1
+			keystroke "/"
+		end tell
+	end tell
+end run`
+
+func typeGoToFolderPath(folderPath string) error {
+	pathBody, err := goToFolderPathBody(folderPath)
+	if err != nil {
+		return err
+	}
+	if out, err := exec.Command("osascript", "-e", typeGoToFolderPathScript, pathBody).CombinedOutput(); err != nil {
+		return fmt.Errorf("type Go to Folder path: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
 	return nil
 }
 
-// dismissGoToFolderSheet finds and closes any lingering Go to Folder sheet.
-func dismissGoToFolderSheet(window uintptr) {
-	goToSheet := findElement(window, func(el uintptr) bool {
-		role := axString(el, "AXRole")
-		ident := axString(el, "AXIdentifier")
-		return role == "AXSheet" && ident == "GoToWindow"
-	})
-	if goToSheet == 0 {
-		return // No Go to Folder sheet found — already dismissed
+func goToFolderPathBody(path string) (string, error) {
+	if !filepath.IsAbs(path) {
+		return "", fmt.Errorf("Go to Folder path is not absolute: %q", path)
 	}
-	verboseLog("dismissGoToFolderSheet: found GoToWindow sheet, dismissing")
+	return strings.TrimPrefix(path, string(filepath.Separator)), nil
+}
 
-	// Try Close button first (id="CloseButton")
-	closeBtn := findElement(goToSheet, func(el uintptr) bool {
-		return axString(el, "AXRole") == "AXButton" &&
-			axString(el, "AXIdentifier") == "CloseButton"
-	})
-	if closeBtn != 0 {
-		axPressWithFallback(closeBtn)
-		sleepMs(300)
-		return
+func confirmFocusedXcodeField() error {
+	script := `
+tell application "System Events"
+	tell process "Xcode"
+		set frontmost to true
+		key code 36
+	end tell
+end tell`
+	if out, err := exec.Command("osascript", "-e", script).CombinedOutput(); err != nil {
+		return fmt.Errorf("confirm focused Xcode field: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
+	return nil
+}
 
-	// Fallback: send Escape
-	axuiautomation.SendEscape()
-	sleepMs(300)
+func focusAXElement(element uintptr) error {
+	key := mkString("AXFocused")
+	defer cfRelease(key)
+	if kCFBooleanTrue == 0 {
+		return fmt.Errorf("focus element: true CFBoolean unavailable")
+	}
+	if ret := axSetAttributeValue(element, key, kCFBooleanTrue); ret != kAXErrorSuccess {
+		return fmt.Errorf("focus element: AX error %d", ret)
+	}
+	sleepMs(100)
+	if !axBool(element, "AXFocused") {
+		return fmt.Errorf("focus element: AXFocused did not become true")
+	}
+	return nil
+}
+
+func waitForGoToFolderNavigationState(window uintptr, folderPath string, timeout time.Duration) (exportSheetState, bool) {
+	return waitForStableExportSheetState(window, timeout, func(state exportSheetState) bool {
+		return goToFolderNavigationComplete(state, folderPath)
+	})
+}
+
+func waitForGoToFolderConfirmationState(window uintptr, folderPath string, timeout time.Duration) (exportSheetState, bool) {
+	return waitForStableExportSheetState(window, timeout, func(state exportSheetState) bool {
+		return goToFolderConfirmationReady(state, folderPath) && state.GoToFolderSheetOpen
+	})
+}
+
+func waitForGoToFolderNavigationStateAfterExactEntry(window uintptr, folderPath string, timeout time.Duration) (exportSheetState, bool) {
+	return waitForStableExportSheetState(window, timeout, func(state exportSheetState) bool {
+		return goToFolderNavigationCompleteAfterExactEntry(state, folderPath)
+	})
+}
+
+func waitForStableExportSheetState(window uintptr, timeout time.Duration, ready func(exportSheetState) bool) (exportSheetState, bool) {
+	deadline := time.Now().Add(timeout)
+	var state exportSheetState
+	stable := 0
+	for {
+		state = readExportSheetState(window)
+		if ready(state) {
+			stable++
+		} else {
+			stable = 0
+		}
+		// A slow AX traversal may consume the whole nominal timeout. Once one
+		// matching sample has completed, always allow its confirmation sample.
+		// With no pending match, fail as soon as a completed read is past the
+		// deadline. Overtime is therefore limited to one confirmation read.
+		if done, ok := stableExportSheetWaitResult(stable, time.Now().After(deadline)); done {
+			return state, ok
+		}
+		sleepMs(100)
+	}
+}
+
+func stableExportSheetWaitResult(stable int, deadlineReached bool) (done, ok bool) {
+	if stable >= 2 {
+		return true, true
+	}
+	if deadlineReached && stable == 0 {
+		return true, false
+	}
+	return false, false
+}
+
+func waitForGoToFolderNavigation(window uintptr, folderPath string, timeout time.Duration) error {
+	state, ok := waitForGoToFolderNavigationState(window, folderPath, timeout)
+	if !ok {
+		return fmt.Errorf("Go to Folder did not confirm requested directory %q; sheet state: %s",
+			folderPath, formatExportSheetState(state))
+	}
+	return nil
 }
 
 // sendKeyToPid sends a key event directly to a process without changing focus.
@@ -1711,11 +1841,18 @@ func findGoToFolderInAllWindows() uintptr {
 // findGoToFolderSheet finds the "Go to Folder" UI in a window.
 // Modern macOS uses an inline text field in the path bar, not a separate sheet.
 func findGoToFolderSheet(window uintptr) uintptr {
-	// First try: Look for a sheet with "Go" button (older macOS style)
-	sheet := findElement(window, func(el uintptr) bool {
+	// Xcode 26 identifies the nested save-panel sheet directly and exposes its
+	// confirmation action through PathTextField.AXConfirm.
+	sheet := findExactGoToFolderSheet(window)
+	if sheet != 0 {
+		return sheet
+	}
+
+	// Older macOS versions expose a sheet or group with a Go button.
+	sheet = findElementBounded(window, 600, func(el uintptr) bool {
 		role := axString(el, "AXRole")
 		if role == "AXSheet" || role == "AXGroup" {
-			goBtn := findButtonBFS(el, "Go", 50)
+			goBtn := findButtonBFS(el, "Go", 200)
 			if goBtn != 0 {
 				return true
 			}
@@ -1728,7 +1865,7 @@ func findGoToFolderSheet(window uintptr) uintptr {
 
 	// Second try: Look for inline "Go to:" text field (modern macOS style)
 	// This appears as a text field/combo box with "Go to:" label or a path-like value
-	field := findElement(window, func(el uintptr) bool {
+	field := findElementBounded(window, 600, func(el uintptr) bool {
 		role := axString(el, "AXRole")
 		if role == "AXTextField" || role == "AXComboBox" {
 			// Check if this is focused (Go to field gets focus when Cmd+Shift+G is pressed)
@@ -1757,4 +1894,11 @@ func findGoToFolderSheet(window uintptr) uintptr {
 	}
 
 	return 0
+}
+
+func findExactGoToFolderSheet(window uintptr) uintptr {
+	return findElementBounded(window, 600, func(el uintptr) bool {
+		return axString(el, "AXRole") == "AXSheet" &&
+			axString(el, "AXIdentifier") == "GoToWindow"
+	})
 }
