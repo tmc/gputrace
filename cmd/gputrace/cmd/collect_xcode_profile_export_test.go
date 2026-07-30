@@ -433,42 +433,47 @@ func TestValidateRecoveryFinalizePrecondition(t *testing.T) {
 	}
 }
 
-func TestRecoveryFinalizeProgress(t *testing.T) {
+func TestRestoredRecoverySourceTarget(t *testing.T) {
 	recovery := standaloneExportRecovery{
-		Identity: xcodeProcessIdentity{PID: 81051, AppPath: "/Applications/Xcode.app"},
+		SourcePath: "/Users/tmc/tmp/raw.gputrace",
+		Identity:   xcodeProcessIdentity{PID: 81051, AppPath: "/Applications/Xcode.app"},
 	}
-	const key = "window"
-	base := recoveryFinalizeSnapshot{
-		Identity:    recovery.Identity,
-		WindowKey:   key,
-		Performance: true,
-		StopCount:   1,
-		StopEnabled: true,
-		ExportFound: true,
+	base := standaloneRecoveryWindow{
+		xcodeAXWindow: xcodeAXWindow{
+			Element:  21,
+			Title:    "raw.gputrace",
+			Document: "file:///Users/tmc/tmp/raw.gputrace",
+			X:        229,
+			Y:        320,
+			Width:    1376,
+			Height:   900,
+		},
+		PID:           81051,
+		NewEditorView: true,
+		Finished:      true,
 	}
+	key := standaloneRecoveryGeometryKey(base)
 	tests := []struct {
 		name    string
-		edit    func(*recoveryFinalizeSnapshot)
-		want    bool
+		edit    func(*standaloneRecoveryWindow)
 		wantErr string
 	}{
-		{name: "still stopping"},
-		{name: "stop cleared export disabled", edit: func(s *recoveryFinalizeSnapshot) { s.StopCount = 0 }},
-		{name: "done absent", edit: func(s *recoveryFinalizeSnapshot) { s.StopCount = 0; s.ExportEnabled = true }, want: true},
-		{name: "done disabled", edit: func(s *recoveryFinalizeSnapshot) { s.StopEnabled = false; s.ExportEnabled = true }, want: true},
-		{name: "identity drift", edit: func(s *recoveryFinalizeSnapshot) { s.Identity.PID++ }, wantErr: "identity changed"},
-		{name: "window drift", edit: func(s *recoveryFinalizeSnapshot) { s.WindowKey = "other" }, wantErr: "window identity changed"},
-		{name: "performance lost", edit: func(s *recoveryFinalizeSnapshot) { s.Performance = false }, wantErr: "disappeared"},
-		{name: "sheet appeared", edit: func(s *recoveryFinalizeSnapshot) { s.SheetOpen = true }, wantErr: "unexpected sheet"},
-		{name: "duplicate stop", edit: func(s *recoveryFinalizeSnapshot) { s.StopCount = 2 }, wantErr: "multiple Stop"},
+		{name: "exact restored source"},
+		{name: "wrong pid", edit: func(w *standaloneRecoveryWindow) { w.PID++ }, wantErr: "found 0"},
+		{name: "window drift", edit: func(w *standaloneRecoveryWindow) { w.X++ }, wantErr: "found 0"},
+		{name: "wrong document", edit: func(w *standaloneRecoveryWindow) { w.Document = "/Users/tmc/tmp/other.gputrace" }, wantErr: "found 0"},
+		{name: "empty document", edit: func(w *standaloneRecoveryWindow) { w.Document = "" }, wantErr: "found 0"},
+		{name: "wrong title", edit: func(w *standaloneRecoveryWindow) { w.Title = "other.gputrace" }, wantErr: "found 0"},
+		{name: "new editor missing", edit: func(w *standaloneRecoveryWindow) { w.NewEditorView = false }, wantErr: "found 0"},
+		{name: "finished missing", edit: func(w *standaloneRecoveryWindow) { w.Finished = false }, wantErr: "found 0"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			snapshot := base
+			window := base
 			if test.edit != nil {
-				test.edit(&snapshot)
+				test.edit(&window)
 			}
-			got, err := recoveryFinalizeProgress(snapshot, recovery, key)
+			got, err := restoredRecoverySourceTarget([]standaloneRecoveryWindow{window}, recovery, key)
 			if test.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
 					t.Fatalf("error = %v, want %q", err, test.wantErr)
@@ -478,10 +483,78 @@ func TestRecoveryFinalizeProgress(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got != test.want {
-				t.Fatalf("done = %v, want %v", got, test.want)
+			if got.Element != base.Element {
+				t.Fatalf("element = %d, want %d", got.Element, base.Element)
 			}
 		})
+	}
+}
+
+func TestFinalizedRecoveryPerformanceTarget(t *testing.T) {
+	recovery := standaloneExportRecovery{
+		SourcePath: "/Users/tmc/tmp/raw.gputrace",
+		Identity:   xcodeProcessIdentity{PID: 81051, AppPath: "/Applications/Xcode.app"},
+	}
+	base := standaloneRecoveryWindow{
+		xcodeAXWindow: xcodeAXWindow{
+			Element: 22,
+			X:       229,
+			Y:       320,
+			Width:   1376,
+			Height:  900,
+		},
+		PID:             81051,
+		PerformanceView: true,
+	}
+	key := standaloneRecoveryGeometryKey(base)
+	tests := []struct {
+		name    string
+		edit    func(*standaloneRecoveryWindow)
+		wantErr string
+	}{
+		{name: "untitled transitioned performance"},
+		{name: "source-bound transitioned performance", edit: func(w *standaloneRecoveryWindow) {
+			w.Title = "raw.gputrace"
+			w.Document = "file:///Users/tmc/tmp/raw.gputrace"
+		}},
+		{name: "wrong pid", edit: func(w *standaloneRecoveryWindow) { w.PID++ }, wantErr: "found 0"},
+		{name: "window drift", edit: func(w *standaloneRecoveryWindow) { w.Width++ }, wantErr: "found 0"},
+		{name: "performance missing", edit: func(w *standaloneRecoveryWindow) { w.PerformanceView = false }, wantErr: "found 0"},
+		{name: "wrong document", edit: func(w *standaloneRecoveryWindow) { w.Document = "/Users/tmc/tmp/other.gputrace" }, wantErr: "found 0"},
+		{name: "wrong title", edit: func(w *standaloneRecoveryWindow) { w.Title = "other.gputrace" }, wantErr: "found 0"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			window := base
+			if test.edit != nil {
+				test.edit(&window)
+			}
+			got, err := finalizedRecoveryPerformanceTarget([]standaloneRecoveryWindow{window}, recovery, key)
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("error = %v, want %q", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Element != base.Element {
+				t.Fatalf("element = %d, want %d", got.Element, base.Element)
+			}
+		})
+	}
+}
+
+func TestNormalizedTraceDocument(t *testing.T) {
+	const want = "/Users/tmc/tmp/raw trace.gputrace"
+	for _, document := range []string{
+		want,
+		"file:///Users/tmc/tmp/raw%20trace.gputrace",
+	} {
+		if got := normalizedTraceDocument(document); got != want {
+			t.Fatalf("normalizedTraceDocument(%q) = %q, want %q", document, got, want)
+		}
 	}
 }
 
