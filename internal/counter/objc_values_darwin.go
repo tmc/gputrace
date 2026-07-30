@@ -4,6 +4,7 @@ package counter
 
 import (
 	"fmt"
+	"runtime"
 
 	"github.com/tmc/apple/objc"
 )
@@ -16,6 +17,8 @@ import (
 func CounterDataValues(data objc.ID) ([]float64, error) {
 	var values []float64
 	var err error
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	objc.AutoreleasePool(func() {
 		values, err = counterDataValues(data)
 	})

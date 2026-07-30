@@ -5,9 +5,13 @@ package counter
 import (
 	"errors"
 	"fmt"
+	"os"
+	"runtime"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
+	"github.com/tmc/apple/foundation"
 	"github.com/tmc/apple/objc"
 	"github.com/tmc/apple/objectivec"
 	"github.com/tmc/apple/private/dvtinstrumentsfoundation"
@@ -16,8 +20,55 @@ import (
 // APSDataSource is the private DVT Instruments source for live APS samples.
 // It is available only when built with gputrace_private_bindings.
 type APSDataSource struct {
-	source dvtinstrumentsfoundation.DTGPUDataSource
+	source   dvtinstrumentsfoundation.DTGPUDataSource
+	delegate objc.ID
 }
+
+// APSRawData is one payload delivered by DTGPUDataSource's delegate. Data is
+// copied before the delegate method returns; the framework-owned buffer must
+// not be retained by the caller.
+type APSRawData struct {
+	Data            []byte
+	SampleCount     uint64
+	SampleType      uint64
+	RingBufferIndex uint32
+	SourceIndex     uint32
+	SourceID        objc.ID
+}
+
+// APSCounterProfileInfo describes a profile advertised by the active GPU
+// data source. Profile selectors are private and device-specific, so callers
+// should discover them here instead of hard-coding a numeric value.
+type APSCounterProfileInfo struct {
+	Profile uint64
+	Name    string
+	IsAPS   bool
+}
+
+// ErrAPSUnavailable reports that the host's private APS source cannot be
+// instantiated. It is returned with APSUnavailableError when the framework
+// provides a domain and code for the failure.
+var ErrAPSUnavailable = errors.New("APS counter source is unavailable")
+
+// APSUnavailableError preserves the NSError identity reported by
+// GPURawCounter. Callers can use errors.Is(err, ErrAPSUnavailable) and
+// errors.As(err, *APSUnavailableError) without parsing a diagnostic string.
+type APSUnavailableError struct {
+	Domain string
+	Code   int64
+	Detail string
+}
+
+func (e *APSUnavailableError) Error() string {
+	if e == nil {
+		return ErrAPSUnavailable.Error()
+	}
+	return fmt.Sprintf("counter: APS unavailable: %s (code %d): %s", e.Domain, e.Code, e.Detail)
+}
+
+func (e *APSUnavailableError) Unwrap() error { return ErrAPSUnavailable }
+
+var apsDelegateClassID atomic.Uint64
 
 // NewAPSDataSourceWithDedicatedQueue creates a source with its own serial
 // dispatch queue. The queue is retained by DTGPUDataSource for the source's
@@ -116,7 +167,15 @@ func PrepareRawCountersAPS(profile objectivec.IObject) error {
 	if profile == nil || profile.GetID() == 0 {
 		return errors.New("counter: nil APS counter profile")
 	}
+	if sourceErr := rawCounterSourceGroupError(); sourceErr != nil {
+		return sourceErr
+	}
 	p := dvtinstrumentsfoundation.DTGPUCounterProfileGPURawCountersAPSFromID(profile.GetID())
+	config, err := rawCountersAPSConfig(profile)
+	if err != nil {
+		return err
+	}
+	p.SetAPSCounterConfig(config)
 	valid, err := p.ValidateAndConfigureRawCounters()
 	if err != nil {
 		return fmt.Errorf("counter: validate APS counter profile: %w", err)
@@ -131,6 +190,67 @@ func PrepareRawCountersAPS(profile objectivec.IObject) error {
 	return nil
 }
 
+// rawCounterSourceGroupError asks GPURawCounter for the detailed source-group
+// discovery error. ValidateAndConfigureRawCounters returns false without an
+// NSError when discovery produces no groups, which otherwise hides the reason
+// APS cannot be prepared on the host.
+func rawCounterSourceGroupError() error {
+	if os.Getenv("GPUTRACE_APS_PRELOAD_BUNDLE") != "" {
+		const bundleImage = "/System/Library/Extensions/AGXGPURawCounterBundle.bundle/Contents/MacOS/AGXGPURawCounterBundle"
+		if _, err := purego.Dlopen(bundleImage, purego.RTLD_LAZY|purego.RTLD_GLOBAL); err != nil {
+			return fmt.Errorf("counter: preload APS source-group bundle: %w", err)
+		}
+	}
+	handle, err := purego.Dlopen("/System/Library/PrivateFrameworks/GPURawCounter.framework/GPURawCounter", purego.RTLD_LAZY|purego.RTLD_GLOBAL)
+	if err != nil {
+		return nil
+	}
+	symbol, err := purego.Dlsym(handle, "GRCCopyAllCounterSourceGroupWithError")
+	if err != nil || symbol == 0 {
+		return nil
+	}
+	var copyGroups func(*objc.ID) objc.ID
+	purego.RegisterFunc(&copyGroups, symbol)
+	var frameworkError objc.ID
+	groups := copyGroups(&frameworkError)
+	if frameworkError != 0 {
+		return &APSUnavailableError{
+			Domain: errorDomain(frameworkError),
+			Code:   errorCode(frameworkError),
+			Detail: objectDescription(frameworkError),
+		}
+	}
+	if groups == 0 || !objc.RespondsToSelector(groups, objc.Sel("count")) || objc.Send[uint](groups, objc.Sel("count")) == 0 {
+		return errors.New("counter: discover APS counter source groups: no groups")
+	}
+	return nil
+}
+
+// rawCountersAPSConfig returns the host-specific dictionary accepted by the
+// APS profile's setAPSCounterConfig: selector. CounterProfileForHost returns
+// an NSArray, even when it contains one configuration dictionary.
+func rawCountersAPSConfig(profile objectivec.IObject) (objectivec.IObject, error) {
+	if profile == nil || profile.GetID() == 0 {
+		return nil, errors.New("counter: nil APS counter profile")
+	}
+	base := dvtinstrumentsfoundation.DTGPUCounterProfileFromID(profile.GetID())
+	configs := base.CounterProfileForHost()
+	if configs == nil || configs.GetID() == 0 {
+		return nil, errors.New("counter: APS profile has no host configuration")
+	}
+	if !objc.RespondsToSelector(configs.GetID(), objc.Sel("count")) {
+		return nil, errors.New("counter: APS host configuration is not an array")
+	}
+	array := foundation.NSArrayFromID(configs.GetID())
+	for i := uint(0); i < array.Count(); i++ {
+		candidate := array.ObjectAtIndex(i)
+		if candidate.GetID() != 0 && objc.RespondsToSelector(candidate.GetID(), objc.Sel("objectForKeyedSubscript:")) {
+			return candidate, nil
+		}
+	}
+	return nil, errors.New("counter: APS host configuration has no dictionary")
+}
+
 // SampleRawCounters requests one raw-counter sample. The callback runs on the
 // profile's work queue. The block is retained until the private framework
 // invokes it, then released explicitly.
@@ -140,6 +260,9 @@ func SampleRawCounters(profile objectivec.IObject, counters uint64, callback fun
 	}
 	if callback == nil {
 		return errors.New("counter: nil APS sample callback")
+	}
+	if !objc.RespondsToSelector(profile.GetID(), objc.Sel("sampleCounters:callback:")) {
+		return errors.New("counter: APS profile does not support sample callback")
 	}
 	var release func()
 	block, blockRelease := dvtinstrumentsfoundation.NewVoidBlock(func() {
@@ -161,8 +284,78 @@ func (s APSDataSource) SetCounterProfile(profile objectivec.IObject) error {
 	if profile == nil || profile.GetID() == 0 {
 		return errors.New("counter: nil APS counter profile")
 	}
-	s.source.SetAPSCounterConfig(profile)
+	config, err := rawCountersAPSConfig(profile)
+	if err != nil {
+		return err
+	}
+	dvtinstrumentsfoundation.DTGPUCounterProfileGPURawCountersAPSFromID(profile.GetID()).SetAPSCounterConfig(config)
+	s.source.SetAPSCounterConfig(config)
 	return nil
+}
+
+// SetDataCallback installs a delegate that copies raw APS payloads as the
+// source makes them available. The callback runs on the source's work queue.
+// Keep the APSDataSource value alive until Stop and GetRemainingData have
+// completed so the delegate remains retained by the Go wrapper.
+func (s *APSDataSource) SetDataCallback(callback func(APSRawData)) error {
+	if s == nil || s.source.ID == 0 {
+		return errors.New("counter: nil APS data source")
+	}
+	if callback == nil {
+		return errors.New("counter: nil APS data callback")
+	}
+
+	className := fmt.Sprintf("GoAPSDataSourceDelegate_%d", apsDelegateClassID.Add(1))
+	selector := objc.Sel("readyToSendData:sampleCount:length:dataSource:sampleType:ringBufferIndex:sourceIndex:")
+	methods := []objc.MethodDef{{
+		Cmd: selector,
+		Fn: func(_ objc.ID, _ objc.SEL, data *uint64, count, length uint64, source objc.ID, sampleType uint64, ringBufferIndex, sourceIndex uint32) {
+			runtime.LockOSThread()
+			defer runtime.UnlockOSThread()
+			objc.AutoreleasePool(func() {
+				var payload []byte
+				if data != nil && length != 0 && length <= uint64(^uint(0)>>1) {
+					payload = append([]byte(nil), unsafe.Slice((*byte)(unsafe.Pointer(data)), int(length))...)
+				}
+				callback(APSRawData{
+					Data:            payload,
+					SampleCount:     count,
+					SampleType:      sampleType,
+					RingBufferIndex: ringBufferIndex,
+					SourceIndex:     sourceIndex,
+					SourceID:        source,
+				})
+			})
+		},
+	}}
+	protocol := objc.GetProtocol("DTGPUDataSourceDelegate")
+	if protocol == nil {
+		return errors.New("counter: DTGPUDataSourceDelegate protocol is unavailable")
+	}
+	var protocols []*objc.Protocol
+	protocols = append(protocols, protocol)
+	class, err := objc.RegisterClass(className, objc.GetClass("NSObject"), protocols, nil, methods)
+	if err != nil {
+		return fmt.Errorf("counter: register APS data delegate: %w", err)
+	}
+	delegate := objc.Send[objc.ID](objc.ID(class), objc.Sel("alloc"))
+	delegate = objc.Send[objc.ID](delegate, objc.Sel("init"))
+	if delegate == 0 {
+		return errors.New("counter: create APS data delegate")
+	}
+	if s.delegate != 0 {
+		s.source.SetDelegate(nil)
+		releaseAPSDelegate(s.delegate)
+	}
+	objc.Send[struct{}](s.source.ID, objc.Sel("setDelegate:"), delegate)
+	s.delegate = delegate
+	return nil
+}
+
+func releaseAPSDelegate(delegate objc.ID) {
+	if delegate != 0 {
+		objc.Send[objc.ID](delegate, objc.Sel("release"))
+	}
 }
 
 // SupportedCounterProfiles returns the counter profiles the source reports for
@@ -191,6 +384,47 @@ func (s APSDataSource) SupportedCounterProfiles() ([]objectivec.IObject, error) 
 		return nil, errors.New("counter: APS data source reports no counter profiles")
 	}
 	return profiles, nil
+}
+
+// SupportedCounterProfileInfo returns the device-advertised profile selectors
+// and names. It reads only profiles reported by DTGPUDataSource and does not
+// prepare or start sampling.
+func (s APSDataSource) SupportedCounterProfileInfo() ([]APSCounterProfileInfo, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	var result []APSCounterProfileInfo
+	var err error
+	objc.AutoreleasePool(func() {
+		profiles, profilesErr := s.SupportedCounterProfiles()
+		if profilesErr != nil {
+			err = profilesErr
+			return
+		}
+		result = make([]APSCounterProfileInfo, 0, len(profiles))
+		for _, profile := range profiles {
+			if profile == nil || profile.GetID() == 0 {
+				continue
+			}
+			base := dvtinstrumentsfoundation.DTGPUCounterProfileFromID(profile.GetID())
+			if !objc.RespondsToSelector(profile.GetID(), objc.Sel("profile")) {
+				continue
+			}
+			info := APSCounterProfileInfo{Profile: base.Profile()}
+			if objc.RespondsToSelector(profile.GetID(), objc.Sel("profileName")) {
+				info.Name = base.ProfileName()
+			}
+			if objc.RespondsToSelector(profile.GetID(), objc.Sel("isAPS")) {
+				info.IsAPS = base.IsAPS()
+			}
+			if info.Profile != 0 {
+				result = append(result, info)
+			}
+		}
+		if len(result) == 0 {
+			err = errors.New("counter: APS data source reports no usable profile selectors")
+		}
+	})
+	return result, err
 }
 
 // Configure sets the source sampling configuration. The private selector
@@ -222,6 +456,28 @@ func objectDescription(id objc.ID) string {
 		return "<no description>"
 	}
 	return objc.GoString(cstr)
+}
+
+func errorDomain(id objc.ID) string {
+	if id == 0 || !objc.RespondsToSelector(id, objc.Sel("domain")) {
+		return "<unknown>"
+	}
+	domain := objc.Send[objc.ID](id, objc.Sel("domain"))
+	if domain == 0 || !objc.RespondsToSelector(domain, objc.Sel("UTF8String")) {
+		return "<unknown>"
+	}
+	cstr := objc.Send[*byte](domain, objc.Sel("UTF8String"))
+	if cstr == nil {
+		return "<unknown>"
+	}
+	return objc.GoString(cstr)
+}
+
+func errorCode(id objc.ID) int64 {
+	if id == 0 || !objc.RespondsToSelector(id, objc.Sel("code")) {
+		return 0
+	}
+	return objc.Send[int64](id, objc.Sel("code"))
 }
 
 // Run starts sampling. The callback is invoked by the framework's work queue
@@ -264,8 +520,22 @@ func (s APSDataSource) Stop() {
 }
 
 // Release releases the Objective-C data source.
-func (s APSDataSource) Release() {
+func (s *APSDataSource) Release() {
+	if s == nil {
+		return
+	}
+	if s.source.ID != 0 {
+		s.Stop()
+	}
+	if s.delegate != 0 {
+		if s.source.ID != 0 {
+			s.source.SetDelegate(nil)
+		}
+		releaseAPSDelegate(s.delegate)
+		s.delegate = 0
+	}
 	if s.source.ID != 0 {
 		s.source.Release()
+		s.source.ID = 0
 	}
 }
