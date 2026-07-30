@@ -2,6 +2,11 @@
 
 This document describes the findings from reverse engineering the Apple GPU trace format used by Xcode's GPU debugger.
 
+[../trace-format.md](../trace-format.md) is the maintained overview of the
+bundle layout and MTSP record types. This file keeps the raw research that does
+not appear there: the `index` (xdic) format, the API-call counting markers, and
+the original timing investigation.
+
 ## File Structure
 
 A `.gputrace` directory contains:
@@ -14,13 +19,18 @@ A `.gputrace` directory contains:
 - `store0` - zlib-compressed file (typically all zeros - no timing data)
 - Various shader files (hex UUIDs)
 
-### ⚠️ Important: Timing Data Not Stored
+### Important: the capture stream carries no timing
 
-**Critical Discovery:** The `.gputrace` files do NOT contain GPU execution timing or performance percentages.
+The MTSP capture stream describes command structure, not execution
+measurements. `store0` decompresses to all zeros, and no per-shader duration or
+cost percentage appears anywhere in `capture` or `device-resources-*`.
 
-- The `store0` file decompresses to all zeros (no pre-computed timing)
-- MTSP records contain command structure, not execution measurements
-- Xcode Instruments derives timing by **replaying the GPU workload** with performance counters enabled
+Timing lives in the sibling `.gpuprofiler_raw` directory, which is present only
+for profiled captures. When it is present, `gputrace` reads real dispatch and
+kernel durations, execution cost, and command-buffer timelines from it; see
+[../STREAMDATA_FORMAT.md](../STREAMDATA_FORMAT.md) and
+[PERF_VS_NONPERF_TRACES.md](./PERF_VS_NONPERF_TRACES.md). Xcode produces that
+directory by **replaying the GPU workload** with performance counters enabled.
 
 See [INSTRUMENTS_TIMING_INVESTIGATION.md](./INSTRUMENTS_TIMING_INVESTIGATION.md) for complete details on how Instruments measures GPU timing.
 
@@ -141,7 +151,7 @@ Test results:
 
 ## Implementation
 
-See `command_buffer.go` for the Go implementation:
+See `internal/trace/command_buffer.go` for the Go implementation:
 
 ```go
 // Command buffers (CUUU markers)
@@ -179,36 +189,47 @@ func (t *Trace) CountDispatchCalls() (int, error)
 gputrace stats trace.gputrace
 
 # List all command buffers with details
-go test -v -run TestParseCommandBuffers
+gputrace command-buffers trace.gputrace
 ```
 
 ## Timing Data in GPU Traces
 
-**Important**: The `.gputrace` format does NOT contain pre-computed timing data or shader execution durations.
+The capture stream itself holds no pre-computed timing or shader execution
+durations. Whether a bundle has timing depends on how it was captured.
 
-### What IS in the Trace
+### What IS in the capture stream
 
 - Command buffer commit timestamps (CUUU records, +0x08)
 - Command buffer UUIDs for identification
 - Encoder structure and dispatch configurations
 - Buffer bindings and resource state
 
-### What is NOT in the Trace
+### What is NOT in the capture stream
 
-- ❌ Per-shader execution time
-- ❌ Shader cost percentages
-- ❌ GPU cycle counts
-- ❌ Performance counter values
+- Per-shader execution time
+- Shader cost percentages
+- GPU cycle counts
+- Performance counter values
 
-### How to Get Timing Data
+The CUUU timestamps record when command buffers were submitted, not how long
+individual shaders ran.
 
-See [INSTRUMENTS_TIMING_INVESTIGATION.md](./INSTRUMENTS_TIMING_INVESTIGATION.md) for details on:
+### How to get timing data
+
+Profiled bundles carry a `.gpuprofiler_raw` directory with `streamData`,
+`Counters_f_*.raw`, `Profiling_f_*.raw`, and `Timeline_f_*.raw`. That is where
+dispatch duration, kernel duration, execution cost, and the command-buffer
+timeline come from, and `gputrace timing`, `profiler`, `shaders`, `timeline`,
+and `pprof` read them directly. See [../STREAMDATA_FORMAT.md](../STREAMDATA_FORMAT.md)
+and [PERF_VS_NONPERF_TRACES.md](./PERF_VS_NONPERF_TRACES.md).
+
+For non-profiled bundles there is no measured timing to recover.
+[INSTRUMENTS_TIMING_INVESTIGATION.md](./INSTRUMENTS_TIMING_INVESTIGATION.md)
+covers the approaches Instruments uses to produce it in the first place:
 
 1. **Replay approach**: Reconstruct and re-execute commands with `MTLCounterSampleBuffer`
 2. **kdebug approach**: Capture kernel debug events during original execution
 3. **Signpost approach**: Use Metal AGX signposts for shader-level timing
-
-The command buffer timestamps in CUUU records show when command buffers were submitted but not individual shader timing.
 
 ## References
 
