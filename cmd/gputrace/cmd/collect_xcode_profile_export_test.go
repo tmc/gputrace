@@ -4,11 +4,15 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -177,6 +181,28 @@ func TestStandaloneExportRecoveryFlagsRejectCheckAndFinalize(t *testing.T) {
 	}
 }
 
+func TestStandaloneExportRecoveryFlagsPreserveDeadPIDForSentinel(t *testing.T) {
+	source := writeStandaloneExportFixture(t, "source", "SOURCE-UUID", true)
+	cmd := &cobra.Command{}
+	standaloneExportFlags(cmd)
+	err := cmd.ParseFlags([]string{
+		"--recover-untitled",
+		"--source", source,
+		"--xcode-pid", "987654",
+		"--xcode-app", "/Applications/Xcode.app",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery, err := standaloneExportRecoveryFromFlags(cmd)
+	if err != nil {
+		t.Fatalf("parse recovery flags: %v", err)
+	}
+	if recovery.Identity.PID != 987654 || recovery.Identity.AppPath != "/Applications/Xcode.app" {
+		t.Fatalf("identity = %+v", recovery.Identity)
+	}
+}
+
 func TestStandaloneRecoveryTarget(t *testing.T) {
 	recovery := standaloneExportRecovery{
 		Enabled:    true,
@@ -276,6 +302,60 @@ func TestValidateStandaloneRecoveryIdentity(t *testing.T) {
 	err := validateStandaloneRecoveryIdentity(identity, "/Applications/Xcode-rc.app")
 	if err == nil || !strings.Contains(err.Error(), "not requested app") {
 		t.Fatalf("error = %v, want cross-app rejection", err)
+	}
+	for _, actual := range []string{"", " \t"} {
+		err := validateStandaloneRecoveryIdentity(identity, actual)
+		if err == nil || !strings.Contains(err.Error(), "PID 81051 is not running") {
+			t.Fatalf("validate dead PID with %q: %v", actual, err)
+		}
+		if strings.Contains(err.Error(), "runs from .") {
+			t.Fatalf("dead PID rendered cleaned empty path: %v", err)
+		}
+	}
+}
+
+func TestNormalizeStandaloneRecoveryFailureReportsExitWithoutIPS(t *testing.T) {
+	recovery := standaloneExportRecovery{
+		Identity: xcodeProcessIdentity{PID: 987654, AppPath: "/Applications/Xcode.app"},
+	}
+	scope := newXcodeCrashScope(recovery.Identity.AppPath, time.Now())
+	scope.allowRebind = false
+	scope.bind(recovery.Identity)
+	original := fmt.Errorf("reacquire recovery Xcode: process not running")
+	err := normalizeStandaloneRecoveryFailureWithGrace(
+		context.Background(), scope, recovery, original, time.Millisecond,
+	)
+	if err == nil || !strings.Contains(err.Error(), "PID 987654 exited") ||
+		!strings.Contains(err.Error(), "no matching DiagnosticReport") {
+		t.Fatalf("error = %v, want explicit exit without report", err)
+	}
+	if !errors.Is(err, original) {
+		t.Fatalf("error does not wrap original: %v", err)
+	}
+}
+
+func TestNormalizeStandaloneRecoveryFailureReturnsCrashReport(t *testing.T) {
+	recovery := standaloneExportRecovery{
+		Identity: xcodeProcessIdentity{PID: 987654, AppPath: "/Applications/Xcode.app"},
+	}
+	scope := newXcodeCrashScope(recovery.Identity.AppPath, time.Now())
+	scope.allowRebind = false
+	scope.bind(recovery.Identity)
+	report := xcodeCrashReport{
+		Path:      "/Users/tmc/Library/Logs/DiagnosticReports/Xcode.ips",
+		PID:       recovery.Identity.PID,
+		AppPath:   recovery.Identity.AppPath,
+		Exception: "EXC_BAD_ACCESS",
+		Signal:    "SIGBUS",
+	}
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(report)
+	err := normalizeStandaloneRecoveryFailureWithGrace(
+		ctx, scope, recovery, fmt.Errorf("window disappeared"), time.Second,
+	)
+	var got xcodeCrashReport
+	if !errors.As(err, &got) || got.Path != report.Path {
+		t.Fatalf("error = %T %v, want crash report", err, err)
 	}
 }
 

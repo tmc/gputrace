@@ -4,6 +4,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -51,11 +52,11 @@ type recoveryFinalizeSnapshot struct {
 	ExportEnabled bool
 }
 
-func runExport(cmd *cobra.Command, args []string) error {
+func runExport(cmd *cobra.Command, args []string) (retErr error) {
 	status := xcodeProfileStatusWriter()
 	var outputPath string
+	var err error
 	if len(args) > 0 {
-		var err error
 		outputPath, err = resolveXcodeProfileTraceOutputPath(args[0])
 		if err != nil {
 			return err
@@ -66,9 +67,37 @@ func runExport(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	var crashReportDir string
+	var crashBaseline map[string]crashReportState
+	recoveryRequested, _ := cmd.Flags().GetBool("recover-untitled")
+	if recoveryRequested {
+		crashReportDir = diagnosticReportDirectory()
+		crashBaseline, err = snapshotXcodeCrashReports(crashReportDir)
+		if err != nil {
+			return fmt.Errorf("snapshot Xcode crash reports: %w", err)
+		}
+	}
 	recovery, err := standaloneExportRecoveryFromFlags(cmd)
 	if err != nil {
 		return err
+	}
+	ctx := cmd.Context()
+	var crashScope *xcodeCrashScope
+	if recovery.Enabled {
+		crashScope = newXcodeCrashScope(recovery.Identity.AppPath, time.Now())
+		crashScope.allowRebind = false
+		crashScope.bind(recovery.Identity)
+		var stopCrashMonitor func()
+		ctx, stopCrashMonitor = startXcodeCrashMonitor(ctx, crashReportDir, crashBaseline, crashScope)
+		defer stopCrashMonitor()
+		defer func() {
+			if retErr != nil {
+				retErr = normalizeStandaloneRecoveryFailure(ctx, crashScope, recovery, retErr)
+			}
+		}()
+		if err := validateStandaloneRecoveryIdentity(recovery.Identity, xcodeProcessPath(recovery.Identity.PID)); err != nil {
+			return err
+		}
 	}
 
 	var appAX uintptr
@@ -96,9 +125,9 @@ func runExport(cmd *cobra.Command, args []string) error {
 	var doc string
 	if recovery.Enabled {
 		if recovery.Finalize {
-			windowAX, err = waitForStandaloneFinalizeWindow(cmd.Context(), appAX, recovery, 10*time.Second)
+			windowAX, err = waitForStandaloneFinalizeWindow(ctx, appAX, recovery, 10*time.Second)
 		} else {
-			windowAX, err = waitForStandaloneRecoveryWindow(cmd.Context(), appAX, recovery, 10*time.Second)
+			windowAX, err = waitForStandaloneRecoveryWindow(ctx, appAX, recovery, 10*time.Second)
 		}
 		if err != nil {
 			return err
@@ -131,7 +160,7 @@ func runExport(cmd *cobra.Command, args []string) error {
 		})
 	}
 	if recovery.Finalize {
-		windowAX, err = finalizeRecoveredWorkload(cmd.Context(), appAX, windowAX, recovery, 2*time.Minute)
+		windowAX, err = finalizeRecoveredWorkload(ctx, appAX, windowAX, recovery, 2*time.Minute)
 		if err != nil {
 			return fmt.Errorf("finalize recovered workload: %w", err)
 		}
@@ -154,12 +183,12 @@ func runExport(cmd *cobra.Command, args []string) error {
 		verboseLog("runExport: window AXDocument=%q", doc)
 	}
 
-	if err := exportTrace(cmd.Context(), appAX, windowAX, outputPath); err != nil {
+	if err := exportTrace(ctx, appAX, windowAX, outputPath); err != nil {
 		return fmt.Errorf("export failed: %w", err)
 	}
 
 	candidates := exportCandidatePaths(doc, outputPath)
-	finalPath, err := waitForExportedTrace(cmd.Context(), []string{outputPath}, exportWaitTimeout())
+	finalPath, err := waitForExportedTrace(ctx, []string{outputPath}, exportWaitTimeout())
 	if err != nil {
 		if alternates := existingExportCandidates(candidates, outputPath); len(alternates) > 0 {
 			return fmt.Errorf("export did not appear at requested location %s; Xcode wrote candidate output at %s; preserving it for recovery: %w",
@@ -242,9 +271,6 @@ func standaloneExportRecoveryFromFlags(cmd *cobra.Command) (standaloneExportReco
 		return standaloneExportRecovery{}, fmt.Errorf("recovery source has no trace UUID: %s", source)
 	}
 	identity := xcodeProcessIdentity{PID: pid, AppPath: app, BundleID: "com.apple.dt.Xcode"}
-	if err := validateStandaloneRecoveryIdentity(identity, xcodeProcessPath(pid)); err != nil {
-		return standaloneExportRecovery{}, err
-	}
 	return standaloneExportRecovery{
 		Enabled:    true,
 		CheckOnly:  checkOnly,
@@ -256,12 +282,49 @@ func standaloneExportRecoveryFromFlags(cmd *cobra.Command) (standaloneExportReco
 }
 
 func validateStandaloneRecoveryIdentity(identity xcodeProcessIdentity, actualApp string) error {
+	if identity.PID <= 0 {
+		return fmt.Errorf("invalid Xcode PID %d", identity.PID)
+	}
+	actualApp = strings.TrimSpace(actualApp)
+	if actualApp == "" {
+		return fmt.Errorf("Xcode PID %d is not running", identity.PID)
+	}
 	actualApp = filepath.Clean(actualApp)
-	if identity.PID <= 0 || actualApp != filepath.Clean(identity.AppPath) {
+	if actualApp != filepath.Clean(identity.AppPath) {
 		return fmt.Errorf("Xcode PID %d runs from %s, not requested app %s",
 			identity.PID, actualApp, identity.AppPath)
 	}
 	return nil
+}
+
+func normalizeStandaloneRecoveryFailure(ctx context.Context, scope *xcodeCrashScope, recovery standaloneExportRecovery, original error) error {
+	return normalizeStandaloneRecoveryFailureWithGrace(ctx, scope, recovery, original, xcodeCrashReportGrace)
+}
+
+func normalizeStandaloneRecoveryFailureWithGrace(ctx context.Context, scope *xcodeCrashScope, recovery standaloneExportRecovery, original error, grace time.Duration) error {
+	if scope == nil {
+		return original
+	}
+	if xcodeProcessPath(recovery.Identity.PID) != "" {
+		return original
+	}
+	scope.refreshProcesses()
+	if !scope.crashSuspected() {
+		return original
+	}
+	var report xcodeCrashReport
+	if cause := context.Cause(ctx); errors.As(cause, &report) {
+		return cause
+	}
+	if err := waitForXcodeCrashReport(ctx, grace); err != nil {
+		if errors.As(err, &report) {
+			return err
+		}
+		return fmt.Errorf("bound Xcode PID %d exited while waiting for a crash report: %w",
+			recovery.Identity.PID, err)
+	}
+	return fmt.Errorf("bound Xcode PID %d exited; no matching DiagnosticReport appeared within %s: %w",
+		recovery.Identity.PID, grace, original)
 }
 
 func standaloneExportTarget(windows []xcodeAXWindow) (uintptr, string, error) {

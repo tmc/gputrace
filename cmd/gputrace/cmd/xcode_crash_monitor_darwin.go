@@ -52,13 +52,15 @@ type xcodeCrashScope struct {
 	boundAt      time.Time
 	pids         map[int]struct{}
 	exitObserved bool
+	allowRebind  bool
 }
 
 func newXcodeCrashScope(appPath string, startedAt time.Time) *xcodeCrashScope {
 	return &xcodeCrashScope{
-		appPath:   filepath.Clean(appPath),
-		startedAt: startedAt,
-		pids:      make(map[int]struct{}),
+		appPath:     filepath.Clean(appPath),
+		startedAt:   startedAt,
+		pids:        make(map[int]struct{}),
+		allowRebind: true,
 	}
 }
 
@@ -126,7 +128,7 @@ func (scope *xcodeCrashScope) refreshProcesses() {
 				break
 			}
 		}
-		if allExited && len(current) == 1 {
+		if scope.allowRebind && allExited && len(current) == 1 {
 			scope.pids[current[0].PID] = struct{}{}
 		}
 		return
