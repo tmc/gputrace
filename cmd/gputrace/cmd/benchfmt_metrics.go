@@ -29,18 +29,29 @@ func benchfmtDefaults(tracePath, timingSource string) []benchfmtConfig {
 		{Key: "capture-range", Value: inferBenchfmtCaptureRange(tracePath)},
 		{Key: "compile-mode", Value: "unknown"},
 		{Key: "cache-mode", Value: inferBenchfmtCacheMode(tracePath)},
+		{Key: "trace-uuid", Value: "unknown"},
 		{Key: "mlx-version", Value: "unknown"},
+		{Key: "payload", Value: "unknown"},
 	}
 	if metadata, err := gputraceTrace.ReadMetadata(tracePath); err == nil && metadata.UUID != "" {
-		config = append(config, benchfmtConfig{Key: "trace-uuid", Value: metadata.UUID})
+		setBenchfmtConfig(config, "trace-uuid", metadata.UUID)
 	}
 	if payload, err := tracebundle.InspectPayload(tracePath); err == nil {
-		config = append(config, benchfmtConfig{Key: "payload", Value: string(payload.Class)})
+		setBenchfmtConfig(config, "payload", string(payload.Class))
 	}
 	if timingSource != "" {
 		config = append(config, benchfmtConfig{Key: "timing-source", Value: timingSource})
 	}
 	return config
+}
+
+func setBenchfmtConfig(config []benchfmtConfig, key, value string) {
+	for i := range config {
+		if config[i].Key == key {
+			config[i].Value = value
+			return
+		}
+	}
 }
 
 func benchfmtCPU() string {
@@ -189,7 +200,10 @@ func writeProfilerBenchfmt(w io.Writer, tracePath string, stats *counter.StreamD
 	}
 	for _, cost := range executionCost {
 		if err := writeBenchfmt(&out, benchfmtRecord{
-			Suffix: benchfmtSampleCostSuffix(cost.FunctionName),
+			NameConfig: []benchfmtConfig{{
+				Key:   "function",
+				Value: benchfmtSampleCostName(cost.FunctionName),
+			}},
 			Config: config,
 			Values: []benchfmtValue{{
 				Value: cost.CostPercent,
@@ -205,11 +219,11 @@ func writeProfilerBenchfmt(w io.Writer, tracePath string, stats *counter.StreamD
 	return nil
 }
 
-func benchfmtSampleCostSuffix(function string) string {
+func benchfmtSampleCostName(function string) string {
 	name := []rune(sanitizeBenchfmtSuffix(function))
 	if len(name) > 80 {
 		name = name[:80]
 	}
 	sum := sha256.Sum256([]byte(function))
-	return "ProfilerSampleCost_" + string(name) + "_" + hex.EncodeToString(sum[:4])
+	return string(name) + "_" + hex.EncodeToString(sum[:4])
 }

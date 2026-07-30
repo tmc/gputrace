@@ -15,7 +15,7 @@ gputrace profiler trace.gputrace --benchfmt \
   --bench-config cache-mode=warm \
   --bench-config mlx-version=0.32.0 > go.txt
 
-benchstat -ignore trace-uuid go.txt python.txt
+benchstat -col runtime -ignore trace-uuid go.txt python.txt
 ```
 
 The command infers `runtime`, `model`, `capture-range`, and `cache-mode` from
@@ -23,6 +23,8 @@ common trace path names. It prints `unknown` when a value is not stored in the
 trace. Use repeatable `--bench-config key=value` flags to replace inferred
 values. The trace UUID and payload class are read from the bundle.
 Other lowercase experiment keys are accepted and emitted in sorted order.
+Use `-col runtime` when comparing runtime values in one table; otherwise
+benchstat treats differing file configuration as separate tables.
 
 The benchmark line uses separate units for values with different meanings:
 
@@ -43,7 +45,10 @@ The span units are not aliases for active or effective GPU time.
 `profiler_cost_samples/op` is emitted by `profiler`, which reads the
 `Profiling_f_*.raw` execution-cost records. `stats` and `timing` do not scan
 those records. The same command emits one stable function-specific benchmark
-row with `profiler_sample_cost_percent` for each attributed function.
+row with `profiler_sample_cost_percent` for each attributed function. These
+rows use benchfmt's name-based configuration form,
+`BenchmarkGPUTrace/function=<name>-1`, so benchstat can project the `function`
+field.
 GPRWCNTR samples remain a separate unit.
 
 Measured timing units are emitted only when profiler `streamData` supplies

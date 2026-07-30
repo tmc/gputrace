@@ -58,6 +58,19 @@ func TestInferBenchfmtProvenance(t *testing.T) {
 	}
 }
 
+func TestBenchfmtDefaultsKeepUnavailableProvenance(t *testing.T) {
+	config := benchfmtDefaults("/missing/go/model_tokens_2_to_4.gputrace", "")
+	values := make(map[string]string, len(config))
+	for _, item := range config {
+		values[item.Key] = item.Value
+	}
+	for _, key := range []string{"trace-uuid", "payload"} {
+		if got := values[key]; got != "unknown" {
+			t.Fatalf("%s = %q, want unknown", key, got)
+		}
+	}
+}
+
 func TestWriteProfilerBenchfmtOmitsUnavailableTiming(t *testing.T) {
 	stats := &counter.StreamDataStats{
 		NumEncoders:         3,
@@ -176,8 +189,12 @@ func TestWriteProfilerBenchfmtExecutionCost(t *testing.T) {
 			t.Fatalf("duplicate benchmark name %q for colliding sanitized function names", name)
 		}
 		names[name] = true
-		if !strings.Contains(name, "ProfilerSampleCost_steel_gemm_") {
-			t.Fatalf("cost %d name = %q, want sanitized function name and hash", i, name)
+		base, parts := benchfmt.Name(result.name).Parts()
+		if got := string(base); got != "GPUTrace" {
+			t.Fatalf("cost %d base name = %q, want GPUTrace", i, got)
+		}
+		if len(parts) != 2 || !strings.HasPrefix(string(parts[0]), "/function=steel_gemm_") {
+			t.Fatalf("cost %d name parts = %q, want function field and GOMAXPROCS", i, parts)
 		}
 	}
 }

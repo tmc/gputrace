@@ -66,10 +66,11 @@ type benchfmtValue struct {
 }
 
 type benchfmtRecord struct {
-	Suffix string
-	Iters  int
-	Config []benchfmtConfig
-	Values []benchfmtValue
+	Suffix     string
+	NameConfig []benchfmtConfig
+	Iters      int
+	Config     []benchfmtConfig
+	Values     []benchfmtValue
 }
 
 type benchfmtConfigFlags []benchfmtConfig
@@ -196,6 +197,19 @@ func writeBenchfmt(w io.Writer, record benchfmtRecord) error {
 	if suffix := sanitizeBenchfmtSuffix(record.Suffix); suffix != "" {
 		out.WriteByte('/')
 		out.WriteString(suffix)
+	}
+	for _, item := range record.NameConfig {
+		if !validBenchfmtConfigKey(item.Key) {
+			return fmt.Errorf("invalid benchfmt name config key %q", item.Key)
+		}
+		value := sanitizeBenchfmtSuffix(item.Value)
+		if value == "" {
+			return fmt.Errorf("invalid benchfmt name config value for %q", item.Key)
+		}
+		out.WriteByte('/')
+		out.WriteString(item.Key)
+		out.WriteByte('=')
+		out.WriteString(value)
 	}
 	fmt.Fprintf(&out, "-1 %d", iters)
 	for _, value := range values {
