@@ -4,6 +4,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -27,12 +29,122 @@ type crashReportState struct {
 }
 
 type xcodeCrashReport struct {
-	Path      string
-	PID       int
-	AppPath   string
-	Exception string
-	Signal    string
-	Assertion string
+	Path        string
+	PID         int
+	AppPath     string
+	BundleID    string
+	LaunchTime  time.Time
+	CaptureTime time.Time
+	Exception   string
+	Signal      string
+	Assertion   string
+}
+
+// DiagnosticReports can publish an .ips several minutes after the process
+// exits. Keep this bounded, but long enough to cover the delay observed from
+// Xcode's GPU profiler crash reporter.
+const xcodeCrashReportGrace = 5 * time.Minute
+
+type xcodeCrashScope struct {
+	mu           sync.RWMutex
+	appPath      string
+	startedAt    time.Time
+	boundAt      time.Time
+	pids         map[int]struct{}
+	exitObserved bool
+}
+
+func newXcodeCrashScope(appPath string, startedAt time.Time) *xcodeCrashScope {
+	return &xcodeCrashScope{
+		appPath:   filepath.Clean(appPath),
+		startedAt: startedAt,
+		pids:      make(map[int]struct{}),
+	}
+}
+
+func (scope *xcodeCrashScope) observe(identity xcodeProcessIdentity) {
+	if scope == nil || identity.PID == 0 {
+		return
+	}
+	if scope.appPath != "." && identity.AppPath != "" &&
+		filepath.Clean(identity.AppPath) != scope.appPath {
+		return
+	}
+	scope.mu.Lock()
+	scope.pids[identity.PID] = struct{}{}
+	scope.mu.Unlock()
+}
+
+func (scope *xcodeCrashScope) bind(identity xcodeProcessIdentity) {
+	scope.bindAtTime(identity, time.Now())
+}
+
+func (scope *xcodeCrashScope) bindAtTime(identity xcodeProcessIdentity, when time.Time) {
+	scope.observe(identity)
+	scope.mu.Lock()
+	if scope.boundAt.IsZero() {
+		scope.boundAt = when
+	}
+	scope.mu.Unlock()
+}
+
+func (scope *xcodeCrashScope) matches(report xcodeCrashReport) bool {
+	if scope == nil || report.AppPath == "" ||
+		filepath.Clean(report.AppPath) != scope.appPath {
+		return false
+	}
+	scope.mu.RLock()
+	_, observed := scope.pids[report.PID]
+	scope.mu.RUnlock()
+	return observed
+}
+
+func (scope *xcodeCrashScope) refreshProcesses() {
+	if scope == nil {
+		return
+	}
+	current := xcodeProcessesForApp(scope.appPath)
+	currentPIDs := make(map[int]xcodeProcessIdentity, len(current))
+	for _, identity := range current {
+		currentPIDs[identity.PID] = identity
+	}
+
+	scope.mu.Lock()
+	defer scope.mu.Unlock()
+	for pid := range scope.pids {
+		if _, ok := currentPIDs[pid]; !ok {
+			scope.exitObserved = true
+		}
+	}
+	if !scope.boundAt.IsZero() {
+		// If every observed process exited and LaunchServices supplied one
+		// exact-app replacement, it is the only safe automatic rebind.
+		allExited := len(scope.pids) > 0
+		for pid := range scope.pids {
+			if _, ok := currentPIDs[pid]; ok {
+				allExited = false
+				break
+			}
+		}
+		if allExited && len(current) == 1 {
+			scope.pids[current[0].PID] = struct{}{}
+		}
+		return
+	}
+	// Before the first AX bind, "open" targets the sole exact-app process.
+	// Do not guess when multiple same-path instances exist.
+	if len(current) == 1 {
+		scope.pids[current[0].PID] = struct{}{}
+	}
+}
+
+func (scope *xcodeCrashScope) crashSuspected() bool {
+	if scope == nil {
+		return false
+	}
+	scope.mu.RLock()
+	defer scope.mu.RUnlock()
+	return scope.exitObserved
 }
 
 func (report xcodeCrashReport) Error() string {
@@ -92,27 +204,35 @@ func xcodeProcessPath(pid int) string {
 	return command
 }
 
+func xcodeProcessesForApp(requestedApp string) []xcodeProcessIdentity {
+	out, _ := exec.Command("pgrep", "-x", "Xcode").Output()
+	var identities []xcodeProcessIdentity
+	for _, field := range strings.Fields(string(out)) {
+		pid, err := strconv.Atoi(field)
+		if err != nil {
+			continue
+		}
+		appPath := xcodeProcessPath(pid)
+		if requestedApp != "" && filepath.Clean(appPath) != filepath.Clean(requestedApp) {
+			continue
+		}
+		identities = append(identities, xcodeProcessIdentity{
+			PID:      pid,
+			AppPath:  appPath,
+			BundleID: "com.apple.dt.Xcode",
+		})
+	}
+	return identities
+}
+
 func findSelectedXcodeApp(ctx context.Context, requestedApp string) (uintptr, xcodeProcessIdentity, error) {
 	for {
-		out, _ := exec.Command("pgrep", "-x", "Xcode").Output()
-		for _, field := range strings.Fields(string(out)) {
-			pid, err := strconv.Atoi(field)
-			if err != nil {
-				continue
-			}
-			appPath := xcodeProcessPath(pid)
-			if requestedApp != "" && filepath.Clean(appPath) != filepath.Clean(requestedApp) {
-				continue
-			}
-			appAX := axCreateApplication(int32(pid))
+		for _, identity := range xcodeProcessesForApp(requestedApp) {
+			appAX := axCreateApplication(int32(identity.PID))
 			if appAX == 0 {
 				continue
 			}
-			return appAX, xcodeProcessIdentity{
-				PID:      pid,
-				AppPath:  appPath,
-				BundleID: "com.apple.dt.Xcode",
-			}, nil
+			return appAX, identity, nil
 		}
 		if err := waitForAutomation(ctx, 250*time.Millisecond); err != nil {
 			return 0, xcodeProcessIdentity{}, err
@@ -139,7 +259,7 @@ func snapshotXcodeCrashReports(dir string) (map[string]crashReportState, error) 
 	return snapshot, nil
 }
 
-func detectNewXcodeCrash(dir string, baseline map[string]crashReportState, identity xcodeProcessIdentity) (*xcodeCrashReport, error) {
+func detectNewXcodeCrash(dir string, baseline map[string]crashReportState, scope *xcodeCrashScope) (*xcodeCrashReport, error) {
 	paths, err := filepath.Glob(filepath.Join(dir, "Xcode*.ips"))
 	if err != nil {
 		return nil, fmt.Errorf("list Xcode crash reports: %w", err)
@@ -164,11 +284,7 @@ func detectNewXcodeCrash(dir string, baseline map[string]crashReportState, ident
 		if err != nil {
 			continue
 		}
-		if report.PID != identity.PID {
-			continue
-		}
-		if identity.AppPath != "" && report.AppPath != "" &&
-			filepath.Clean(report.AppPath) != filepath.Clean(identity.AppPath) {
+		if !scope.matches(report) {
 			continue
 		}
 		if report.Exception == "" && report.Signal == "" && report.Assertion == "" {
@@ -180,10 +296,6 @@ func detectNewXcodeCrash(dir string, baseline map[string]crashReportState, ident
 }
 
 var (
-	crashPIDPattern       = regexp.MustCompile(`"pid"\s*:\s*(\d+)`)
-	crashPathPattern      = regexp.MustCompile(`"(?:procPath|path)"\s*:\s*"([^"]*Xcode[^"]*?\.app)(?:/Contents/MacOS/Xcode)?"`)
-	crashExceptionPattern = regexp.MustCompile(`"type"\s*:\s*"(EXC_[^"]+)"`)
-	crashSignalPattern    = regexp.MustCompile(`"signal"\s*:\s*"([^"]+)"`)
 	crashAssertionPattern = regexp.MustCompile(`(?i)assertion failed:?\s*([^"\n]+)`)
 	crashKnownAssertion   = regexp.MustCompile(`(?i)([^"\n]*originalForMissingFileHistoryItem[^"\n]*)`)
 )
@@ -193,18 +305,42 @@ func parseXcodeCrashReport(path string) (xcodeCrashReport, error) {
 	if err != nil {
 		return xcodeCrashReport{}, err
 	}
-	report := xcodeCrashReport{Path: path}
-	if match := crashPIDPattern.FindSubmatch(data); len(match) == 2 {
-		report.PID, _ = strconv.Atoi(string(match[1]))
+	var header struct {
+		Timestamp string `json:"timestamp"`
 	}
-	if match := crashPathPattern.FindSubmatch(data); len(match) == 2 {
-		report.AppPath = string(match[1])
+	var body struct {
+		PID         int    `json:"pid"`
+		ProcPath    string `json:"procPath"`
+		Path        string `json:"path"`
+		ProcLaunch  string `json:"procLaunch"`
+		CaptureTime string `json:"captureTime"`
+		BundleInfo  struct {
+			Identifier string `json:"CFBundleIdentifier"`
+		} `json:"bundleInfo"`
+		Exception struct {
+			Type   string `json:"type"`
+			Signal string `json:"signal"`
+		} `json:"exception"`
 	}
-	if match := crashExceptionPattern.FindSubmatch(data); len(match) == 2 {
-		report.Exception = string(match[1])
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	if err := decoder.Decode(&header); err != nil {
+		return xcodeCrashReport{}, fmt.Errorf("decode crash report header: %w", err)
 	}
-	if match := crashSignalPattern.FindSubmatch(data); len(match) == 2 {
-		report.Signal = string(match[1])
+	if err := decoder.Decode(&body); err != nil {
+		return xcodeCrashReport{}, fmt.Errorf("decode crash report body: %w", err)
+	}
+	report := xcodeCrashReport{
+		Path:        path,
+		PID:         body.PID,
+		AppPath:     xcodeAppPath(body.ProcPath),
+		BundleID:    body.BundleInfo.Identifier,
+		LaunchTime:  parseIPSTime(body.ProcLaunch),
+		CaptureTime: parseIPSTime(body.CaptureTime),
+		Exception:   body.Exception.Type,
+		Signal:      body.Exception.Signal,
+	}
+	if report.AppPath == "" {
+		report.AppPath = xcodeAppPath(body.Path)
 	}
 	if match := crashAssertionPattern.FindSubmatch(data); len(match) == 2 {
 		report.Assertion = strings.TrimSpace(string(match[1]))
@@ -214,8 +350,35 @@ func parseXcodeCrashReport(path string) (xcodeCrashReport, error) {
 	return report, nil
 }
 
-func startXcodeCrashMonitor(parent context.Context, dir string, baseline map[string]crashReportState, identity xcodeProcessIdentity) (context.Context, func()) {
-	ctx, cancel := context.WithCancelCause(parent)
+func xcodeAppPath(processPath string) string {
+	processPath = filepath.Clean(processPath)
+	if index := strings.Index(processPath, ".app/"); index >= 0 {
+		return processPath[:index+len(".app")]
+	}
+	if strings.HasSuffix(processPath, ".app") {
+		return processPath
+	}
+	return ""
+}
+
+func parseIPSTime(value string) time.Time {
+	for _, layout := range []string{
+		"2006-01-02 15:04:05.999999999 -0700",
+		"2006-01-02 15:04:05 -0700",
+		time.RFC3339Nano,
+	} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed
+		}
+	}
+	return time.Time{}
+}
+
+type xcodeCrashScopeContextKey struct{}
+
+func startXcodeCrashMonitor(parent context.Context, dir string, baseline map[string]crashReportState, scope *xcodeCrashScope) (context.Context, func()) {
+	cancelContext, cancel := context.WithCancelCause(parent)
+	ctx := context.WithValue(cancelContext, xcodeCrashScopeContextKey{}, scope)
 	done := make(chan struct{})
 	go func() {
 		ticker := time.NewTicker(200 * time.Millisecond)
@@ -223,7 +386,8 @@ func startXcodeCrashMonitor(parent context.Context, dir string, baseline map[str
 		for {
 			select {
 			case <-ticker.C:
-				report, err := detectNewXcodeCrash(dir, baseline, identity)
+				scope.refreshProcesses()
+				report, err := detectNewXcodeCrash(dir, baseline, scope)
 				if err != nil {
 					verboseLog("Xcode crash monitor: %v", err)
 					continue
@@ -242,5 +406,21 @@ func startXcodeCrashMonitor(parent context.Context, dir string, baseline map[str
 	return ctx, func() {
 		close(done)
 		cancel(nil)
+	}
+}
+
+func xcodeCrashScopeFromContext(ctx context.Context) *xcodeCrashScope {
+	scope, _ := ctx.Value(xcodeCrashScopeContextKey{}).(*xcodeCrashScope)
+	return scope
+}
+
+func waitForXcodeCrashReport(ctx context.Context, grace time.Duration) error {
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	case <-timer.C:
+		return nil
 	}
 }

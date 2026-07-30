@@ -93,6 +93,17 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("snapshot Xcode crash reports: %w", err)
 	}
+	requestedXcode := requestedXcodeAppPath()
+	crashScope := newXcodeCrashScope(requestedXcode, time.Now())
+	// A normal "open" request is delivered to the sole existing instance.
+	// Observe it before opening so a crash during document loading is still
+	// attributable even if LaunchServices immediately relaunches Xcode.
+	if existing := xcodeProcessesForApp(requestedXcode); len(existing) == 1 {
+		crashScope.observe(existing[0])
+	}
+	crashContext, stopCrashMonitor := startXcodeCrashMonitor(ctx, crashReportDir, crashBaseline, crashScope)
+	defer stopCrashMonitor()
+	ctx = crashContext
 
 	fmt.Fprint(status, Colorize("Collect Profile: Automating Xcode GPU trace...\n", ColorBold))
 	fmt.Fprintf(status, "  Input:  %s\n", inputPath)
@@ -120,19 +131,23 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 
 	// Step 2: Wait for Xcode window via AX
 	fmt.Fprintln(status, "  Step 2: Waiting for Xcode window...")
-	appAX, xcodeIdentity, err := findSelectedXcodeApp(ctx, requestedXcodeAppPath())
+	appAX, xcodeIdentity, err := findSelectedXcodeApp(ctx, requestedXcode)
 	if err != nil {
 		return fmt.Errorf("selected Xcode app not found via AX: %w", err)
 	}
 	defer cfRelease(appAX)
+	crashScope.bind(xcodeIdentity)
 	fmt.Fprintf(status, "    Xcode process: PID %d, app %s, bundle %s\n",
 		xcodeIdentity.PID, xcodeIdentity.AppPath, xcodeIdentity.BundleID)
-	crashContext, stopCrashMonitor := startXcodeCrashMonitor(ctx, crashReportDir, crashBaseline, xcodeIdentity)
-	defer stopCrashMonitor()
-	ctx = crashContext
 
 	windowAX, err := waitForWindow(ctx, appAX, inputPath, 30*time.Second)
 	if err != nil {
+		crashScope.refreshProcesses()
+		if crashScope.crashSuspected() {
+			if crashErr := waitForXcodeCrashReport(ctx, xcodeCrashReportGrace); crashErr != nil {
+				return crashErr
+			}
+		}
 		return fmt.Errorf("Xcode window not found: %w", err)
 	}
 
@@ -1243,9 +1258,33 @@ func waitForReplayComplete(ctx context.Context, appAX uintptr, traceFileName str
 			freshApp = axCreateApplication(targetPID)
 		}
 		if freshApp == 0 {
-			verboseLog("waitForReplayComplete: failed to re-fetch target Xcode PID %d", targetPID)
-			return 0, false
+			verboseLog("waitForReplayComplete: failed to re-fetch target Xcode PID %d; checking exact-app replacements", targetPID)
+			crashScope := xcodeCrashScopeFromContext(ctx)
+			if crashScope != nil {
+				crashScope.refreshProcesses()
+				for _, identity := range xcodeProcessesForApp(crashScope.appPath) {
+					replacementApp := axCreateApplication(int32(identity.PID))
+					if replacementApp == 0 {
+						continue
+					}
+					replacementWindow := getPreferredTraceWindow(replacementApp, traceFileName)
+					if replacementWindow == 0 {
+						cfRelease(replacementApp)
+						continue
+					}
+					verboseLog("waitForReplayComplete: rebound exact trace window to Xcode PID %d", identity.PID)
+					crashScope.observe(identity)
+					targetPID = int32(identity.PID)
+					currentWindow = replacementWindow
+					freshApp = replacementApp
+					break
+				}
+			}
+			if freshApp == 0 {
+				return 0, false
+			}
 		}
+		defer cfRelease(freshApp)
 		consecutiveXcodeFailures = 0
 		allWindows := GetAllWindows(freshApp)
 
@@ -1278,6 +1317,14 @@ func waitForReplayComplete(ctx context.Context, appAX uintptr, traceFileName str
 		if !xcodeRunning {
 			consecutiveXcodeFailures++
 			if consecutiveXcodeFailures >= maxXcodeFailures {
+				if crashScope := xcodeCrashScopeFromContext(ctx); crashScope != nil {
+					crashScope.refreshProcesses()
+					if crashScope.crashSuspected() {
+						if crashErr := waitForXcodeCrashReport(ctx, xcodeCrashReportGrace); crashErr != nil {
+							return 0, crashErr
+						}
+					}
+				}
 				return 0, fmt.Errorf("Xcode exited while waiting for replay completion")
 			}
 		}
