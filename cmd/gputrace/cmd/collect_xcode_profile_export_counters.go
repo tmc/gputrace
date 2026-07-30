@@ -50,6 +50,10 @@ func runXcodeExportCounters(cmd *cobra.Command, args []string, opts *xcodeExport
 	if err != nil {
 		return fmt.Errorf("could not find trace window: %w", err)
 	}
+	selection := selectionForWindow(traceFile, windowAX)
+	if err := requireBoundSelection(selection); err != nil {
+		return err
+	}
 
 	// Raise the window
 	axAction(windowAX, "AXRaise")
@@ -128,6 +132,7 @@ func runXcodeExportCounters(cmd *cobra.Command, args []string, opts *xcodeExport
 
 	// Find and click Save button with retries (AX references can go stale)
 	var clickErr error
+	var expectedPath string
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
 			time.Sleep(200 * time.Millisecond)
@@ -137,6 +142,11 @@ func runXcodeExportCounters(cmd *cobra.Command, args []string, opts *xcodeExport
 		for _, w := range windows {
 			// Try Save button (export sheet is shallow)
 			if btn := findButtonBFS(w, "Save", 500); btn != 0 {
+				sheetState := readExportSheetState(w)
+				expectedPath, err = exportPathFromSheetState(sheetState)
+				if err != nil {
+					return fmt.Errorf("cannot verify GPU counter export destination before Save: %w; sheet state: %s", err, formatExportSheetState(sheetState))
+				}
 				fmt.Fprintln(status, "Clicking Save...")
 				if err := axAction(btn, "AXPress"); err != nil {
 					clickErr = err
@@ -148,6 +158,11 @@ func runXcodeExportCounters(cmd *cobra.Command, args []string, opts *xcodeExport
 			}
 			// Try Export button (export sheet is shallow)
 			if btn := findButtonBFS(w, "Export", 500); btn != 0 {
+				sheetState := readExportSheetState(w)
+				expectedPath, err = exportPathFromSheetState(sheetState)
+				if err != nil {
+					return fmt.Errorf("cannot verify GPU counter export destination before Export: %w; sheet state: %s", err, formatExportSheetState(sheetState))
+				}
 				fmt.Fprintln(status, "Clicking Export...")
 				if err := axAction(btn, "AXPress"); err != nil {
 					clickErr = err
@@ -190,11 +205,20 @@ saveClicked:
 		}
 	}
 
-	time.Sleep(500 * time.Millisecond)
-	fmt.Fprintln(status, "Export complete")
+	if err := waitForExportFile(cmd.Context(), expectedPath, 10*time.Second); err != nil {
+		return fmt.Errorf("verify GPU counter export: %w", err)
+	}
+	fmt.Fprintf(status, "GPU counter export verified: %s\n", expectedPath)
 	return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
-		Action: "xcode-export-counters",
-		Target: traceFile,
+		Action:           "xcode-export-counters",
+		Target:           traceFile,
+		Output:           expectedPath,
+		RequestedTrace:   traceFile,
+		SelectedTitle:    selection.Title,
+		SelectedDocument: selection.Document,
+		Phase:            "export verified",
+		Evidence:         "saved file exists, is non-empty, and stabilized",
+		TargetBound:      boolPointer(selection.Bound),
 	})
 }
 

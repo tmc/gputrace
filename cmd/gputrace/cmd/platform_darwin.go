@@ -60,7 +60,7 @@ func platformXcodeProfileRun(name string) func(*cobra.Command, []string) error {
 		case "select-tab":
 			return runSelectTab(cmd, args)
 		case "show-performance":
-			return runShowPerformance(cmd, args)
+			return runPerformanceShow(cmd, args)
 		case "show-summary":
 			return runSelectTab(cmd, []string{"Summary"})
 		case "show-counters":

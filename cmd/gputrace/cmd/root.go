@@ -2,6 +2,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -16,7 +17,7 @@ var rootCmd = &cobra.Command{
 Command Groups:
 
 Trace Overview:
-  stats            - Comprehensive trace statistics
+  stats            - Capture structure, resources, and profiler availability
   api-calls        - API call sequences
   dump             - Raw API call dump
 
@@ -26,10 +27,12 @@ Kernel & Shader Analysis:
   shader-source    - Source-level performance attribution
 
 Timing & Profiling:
-  timing           - Timing metrics export
-  profiler         - GPU profiler data extraction
+  timing           - Timing metrics with measured/estimated provenance
+  profiler         - Profiler spans, active time, dispatches, and pipelines
   pprof            - pprof format export
   correlate        - Correlate timing with hardware metrics
+  counters         - Counter collection planning
+  replay-counters  - Replay counter collection or simulate its plan
 
 Command Buffers & Encoders:
   command-buffers  - Command buffer analysis
@@ -39,13 +42,16 @@ Buffer Analysis:
   buffers          - Buffer listing and properties
   buffer-access    - Buffer access patterns
   buffer-timeline  - Buffer allocation timeline
+  dependencies     - Resource dependency analysis
+  fences           - Fence and synchronization analysis
 
 Visualization & Export:
   timeline         - Text timeline and Chrome/Perfetto export
   graph            - Graph visualization
   tree             - Execution tree view
   diff             - Compare two traces
-  insights         - Actionable performance insights
+  brief            - Compact comparison brief
+  insights         - Diagnostic performance hypotheses
 
 Capture & Automation:
   xcode-profile    - Xcode GPU profiler automation
@@ -54,7 +60,7 @@ Capture & Automation:
 
 Utilities:
   mtlb             - Metal Library Binary inspection
-  clear-buffers    - Zero out buffers to reduce trace size
+  clear-buffers    - Destructively zero captured buffers
   version          - Print gputrace build version
 
 For more information about a specific command:
@@ -66,7 +72,24 @@ func Execute() error {
 	return rootCmd.Execute()
 }
 
+type alreadyReportedError interface {
+	error
+	alreadyReported()
+}
+
+// ErrorAlreadyReported reports whether err has already been written as
+// structured command output.
+func ErrorAlreadyReported(err error) bool {
+	var reported alreadyReportedError
+	return errors.As(err, &reported)
+}
+
 func init() {
+	// The command entry point prints ordinary errors. Some commands write a
+	// structured JSON error before returning, so Cobra must not independently
+	// print either the error or command usage.
+	rootCmd.SilenceErrors = true
+	rootCmd.SilenceUsage = true
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
 	initColorFlag(rootCmd)
 }

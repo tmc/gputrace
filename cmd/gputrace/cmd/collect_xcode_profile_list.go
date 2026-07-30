@@ -267,17 +267,31 @@ type JSONError struct {
 	Suggestion string `json:"suggestion,omitempty"`
 }
 
-// outputJSONError outputs a JSON error and returns nil (to avoid duplicate error output).
+type reportedJSONError struct {
+	JSONError
+}
+
+func (err reportedJSONError) Error() string {
+	return err.Message
+}
+
+func (reportedJSONError) alreadyReported() {}
+
+// outputJSONError writes a JSON error and returns a non-nil marker error.
+// The command entry point recognizes the marker and does not print it again.
 func outputJSONError(code, message, suggestion string) error {
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
-	enc.Encode(JSONError{
+	report := JSONError{
 		Error:      true,
 		Code:       code,
 		Message:    message,
 		Suggestion: suggestion,
-	})
-	return nil
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(report); err != nil {
+		return fmt.Errorf("write JSON error: %w", err)
+	}
+	return reportedJSONError{JSONError: report}
 }
 
 // keyButtons are the button names we care about for automation.

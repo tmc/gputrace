@@ -99,6 +99,7 @@ func runPerformanceShow(cmd *cobra.Command, args []string) error {
 		}
 		return err
 	}
+	selection := selectionForWindow("", windowAX)
 
 	btn := findShowPerformanceButton(windowAX)
 	if btn == 0 {
@@ -123,18 +124,36 @@ func runPerformanceShow(cmd *cobra.Command, args []string) error {
 		}
 		return fmt.Errorf("failed to click: %w", err)
 	}
-
-	if collectProfileOpts.json {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(map[string]interface{}{
-			"success": true,
-			"action":  "show_performance",
-		})
+	if err := waitForPerformanceView(cmd.Context(), windowAX, 3*time.Second); err != nil {
+		return err
 	}
+	fmt.Fprintln(status, "Performance view verified")
+	return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+		Action:           "show_performance",
+		Target:           selection.Document,
+		SelectedTitle:    selection.Title,
+		SelectedDocument: selection.Document,
+		Phase:            "performance view visible",
+		Evidence:         "Xcode performance navigation controls are present after Show Performance",
+		TargetBound:      boolPointer(selection.Bound),
+	})
+}
 
-	fmt.Fprintln(status, "Done")
-	return nil
+func waitForPerformanceView(ctx context.Context, window uintptr, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		for _, name := range []string{"Overview", "Timeline", "Shaders", "Counters", "Encoders"} {
+			if findButtonBFS(window, name, 1000) != 0 {
+				return nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("Show Performance was pressed, but the Performance view did not become visible within %s", timeout.Round(time.Second))
+		}
+		if err := waitForAutomation(ctx, 100*time.Millisecond); err != nil {
+			return err
+		}
+	}
 }
 
 func runPerformanceStatus(cmd *cobra.Command, args []string) error {
@@ -788,6 +807,7 @@ func runPerformanceView(ctx context.Context, viewName string) error {
 		}
 		return err
 	}
+	selection := selectionForWindow("", windowAX)
 
 	// Map view names to button names in Xcode UI
 	buttonNames := map[string]string{
@@ -830,16 +850,35 @@ func runPerformanceView(ctx context.Context, viewName string) error {
 		}
 		return fmt.Errorf("failed to click: %w", err)
 	}
-
-	if collectProfileOpts.json {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(map[string]interface{}{
-			"success": true,
-			"view":    viewName,
-		})
+	if err := waitForSelectedControl(ctx, windowAX, btn, buttonName, 2*time.Second); err != nil {
+		return err
 	}
+	fmt.Fprintf(status, "%s view selected and verified\n", buttonName)
+	return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+		Action:           "select_performance_view",
+		Target:           viewName,
+		SelectedTitle:    selection.Title,
+		SelectedDocument: selection.Document,
+		Phase:            "performance view selected",
+		Evidence:         fmt.Sprintf("%s control reports selected", buttonName),
+		TargetBound:      boolPointer(selection.Bound),
+	})
+}
 
-	fmt.Fprintln(status, "Done")
-	return nil
+func waitForSelectedControl(ctx context.Context, window, control uintptr, name string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		if isElementSelected(control) || isTabSelected(control) || strings.EqualFold(getCurrentTab(window), name) {
+			return nil
+		}
+		if tab := findTabByName(window, name); tab != 0 && isTabSelected(tab) {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%s was pressed, but Xcode did not expose a selected-state postcondition within %s", name, timeout.Round(time.Second))
+		}
+		if err := waitForAutomation(ctx, 100*time.Millisecond); err != nil {
+			return err
+		}
+	}
 }

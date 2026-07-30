@@ -4,6 +4,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -31,7 +32,11 @@ func TestResolveScreenshotOutputPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("default output path: %v", err)
 	}
-	if want := "/tmp/xcode-screenshot-20260531-010203.png"; got != want {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(home, "tmp", "xcode-screenshot-20260531-010203.png"); got != want {
 		t.Fatalf("default path = %q, want %q", got, want)
 	}
 
@@ -44,6 +49,23 @@ func TestResolveScreenshotOutputPath(t *testing.T) {
 	}
 	if filepath.Base(got) != "trace.png" {
 		t.Fatalf("resolved path = %q, want basename trace.png", got)
+	}
+}
+
+func TestVerifyScreenshotFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "window.png")
+	png := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0}
+	if err := os.WriteFile(path, png, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyScreenshotFile(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("not png"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyScreenshotFile(path); err == nil {
+		t.Fatal("non-PNG screenshot returned nil error")
 	}
 }
 

@@ -43,18 +43,14 @@ func runOpenTrace(cmd *cobra.Command, args []string, opts *openTraceOptions) err
 
 	fmt.Fprintln(status, "Waiting for Xcode window...")
 
-	// Wait for window using AX polling (doesn't steal focus)
+	// Wait for Xcode using AX polling (doesn't steal focus).
 	deadline := time.Now().Add(30 * time.Second)
 	var appAX uintptr
 	var axErr error
 	for time.Now().Before(deadline) {
 		appAX, axErr = FindXcodeApp()
 		if axErr == nil {
-			windows := GetAllWindows(appAX)
-			if len(windows) > 0 {
-				break
-			}
-			cfRelease(appAX)
+			break
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
@@ -64,26 +60,32 @@ func runOpenTrace(cmd *cobra.Command, args []string, opts *openTraceOptions) err
 	}
 	defer cfRelease(appAX)
 
-	// Handle startup dialogs (Reopen, etc.)
+	// Handle startup dialogs (Reopen, etc.) before binding the requested trace
+	// window; a modal dialog can hide the document's AX attributes.
 	if err := dismissStartupDialogs(); err != nil {
 		verboseLog("dismissStartupDialogs: %v", err)
 	}
 
-	// Ensure window is on-screen (may be restored to disconnected monitor position)
-	windows := GetAllWindows(appAX)
-	for _, w := range windows {
-		x, y := axPosition(w)
-		_, h := axSize(w)
-		// If window is off-screen (negative Y or very far), move it
-		if y < 0 || y > 2000 || x < -500 {
-			verboseLog("Window at (%d,%d) appears off-screen, repositioning", x, y)
-			setWindowPosition(w, 100, 100)
-			time.Sleep(200 * time.Millisecond)
-		}
-		// Also ensure window has reasonable height (not minimized)
-		if h < 100 {
-			verboseLog("Window height %d too small, may be minimized", h)
-		}
+	windowAX, err := waitForWindow(cmd.Context(), appAX, inputPath, 30*time.Second)
+	if err != nil {
+		return fmt.Errorf("find requested trace window: %w", err)
+	}
+	selection := selectionForWindow(inputPath, windowAX)
+	if err := requireBoundSelection(selection); err != nil {
+		return fmt.Errorf("Xcode opened a GPU trace window, but %w", err)
+	}
+
+	// Ensure the selected window is on-screen (it may have been restored to a
+	// disconnected monitor).
+	x, y := axPosition(windowAX)
+	_, h := axSize(windowAX)
+	if y < 0 || y > 2000 || x < -500 {
+		verboseLog("Window at (%d,%d) appears off-screen, repositioning", x, y)
+		setWindowPosition(windowAX, 100, 100)
+		time.Sleep(200 * time.Millisecond)
+	}
+	if h < 100 {
+		verboseLog("Window height %d too small, may be minimized", h)
 	}
 
 	// Ensure the Debug navigator is shown using AX menu click
@@ -93,10 +95,23 @@ func runOpenTrace(cmd *cobra.Command, args []string, opts *openTraceOptions) err
 		}
 	}
 
-	fmt.Fprint(status, Colorize("Trace opened successfully in Xcode\n", ColorGreen))
+	fmt.Fprint(status, Colorize("Xcode opened the requested trace window.\n", ColorGreen))
+	if selection.Document != "" {
+		fmt.Fprintf(status, "  Selected document: %s\n", selection.Document)
+	}
+	if selection.Title != "" {
+		fmt.Fprintf(status, "  Selected window: %s\n", selection.Title)
+	}
+	fmt.Fprintf(status, "  Evidence: %s\n", selection.Evidence)
 	return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
-		Action: "open",
-		Input:  inputPath,
+		Action:           "open",
+		Input:            inputPath,
+		RequestedTrace:   inputPath,
+		SelectedTitle:    selection.Title,
+		SelectedDocument: selection.Document,
+		Phase:            "trace window ready",
+		Evidence:         selection.Evidence,
+		TargetBound:      boolPointer(selection.Bound),
 	})
 }
 

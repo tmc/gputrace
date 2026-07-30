@@ -24,27 +24,27 @@ This command uses Accessibility APIs to control Xcode's UI and extract data.
 
 Workflow:
   run               Run full automation (open, replay, export)
-  open              Open a trace file in Xcode
-  close             Close the trace window
-  export            Export the trace with performance data
+  open              Open and bind a trace file in Xcode
+  close             Close and verify removal of a trace window
+  export            Export and verify a trace bundle
   run-profile       Start profiling in Xcode
-  wait-profile      Wait for profiling to complete
+  wait-profile      Wait for Performance data UI readiness
 
 Status:
   check-status      Check profiling status (ready, running, complete)
   check-permissions Check required permissions (Accessibility, Screen Recording)
 
 Navigation:
-  select-tab        Select a tab by name
-  show-performance  Click Show Performance button
-  show-summary      Select Summary tab
-  show-counters     Select Counters tab
-  show-memory       Click the Show Memory button
-  show-dependencies Click Show Dependencies button
+  select-tab        Select and verify a tab by name
+  show-performance  Reveal and verify the Performance view
+  show-summary      Select and verify the Summary tab
+  show-counters     Select and verify the Counters tab
+  show-memory       Select and verify the Memory view
+  show-dependencies Select and verify the Dependencies view
 
 Data Export:
-  xcode-export-counters  Export GPU counters from Performance view to CSV
-  xcode-export-memory    Export memory report from Performance view
+  xcode-export-counters  Export counters to a verified stable CSV
+  xcode-export-memory    Export a verified stable memory report
   vertex-output          Extract vertex shader output from Xcode GPU debugger
   performance            Performance data commands`,
 		Args:              cobra.MaximumNArgs(1),
@@ -106,12 +106,12 @@ var xcodeProfileCommandSpecs = []platformCommandSpec{
 	{name: "run", use: "run <trace_file>", short: "Run full automation (open, replay, export)", args: cobra.ExactArgs(1), silenceUsage: true, flags: outputFlag},
 	{name: "open", use: "open <trace_file>", short: "Open a trace file in Xcode", long: `Opens a GPU trace file in Xcode and waits for the window to be ready.
 By default, opens in background without stealing focus. Use --foreground to bring Xcode to front.`, args: cobra.ExactArgs(1), flags: foregroundFlag},
-	{name: "close", use: "close [trace_file]", short: "Close the trace window in Xcode", long: "Closes the Xcode window for the specified trace file, or the first window if no file specified.", args: cobra.MaximumNArgs(1)},
-	{name: "export", use: "export [output_path]", short: "Export the trace from Xcode", long: `Triggers File > Export in Xcode and saves to the specified path.
+	{name: "close", use: "close [trace_file]", short: "Close and verify removal of a selected trace window", long: "Closes the uniquely selected Xcode trace window and verifies that it disappeared. When multiple windows are present, provide trace_file to avoid ambiguity.", args: cobra.MaximumNArgs(1)},
+	{name: "export", use: "export [output_path]", short: "Export and verify a trace bundle from Xcode", long: `Triggers File > Export in Xcode, verifies the destination and stable output bundle, and saves to the specified path.
 If no path is specified, it defaults to the trace file path with -perfdata suffix, inferred from the Xcode window.`, args: cobra.MaximumNArgs(1)},
 	{name: "run-profile", use: "run-profile [trace_file]", aliases: []string{"run-replay"}, short: "Start profiling in Xcode", long: `Clicks the Profile button if available, otherwise falls back to Replay button.
 The Profile button starts profiling directly without needing additional checkboxes.`, args: cobra.MaximumNArgs(1)},
-	{name: "wait-profile", use: "wait-profile [trace_file]", aliases: []string{"wait-replay"}, short: "Wait for profiling to complete", long: "Polls Xcode until profiling completes (Show Performance button appears or Replay re-enabled).", args: cobra.MaximumNArgs(1)},
+	{name: "wait-profile", use: "wait-profile [trace_file]", aliases: []string{"wait-replay"}, short: "Wait for Performance data to become available", long: "Polls the bound trace window until a completion-ready Performance control appears. This verifies UI readiness, not exported-bundle identity.", args: cobra.MaximumNArgs(1)},
 	{name: "check-status", use: "check-status [trace_file]", short: "Check profiling status", long: `Returns the current profiling status:
   - initializing: Trace loading, Replay button disabled
   - replay-ready: Ready to start replay
@@ -124,7 +124,7 @@ The Profile button starts profiling directly without needing additional checkbox
 
 Use --json for machine-readable output.
 Use --no-prompt to check without triggering permission dialogs.`, args: cobra.NoArgs},
-	{name: "select-tab", use: "select-tab <tab_name>", short: "Select a tab in the trace viewer", long: `Selects a tab in the Xcode GPU trace viewer.
+	{name: "select-tab", use: "select-tab <tab_name>", short: "Select and verify a trace-viewer tab", long: `Selects a tab in the Xcode GPU trace viewer and verifies its selected state.
 
 Available tabs:
   summary      - Summary view with overview statistics
@@ -133,13 +133,13 @@ Available tabs:
   encoders     - Encoder timeline
   dependencies - Resource dependencies
   performance  - Performance metrics (same as Show Performance button)`, args: cobra.ExactArgs(1)},
-	{name: "show-performance", use: "show-performance", short: "Click the Show Performance button", args: cobra.NoArgs},
-	{name: "show-summary", use: "show-summary", short: "Select the Summary tab", args: cobra.NoArgs},
-	{name: "show-counters", use: "show-counters", short: "Select the Counters tab", args: cobra.NoArgs},
-	{name: "show-memory", use: "show-memory", short: "Click the Show Memory button", args: cobra.NoArgs},
-	{name: "show-dependencies", use: "show-dependencies", short: "Click the Show Dependencies button", args: cobra.NoArgs},
-	{name: "xcode-export-counters", use: "xcode-export-counters [trace_file]", short: "Export GPU counters from Xcode's Performance view to CSV", long: xcodeExportCountersLong, args: cobra.MaximumNArgs(1), flags: forceFlag},
-	{name: "xcode-export-memory", use: "xcode-export-memory [trace_file]", short: "Export memory report from Xcode's Performance view", long: xcodeExportMemoryLong, args: cobra.MaximumNArgs(1), flags: forceFlag},
+	{name: "show-performance", use: "show-performance", short: "Reveal and verify the Performance view", args: cobra.NoArgs},
+	{name: "show-summary", use: "show-summary", short: "Select and verify the Summary tab", args: cobra.NoArgs},
+	{name: "show-counters", use: "show-counters", short: "Select and verify the Counters tab", args: cobra.NoArgs},
+	{name: "show-memory", use: "show-memory", short: "Select and verify the Memory view", args: cobra.NoArgs},
+	{name: "show-dependencies", use: "show-dependencies", short: "Select and verify the Dependencies view", args: cobra.NoArgs},
+	{name: "xcode-export-counters", use: "xcode-export-counters [trace_file]", short: "Export counters to a verified stable CSV", long: xcodeExportCountersLong, args: cobra.MaximumNArgs(1), flags: forceFlag},
+	{name: "xcode-export-memory", use: "xcode-export-memory [trace_file]", short: "Export a verified stable memory report", long: xcodeExportMemoryLong, args: cobra.MaximumNArgs(1), flags: forceFlag},
 	{name: "vertex-output", use: "vertex-output <trace.gputrace>", short: "Extract vertex shader output from Xcode GPU debugger", long: vertexOutputLong, args: cobra.ExactArgs(1), silenceUsage: true, flags: vertexOutputFlags},
 	{name: "list-windows", use: "list-windows [trace_file]", short: "List Xcode windows", long: "Lists Xcode windows with their titles, checkboxes, and buttons. Optionally filter by trace filename.", args: cobra.MaximumNArgs(1), hidden: true},
 	{name: "list-tabs", use: "list-tabs [trace_file]", short: "List available tabs in the trace viewer", args: cobra.MaximumNArgs(1), hidden: true},
@@ -250,7 +250,7 @@ func newPerformanceCommand() *cobra.Command {
 		Long: `Commands for working with GPU performance data in Xcode.
 
 Subcommands:
-  show      Click the "Show Performance" button to reveal performance data
+  show      Reveal and verify the Performance view
   status    Check if performance data is available
   summary   Extract visible summary statistics
   counters  Select the Counters tab
@@ -267,7 +267,7 @@ Subcommands:
 func performanceCommandLong(name string) string {
 	switch name {
 	case "show":
-		return `Clicks the "Show Performance" button in Xcode to reveal GPU performance data.`
+		return `Reveals Xcode's Performance view and verifies that its navigation controls became available.`
 	case "status":
 		return `Checks whether the "Show Performance" button is available and enabled.`
 	case "summary":
@@ -275,14 +275,14 @@ func performanceCommandLong(name string) string {
 	case "memory":
 		return `Extracts memory allocation and usage information from Xcode when visible.`
 	default:
-		return "Selects the " + name + " tab in Xcode's Performance view."
+		return "Selects the " + name + " view in Xcode Performance and verifies its selected state."
 	}
 }
 
 func performanceCommandShort(name string) string {
 	switch name {
 	case "show":
-		return "Click the Show Performance button"
+		return "Reveal and verify the Performance view"
 	case "status":
 		return "Check if performance data is available"
 	case "summary":
@@ -290,7 +290,7 @@ func performanceCommandShort(name string) string {
 	case "memory":
 		return "Extract memory usage info"
 	default:
-		return "Select the " + name + " tab"
+		return "Select and verify the " + name + " view"
 	}
 }
 

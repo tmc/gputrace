@@ -4,7 +4,6 @@ package cmd
 
 import (
 	"fmt"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 )
@@ -55,7 +54,7 @@ func runWaitReplay(cmd *cobra.Command, args []string) error {
 	}
 
 	status := xcodeProfileStatusWriter()
-	fmt.Fprintln(status, "Waiting for replay to complete...")
+	fmt.Fprintln(status, "Waiting for GPU replay and performance profiling...")
 
 	appAX, err := FindXcodeApp()
 	if err != nil {
@@ -67,15 +66,32 @@ func runWaitReplay(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("window not found: %w", err)
 	}
+	selection := selectionForWindow(traceFile, windowAX)
+	if err := requireBoundSelection(selection); err != nil {
+		return err
+	}
+	fmt.Fprintln(status, "  Phase: performance profiling running or pending")
+	if selection.Document != "" {
+		fmt.Fprintf(status, "  Selected document: %s\n", selection.Document)
+	}
+	if selection.Title != "" {
+		fmt.Fprintf(status, "  Selected window: %s\n", selection.Title)
+	}
+	fmt.Fprintf(status, "  Evidence: %s\n", selection.Evidence)
 
-	traceFileName := filepath.Base(traceFile)
-	if err := waitForReplayComplete(cmd.Context(), appAX, traceFileName, windowAX, collectProfileOpts.timeout); err != nil {
-		return fmt.Errorf("wait failed: %w", err)
+	if err := waitForReplayComplete(cmd.Context(), appAX, traceFile, windowAX, collectProfileOpts.timeout); err != nil {
+		return fmt.Errorf("wait for performance profiling: %w", err)
 	}
 
-	fmt.Fprint(status, Colorize("Replay completed\n", ColorGreen))
+	fmt.Fprint(status, Colorize("Performance data became available after GPU replay; export identity is not yet verified.\n", ColorGreen))
 	return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
-		Action: "wait-profile",
-		Target: traceFile,
+		Action:           "wait-profile",
+		Target:           traceFile,
+		RequestedTrace:   traceFile,
+		SelectedTitle:    selection.Title,
+		SelectedDocument: selection.Document,
+		Phase:            "performance data available",
+		Evidence:         "Xcode exposed a completion-ready performance control for the bound trace window; export identity is not yet verified",
+		TargetBound:      boolPointer(selection.Bound),
 	})
 }
