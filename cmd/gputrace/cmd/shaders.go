@@ -436,6 +436,9 @@ func runShadersFromProfiler(tracePath string, opts *shadersOptions) error {
 	// Note: Uses dispatch duration for Cost %. Statistical sampling from Profiling_f_*.raw
 	// has a complex format that needs further reverse engineering to match Xcode exactly.
 	report := convertPipelineStatsToShaderReport(stats, nil)
+	if err := applySourceBackedShaderMetrics(filepath.Join(profilerDir, "streamData"), stats, report); err != nil {
+		fmt.Fprintf(os.Stderr, "Note: source-backed high-register metrics unavailable: %v\n", err)
+	}
 
 	// Output based on format
 	switch opts.format {
