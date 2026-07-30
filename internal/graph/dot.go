@@ -51,6 +51,8 @@ func (g *DOTGenerator) generateHierarchy(t *trace.Trace, config *Config) (string
 
 	// Root node
 	sb.WriteString("  trace [label=\"GPU Trace\", shape=ellipse, style=filled, fillcolor=lightblue];\n\n")
+	sb.WriteString("  attribution [label=\"Warning: command-buffer ownership of CS labels is heuristic\", shape=note, color=orange];\n")
+	sb.WriteString("  trace -> attribution [style=dashed, color=orange];\n\n")
 
 	// Parse command buffers
 	commandBuffers, err := t.ParseCommandBuffers()
@@ -105,7 +107,7 @@ func (g *DOTGenerator) generateHierarchy(t *trace.Trace, config *Config) (string
 				}
 			}
 			sb.WriteString(fmt.Sprintf("  %s [label=\"%s\", style=filled, fillcolor=lightyellow];\n", encID, dotLabel(label)))
-			sb.WriteString(fmt.Sprintf("  %s -> %s;\n", cbID, encID))
+			sb.WriteString(fmt.Sprintf("  %s -> %s [style=dashed, label=\"heuristic\"];\n", cbID, encID))
 		}
 	}
 	sb.WriteString("\n")
@@ -151,7 +153,8 @@ func (g *DOTGenerator) generateHierarchy(t *trace.Trace, config *Config) (string
 	return sb.String(), nil
 }
 
-// generateFlow creates a temporal execution flow graph matching Xcode Instruments style.
+// generateFlow shows CS labels in their observed order. The trace parser does
+// not currently prove command-buffer ownership or dispatch membership here.
 func (g *DOTGenerator) generateFlow(t *trace.Trace, config *Config) (string, error) {
 	var sb strings.Builder
 
@@ -160,84 +163,30 @@ func (g *DOTGenerator) generateFlow(t *trace.Trace, config *Config) (string, err
 	sb.WriteString("  rankdir=TB;\n")
 	sb.WriteString("  node [shape=box, style=rounded];\n\n")
 
-	// Parse command buffers
-	commandBuffers, err := t.ParseCommandBuffers()
-	if err != nil {
-		return "", fmt.Errorf("parse command buffers: %w", err)
-	}
-
-	// Parse encoders
+	// Parse observed CS labels.
 	encoders, err := t.ParseComputeEncoders()
 	if err != nil {
 		return "", fmt.Errorf("parse encoders: %w", err)
 	}
 
-	// Add command buffer at top
-	if len(commandBuffers) > 0 {
-		cbID := "cb0"
-		label := "MultipleEncoders_6" // Or use cb label if available
-		sb.WriteString(fmt.Sprintf("  %s [label=\"%s\", shape=box, style=filled, fillcolor=\"#2B2B2B\", fontcolor=white, width=2];\n\n", cbID, label))
-	}
+	sb.WriteString("  note [label=\"Observed CS-label order only\\nCommand-buffer and dispatch edges unavailable\", shape=note, color=orange];\n\n")
 
-	// Add encoders in vertical flow
-	sb.WriteString("  // Encoders in execution order\n")
+	sb.WriteString("  // CS labels in observed order\n")
 	for i, encoder := range encoders {
-		encID := fmt.Sprintf("enc%d", i)
+		encID := fmt.Sprintf("label%d", i)
 
-		// Encoder node
 		label := encoder.Label
 		if label == "" {
-			label = fmt.Sprintf("Encoder %d", i)
+			label = fmt.Sprintf("CS label %d", i)
 		}
-
-		// Red rounded box for encoder
 		sb.WriteString(fmt.Sprintf("  %s [label=\"%s\", style=\"rounded,filled\", fillcolor=\"#CC5555\", fontcolor=white, width=2];\n", encID, dotLabel(label)))
-
-		// Add dispatch nodes (blue grids) below each encoder
-		// Assuming 3 dispatches per encoder (as shown in Xcode screenshot)
-		dispatchCount := 3
-		sb.WriteString("  // Dispatches for encoder\n")
-
-		// Create invisible rank for dispatch nodes
-		sb.WriteString("  { rank=same; ")
-		for d := 0; d < dispatchCount; d++ {
-			dispID := fmt.Sprintf("%s_d%d", encID, d)
-			sb.WriteString(dispID)
-			if d < dispatchCount-1 {
-				sb.WriteString("; ")
-			}
-		}
-		sb.WriteString(" }\n")
-
-		// Define dispatch nodes
-		for d := 0; d < dispatchCount; d++ {
-			dispID := fmt.Sprintf("%s_d%d", encID, d)
-			sb.WriteString(fmt.Sprintf("  %s [label=\"\", shape=square, style=filled, fillcolor=\"#4488CC\", width=0.3, height=0.3, fixedsize=true];\n", dispID))
-		}
-
-		// Connect encoder to its dispatches
-		for d := 0; d < dispatchCount; d++ {
-			dispID := fmt.Sprintf("%s_d%d", encID, d)
-			sb.WriteString(fmt.Sprintf("  %s -> %s [arrowhead=none, color=\"#666666\"];\n", encID, dispID))
-		}
-
-		sb.WriteString("\n")
 	}
 
-	// Add flow connections between encoders
-	sb.WriteString("  // Execution flow\n")
-	if len(commandBuffers) > 0 && len(encoders) > 0 {
-		// Connect command buffer to first encoder
-		sb.WriteString(fmt.Sprintf("  cb0 -> enc0 [color=\"#666666\"];\n"))
+	if len(encoders) > 0 {
+		sb.WriteString("  note -> label0 [style=dashed, label=\"observed order\"];\n")
 	}
-
 	for i := 0; i < len(encoders)-1; i++ {
-		// Connect from last dispatch of current encoder to next encoder
-		currEncID := fmt.Sprintf("enc%d", i)
-		nextEncID := fmt.Sprintf("enc%d", i+1)
-		lastDispID := fmt.Sprintf("%s_d1", currEncID) // Middle dispatch for visual clarity
-
-		sb.WriteString(fmt.Sprintf("  %s -> %s [color=\"#666666\"];\n", lastDispID, nextEncID))
+		sb.WriteString(fmt.Sprintf("  label%d -> label%d [style=dashed, label=\"observed order\"];\n", i, i+1))
 	}
 
 	sb.WriteString("}\n")

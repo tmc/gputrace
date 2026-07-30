@@ -68,6 +68,8 @@ func (g *MermaidGenerator) generateHierarchy(t *trace.Trace, config *Config) (st
 
 	// Root node
 	sb.WriteString("  trace([GPU Trace])\n")
+	sb.WriteString("  attribution[\"Warning: command-buffer ownership of CS labels is heuristic\"]\n")
+	sb.WriteString("  trace -.-> attribution\n")
 
 	// Add command buffers
 	for _, cb := range commandBuffers {
@@ -97,7 +99,7 @@ func (g *MermaidGenerator) generateHierarchy(t *trace.Trace, config *Config) (st
 				}
 			}
 			sb.WriteString(fmt.Sprintf("  %s[%s]\n", encID, label))
-			sb.WriteString(fmt.Sprintf("  %s --> %s\n", cbID, encID))
+			sb.WriteString(fmt.Sprintf("  %s -. heuristic .-> %s\n", cbID, encID))
 		}
 	}
 
@@ -156,83 +158,45 @@ func (g *MermaidGenerator) generateHierarchy(t *trace.Trace, config *Config) (st
 	return sb.String(), nil
 }
 
-// generateFlow creates a temporal execution flow Mermaid graph matching Xcode style.
+// generateFlow shows CS labels in their observed order. It does not infer
+// command-buffer ownership or manufacture dispatch nodes.
 func (g *MermaidGenerator) generateFlow(t *trace.Trace, config *Config) (string, error) {
 	var sb strings.Builder
 
 	// Header - top to bottom flow
 	sb.WriteString("graph TB\n")
 
-	// Parse command buffers
-	commandBuffers, err := t.ParseCommandBuffers()
-	if err != nil {
-		return "", fmt.Errorf("parse command buffers: %w", err)
-	}
-
-	// Parse encoders
+	// Parse observed CS labels.
 	encoders, err := t.ParseComputeEncoders()
 	if err != nil {
 		return "", fmt.Errorf("parse encoders: %w", err)
 	}
 
-	// Add command buffer at top
-	if len(commandBuffers) > 0 {
-		sb.WriteString("  cb0[MultipleEncoders_6]\n")
-	}
+	sb.WriteString("  note[\"Observed CS-label order only<br/>Command-buffer and dispatch edges unavailable\"]\n")
 
-	// Add encoders in vertical flow
+	// Add labels in observed order.
 	for i, encoder := range encoders {
-		encID := fmt.Sprintf("enc%d", i)
+		encID := fmt.Sprintf("label%d", i)
 		label := encoder.Label
 		if label == "" {
-			label = fmt.Sprintf("Encoder %d", i)
+			label = fmt.Sprintf("CS label %d", i)
 		}
-
-		// Encoder node
 		sb.WriteString(fmt.Sprintf("  %s[\"%s\"]\n", encID, label))
-
-		// Add dispatch nodes (3 per encoder)
-		for d := 0; d < 3; d++ {
-			dispID := fmt.Sprintf("%s_d%d", encID, d)
-			sb.WriteString(fmt.Sprintf("  %s[ ]\n", dispID))
-		}
 	}
 
-	// Add connections
-	sb.WriteString("\n  %% Execution flow\n")
-	if len(commandBuffers) > 0 && len(encoders) > 0 {
-		sb.WriteString("  cb0 --> enc0\n")
+	sb.WriteString("\n  %% Observed order, not verified execution ownership\n")
+	if len(encoders) > 0 {
+		sb.WriteString("  note -. observed order .-> label0\n")
 	}
-
-	// Connect encoders to their dispatches
-	for i := range encoders {
-		encID := fmt.Sprintf("enc%d", i)
-		for d := 0; d < 3; d++ {
-			dispID := fmt.Sprintf("%s_d%d", encID, d)
-			sb.WriteString(fmt.Sprintf("  %s --> %s\n", encID, dispID))
-		}
-	}
-
-	// Connect between encoders
 	for i := 0; i < len(encoders)-1; i++ {
-		currDispID := fmt.Sprintf("enc%d_d1", i)
-		nextEncID := fmt.Sprintf("enc%d", i+1)
-		sb.WriteString(fmt.Sprintf("  %s --> %s\n", currDispID, nextEncID))
+		sb.WriteString(fmt.Sprintf("  label%d -. observed order .-> label%d\n", i, i+1))
 	}
 
 	// Add styling
 	sb.WriteString("\n  %% Styling\n")
-	sb.WriteString("  classDef commandBuffer fill:#2B2B2B,stroke:#666,color:#fff\n")
-	sb.WriteString("  classDef encoder fill:#CC5555,stroke:#666,color:#fff\n")
-	sb.WriteString("  classDef dispatch fill:#4488CC,stroke:#666,color:#fff\n")
-
-	// Apply styles
-	sb.WriteString("  class cb0 commandBuffer\n")
+	sb.WriteString("  classDef observed fill:#CC5555,stroke:#666,color:#fff\n")
 	for i := range encoders {
-		sb.WriteString(fmt.Sprintf("  class enc%d encoder\n", i))
-		for d := 0; d < 3; d++ {
-			sb.WriteString(fmt.Sprintf("  class enc%d_d%d dispatch\n", i, d))
-		}
+		sb.WriteString(fmt.Sprintf("  class label%d observed\n", i))
 	}
 
 	return sb.String(), nil
