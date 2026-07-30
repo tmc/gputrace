@@ -1,6 +1,10 @@
 package cmd
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"io"
 	"os/exec"
 	"path/filepath"
@@ -176,5 +180,36 @@ func writeProfilerBenchfmt(w io.Writer, tracePath string, stats *counter.StreamD
 	if err != nil {
 		return err
 	}
-	return writeBenchfmt(w, benchfmtRecord{Config: config, Values: benchfmtProfilerValues(stats, executionCost)})
+	var out bytes.Buffer
+	if err := writeBenchfmt(&out, benchfmtRecord{
+		Config: config,
+		Values: benchfmtProfilerValues(stats, executionCost),
+	}); err != nil {
+		return err
+	}
+	for _, cost := range executionCost {
+		if err := writeBenchfmt(&out, benchfmtRecord{
+			Suffix: benchfmtSampleCostSuffix(cost.FunctionName),
+			Config: config,
+			Values: []benchfmtValue{{
+				Value: cost.CostPercent,
+				Unit:  benchfmtProfilerSampleCostUnit,
+			}},
+		}); err != nil {
+			return err
+		}
+	}
+	if _, err := w.Write(out.Bytes()); err != nil {
+		return fmt.Errorf("write benchfmt: %w", err)
+	}
+	return nil
+}
+
+func benchfmtSampleCostSuffix(function string) string {
+	name := []rune(sanitizeBenchfmtSuffix(function))
+	if len(name) > 80 {
+		name = name[:80]
+	}
+	sum := sha256.Sum256([]byte(function))
+	return "ProfilerSampleCost_" + string(name) + "_" + hex.EncodeToString(sum[:4])
 }

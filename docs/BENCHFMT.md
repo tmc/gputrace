@@ -32,16 +32,19 @@ The benchmark line uses separate units for values with different meanings:
 | `cb_active_ns/op` | Sum of command-buffer active ranges |
 | `cb_wall_ns/op` | Wall span covered by command buffers |
 | `effective_gpu_ns/op` | Xcode APSTimelineData effective GPU time |
+| `profiler_sample_cost_percent` | Per-function share of USC statistical profiler samples |
 | `profiler_cost_samples/op` | USC samples underlying statistical execution-cost attribution |
 | `gprwcntr_samples/op` | GPRWCNTR samples attached to dispatch records |
 | `dispatches/op` | GPU dispatch count |
-| `command_buffers/op` | Command-buffer count |
+| `command-buffers/op` | Command-buffer count |
 | `encoders/op` | Compute-encoder count |
 
 The span units are not aliases for active or effective GPU time.
 `profiler_cost_samples/op` is emitted by `profiler`, which reads the
 `Profiling_f_*.raw` execution-cost records. `stats` and `timing` do not scan
-those records. GPRWCNTR samples remain a separate unit.
+those records. The same command emits one stable function-specific benchmark
+row with `profiler_sample_cost_percent` for each attributed function.
+GPRWCNTR samples remain a separate unit.
 
 Measured timing units are emitted only when profiler `streamData` supplies
 them. `timing --benchfmt` fails if measured profiler data is absent. `stats

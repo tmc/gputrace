@@ -36,7 +36,7 @@ pkg: github.com/tmc/gputrace
 trace-uuid: ABC-123
 timing-source: streamData
 
-BenchmarkGPUTrace/Qwen_2_5_0_5B-1 1 2.317e+07 dispatch_span_ns/op 869 dispatches/op 30 command_buffers/op
+BenchmarkGPUTrace/Qwen_2_5_0_5B-1 1 2.317e+07 dispatch_span_ns/op 869 dispatches/op 30 command-buffers/op
 `
 	if got := out.String(); got != want {
 		t.Fatalf("output:\n%s\nwant:\n%s", got, want)

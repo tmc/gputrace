@@ -17,10 +17,11 @@ const (
 	benchfmtCBActiveUnit            = "cb_active_ns/op"
 	benchfmtCBWallUnit              = "cb_wall_ns/op"
 	benchfmtEffectiveGPUUnit        = "effective_gpu_ns/op"
+	benchfmtProfilerSampleCostUnit  = "profiler_sample_cost_percent"
 	benchfmtProfilerCostSamplesUnit = "profiler_cost_samples/op"
 	benchfmtGPRWCNTRSamplesUnit     = "gprwcntr_samples/op"
 	benchfmtDispatchesUnit          = "dispatches/op"
-	benchfmtCommandBuffersUnit      = "command_buffers/op"
+	benchfmtCommandBuffersUnit      = "command-buffers/op"
 	benchfmtEncodersUnit            = "encoders/op"
 )
 
@@ -46,6 +47,7 @@ var benchfmtUnitOrder = []string{
 	benchfmtCBActiveUnit,
 	benchfmtCBWallUnit,
 	benchfmtEffectiveGPUUnit,
+	benchfmtProfilerSampleCostUnit,
 	benchfmtProfilerCostSamplesUnit,
 	benchfmtGPRWCNTRSamplesUnit,
 	benchfmtDispatchesUnit,
