@@ -424,6 +424,15 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 		}
 	}
 
+	// Capture-only bundles have no streamData, but Xcode archives the same
+	// shader compilation statistics in the store sections.
+	var storeStats *counter.StoreStats
+	if streamStats == nil {
+		if stats, err := counter.ExtractStoreStats(trace, 0); err == nil {
+			storeStats = stats
+		}
+	}
+
 	var perfStats *gputrace.PerfCounterStats
 	if stats, err := gputrace.ParsePerfCounters(trace); err == nil {
 		perfStats = stats
@@ -442,6 +451,9 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 	sourceMapper := gputrace.NewShaderSourceMapper()
 	_ = sourceMapper.IndexShaderSources()
 	_ = sourceMapper.IndexTraceBundleSources(trace.Path)
+	if storeStats != nil && storeStats.Source != "" {
+		_ = sourceMapper.IndexSource(filepath.Join(trace.Path, "store0"), storeStats.Source)
+	}
 
 	// Get real encoder labels from ParseComputeEncoders (primary source for labels)
 	computeEncoders, _ := trace.ParseComputeEncoders()
@@ -628,7 +640,7 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 	// Add shader/kernel events. Prefer streamData dispatches so the Shaders lane
 	// matches Xcode's pipeline table instead of duplicating whole encoder spans.
 	if !addDispatchKernelEvents(timeline, streamStats, dispatchSIMD, shaderReport, perfStats, encoderMetrics, sourceMapper) {
-		addEncoderKernelEvents(timeline, trace, sourceMapper)
+		addEncoderKernelEvents(timeline, trace, sourceMapper, storeStats)
 	}
 
 	// Add command buffer events - try to get real timing from APSTimelineData
@@ -1394,7 +1406,23 @@ func annotateDispatchExecutionCosts(stats *counter.StreamDataStats, profilerDir 
 	}
 }
 
-func addEncoderKernelEvents(timeline *Timeline, trace *gputrace.Trace, sourceMapper *gputrace.ShaderSourceMapper) {
+// addStorePipelineArgs records the shader statistics archived in the capture
+// bundle. Only fields the store actually carries are set; high_register,
+// occupancy and ALU utilization are not archived here and stay absent.
+func addStorePipelineArgs(args map[string]interface{}, p *counter.PipelineStats) {
+	if p == nil {
+		return
+	}
+	args["function_name"] = p.FunctionName
+	args["allocated_registers"] = p.TemporaryRegisterCount
+	args["uniform_registers"] = p.UniformRegisterCount
+	args["spilled_bytes"] = p.SpilledBytes
+	args["threadgroup_memory"] = p.ThreadgroupMemory
+	args["instruction_count"] = p.InstructionCount
+	args["metrics_source"] = "capture bundle store sections"
+}
+
+func addEncoderKernelEvents(timeline *Timeline, trace *gputrace.Trace, sourceMapper *gputrace.ShaderSourceMapper, storeStats *counter.StoreStats) {
 	computeEncoders, _ := traceComputeEncoders(trace)
 
 	for i, encoder := range timeline.Encoders {
@@ -1425,6 +1453,7 @@ func addEncoderKernelEvents(timeline *Timeline, trace *gputrace.Trace, sourceMap
 				}
 			}
 		}
+		addStorePipelineArgs(args, storeStats.PipelineForLabel(encoder.Label))
 		if sourceMapper != nil {
 			if sourceFile, sourceLine := sourceMapper.SourceLocation(encoder.Label); sourceFile != "" {
 				args["source_available"] = true
@@ -2499,7 +2528,7 @@ func buildTimelineFromProfilerData(tracePath string, stats *counter.StreamDataSt
 
 	// Add kernel events from streamData dispatches.
 	if !addDispatchKernelEvents(timeline, stats, timelineDispatchSIMDStats{}, nil, nil, nil, nil) {
-		addEncoderKernelEvents(timeline, nil, nil)
+		addEncoderKernelEvents(timeline, nil, nil, nil)
 	}
 
 	// Set timeline duration

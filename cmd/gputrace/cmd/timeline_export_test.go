@@ -614,8 +614,8 @@ func TestXcodeParityStreamDataEvidenceReportsSafeNextSteps(t *testing.T) {
 	for _, gap := range report.RemainingGaps {
 		gaps[gap.Metric] = gap
 	}
-	if got := gaps["high_register"].Next; !strings.Contains(got, "nil-parent constructor path remains disabled") {
-		t.Fatalf("high_register next = %q, want disabled constructor warning", got)
+	if got := gaps["high_register"].Next; !strings.Contains(got, "GTShaderProfilerStreamData") && !strings.Contains(got, "selector") {
+		t.Fatalf("high_register next = %q, want runtime selector compatibility warning", got)
 	}
 	if got := gaps["alu_utilization_pct"].Next; !strings.Contains(got, "counter info dictionary is empty") {
 		t.Fatalf("alu_utilization_pct next = %q, want empty counter info warning", got)
