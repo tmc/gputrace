@@ -247,7 +247,7 @@ func TestXcodeProfileExportUsageShowsOptionalOutputPath(t *testing.T) {
 	if err := exportCmd.Args(exportCmd, []string{"out.gputrace"}); err != nil {
 		t.Fatalf("xcode-profile export should accept one arg: %v", err)
 	}
-	for _, name := range []string{"recover-untitled", "check-recovery", "source", "xcode-pid", "xcode-app"} {
+	for _, name := range []string{"recover-untitled", "check-recovery", "finalize-workload", "source", "xcode-pid", "xcode-app"} {
 		if exportCmd.Flags().Lookup(name) == nil {
 			t.Fatalf("xcode-profile export missing --%s", name)
 		}

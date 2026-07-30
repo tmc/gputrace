@@ -113,7 +113,10 @@ If no path is specified, it defaults to the trace file path with -perfdata suffi
 To recover an untitled Performance window left by a combined run, provide all
 of --recover-untitled, --source, --xcode-pid, and --xcode-app. Recovery stays
 bound to that exact process and verifies the exported UUID against --source.
-Use --check-recovery to verify the binding without opening the export sheet.`, args: cobra.MaximumNArgs(1), flags: standaloneExportFlags},
+Use --check-recovery to verify the binding without opening the export sheet.
+If the recovered window still has an enabled Stop GPU workload control and
+disabled Export, --finalize-workload explicitly presses Stop once and requires
+Performance to remain populated and Export to become enabled before export.`, args: cobra.MaximumNArgs(1), flags: standaloneExportFlags},
 	{name: "run-profile", use: "run-profile [trace_file]", aliases: []string{"run-replay"}, short: "Start profiling in Xcode", long: `Clicks the Profile button if available, otherwise falls back to Replay button.
 The Profile button starts profiling directly without needing additional checkboxes.`, args: cobra.MaximumNArgs(1)},
 	{name: "wait-profile", use: "wait-profile [trace_file]", aliases: []string{"wait-replay"}, short: "Wait for Performance data to become available", long: "Polls the bound trace window until a completion-ready Performance control appears. This verifies UI readiness, not exported-bundle identity.", args: cobra.MaximumNArgs(1)},
@@ -220,6 +223,7 @@ func outputFlag(cmd *cobra.Command) {
 func standaloneExportFlags(cmd *cobra.Command) {
 	cmd.Flags().Bool("recover-untitled", false, "Recover an untitled Performance window using explicit source and Xcode identity")
 	cmd.Flags().Bool("check-recovery", false, "Verify untitled recovery binding without changing Xcode UI")
+	cmd.Flags().Bool("finalize-workload", false, "Explicitly stop an unfinalized recovered workload before export")
 	cmd.Flags().String("source", "", "Source trace used to verify a recovered export")
 	cmd.Flags().Int("xcode-pid", 0, "Exact Xcode process ID for untitled-window recovery")
 	cmd.Flags().String("xcode-app", "", "Exact absolute Xcode.app path for untitled-window recovery")

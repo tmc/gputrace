@@ -137,6 +137,7 @@ func TestStandaloneExportRecoveryFlagsRequireCompleteIdentity(t *testing.T) {
 	}{
 		{name: "mode only", args: []string{"--recover-untitled"}},
 		{name: "check only", args: []string{"--check-recovery"}},
+		{name: "finalize only", args: []string{"--finalize-workload"}},
 		{name: "source only", args: []string{"--source", "/trace.gputrace"}},
 		{name: "missing app", args: []string{"--recover-untitled", "--source", "/trace.gputrace", "--xcode-pid", "81051"}},
 		{name: "missing pid", args: []string{"--recover-untitled", "--source", "/trace.gputrace", "--xcode-app", "/Applications/Xcode.app"}},
@@ -153,6 +154,26 @@ func TestStandaloneExportRecoveryFlagsRequireCompleteIdentity(t *testing.T) {
 				t.Fatalf("error = %v, want incomplete recovery flags", err)
 			}
 		})
+	}
+}
+
+func TestStandaloneExportRecoveryFlagsRejectCheckAndFinalize(t *testing.T) {
+	cmd := &cobra.Command{}
+	standaloneExportFlags(cmd)
+	err := cmd.ParseFlags([]string{
+		"--recover-untitled",
+		"--check-recovery",
+		"--finalize-workload",
+		"--source", "/trace.gputrace",
+		"--xcode-pid", "81051",
+		"--xcode-app", "/Applications/Xcode.app",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = standaloneExportRecoveryFromFlags(cmd)
+	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("error = %v, want mutually exclusive flags", err)
 	}
 }
 
@@ -357,6 +378,110 @@ func TestStandaloneRecoveryWindowKeyIgnoresAXHandle(t *testing.T) {
 	right.Element = 22
 	if standaloneRecoveryWindowKey(left) != standaloneRecoveryWindowKey(right) {
 		t.Fatal("logical window key depends on transient AX element handle")
+	}
+}
+
+func TestValidateRecoveryFinalizePrecondition(t *testing.T) {
+	recovery := standaloneExportRecovery{
+		Identity: xcodeProcessIdentity{PID: 81051, AppPath: "/Applications/Xcode.app"},
+	}
+	const key = "window"
+	valid := recoveryFinalizeSnapshot{
+		Identity:      recovery.Identity,
+		WindowKey:     key,
+		Performance:   true,
+		StopCount:     1,
+		StopEnabled:   true,
+		StopElement:   7,
+		ExportFound:   true,
+		ExportEnabled: false,
+	}
+	tests := []struct {
+		name string
+		edit func(*recoveryFinalizeSnapshot)
+		want string
+	}{
+		{name: "valid"},
+		{name: "wrong pid", edit: func(s *recoveryFinalizeSnapshot) { s.Identity.PID++ }, want: "identity mismatch"},
+		{name: "wrong app", edit: func(s *recoveryFinalizeSnapshot) { s.Identity.AppPath = "/Applications/Xcode-rc.app" }, want: "identity mismatch"},
+		{name: "window changed", edit: func(s *recoveryFinalizeSnapshot) { s.WindowKey = "other" }, want: "window identity changed"},
+		{name: "performance missing", edit: func(s *recoveryFinalizeSnapshot) { s.Performance = false }, want: "Performance group"},
+		{name: "sheet open", edit: func(s *recoveryFinalizeSnapshot) { s.SheetOpen = true }, want: "open sheet"},
+		{name: "stop absent", edit: func(s *recoveryFinalizeSnapshot) { s.StopCount = 0 }, want: "exactly one enabled"},
+		{name: "stop duplicate", edit: func(s *recoveryFinalizeSnapshot) { s.StopCount = 2 }, want: "exactly one enabled"},
+		{name: "stop disabled", edit: func(s *recoveryFinalizeSnapshot) { s.StopEnabled = false }, want: "exactly one enabled"},
+		{name: "export missing", edit: func(s *recoveryFinalizeSnapshot) { s.ExportFound = false }, want: "could not find"},
+		{name: "already ready", edit: func(s *recoveryFinalizeSnapshot) { s.ExportEnabled = true }, want: "already export-ready"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot := valid
+			if test.edit != nil {
+				test.edit(&snapshot)
+			}
+			err := validateRecoveryFinalizePrecondition(snapshot, recovery, key)
+			if test.want == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestRecoveryFinalizeProgress(t *testing.T) {
+	recovery := standaloneExportRecovery{
+		Identity: xcodeProcessIdentity{PID: 81051, AppPath: "/Applications/Xcode.app"},
+	}
+	const key = "window"
+	base := recoveryFinalizeSnapshot{
+		Identity:    recovery.Identity,
+		WindowKey:   key,
+		Performance: true,
+		StopCount:   1,
+		StopEnabled: true,
+		ExportFound: true,
+	}
+	tests := []struct {
+		name    string
+		edit    func(*recoveryFinalizeSnapshot)
+		want    bool
+		wantErr string
+	}{
+		{name: "still stopping"},
+		{name: "stop cleared export disabled", edit: func(s *recoveryFinalizeSnapshot) { s.StopCount = 0 }},
+		{name: "done absent", edit: func(s *recoveryFinalizeSnapshot) { s.StopCount = 0; s.ExportEnabled = true }, want: true},
+		{name: "done disabled", edit: func(s *recoveryFinalizeSnapshot) { s.StopEnabled = false; s.ExportEnabled = true }, want: true},
+		{name: "identity drift", edit: func(s *recoveryFinalizeSnapshot) { s.Identity.PID++ }, wantErr: "identity changed"},
+		{name: "window drift", edit: func(s *recoveryFinalizeSnapshot) { s.WindowKey = "other" }, wantErr: "window identity changed"},
+		{name: "performance lost", edit: func(s *recoveryFinalizeSnapshot) { s.Performance = false }, wantErr: "disappeared"},
+		{name: "sheet appeared", edit: func(s *recoveryFinalizeSnapshot) { s.SheetOpen = true }, wantErr: "unexpected sheet"},
+		{name: "duplicate stop", edit: func(s *recoveryFinalizeSnapshot) { s.StopCount = 2 }, wantErr: "multiple Stop"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot := base
+			if test.edit != nil {
+				test.edit(&snapshot)
+			}
+			got, err := recoveryFinalizeProgress(snapshot, recovery, key)
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("error = %v, want %q", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.want {
+				t.Fatalf("done = %v, want %v", got, test.want)
+			}
+		})
 	}
 }
 

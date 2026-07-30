@@ -19,6 +19,7 @@ import (
 type standaloneExportRecovery struct {
 	Enabled    bool
 	CheckOnly  bool
+	Finalize   bool
 	SourcePath string
 	SourceUUID string
 	Identity   xcodeProcessIdentity
@@ -33,6 +34,18 @@ type standaloneRecoveryWindow struct {
 type depthElement struct {
 	Element uintptr
 	Depth   int
+}
+
+type recoveryFinalizeSnapshot struct {
+	Identity      xcodeProcessIdentity
+	WindowKey     string
+	Performance   bool
+	SheetOpen     bool
+	StopCount     int
+	StopEnabled   bool
+	StopElement   uintptr
+	ExportFound   bool
+	ExportEnabled bool
 }
 
 func runExport(cmd *cobra.Command, args []string) error {
@@ -66,7 +79,7 @@ func runExport(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(status, "Recovering source: %s\n", recovery.SourcePath)
 		fmt.Fprintf(status, "Source trace UUID: %s\n", recovery.SourceUUID)
 		fmt.Fprintf(status, "Bound Xcode: PID %d app %s\n", identity.PID, identity.AppPath)
-		fmt.Fprintln(status, "Recovery requires a shallow Performance group; Stop/activity progress is advisory")
+		fmt.Fprintln(status, "Recovery requires a shallow Performance group; enabled Stop with disabled Export is unfinalized")
 	} else {
 		requestedApp := requestedXcodeAppPath()
 		appAX, identity, err = findSingleXcodeApp(cmd.Context(), requestedApp, 10*time.Second)
@@ -109,6 +122,12 @@ func runExport(cmd *cobra.Command, args []string) error {
 			SelectedTitle:    "",
 			SelectedDocument: "",
 		})
+	}
+	if recovery.Finalize {
+		if err := finalizeRecoveredWorkload(cmd.Context(), appAX, windowAX, recovery, 2*time.Minute); err != nil {
+			return fmt.Errorf("finalize recovered workload: %w", err)
+		}
+		fmt.Fprintln(status, "Recovered workload finalized; Performance remained populated and Export is enabled")
 	}
 	// If no output path specified, try to infer from window document
 	if outputPath == "" {
@@ -168,11 +187,12 @@ func runExport(cmd *cobra.Command, args []string) error {
 func standaloneExportRecoveryFromFlags(cmd *cobra.Command) (standaloneExportRecovery, error) {
 	enabled, _ := cmd.Flags().GetBool("recover-untitled")
 	checkOnly, _ := cmd.Flags().GetBool("check-recovery")
+	finalize, _ := cmd.Flags().GetBool("finalize-workload")
 	source, _ := cmd.Flags().GetString("source")
 	pid, _ := cmd.Flags().GetInt("xcode-pid")
 	app, _ := cmd.Flags().GetString("xcode-app")
 
-	any := enabled || checkOnly || source != "" || pid != 0 || app != ""
+	any := enabled || checkOnly || finalize || source != "" || pid != 0 || app != ""
 	if !any {
 		return standaloneExportRecovery{}, nil
 	}
@@ -180,6 +200,9 @@ func standaloneExportRecoveryFromFlags(cmd *cobra.Command) (standaloneExportReco
 		return standaloneExportRecovery{}, fmt.Errorf(
 			"untitled recovery requires --recover-untitled, --source, --xcode-pid, and --xcode-app",
 		)
+	}
+	if checkOnly && finalize {
+		return standaloneExportRecovery{}, fmt.Errorf("--check-recovery and --finalize-workload are mutually exclusive")
 	}
 	if !filepath.IsAbs(app) {
 		return standaloneExportRecovery{}, fmt.Errorf("--xcode-app must be an absolute .app path")
@@ -217,6 +240,7 @@ func standaloneExportRecoveryFromFlags(cmd *cobra.Command) (standaloneExportReco
 	return standaloneExportRecovery{
 		Enabled:    true,
 		CheckOnly:  checkOnly,
+		Finalize:   finalize,
 		SourcePath: source,
 		SourceUUID: metadata.UUID,
 		Identity:   identity,
@@ -391,6 +415,227 @@ func findElementAtDepth(
 		}
 	}
 	return 0
+}
+
+func findElementsAtDepth(
+	root uintptr,
+	maxDepth, maxVisit, maxMatches int,
+	children func(uintptr) []uintptr,
+	prune, match func(uintptr) bool,
+) []uintptr {
+	if root == 0 || maxDepth < 0 || maxVisit <= 0 || maxMatches <= 0 {
+		return nil
+	}
+	queue := []depthElement{{Element: root}}
+	seen := make(map[uintptr]bool)
+	var matches []uintptr
+	visited := 0
+	for len(queue) > 0 && visited < maxVisit && len(matches) < maxMatches {
+		item := queue[0]
+		queue = queue[1:]
+		if item.Element == 0 || seen[item.Element] {
+			continue
+		}
+		seen[item.Element] = true
+		visited++
+		if match(item.Element) {
+			matches = append(matches, item.Element)
+		}
+		if item.Depth >= maxDepth || prune(item.Element) {
+			continue
+		}
+		for _, child := range children(item.Element) {
+			queue = append(queue, depthElement{Element: child, Depth: item.Depth + 1})
+		}
+	}
+	return matches
+}
+
+func shallowStopButtons(root uintptr) []uintptr {
+	return findElementsAtDepth(
+		root,
+		4,
+		128,
+		2,
+		axChildren,
+		func(element uintptr) bool {
+			return axString(element, "AXRole") == "AXOutline"
+		},
+		func(element uintptr) bool {
+			if axString(element, "AXRole") != "AXButton" {
+				return false
+			}
+			title := axString(element, "AXTitle")
+			description := axString(element, "AXDescription")
+			return title == "Stop GPU workload" || description == "Stop GPU workload"
+		},
+	)
+}
+
+func readRecoveryFinalizeSnapshot(appAX uintptr, recovery standaloneExportRecovery) (recoveryFinalizeSnapshot, error) {
+	identity, err := xcodeIdentityForAX(appAX)
+	if err != nil {
+		return recoveryFinalizeSnapshot{}, err
+	}
+	if identity.PID != recovery.Identity.PID ||
+		filepath.Clean(identity.AppPath) != filepath.Clean(recovery.Identity.AppPath) {
+		return recoveryFinalizeSnapshot{}, fmt.Errorf("recovery Xcode identity changed: got PID %d app %s",
+			identity.PID, identity.AppPath)
+	}
+	window, err := standaloneRecoveryTarget(recoveryWindows(appAX), recovery)
+	if err != nil {
+		return recoveryFinalizeSnapshot{}, err
+	}
+	stops := shallowStopButtons(window.Element)
+	snapshot := recoveryFinalizeSnapshot{
+		Identity:    identity,
+		WindowKey:   standaloneRecoveryWindowKey(window),
+		Performance: window.PerformanceView,
+		StopCount:   len(stops),
+	}
+	if len(stops) == 1 {
+		snapshot.StopElement = stops[0]
+		snapshot.StopEnabled = IsElementEnabled(stops[0])
+	}
+	snapshot.SheetOpen = findElementAtDepth(
+		window.Element,
+		3,
+		64,
+		axChildren,
+		func(element uintptr) bool {
+			return axString(element, "AXRole") == "AXOutline"
+		},
+		func(element uintptr) bool {
+			return axString(element, "AXRole") == "AXSheet"
+		},
+	) != 0
+	snapshot.ExportFound, snapshot.ExportEnabled, err = fileExportMenuState(appAX)
+	if err != nil {
+		return recoveryFinalizeSnapshot{}, err
+	}
+	afterIdentity, err := xcodeIdentityForAX(appAX)
+	if err != nil || afterIdentity.PID != identity.PID ||
+		filepath.Clean(afterIdentity.AppPath) != filepath.Clean(identity.AppPath) {
+		return recoveryFinalizeSnapshot{}, fmt.Errorf("recovery Xcode identity changed while probing File > Export")
+	}
+	afterWindow, err := standaloneRecoveryTarget(recoveryWindows(appAX), recovery)
+	if err != nil {
+		return recoveryFinalizeSnapshot{}, err
+	}
+	if standaloneRecoveryWindowKey(afterWindow) != snapshot.WindowKey {
+		return recoveryFinalizeSnapshot{}, fmt.Errorf("recovery window identity changed while probing File > Export")
+	}
+	return snapshot, nil
+}
+
+func validateRecoveryFinalizePrecondition(snapshot recoveryFinalizeSnapshot, recovery standaloneExportRecovery, windowKey string) error {
+	if snapshot.Identity.PID != recovery.Identity.PID ||
+		filepath.Clean(snapshot.Identity.AppPath) != filepath.Clean(recovery.Identity.AppPath) {
+		return fmt.Errorf("recovery finalize identity mismatch")
+	}
+	if snapshot.WindowKey != windowKey {
+		return fmt.Errorf("recovery finalize window identity changed")
+	}
+	if !snapshot.Performance {
+		return fmt.Errorf("recovery finalize requires a populated Performance group")
+	}
+	if snapshot.SheetOpen {
+		return fmt.Errorf("recovery finalize refuses a window with an open sheet")
+	}
+	if snapshot.StopCount != 1 || !snapshot.StopEnabled {
+		return fmt.Errorf("recovery finalize requires exactly one enabled Stop GPU workload control")
+	}
+	if !snapshot.ExportFound {
+		return fmt.Errorf("recovery finalize could not find File > Export")
+	}
+	if snapshot.ExportEnabled {
+		return fmt.Errorf("recovery window is already export-ready; omit --finalize-workload")
+	}
+	return nil
+}
+
+func recoveryFinalizeProgress(snapshot recoveryFinalizeSnapshot, recovery standaloneExportRecovery, windowKey string) (bool, error) {
+	if snapshot.Identity.PID != recovery.Identity.PID ||
+		filepath.Clean(snapshot.Identity.AppPath) != filepath.Clean(recovery.Identity.AppPath) {
+		return false, fmt.Errorf("recovery finalize identity changed")
+	}
+	if snapshot.WindowKey != windowKey {
+		return false, fmt.Errorf("recovery finalize window identity changed")
+	}
+	if !snapshot.Performance {
+		return false, fmt.Errorf("Performance group disappeared after Stop")
+	}
+	if snapshot.SheetOpen {
+		return false, fmt.Errorf("unexpected sheet appeared after Stop")
+	}
+	if snapshot.StopCount > 1 {
+		return false, fmt.Errorf("multiple Stop GPU workload controls appeared after Stop")
+	}
+	if snapshot.StopCount == 1 && snapshot.StopEnabled {
+		return false, nil
+	}
+	return snapshot.ExportFound && snapshot.ExportEnabled, nil
+}
+
+func finalizeRecoveredWorkload(ctx context.Context, appAX, windowAX uintptr, recovery standaloneExportRecovery, timeout time.Duration) error {
+	axAction(windowAX, "AXRaise")
+	before, err := readRecoveryFinalizeSnapshot(appAX, recovery)
+	if err != nil {
+		return err
+	}
+	windowKey := before.WindowKey
+	if err := validateRecoveryFinalizePrecondition(before, recovery, windowKey); err != nil {
+		return err
+	}
+
+	// Re-read after probing File > Export so the exact window and Stop control
+	// are current at the only mutating action in this transition.
+	before, err = readRecoveryFinalizeSnapshot(appAX, recovery)
+	if err != nil {
+		return err
+	}
+	if err := validateRecoveryFinalizePrecondition(before, recovery, windowKey); err != nil {
+		return err
+	}
+	var stopPID int32
+	if axUIElementGetPid(before.StopElement, &stopPID) != kAXErrorSuccess ||
+		int(stopPID) != recovery.Identity.PID {
+		return fmt.Errorf("Stop GPU workload is not owned by bound Xcode PID %d", recovery.Identity.PID)
+	}
+	if err := axPressWithFallbackWindow(before.StopElement, windowAX); err != nil {
+		return fmt.Errorf("press Stop GPU workload: %w", err)
+	}
+
+	deadline := time.Now().Add(timeout)
+	stable := 0
+	for {
+		if err := checkAutomationCanceled(ctx); err != nil {
+			return err
+		}
+		snapshot, err := readRecoveryFinalizeSnapshot(appAX, recovery)
+		if err != nil {
+			return err
+		}
+		done, err := recoveryFinalizeProgress(snapshot, recovery, windowKey)
+		if err != nil {
+			return err
+		}
+		if done {
+			stable++
+			if stable >= 2 {
+				return nil
+			}
+		} else {
+			stable = 0
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out after %s waiting for Stop to clear and File > Export to enable",
+				timeout.Round(time.Second))
+		}
+		if err := waitForAutomation(ctx, 500*time.Millisecond); err != nil {
+			return err
+		}
+	}
 }
 
 func waitForStandaloneRecoveryWindow(ctx context.Context, appAX uintptr, recovery standaloneExportRecovery, timeout time.Duration) (uintptr, error) {

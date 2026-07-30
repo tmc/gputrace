@@ -1675,11 +1675,29 @@ func exportTrace(ctx context.Context, appAX, windowAX uintptr, outputPath string
 	// Try clicking Export button in Summary panel first
 	exportBtn := FindExportButton(windowAX)
 	if exportBtn != 0 {
+		if !IsElementEnabled(exportBtn) {
+			return fmt.Errorf("Export button is disabled; Xcode workload is not finalized")
+		}
 		fmt.Fprintln(status, "    Found Export button in Summary panel")
 		if err := axPressWithFallback(exportBtn); err != nil {
 			fmt.Fprintf(status, "    Warning: Failed to click Export button: %v\n", err)
 		}
 	} else {
+		found, enabled, err := fileExportMenuState(appAX)
+		if err != nil {
+			return fmt.Errorf("check File > Export readiness: %w", err)
+		}
+		if !found {
+			return fmt.Errorf("File > Export menu item not found")
+		}
+		if !enabled {
+			return fmt.Errorf("File > Export is disabled; Xcode workload is not finalized")
+		}
+		bound, err := xcodeIdentityForAX(appAX)
+		if err != nil || bound.PID != identity.PID ||
+			filepath.Clean(bound.AppPath) != filepath.Clean(identity.AppPath) {
+			return fmt.Errorf("bound Xcode identity changed while checking File > Export")
+		}
 		// Fall back to menu
 		if collectProfileOpts.debug || collectProfileOpts.verbose {
 			if err := debugCheckExportMenu(appAX); err != nil {
