@@ -47,8 +47,8 @@ func DefaultCounterSamplingConfig() *CounterSamplingConfig {
 	}
 }
 
-// CounterSampleBuffer describes an MTLCounterSampleBuffer.
-// The current implementation does not create this Metal object.
+// CounterSampleBuffer describes a configured counter sample buffer. A backend
+// may associate it with a platform object through CounterSampler.BackendBuffers.
 type CounterSampleBuffer struct {
 	// Device reference (MTLDevice in actual Metal implementation)
 	Device any
@@ -77,6 +77,19 @@ type CounterSampleBufferDescriptor struct {
 
 	// Sample count (number of samples this buffer can hold)
 	SampleCount int
+}
+
+// CounterSampleBackend supplies platform-specific operations for replay-time
+// counter collection. Implementations preserve resolved bytes without
+// interpreting an unverified hardware layout.
+type CounterSampleBackend interface {
+	CreateSampleBuffer(counterSet string, sampleCount int) (any, error)
+	SampleCounters(encoder, sampleBuffer any, sampleIndex int) error
+	ResolveCounterSamples(commandBuffer, sampleBuffer any, startIndex, count int) ([]byte, error)
+}
+
+type counterSampleBackendReleaser interface {
+	ReleaseSampleBuffer(buffer any)
 }
 
 // CounterSet represents an MTLCounterSet (collection of related counters).
@@ -140,11 +153,12 @@ type CounterSamplingResult struct {
 	DispatchMetrics []DispatchCounterMetrics
 
 	// Summary statistics
-	TotalGPUTime     uint64  // Total GPU execution time (nanoseconds)
-	EstimatedGPUFreq float64 // Estimated GPU frequency (GHz)
-	SampleCount      int     // Total samples collected
-	EncoderCount     int     // Number of encoders sampled
-	DispatchCount    int     // Number of dispatches sampled
+	TotalGPUTime     uint64            // Total GPU execution time (nanoseconds)
+	EstimatedGPUFreq float64           // Estimated GPU frequency (GHz)
+	SampleCount      int               // Total samples collected
+	EncoderCount     int               // Number of encoders sampled
+	DispatchCount    int               // Number of dispatches sampled
+	RawData          map[string][]byte // Resolved bytes by counter set, undecoded
 }
 
 // EncoderCounterMetrics contains aggregated counter metrics for a single encoder.
@@ -246,11 +260,15 @@ type DispatchCounterMetrics struct {
 	MemoryBandwidth uint64
 }
 
-// CounterSampler handles counter sample buffer creation and sampling during replay.
-// It currently fails closed until replay-time Metal counter sampling is implemented.
+// CounterSampler handles counter sample buffer creation and sampling during
+// replay. Without a backend it remains useful for analysis-only builds and
+// fails closed before claiming hardware data.
 type CounterSampler struct {
-	Config  *CounterSamplingConfig
-	Buffers map[string]*CounterSampleBuffer // counter set name -> buffer
+	Config         *CounterSamplingConfig
+	Buffers        map[string]*CounterSampleBuffer // counter set name -> buffer
+	Backend        CounterSampleBackend
+	BackendBuffers map[string]any
+	RawData        map[string][]byte // Resolved bytes by counter set, undecoded
 
 	// Sample tracking
 	NextSampleIndex int
@@ -259,6 +277,12 @@ type CounterSampler struct {
 
 // NewCounterSampler creates a new counter sampler with the given configuration.
 func NewCounterSampler(config *CounterSamplingConfig) *CounterSampler {
+	return NewCounterSamplerWithBackend(config, nil)
+}
+
+// NewCounterSamplerWithBackend creates a sampler backed by platform-specific
+// counter operations. A nil backend retains fail-closed analysis behavior.
+func NewCounterSamplerWithBackend(config *CounterSamplingConfig, backend CounterSampleBackend) *CounterSampler {
 	if config == nil {
 		config = DefaultCounterSamplingConfig()
 	}
@@ -266,15 +290,40 @@ func NewCounterSampler(config *CounterSamplingConfig) *CounterSampler {
 	return &CounterSampler{
 		Config:          config,
 		Buffers:         make(map[string]*CounterSampleBuffer),
+		Backend:         backend,
+		BackendBuffers:  make(map[string]any),
+		RawData:         make(map[string][]byte),
 		NextSampleIndex: 0,
 		Samples:         make([]CounterSample, 0),
 	}
 }
 
-// CreateCounterSampleBuffers validates the enabled counter sets.
-// It returns ErrMetalCounterSamplingUnavailable because real Metal bindings are
-// not yet connected.
+// CreateCounterSampleBuffers validates and allocates the enabled counter sets.
+// With no backend it retains the analysis-only fail-closed behavior.
 func (cs *CounterSampler) CreateCounterSampleBuffers(device any, maxSamples int) error {
+	if cs.Backend != nil {
+		if maxSamples <= 0 {
+			return errors.New("counter sample count must be positive")
+		}
+		for _, counterSetName := range cs.Config.EnabledCounterSets {
+			buffer, err := cs.Backend.CreateSampleBuffer(counterSetName, maxSamples)
+			if err != nil {
+				cs.Close()
+				return fmt.Errorf("create counter sample buffer %q: %w", counterSetName, err)
+			}
+			if buffer == nil {
+				cs.Close()
+				return fmt.Errorf("create counter sample buffer %q: backend returned nil", counterSetName)
+			}
+			cs.Buffers[counterSetName] = &CounterSampleBuffer{
+				Device:         device,
+				CounterSetName: counterSetName,
+				SampleCount:    maxSamples,
+			}
+			cs.BackendBuffers[counterSetName] = buffer
+		}
+		return nil
+	}
 	for _, counterSetName := range cs.Config.EnabledCounterSets {
 		counterSet := cs.getCounterSet(counterSetName)
 		if counterSet == nil {
@@ -286,9 +335,24 @@ func (cs *CounterSampler) CreateCounterSampleBuffers(device any, maxSamples int)
 }
 
 // SampleCounters records a counter sample at the current point in execution.
-// It returns ErrMetalCounterSamplingUnavailable because no Metal encoder call is
-// available yet.
+// With a backend it also inserts the platform-specific sample operation.
 func (cs *CounterSampler) SampleCounters(encoder any, samplingPoint string, encoderIndex, commandIndex int) error {
+	if cs.Backend != nil {
+		for name, buffer := range cs.BackendBuffers {
+			if err := cs.Backend.SampleCounters(encoder, buffer, cs.NextSampleIndex); err != nil {
+				return fmt.Errorf("sample counter set %q: %w", name, err)
+			}
+		}
+		cs.Samples = append(cs.Samples, CounterSample{
+			Index:         cs.NextSampleIndex,
+			Values:        make(map[string]float64),
+			EncoderIndex:  encoderIndex,
+			CommandIndex:  commandIndex,
+			SamplingPoint: samplingPoint,
+		})
+		cs.NextSampleIndex++
+		return nil
+	}
 	return ErrMetalCounterSamplingUnavailable
 }
 
@@ -330,7 +394,62 @@ func (cs *CounterSampler) SampleCounters(encoder any, samplingPoint string, enco
 //	    samples[i].Values["timestamp"] = parseUInt64(data, offset: i*8)
 //	}
 func (cs *CounterSampler) ResolveCounterSamples() error {
+	if cs.Backend != nil {
+		return errors.New("counter: resolve requires a command buffer")
+	}
 	return ErrMetalCounterSamplingUnavailable
+}
+
+// ResolveCounterSamplesWithCommandBuffer resolves all backend buffers after
+// commandBuffer has completed. The bytes are retained exactly as returned by
+// Metal; decoding is a separate hardware-specific concern.
+func (cs *CounterSampler) ResolveCounterSamplesWithCommandBuffer(commandBuffer any) error {
+	return cs.ResolveCounterSamplesWithCommandBufferRange(commandBuffer, 0, len(cs.Samples))
+}
+
+// ResolveCounterSamplesWithCommandBufferRange resolves a portion of the
+// sample buffer and appends its exact bytes to RawData.
+func (cs *CounterSampler) ResolveCounterSamplesWithCommandBufferRange(commandBuffer any, startIndex, count int) error {
+	if cs.Backend == nil {
+		return ErrMetalCounterSamplingUnavailable
+	}
+	if startIndex < 0 || count < 0 || startIndex+count > len(cs.Samples) {
+		return fmt.Errorf("counter: sample range %d:%d is outside %d samples", startIndex, startIndex+count, len(cs.Samples))
+	}
+	if count == 0 {
+		return nil
+	}
+	for name, buffer := range cs.BackendBuffers {
+		data, err := cs.Backend.ResolveCounterSamples(commandBuffer, buffer, startIndex, count)
+		if err != nil {
+			return fmt.Errorf("resolve counter set %q: %w", name, err)
+		}
+		cs.RawData[name] = append(cs.RawData[name], data...)
+	}
+	return nil
+}
+
+// Close releases backend-owned sample buffers when the backend supports it.
+func (cs *CounterSampler) Close() {
+	if cs == nil || cs.Backend == nil {
+		return
+	}
+	if releaser, ok := cs.Backend.(counterSampleBackendReleaser); ok {
+		for _, buffer := range cs.BackendBuffers {
+			releaser.ReleaseSampleBuffer(buffer)
+		}
+	}
+	cs.BackendBuffers = nil
+	cs.Buffers = nil
+}
+
+// BackendBuffer returns the backend-owned buffer for counterSet. It is used by
+// platform replay code that needs to attach a sample buffer to an encoder.
+func (cs *CounterSampler) BackendBuffer(counterSet string) any {
+	if cs == nil {
+		return nil
+	}
+	return cs.BackendBuffers[counterSet]
 }
 
 // AggregateEncoderMetrics aggregates counter samples into per-encoder metrics.
