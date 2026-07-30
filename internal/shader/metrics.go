@@ -158,6 +158,12 @@ func ExtractShaderMetrics(t *trace.Trace) (*ShaderMetricsReport, error) {
 		_ = err
 	}
 
+	// Capture-only bundles have no streamData; the same statistics are
+	// archived in the store sections. Non-fatal for the same reason.
+	if err := populateStoreInstructionCounts(t, metricsMap); err != nil {
+		_ = err
+	}
+
 	// Calculate derived metrics and classifications
 	var totalGPUTimeNs uint64
 	for _, metrics := range metricsMap {
@@ -548,7 +554,11 @@ func hasNormalizedSuffix(s, suffix string) bool {
 }
 
 func applyPipelineStatsToMetrics(metrics *ShaderMetrics, p *counter.PipelineStats) {
-	metrics.Address = p.PipelineAddress
+	// Capture bundles archive these statistics without a pipeline address, so
+	// keep the address the encoder already supplied.
+	if p.PipelineAddress != 0 {
+		metrics.Address = p.PipelineAddress
+	}
 	metrics.InstructionCount = p.InstructionCount
 	metrics.ALUInstructionCount = p.ALUInstructionCount
 	metrics.FP32InstructionCount = p.FP32InstructionCount
@@ -621,6 +631,27 @@ func populateInstructionCounts(t *trace.Trace, metricsMap map[string]*ShaderMetr
 				applyHardwareMetrics(metrics, hw)
 				break
 			}
+		}
+	}
+
+	return nil
+}
+
+// populateStoreInstructionCounts applies the shader statistics archived in a
+// capture bundle's store sections. Metrics already carrying counts from
+// streamData are left alone, so this only fills gaps.
+func populateStoreInstructionCounts(t *trace.Trace, metricsMap map[string]*ShaderMetrics) error {
+	stats, err := counter.ExtractStoreStats(t, 0)
+	if err != nil {
+		return err
+	}
+
+	for name, metrics := range metricsMap {
+		if metrics.InstructionCount > 0 {
+			continue
+		}
+		if p := stats.PipelineForLabel(name); p != nil {
+			applyPipelineStatsToMetrics(metrics, p)
 		}
 	}
 
