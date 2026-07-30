@@ -16,7 +16,7 @@ Xcode Instruments provides comprehensive GPU profiling through several interconn
 | **Trace Capture** |
 | Capture GPU trace | Yes | Yes (workload-side programmatic capture; see `mlxprof -run` and `testdata/trace-generator`) | Done |
 | Capture with profiling | Yes | Yes (`--profile`) | Done |
-| Capture from Xcode project | Yes | Yes (`gputrace xcui`) | Done |
+| Capture from Xcode project | Yes | Yes (`gputrace xcode-profile`) | Done |
 | **Timing Analysis** |
 | Encoder timing | Yes | Yes | Done |
 | Dispatch timing | Yes | Yes | Done |
@@ -206,7 +206,7 @@ Duration calculation: `(end_ticks - start_ticks) * timebase_numer / timebase_den
 
 **Why:** Requires Metal debugging entitlements and process attachment.
 
-**Workaround:** Use `gputrace xcui` with Xcode UI automation.
+**Workaround:** Use `gputrace xcode-profile` with Xcode UI automation.
 
 ## Validation Checklist
 

@@ -354,12 +354,14 @@ Offset  Size  Type    Field
 
 ## Recommended Parsing Strategy
 
-### Phase 1: Critical (P1)
+### Phase 1: Critical (P1) — implemented
 
-**Implement `device-resources-*` parsing:**
+`device-resources-*` parsing landed in `internal/trace/trace.go`
+(`loadDeviceResources`), which also feeds kernel-name resolution in
+`internal/shader/mapper.go`. The sketch below is the original design note; the
+shipped types differ.
 
 ```go
-// internal/trace/device_resources.go
 type DeviceResources struct {
     DeviceAddress uint64
     DeviceUUID    string

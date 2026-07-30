@@ -117,12 +117,12 @@ func (t *Trace) GetDispatchCountMethod() string
 
 **CLI Command:**
 ```bash
-gputrace perfcounters trace.gputrace
+gputrace shaders trace.gputrace
 ```
 
 ### 5. Documentation
 
-**Binary Format Documentation (perfcounters.go lines 172-191):**
+**Binary Format Documentation (`internal/counter`):**
 ```go
 // Try to extract shader metrics if this looks like a shader performance record
 // Based on APS (Apple Performance Streaming) format discovered in GPUToolsReplayService
@@ -314,9 +314,9 @@ func TestShaderCorrelation(t *testing.T) {
 
 ```bash
 # Test with real Instruments profiled trace
-gputrace perfcounters test.gputrace > output.txt
+gputrace export-counters test.gputrace > output.csv
 # Compare with Instruments export
-diff output.txt expected_instruments_output.txt
+gputrace perfcounters-validate test.gputrace expected_instruments_counters.csv
 ```
 
 ## Usage Examples

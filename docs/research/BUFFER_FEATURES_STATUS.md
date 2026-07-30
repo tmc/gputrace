@@ -10,7 +10,7 @@ The `gputrace` buffer analysis commands provide comprehensive tools for analyzin
 
 ### 1. Basic Buffer Listing (`gputrace buffers`)
 
-**Status:** Complete (847 LOC in cmd/buffers.go)
+**Status:** Complete (`cmd/gputrace/cmd/buffers.go`)
 
 **Features:**
 - List all buffers with IDs, filenames, and sizes
@@ -76,7 +76,7 @@ gputrace buffers trace.gputrace --inspect MTLBuffer-45-0 --inspect-format float3
 
 ### 4. Buffer Diff (`gputrace buffers diff`)
 
-**Status:** Complete (83 LOC in cmd/buffers_diff.go, 177 LOC in buffer_diff.go)
+**Status:** Complete (`cmd/gputrace/cmd/buffers_diff.go`, `internal/analysis/buffer_diff.go`)
 
 **Features:**
 - Compare buffer usage between two traces
@@ -116,7 +116,7 @@ Summary:
 
 ### 5. Buffer Access Pattern Analysis (`gputrace buffer-access`)
 
-**Status:** Complete (113 LOC in cmd/buffer_access.go, 402 LOC in buffer_access.go)
+**Status:** Complete (`cmd/gputrace/cmd/buffer_access.go`, `internal/analysis/buffer_access.go`)
 
 **Features:**
 - Analyze which encoders access which buffers
@@ -155,7 +155,7 @@ Optimization Opportunities:
 
 ### 6. Buffer Timeline Visualization (`gputrace buffer-timeline`)
 
-**Status:** Complete (139 LOC in cmd/buffer_timeline.go, 445 LOC in buffer_timeline.go)
+**Status:** Complete (`cmd/gputrace/cmd/buffer_timeline.go`, `internal/analysis/buffer_timeline.go`)
 
 **Features:**
 - Visualize buffer allocation and deallocation timeline
@@ -330,14 +330,14 @@ Offset  Size  Field
 ### 1. BufferInfo Struct Name Collision
 
 **Problem:** Three different `BufferInfo` structs in different files:
-- `replay_state.go` - Replay-specific buffer info
-- `buffer_diff.go` - Diff-specific buffer info
-- `cmd/buffers.go` - CLI-specific buffer info
+- `internal/replay/state.go` - Replay-specific buffer info
+- `internal/analysis/buffer_diff.go` - Diff-specific buffer info
+- `cmd/gputrace/cmd/buffers.go` - CLI-specific buffer info
 
-**Solution:** Renamed `replay_state.go` version to `ReplayBufferInfo`
+**Solution:** Renamed the `internal/replay` version to `ReplayBufferInfo`
 
 **Files Modified:**
-- `replay_state.go` - Renamed struct and all references
+- `internal/replay/state.go` - Renamed struct and all references
 
 ### 2. Buffer Timeline Command Not Registered
 
@@ -475,4 +475,3 @@ All 5 dependent features have been fully implemented:
 - `internal/analysis/buffer_timeline.go` - Timeline generation
 - `internal/replay/state.go` - Replay state tracking
 
-**Total:** 2,587 lines of buffer-related code
