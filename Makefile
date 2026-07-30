@@ -6,7 +6,9 @@ AXPERMS_BIN := $(HOME)/go/bin/axperms
 BUNDLE_ID := com.tmc.gputrace
 AXPERMS_BUNDLE_ID := com.github.tmc.gputrace.axperms
 
-.PHONY: all build test vet install reinstall clean sign-bundle setup-permissions reset-permissions fullreinstall reset test-permissions axperms setup-axperms help
+.PHONY: all build test vet fmt checkfmt check install reinstall clean sign-bundle setup-permissions reset-permissions fullreinstall reset test-permissions axperms setup-axperms help
+
+GO_FILES = $(shell git ls-files '*.go')
 
 all: build
 
@@ -18,6 +20,20 @@ test:
 
 vet:
 	go vet ./...
+
+fmt:
+	gofmt -w $(GO_FILES)
+
+# checkfmt fails instead of rewriting, so CI and pre-push can use it.
+checkfmt:
+	@unformatted=$$(gofmt -l $(GO_FILES)); \
+	if [ -n "$$unformatted" ]; then \
+		echo "These files are not gofmt-formatted; run 'make fmt':"; \
+		echo "$$unformatted"; \
+		exit 1; \
+	fi
+
+check: checkfmt vet test
 
 install: clean build setup-permissions
 	@echo "Reinstall complete with fresh permissions"
@@ -149,6 +165,9 @@ help:
 	@echo "  build              - Build gputrace"
 	@echo "  test               - Run Go tests"
 	@echo "  vet                - Run go vet"
+	@echo "  fmt                - Rewrite tracked Go files with gofmt"
+	@echo "  checkfmt           - Fail if any tracked Go file is unformatted"
+	@echo "  check              - checkfmt + vet + test"
 	@echo "  reinstall          - Rebuild binary and refresh signed app bundle"
 	@echo "  fullreinstall      - Clean + rebuild + fresh permissions (resets TCC)"
 	@echo "  clean              - Remove app bundle (forces macgo to recreate)"

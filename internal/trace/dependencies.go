@@ -81,9 +81,9 @@ func (t *Trace) BuildDependencyGraph() (*DependencyGraph, error) {
 	graph := &DependencyGraph{}
 
 	// Track buffer state
-	lastWriter := make(map[uint64]int)            // Address -> Last Writer Node ID
-	lastReaders := make(map[uint64]map[int]bool)  // Address -> Set of Reader Node IDs since last write
-	bufferNames := make(map[uint64]string)        // Address -> Name
+	lastWriter := make(map[uint64]int)           // Address -> Last Writer Node ID
+	lastReaders := make(map[uint64]map[int]bool) // Address -> Set of Reader Node IDs since last write
+	bufferNames := make(map[uint64]string)       // Address -> Name
 
 	currentNodeID := -1
 
@@ -211,9 +211,9 @@ func (t *Trace) ParseDependencyEvents() ([]DependencyEvent, error) {
 	}
 
 	// Markers for different record types
-	ctMarker := []byte("Ct\x00\x00")        // Compute dispatch with function addr + buffer bindings
-	ctBindMarker := []byte("CtU<b>ulul")    // Buffer definition with name
-	ctUseMarker := []byte("Ctulul\x00")     // Buffer usage in dispatch
+	ctMarker := []byte("Ct\x00\x00")     // Compute dispatch with function addr + buffer bindings
+	ctBindMarker := []byte("CtU<b>ulul") // Buffer definition with name
+	ctUseMarker := []byte("Ctulul\x00")  // Buffer usage in dispatch
 
 	// First pass: build buffer name map from CtU<b>ulul records
 	bufferNames := make(map[uint64]string)
