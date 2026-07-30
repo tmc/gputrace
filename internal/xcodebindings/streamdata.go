@@ -4,6 +4,7 @@ package xcodebindings
 
 import (
 	"fmt"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -79,25 +80,47 @@ type ObjectSummary struct {
 func ProbeStreamData(path string) (StreamDataSummary, error) {
 	var summary StreamDataSummary
 	var err error
+	// Autorelease pools are thread-affine. Keep the goroutine on the OS thread
+	// for the entire push/pop pair; otherwise a goroutine migration can pop the
+	// pool on a different thread and crash in objc_autoreleasePoolPop.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	// Keep one pool for the whole probe. The archived stream retains source
+	// arrays across helper calls; nested pools can release an array returned by
+	// an enclosing selector before the next iteration uses it.
 	objc.AutoreleasePool(func() {
 		summary, err = probeStreamData(path)
 	})
 	return summary, err
 }
 
+// WithStreamData loads a profiler archive and invokes fn while its verified
+// GTShaderProfilerStreamData parent is alive. The callback runs on a locked
+// OS thread inside the archive's autorelease-pool scope; objects obtained from
+// the parent must not escape the callback.
+func WithStreamData(path string, fn func(parent objc.ID) error) error {
+	if fn == nil {
+		return fmt.Errorf("streamData callback is nil")
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	var err error
+	objc.AutoreleasePool(func() {
+		stream, loadErr := loadStreamData(path)
+		if loadErr != nil {
+			err = loadErr
+			return
+		}
+		err = fn(stream)
+	})
+	return err
+}
+
 func probeStreamData(path string) (StreamDataSummary, error) {
 	summary := StreamDataSummary{Path: path}
-	if err := loadFramework(); err != nil {
-		return summary, fmt.Errorf("load GTShaderProfiler.framework: %w", err)
-	}
-	cls := objc.GetClass("GTShaderProfilerStreamData")
-	if cls == 0 {
-		return summary, fmt.Errorf("GTShaderProfilerStreamData class not found")
-	}
-	url := foundation.NewURLFileURLWithPath(path)
-	stream := objc.Send[objc.ID](objc.ID(cls), objc.Sel("dataFromArchivedDataURL:"), url)
-	if stream == 0 {
-		return summary, fmt.Errorf("dataFromArchivedDataURL returned nil")
+	stream, err := loadStreamData(path)
+	if err != nil {
+		return summary, err
 	}
 	summary.ObjectID = fmt.Sprintf("0x%x", uintptr(stream))
 	summary.GPUGeneration = objc.Send[uint32](stream, objc.Sel("gpuGeneration"))
@@ -142,7 +165,35 @@ func probeStreamData(path string) (StreamDataSummary, error) {
 	return summary, nil
 }
 
+// responds reports whether id implements selector. Every selector this package
+// sends is private, so its presence is checked rather than assumed.
+func responds(id objc.ID, selector string) bool {
+	return id != 0 && objc.RespondsToSelector(id, objc.Sel(selector))
+}
+
+func loadStreamData(path string) (objc.ID, error) {
+	if err := loadFramework(); err != nil {
+		return 0, fmt.Errorf("load GTShaderProfiler.framework: %w", err)
+	}
+	cls := objc.GetClass("GTShaderProfilerStreamData")
+	if cls == 0 {
+		return 0, fmt.Errorf("GTShaderProfilerStreamData class not found")
+	}
+	if !responds(objc.ID(cls), "dataFromArchivedDataURL:") {
+		return 0, fmt.Errorf("GTShaderProfilerStreamData does not respond to dataFromArchivedDataURL:")
+	}
+	url := foundation.NewURLFileURLWithPath(path)
+	stream := objc.Send[objc.ID](objc.ID(cls), objc.Sel("dataFromArchivedDataURL:"), url)
+	if stream == 0 {
+		return 0, fmt.Errorf("dataFromArchivedDataURL returned nil")
+	}
+	return stream, nil
+}
+
 func stringProperty(id objc.ID, selector string) string {
+	if !responds(id, selector) {
+		return ""
+	}
 	value := objc.Send[objc.ID](id, objc.Sel(selector))
 	if value == 0 {
 		return ""
@@ -174,13 +225,10 @@ func objectSamples(array objc.ID, limit uint64) []ObjectSummary {
 	}
 	samples := make([]ObjectSummary, 0, limit)
 	for i := uint64(0); i < limit; i++ {
-		objc.AutoreleasePool(func() {
-			id := objc.Send[objc.ID](array, objc.Sel("objectAtIndex:"), uint(i))
-			if id == 0 {
-				return
-			}
+		id := objc.Send[objc.ID](array, objc.Sel("objectAtIndex:"), uint(i))
+		if id != 0 {
 			samples = append(samples, summarizeObject(id, i, 1))
-		})
+		}
 	}
 	return samples
 }
@@ -216,12 +264,10 @@ func childSamples(id objc.ID, limit uint64, depth int) []ObjectSummary {
 	}
 	children := make([]ObjectSummary, 0, limit)
 	for i := uint64(0); i < limit; i++ {
-		objc.AutoreleasePool(func() {
-			child := objc.Send[objc.ID](id, objc.Sel("objectAtIndex:"), uint(i))
-			if child != 0 {
-				children = append(children, summarizeObject(child, i, depth))
-			}
-		})
+		child := objc.Send[objc.ID](id, objc.Sel("objectAtIndex:"), uint(i))
+		if child != 0 {
+			children = append(children, summarizeObject(child, i, depth))
+		}
 	}
 	return children
 }
@@ -336,13 +382,10 @@ func dictionaryKeys(id objc.ID, limit uint64) []string {
 	}
 	out := make([]string, 0, limit)
 	for i := uint64(0); i < limit; i++ {
-		objc.AutoreleasePool(func() {
-			key := objc.Send[objc.ID](keys, objc.Sel("objectAtIndex:"), uint(i))
-			if key == 0 {
-				return
-			}
+		key := objc.Send[objc.ID](keys, objc.Sel("objectAtIndex:"), uint(i))
+		if key != 0 {
 			out = append(out, objc.IDToString(key))
-		})
+		}
 	}
 	return out
 }
@@ -401,12 +444,10 @@ func dictionaryKeyCounts(array objc.ID) []KeyCount {
 	}
 	counts := make(map[string]int)
 	for i := uint64(0); i < count; i++ {
-		objc.AutoreleasePool(func() {
-			id := objc.Send[objc.ID](array, objc.Sel("objectAtIndex:"), uint(i))
-			for _, key := range dictionaryKeys(id, 256) {
-				counts[key]++
-			}
-		})
+		id := objc.Send[objc.ID](array, objc.Sel("objectAtIndex:"), uint(i))
+		for _, key := range dictionaryKeys(id, 256) {
+			counts[key]++
+		}
 	}
 	out := make([]KeyCount, 0, len(counts))
 	for key, count := range counts {
@@ -426,10 +467,8 @@ func dictionaryNumberInArray(array objc.ID, key string) (uint64, bool) {
 	for i := uint64(0); i < count; i++ {
 		var value uint64
 		var ok bool
-		objc.AutoreleasePool(func() {
-			id := objc.Send[objc.ID](array, objc.Sel("objectAtIndex:"), uint(i))
-			value, ok = dictionaryNumber(id, key)
-		})
+		id := objc.Send[objc.ID](array, objc.Sel("objectAtIndex:"), uint(i))
+		value, ok = dictionaryNumber(id, key)
 		if ok {
 			return value, true
 		}
@@ -441,28 +480,26 @@ func selectedValues(array objc.ID, arrayName, key string) []ValueSummary {
 	count := arrayCount(array)
 	var out []ValueSummary
 	for i := uint64(0); i < count; i++ {
-		objc.AutoreleasePool(func() {
-			id := objc.Send[objc.ID](array, objc.Sel("objectAtIndex:"), uint(i))
-			value := dictionaryObject(id, key)
-			if value == 0 {
-				return
-			}
-			summary := ValueSummary{
-				Array:       arrayName,
-				Index:       i,
-				Key:         key,
-				Class:       className(value),
-				Description: fmtutil.TruncateStringPlain(objectivec.Object{ID: value}.Description(), 120),
-				Keys:        dictionaryKeys(value, 24),
-				Bytes:       dataLength(value),
-				Count:       arrayCount(value),
-				Children:    childSamples(value, 4, 2),
-			}
-			if number, ok := dictionaryNumber(id, key); ok {
-				summary.Number = number
-			}
-			out = append(out, summary)
-		})
+		id := objc.Send[objc.ID](array, objc.Sel("objectAtIndex:"), uint(i))
+		value := dictionaryObject(id, key)
+		if value == 0 {
+			continue
+		}
+		summary := ValueSummary{
+			Array:       arrayName,
+			Index:       i,
+			Key:         key,
+			Class:       className(value),
+			Description: fmtutil.TruncateStringPlain(objectivec.Object{ID: value}.Description(), 120),
+			Keys:        dictionaryKeys(value, 24),
+			Bytes:       dataLength(value),
+			Count:       arrayCount(value),
+			Children:    childSamples(value, 4, 2),
+		}
+		if number, ok := dictionaryNumber(id, key); ok {
+			summary.Number = number
+		}
+		out = append(out, summary)
 	}
 	return out
 }
