@@ -6,13 +6,16 @@ package xcodebindings
 
 import (
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 
 	"github.com/ebitengine/purego"
 	"github.com/tmc/apple/objc"
 	"github.com/tmc/apple/objectivec"
 )
 
-const frameworkPath = "/Applications/Xcode.app/Contents/PlugIns/GPUDebugger.ideplugin/Contents/Frameworks/GTShaderProfiler.framework/Versions/A/GTShaderProfiler"
+const defaultFrameworkPath = "/Applications/Xcode.app/Contents/PlugIns/GPUDebugger.ideplugin/Contents/Frameworks/GTShaderProfiler.framework/Versions/A/GTShaderProfiler"
 
 // Report describes the GTShaderProfiler Objective-C surface gputrace needs for
 // Xcode parity.
@@ -53,9 +56,10 @@ type Gap struct {
 // RTLD_GLOBAL so Objective-C classes become visible, but does not instantiate
 // any GTShaderProfiler class.
 func Probe() Report {
+	path := resolvedFrameworkPath()
 	report := Report{
-		FrameworkPath: frameworkPath,
-		Framework:     fileExists(frameworkPath),
+		FrameworkPath: path,
+		Framework:     fileExists(path),
 		Summary: map[string]int{
 			"classes_present":   0,
 			"classes_missing":   0,
@@ -197,11 +201,42 @@ func Probe() Report {
 }
 
 func loadFramework() error {
-	if _, err := os.Stat(frameworkPath); err != nil {
+	path := resolvedFrameworkPath()
+	if _, err := os.Stat(path); err != nil {
 		return err
 	}
-	_, err := purego.Dlopen(frameworkPath, purego.RTLD_LAZY|purego.RTLD_GLOBAL)
+	_, err := purego.Dlopen(path, purego.RTLD_LAZY|purego.RTLD_GLOBAL)
 	return err
+}
+
+func resolvedFrameworkPath() string {
+	for _, path := range frameworkCandidates() {
+		if fileExists(path) {
+			return path
+		}
+	}
+	return defaultFrameworkPath
+}
+
+func frameworkCandidates() []string {
+	var candidates []string
+	if developerDir := os.Getenv("GPUTRACE_XCODE_DEVELOPER_DIR"); developerDir != "" {
+		candidates = append(candidates, frameworkPathForDeveloperDir(developerDir))
+	}
+	// Keep the historically selected Xcode.app first when no explicit override
+	// is supplied; its generated bindings are the version validated by this
+	// module. xcode-select remains a fallback for hosts with only one Xcode.
+	candidates = append(candidates, defaultFrameworkPath)
+	if output, err := exec.Command("xcode-select", "-p").Output(); err == nil {
+		if developerDir := strings.TrimSpace(string(output)); developerDir != "" {
+			candidates = append(candidates, frameworkPathForDeveloperDir(developerDir))
+		}
+	}
+	return candidates
+}
+
+func frameworkPathForDeveloperDir(developerDir string) string {
+	return filepath.Join(developerDir, "PlugIns", "GPUDebugger.ideplugin", "Contents", "Frameworks", "GTShaderProfiler.framework", "Versions", "A", "GTShaderProfiler")
 }
 
 func fileExists(path string) bool {
