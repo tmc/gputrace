@@ -15,31 +15,33 @@ import (
 
 // PipelineStats contains shader compilation statistics from streamData.
 type PipelineStats struct {
-	PipelineID             int     `json:"pipeline_id"`
-	PipelineAddress        uint64  `json:"pipeline_address,omitempty"`           // Metal pipeline address (e.g., 0x1051ddd70)
-	FunctionName           string  `json:"function_name,omitempty"`              // Kernel function name
-	TemporaryRegisterCount int     `json:"temporary_register_count"`             // "# Allocated Registers" in Xcode
-	UniformRegisterCount   int     `json:"uniform_register_count"`               // Uniform registers
-	SpilledBytes           int     `json:"spilled_bytes"`                        // Register spill to memory
-	ThreadInvariantSpilled int     `json:"thread_invariant_spilled"`             // Thread-invariant spilled bytes
-	ThreadgroupMemory      int     `json:"threadgroup_memory"`                   // Threadgroup memory usage
-	InstructionCount       int     `json:"instruction_count"`                    // Total instructions
-	ALUInstructionCount    int     `json:"alu_instruction_count"`                // ALU instructions
-	FP32InstructionCount   int     `json:"fp32_instruction_count"`               // FP32 instructions
-	FP16InstructionCount   int     `json:"fp16_instruction_count"`               // FP16 instructions
-	INT32InstructionCount  int     `json:"int32_instruction_count"`              // INT32 instructions
-	INT16InstructionCount  int     `json:"int16_instruction_count"`              // INT16 instructions
-	BranchInstructionCount int     `json:"branch_instruction_count"`             // Branch instructions
-	DeviceLoadCount        int     `json:"device_load_instruction_count"`        // Device memory loads
-	DeviceStoreCount       int     `json:"device_store_instruction_count"`       // Device memory stores
-	DeviceAtomicCount      int     `json:"device_atomic_instruction_count"`      // Device atomics
-	TextureReadCount       int     `json:"texture_reads_instruction_count"`      // Texture reads
-	TextureWriteCount      int     `json:"texture_writes_instruction_count"`     // Texture writes
-	ThreadgroupLoadCount   int     `json:"threadgroup_load_instruction_count"`   // Threadgroup loads
-	ThreadgroupStoreCount  int     `json:"threadgroup_store_instruction_count"`  // Threadgroup stores
-	ThreadgroupAtomicCount int     `json:"threadgroup_atomic_instruction_count"` // Threadgroup atomics
-	WaitInstructionCount   int     `json:"wait_instruction_count"`               // Wait instructions
-	CompilationTimeMs      float64 `json:"compilation_time_ms"`                  // Shader compilation time
+	PipelineID                                int     `json:"pipeline_id"`
+	PipelineAddress                           uint64  `json:"pipeline_address,omitempty"`                    // Metal pipeline address (e.g., 0x1051ddd70)
+	FunctionName                              string  `json:"function_name,omitempty"`                       // Kernel function name
+	TemporaryRegisterCount                    int     `json:"temporary_register_count"`                      // "# Allocated Registers" in Xcode
+	UniformRegisterCount                      int     `json:"uniform_register_count"`                        // Uniform registers
+	SpilledBytes                              int     `json:"spilled_bytes"`                                 // Register spill to memory
+	ThreadInvariantSpilled                    int     `json:"thread_invariant_spilled"`                      // Thread-invariant spilled bytes
+	ThreadgroupMemory                         int     `json:"threadgroup_memory"`                            // Threadgroup memory usage
+	InstructionCount                          int     `json:"instruction_count"`                             // Total instructions
+	ALUInstructionCount                       int     `json:"alu_instruction_count"`                         // ALU instructions
+	FP32InstructionCount                      int     `json:"fp32_instruction_count"`                        // FP32 instructions
+	FP16InstructionCount                      int     `json:"fp16_instruction_count"`                        // FP16 instructions
+	INT32InstructionCount                     int     `json:"int32_instruction_count"`                       // INT32 instructions
+	INT16InstructionCount                     int     `json:"int16_instruction_count"`                       // INT16 instructions
+	BranchInstructionCount                    int     `json:"branch_instruction_count"`                      // Branch instructions
+	DeviceLoadCount                           int     `json:"device_load_instruction_count"`                 // Device memory loads
+	DeviceStoreCount                          int     `json:"device_store_instruction_count"`                // Device memory stores
+	DeviceAtomicCount                         int     `json:"device_atomic_instruction_count"`               // Device atomics
+	TextureReadCount                          int     `json:"texture_reads_instruction_count"`               // Texture reads
+	TextureWriteCount                         int     `json:"texture_writes_instruction_count"`              // Texture writes
+	ThreadgroupLoadCount                      int     `json:"threadgroup_load_instruction_count"`            // Threadgroup loads
+	ThreadgroupStoreCount                     int     `json:"threadgroup_store_instruction_count"`           // Threadgroup stores
+	ThreadgroupAtomicCount                    int     `json:"threadgroup_atomic_instruction_count"`          // Threadgroup atomics
+	WaitInstructionCount                      int     `json:"wait_instruction_count"`                        // Wait instructions
+	ConstantCalculationTemporaryRegisterCount int     `json:"constant_calculation_temporary_register_count"` // Temporary registers used by constant calculation
+	ConstantCalculationPhasePresent           bool    `json:"constant_calculation_phase_present"`            // Whether constant calculation was present
+	CompilationTimeMs                         float64 `json:"compilation_time_ms"`                           // Shader compilation time
 }
 
 // DispatchInfo contains per-dispatch timing and metadata.
@@ -601,54 +603,70 @@ func extractPipelineStats(objects []interface{}, ppsIdx int) []PipelineStats {
 		}
 
 		ps := PipelineStats{PipelineID: pipelineID}
-
-		// Extract NSDictionary values
-		statKeys, _ := statsObj["NS.keys"].([]interface{})
-		statVals, _ := statsObj["NS.objects"].([]interface{})
-
-		keyMap := make(map[string]interface{})
-		for j, sk := range statKeys {
-			if skUID, ok := sk.(plist.UID); ok && j < len(statVals) {
-				keyName := ""
-				if s, ok := objects[int(skUID)].(string); ok {
-					keyName = s
-				}
-				if valUID, ok := statVals[j].(plist.UID); ok {
-					keyMap[keyName] = objects[int(valUID)]
-				} else {
-					keyMap[keyName] = statVals[j]
-				}
-			}
-		}
-
-		// Map to struct fields
-		ps.TemporaryRegisterCount = getInt(keyMap, "Temporary register count")
-		ps.UniformRegisterCount = getInt(keyMap, "Uniform register count")
-		ps.SpilledBytes = getInt(keyMap, "Spilled bytes")
-		ps.ThreadInvariantSpilled = getInt(keyMap, "Thread invariant spilled bytes")
-		ps.ThreadgroupMemory = getInt(keyMap, "Threadgroup memory")
-		ps.InstructionCount = getInt(keyMap, "Instruction count")
-		ps.ALUInstructionCount = getInt(keyMap, "ALU instruction count")
-		ps.FP32InstructionCount = getInt(keyMap, "FP32 instruction count")
-		ps.FP16InstructionCount = getInt(keyMap, "FP16 instruction count")
-		ps.INT32InstructionCount = getInt(keyMap, "INT32 instruction count")
-		ps.INT16InstructionCount = getInt(keyMap, "INT16 instruction count")
-		ps.BranchInstructionCount = getInt(keyMap, "Branch instruction count")
-		ps.DeviceLoadCount = getInt(keyMap, "Device load instruction count")
-		ps.DeviceStoreCount = getInt(keyMap, "Device store instruction count")
-		ps.DeviceAtomicCount = getInt(keyMap, "Device atomic instruction count")
-		ps.TextureReadCount = getInt(keyMap, "Texture reads instruction count")
-		ps.TextureWriteCount = getInt(keyMap, "Texture writes instruction count")
-		ps.ThreadgroupLoadCount = getInt(keyMap, "Threadgroup load instruction count")
-		ps.ThreadgroupStoreCount = getInt(keyMap, "Threadgroup store instruction count")
-		ps.ThreadgroupAtomicCount = getInt(keyMap, "Threadgroup atomic instruction count")
-		ps.WaitInstructionCount = getInt(keyMap, "Wait instruction count")
-		ps.CompilationTimeMs = getFloat(keyMap, "Compilation time in milliseconds")
+		assignPipelineStatFields(&ps, resolveKeyedDictionary(objects, statsObj))
 
 		pipelines = append(pipelines, ps)
 	}
 
 	return pipelines
+}
+
+// resolveKeyedDictionary flattens an NSKeyedArchiver NSDictionary into a plain
+// map, dereferencing the UIDs its keys and values hold into objects.
+func resolveKeyedDictionary(objects []interface{}, dict map[string]interface{}) map[string]interface{} {
+	keys, _ := dict["NS.keys"].([]interface{})
+	values, _ := dict["NS.objects"].([]interface{})
+
+	resolved := make(map[string]interface{}, len(keys))
+	for i, key := range keys {
+		keyUID, ok := key.(plist.UID)
+		if !ok || i >= len(values) || int(keyUID) >= len(objects) {
+			continue
+		}
+		name := ""
+		if s, ok := objects[int(keyUID)].(string); ok {
+			name = s
+		}
+		valUID, ok := values[i].(plist.UID)
+		if !ok {
+			resolved[name] = values[i]
+			continue
+		}
+		if int(valUID) < len(objects) {
+			resolved[name] = objects[int(valUID)]
+		}
+	}
+	return resolved
+}
+
+// assignPipelineStatFields copies the shader compilation statistics Xcode
+// archives under well-known names. Both .gpuprofiler_raw streamData and the
+// store sections of a capture bundle use these names.
+func assignPipelineStatFields(ps *PipelineStats, keyMap map[string]interface{}) {
+	ps.TemporaryRegisterCount = getInt(keyMap, "Temporary register count")
+	ps.UniformRegisterCount = getInt(keyMap, "Uniform register count")
+	ps.SpilledBytes = getInt(keyMap, "Spilled bytes")
+	ps.ThreadInvariantSpilled = getInt(keyMap, "Thread invariant spilled bytes")
+	ps.ThreadgroupMemory = getInt(keyMap, "Threadgroup memory")
+	ps.InstructionCount = getInt(keyMap, "Instruction count")
+	ps.ALUInstructionCount = getInt(keyMap, "ALU instruction count")
+	ps.FP32InstructionCount = getInt(keyMap, "FP32 instruction count")
+	ps.FP16InstructionCount = getInt(keyMap, "FP16 instruction count")
+	ps.INT32InstructionCount = getInt(keyMap, "INT32 instruction count")
+	ps.INT16InstructionCount = getInt(keyMap, "INT16 instruction count")
+	ps.BranchInstructionCount = getInt(keyMap, "Branch instruction count")
+	ps.DeviceLoadCount = getInt(keyMap, "Device load instruction count")
+	ps.DeviceStoreCount = getInt(keyMap, "Device store instruction count")
+	ps.DeviceAtomicCount = getInt(keyMap, "Device atomic instruction count")
+	ps.TextureReadCount = getInt(keyMap, "Texture reads instruction count")
+	ps.TextureWriteCount = getInt(keyMap, "Texture writes instruction count")
+	ps.ThreadgroupLoadCount = getInt(keyMap, "Threadgroup load instruction count")
+	ps.ThreadgroupStoreCount = getInt(keyMap, "Threadgroup store instruction count")
+	ps.ThreadgroupAtomicCount = getInt(keyMap, "Threadgroup atomic instruction count")
+	ps.WaitInstructionCount = getInt(keyMap, "Wait instruction count")
+	ps.ConstantCalculationTemporaryRegisterCount = getInt(keyMap, "Constant calculation temporary register count")
+	ps.ConstantCalculationPhasePresent = getBool(keyMap, "Constant calculation phase present")
+	ps.CompilationTimeMs = getFloat(keyMap, "Compilation time in milliseconds")
 }
 
 func getInt(m map[string]interface{}, key string) int {
@@ -681,6 +699,15 @@ func getFloat(m map[string]interface{}, key string) float64 {
 		}
 	}
 	return 0
+}
+
+func getBool(m map[string]interface{}, key string) bool {
+	if v, ok := m[key]; ok {
+		if value, ok := v.(bool); ok {
+			return value
+		}
+	}
+	return false
 }
 
 // ExtractEncoderTimingsFromProfiler extracts per-encoder timing data from the trace's
