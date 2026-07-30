@@ -5,15 +5,16 @@ import "github.com/tmc/gputrace/internal/trace"
 // GenerateSyntheticTiming creates timing data from kernel names when no real timing is available.
 // This is useful for qualitative analysis even when performance counters weren't captured.
 func GenerateSyntheticTiming(t *trace.Trace) []*EncoderTiming {
-	if len(t.KernelNames) == 0 {
+	names := observedKernelLabels(t)
+	if len(names) == 0 {
 		return nil
 	}
 
-	timings := make([]*EncoderTiming, 0, len(t.KernelNames))
+	timings := make([]*EncoderTiming, 0, len(names))
 	baseTime := uint64(1000000000000000) // Arbitrary start time
 	currentTime := baseTime
 
-	for _, kernelName := range t.KernelNames {
+	for _, kernelName := range names {
 		// Estimate duration based on kernel type (for visualization only)
 		durationNs := estimateKernelDuration(kernelName)
 
@@ -36,6 +37,25 @@ func GenerateSyntheticTiming(t *trace.Trace) []*EncoderTiming {
 	calculatePercentages(timings)
 
 	return timings
+}
+
+func observedKernelLabels(t *trace.Trace) []string {
+	encoders, err := t.ParseComputeEncoders()
+	if err == nil {
+		seen := make(map[string]bool)
+		var names []string
+		for _, encoder := range encoders {
+			if encoder.Label == "" || seen[encoder.Label] {
+				continue
+			}
+			seen[encoder.Label] = true
+			names = append(names, encoder.Label)
+		}
+		if len(names) > 0 {
+			return names
+		}
+	}
+	return t.KernelNames
 }
 
 // estimateKernelDuration provides rough duration estimates based on kernel name patterns.

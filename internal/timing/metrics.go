@@ -318,7 +318,11 @@ func WriteTimingMetrics(w io.Writer, metrics *TimingMetrics) error {
 	if _, err := fmt.Fprintf(w, "Trace: %s\n", metrics.TracePath); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "Total Duration: %v (%.2f ms)\n", metrics.TotalDuration, float64(metrics.TotalDuration)/float64(time.Millisecond)); err != nil {
+	durationLabel := "Encoder/dispatch span"
+	if metrics.TimingSource == TimingSourceProfiler {
+		durationLabel = "Dispatch span"
+	}
+	if _, err := fmt.Fprintf(w, "%s: %v (%.2f ms)\n", durationLabel, metrics.TotalDuration, float64(metrics.TotalDuration)/float64(time.Millisecond)); err != nil {
 		return err
 	}
 	if metrics.TimingSource != "" {
@@ -336,15 +340,15 @@ func WriteTimingMetrics(w io.Writer, metrics *TimingMetrics) error {
 	if _, err := fmt.Fprintf(w, "Encoders: %d\n", metrics.TotalEncoders); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "Unique Kernels: %d\n\n", len(metrics.KernelTimings)); err != nil {
+	if _, err := fmt.Fprintf(w, "Timed Functions: %d\n\n", len(metrics.KernelTimings)); err != nil {
 		return err
 	}
 
-	if _, err := fmt.Fprint(w, "=== Top Kernels by Time ===\n\n"); err != nil {
+	if _, err := fmt.Fprint(w, "=== Functions by Attributed Span ===\n\n"); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(w, "%-40s %8s %10s %10s %10s %10s %10s %10s %8s\n",
-		"Kernel Name", "Invokes", "Total(ms)", "Avg(µs)", "Min(µs)", "Max(µs)", "P50(µs)", "P95(µs)", "% Total"); err != nil {
+		"Function", "Calls", "Span(ms)", "Avg(µs)", "Min(µs)", "Max(µs)", "P50(µs)", "P95(µs)", "Share"); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(w, "%s\n", repeatStr("-", 140)); err != nil {
