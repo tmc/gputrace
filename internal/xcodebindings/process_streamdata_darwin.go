@@ -70,6 +70,27 @@ type TimelineSummary struct {
 	PipelineDraws            []TimelinePipelineSummary `json:"pipeline_draws,omitempty"`
 	EncoderDurations         []TimelineEncoderSummary  `json:"encoder_durations,omitempty"`
 	DrawDurationsDataMaster2 []uint64                  `json:"draw_durations_data_master2,omitempty"`
+	// Error carries the reason the timeline could not be reconstructed.
+	// Empty when Ready is true or when reconstruction was never attempted.
+	Error string `json:"error,omitempty"`
+}
+
+// nsErrorMessage reads -[NSError localizedDescription] as a Go string.
+// It returns "" for a nil error or one that does not respond, so a missing
+// diagnostic never panics a caller that is only reporting status.
+func nsErrorMessage(err objc.ID) string {
+	if err == 0 || !responds(err, "localizedDescription") {
+		return ""
+	}
+	desc := objc.Send[objc.ID](err, objc.Sel("localizedDescription"))
+	if desc == 0 || !responds(desc, "UTF8String") {
+		return ""
+	}
+	cstr := objc.Send[*byte](desc, objc.Sel("UTF8String"))
+	if cstr == nil {
+		return ""
+	}
+	return objc.GoString(cstr)
 }
 
 // TimelinePipelineSummary attributes the number of draws to one pipeline.
@@ -457,6 +478,10 @@ func readSerializedTimeline(mio, stream objc.ID, pipelines []PipelineRecord) Tim
 	var archiveError objc.ID
 	data := objc.Send[objc.ID](mio, objc.Sel("archivedData:error:"), false, unsafe.Pointer(&archiveError))
 	if data == 0 {
+		result.Error = nsErrorMessage(archiveError)
+		if result.Error == "" {
+			result.Error = "archivedData:error: returned no data"
+		}
 		return result
 	}
 	kvClass := objc.GetClass("GTMioKVDataStore")
