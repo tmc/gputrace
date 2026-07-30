@@ -99,14 +99,23 @@ func clickSummaryPerformanceOCR(ctx context.Context, appAX uintptr, summary stan
 	if !region.contains(cx, cy) {
 		return fmt.Errorf("OCR target center lies outside selected Summary right pane")
 	}
+	selectedWindowID, err := getWindowID(current.Element)
+	if err != nil {
+		return fmt.Errorf("read selected Xcode CGWindowID before OCR click: %w", err)
+	}
 	hit := axCopyElementAtPosition(appAX, cx, cy)
 	if hit == 0 {
 		return fmt.Errorf("cannot hit-test OCR target in selected Xcode window")
 	}
 	defer cfRelease(hit)
-	if parent := findParentWindow(hit); parent == 0 ||
-		recoveryGeometryKeyForElement(parent, recovery.Identity.PID) != geometryKey {
-		return fmt.Errorf("OCR target hit-test does not belong to selected Xcode window")
+	var hitPID int32
+	hitWindowID, hitWindowErr := getWindowID(hit)
+	if axUIElementGetPid(hit, &hitPID) != kAXErrorSuccess ||
+		int(hitPID) != recovery.Identity.PID ||
+		hitWindowErr != nil || hitWindowID != selectedWindowID {
+		return fmt.Errorf("OCR target ownership mismatch: role=%q description=%q PID=%d windowID=%d want PID=%d windowID=%d",
+			axString(hit, "AXRole"), axString(hit, "AXDescription"),
+			hitPID, hitWindowID, recovery.Identity.PID, selectedWindowID)
 	}
 	if err := clickScreenPoint(cx, cy); err != nil {
 		return fmt.Errorf("click OCR Show Performance target: %w", err)
@@ -156,6 +165,14 @@ func recognizeSummaryPerformance(window uintptr, region screenRect) (summaryOCRM
 	if err != nil {
 		return summaryOCRMatch{}, err
 	}
+	var pid int32
+	if axUIElementGetPid(window, &pid) != kAXErrorSuccess || pid == 0 {
+		return summaryOCRMatch{}, fmt.Errorf("read selected Xcode PID")
+	}
+	cgWindow, err := exactCGWindowInfo(pid, windowID)
+	if err != nil {
+		return summaryOCRMatch{}, err
+	}
 	image := cgWindowListCreateImage(
 		math.Inf(1), math.Inf(1), 0, 0,
 		kCGWindowListOptionIncludingWindow,
@@ -172,6 +189,14 @@ func recognizeSummaryPerformance(window uintptr, region screenRect) (summaryOCRM
 	ww, wh := axSize(window)
 	if imageWidth <= 0 || imageHeight <= 0 || ww <= 0 || wh <= 0 {
 		return summaryOCRMatch{}, fmt.Errorf("invalid selected-window image geometry")
+	}
+	if !compatibleWindowBounds(screenRect{
+		X: float64(wx), Y: float64(wy), Width: float64(ww), Height: float64(wh),
+	}, screenRect{
+		X: cgWindow.bounds.Origin.X, Y: cgWindow.bounds.Origin.Y,
+		Width: cgWindow.bounds.Size.Width, Height: cgWindow.bounds.Size.Height,
+	}, 2) {
+		return summaryOCRMatch{}, fmt.Errorf("selected AX and CG window bounds disagree")
 	}
 
 	handler := vision.NewImageRequestHandlerWithCGImageOptions(coregraphics.CGImageRef(image), nil)
@@ -199,15 +224,15 @@ func recognizeSummaryPerformance(window uintptr, region screenRect) (summaryOCRM
 			continue
 		}
 		bounds := text.BoundingBox()
-		localX := bounds.Origin.X * float64(ww)
-		localY := (1 - bounds.Origin.Y - bounds.Size.Height) * float64(wh)
+		localX := bounds.Origin.X * cgWindow.bounds.Size.Width
+		localY := (1 - bounds.Origin.Y - bounds.Size.Height) * cgWindow.bounds.Size.Height
 		match := summaryOCRMatch{
 			Text:       candidate.String(),
 			Confidence: float64(candidate.Confidence()),
-			X:          float64(wx) + localX,
-			Y:          float64(wy) + localY,
-			Width:      bounds.Size.Width * float64(ww),
-			Height:     bounds.Size.Height * float64(wh),
+			X:          cgWindow.bounds.Origin.X + localX,
+			Y:          cgWindow.bounds.Origin.Y + localY,
+			Width:      bounds.Size.Width * cgWindow.bounds.Size.Width,
+			Height:     bounds.Size.Height * cgWindow.bounds.Size.Height,
 		}
 		cx, cy := match.center()
 		if match.Width < 40 || match.Height < 8 ||
@@ -222,6 +247,27 @@ func recognizeSummaryPerformance(window uintptr, region screenRect) (summaryOCRM
 		return summaryOCRMatch{}, fmt.Errorf("want one exact Show Performance OCR match in selected right pane, found %d", len(matches))
 	}
 	return matches[0], nil
+}
+
+func exactCGWindowInfo(pid int32, windowID uint32) (cgWindowInfo, error) {
+	var matches []cgWindowInfo
+	for _, window := range cgOnscreenWindowsForPID(pid) {
+		if window.windowID == windowID {
+			matches = append(matches, window)
+		}
+	}
+	if len(matches) != 1 {
+		return cgWindowInfo{}, fmt.Errorf("want one on-screen layer-0 CGWindow ID %d for PID %d, found %d",
+			windowID, pid, len(matches))
+	}
+	return matches[0], nil
+}
+
+func compatibleWindowBounds(left, right screenRect, tolerance float64) bool {
+	return math.Abs(left.X-right.X) <= tolerance &&
+		math.Abs(left.Y-right.Y) <= tolerance &&
+		math.Abs(left.Width-right.Width) <= tolerance &&
+		math.Abs(left.Height-right.Height) <= tolerance
 }
 
 func normalizeOCRText(text string) string {

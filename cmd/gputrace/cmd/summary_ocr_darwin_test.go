@@ -64,3 +64,13 @@ func TestNormalizeOCRTextRequiresExactPhrase(t *testing.T) {
 		t.Fatalf("substring normalized as exact: %q", got)
 	}
 }
+
+func TestCompatibleWindowBounds(t *testing.T) {
+	base := screenRect{X: 0, Y: 100, Width: 1376, Height: 900}
+	if !compatibleWindowBounds(base, screenRect{X: 1, Y: 99, Width: 1375, Height: 901}, 2) {
+		t.Fatal("compatible framing difference rejected")
+	}
+	if compatibleWindowBounds(base, screenRect{X: 0, Y: 100, Width: 1360, Height: 900}, 2) {
+		t.Fatal("materially different CG window accepted")
+	}
+}

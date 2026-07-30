@@ -30,7 +30,8 @@ var (
 )
 
 var (
-	axUIElementCopyElementAtPosition func(uintptr, float64, float64, *uintptr) int32
+	// AXUIElementCopyElementAtPosition uses C float coordinates, not CGFloat.
+	axUIElementCopyElementAtPosition func(uintptr, float32, float32, *uintptr) int32
 	axExtraOnce                      sync.Once
 )
 
@@ -130,7 +131,7 @@ func axCopyElementAtPosition(app uintptr, x, y float64) uintptr {
 		return 0
 	}
 	var el uintptr
-	if axUIElementCopyElementAtPosition(app, x, y, &el) != kAXErrorSuccess {
+	if axUIElementCopyElementAtPosition(app, float32(x), float32(y), &el) != kAXErrorSuccess {
 		return 0
 	}
 	return el
@@ -1033,8 +1034,9 @@ func findElement(root uintptr, match func(uintptr) bool) uintptr {
 }
 
 type cgWindowInfo struct {
-	title  string
-	bounds corefoundation.CGRect
+	windowID uint32
+	title    string
+	bounds   corefoundation.CGRect
 }
 
 func cgOnscreenWindowsForPID(pid int32) []cgWindowInfo {
@@ -1065,8 +1067,9 @@ func cgOnscreenWindowsForPID(pid int32) []cgWindowInfo {
 			continue
 		}
 		windows = append(windows, cgWindowInfo{
-			title:  cfDictionaryString(info, "kCGWindowName"),
-			bounds: bounds,
+			windowID: uint32(cfDictionaryInt(info, "kCGWindowNumber")),
+			title:    cfDictionaryString(info, "kCGWindowName"),
+			bounds:   bounds,
 		})
 	}
 	return windows
