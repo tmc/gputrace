@@ -47,8 +47,8 @@ using namespace metal;
 [[host_name("specialized_kernel_float16")]]
 [[kernel]] void templated_kernel(device half *out [[buffer(0)]],
                                  uint tid [[thread_position_in_grid]]) {
-	out[tid] = 1;
-}
+		out[tid] = 1;
+	}
 `
 	if err := os.WriteFile(filepath.Join(dir, "CCDDEEFF00112233"), []byte(source), 0666); err != nil {
 		t.Fatal(err)
@@ -67,5 +67,24 @@ using namespace metal;
 	}
 	if line != 5 {
 		t.Fatalf("line = %d, want 5", line)
+	}
+}
+
+func TestIndexSource(t *testing.T) {
+	mapper := NewShaderSourceMapper()
+	const source = `#include <metal_stdlib>
+using namespace metal;
+
+kernel void archived_kernel(device float *out [[buffer(0)]],
+                            uint tid [[thread_position_in_grid]]) {
+	out[tid] = 1;
+}
+`
+	if err := mapper.IndexSource("capture/store0", source); err != nil {
+		t.Fatal(err)
+	}
+	file, line := mapper.SourceLocation("archived_kernel")
+	if file != "capture/store0" || line != 4 {
+		t.Fatalf("SourceLocation = %q, %d, want capture/store0, 4", file, line)
 	}
 }

@@ -3,6 +3,8 @@ package shader
 import (
 	"bufio"
 	"bytes"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -90,6 +92,18 @@ func (m *ShaderSourceMapper) IndexTraceBundleSources(tracePath string) error {
 	return nil
 }
 
+// IndexSource indexes Metal source held in memory. path identifies the
+// archived source in diagnostics; it need not name a file that exists.
+func (m *ShaderSourceMapper) IndexSource(path, source string) error {
+	if path == "" {
+		return fmt.Errorf("shader: empty source path")
+	}
+	if !looksLikeMetalSource([]byte(source)) {
+		return fmt.Errorf("shader: source is not Metal")
+	}
+	return m.indexMetalText(path, source)
+}
+
 func skipTraceSidecarSource(name string) bool {
 	if name == "capture" || name == "unsorted-capture" || name == "metadata" || name == "index" {
 		return true
@@ -145,13 +159,21 @@ func (m *ShaderSourceMapper) indexMetalFile(path string) error {
 		return err
 	}
 	defer f.Close()
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return err
+	}
+	return m.indexMetalText(path, string(data))
+}
+
+func (m *ShaderSourceMapper) indexMetalText(path, source string) error {
 
 	// Regular expressions for Metal kernel definitions
 	kernelRegex := regexp.MustCompile(`(?:kernel\s+void|\[\[kernel\]\]\s+void)\s+(\w+)\s*\(`)
 	hostNameRegex := regexp.MustCompile(`\[\[host_name\("([^"]+)"\)\]\]`)
 	funcRegex := regexp.MustCompile(`^\s*(?:inline\s+)?(?:device\s+|constant\s+)?(?:void|float|int|half|uint)\s+(\w+)\s*\(`)
 
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(strings.NewReader(source))
 	scanner.Buffer(make([]byte, 1024), 16*1024*1024)
 	lineNum := 0
 	pendingHostName := ""
