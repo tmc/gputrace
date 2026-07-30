@@ -35,7 +35,6 @@ checked in. They are opt-in through environment variables:
 
 | Variable | Used for |
 | --- | --- |
-| `GPUTRACE_AGXPS_PROFILER_RAW_DIR` | `internal/agxps` timeline raw parsing against a `.gpuprofiler_raw` directory |
 | `GPUTRACE_ANALYZE_TEST_TRACE` | `internal/analysis` trace structure report |
 | `GPUTRACE_API_CALL_TRACE` | `internal/trace` API-call integration parsing |
 | `GPUTRACE_API_CALL_EXPECTED` | `internal/trace` API-call golden output comparison |
@@ -48,7 +47,14 @@ checked in. They are opt-in through environment variables:
 | `GPUTRACE_DIFFTRACE_GO_TRACE` | `internal/difftrace` Go trace regression input |
 | `GPUTRACE_DIFFTRACE_PY_TRACE` | `internal/difftrace` Python trace regression input |
 | `GPUTRACE_MTLB_TEST_FILE` | `internal/metallib` Metal library parser comparison |
+| `GPUTRACE_PERF_FIXTURE` | `internal/counter`, `internal/shader`, and `internal/xcodebindings` coverage that needs a profiled `.gputrace` bundle |
 | `GPUTRACE_TRACE_TEST_TRACE` | `internal/trace` real-trace open coverage |
+
+Private-framework probe tests in `internal/counter` and `internal/xcodebindings`
+are gated by further variables that are documented at their use sites:
+`GPUTRACE_APS_PROFILE_PROBE`, `GPUTRACE_DUMP_STORE_KEYS`,
+`GPUTRACE_MIO_USC_PROBE`, `GPUTRACE_MIO_USC_STATS`, and the
+`GPUTRACE_TRACE_DATA_*` family.
 
 These variables should point to local, developer-supplied files or directories.
 Raw trace dumps, profiler exports, generated screenshots, and local binaries
