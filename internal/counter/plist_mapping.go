@@ -10,7 +10,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
+	"os/exec"
+	"strings"
 	"sync"
 )
 
@@ -88,13 +89,21 @@ func LoadGPUCounterGraphFromPath(path string) (*GPUCounterGraph, error) {
 }
 
 func loadGPUCounterGraphFromPath(plistPath string) (*GPUCounterGraph, error) {
-	// Convert plist to JSON using plutil
-	tmpFile := filepath.Join(os.TempDir(), "GPUCounterGraph.json")
+	// plutil is available on all macOS systems. Exec it directly rather than
+	// through a shell: plistPath is caller-supplied on the exported path, and
+	// no quoting scheme makes it safe to paste into /bin/sh -c.
+	tmp, err := os.CreateTemp("", "GPUCounterGraph-*.json")
+	if err != nil {
+		return nil, fmt.Errorf("create temp file: %w", err)
+	}
+	tmpFile := tmp.Name()
+	tmp.Close()
 	defer os.Remove(tmpFile)
 
-	// Use plutil to convert - it's available on all macOS systems
-	cmd := fmt.Sprintf("plutil -convert json -o %q %q", tmpFile, plistPath)
-	if err := runCommand(cmd); err != nil {
+	if out, err := exec.Command("plutil", "-convert", "json", "-o", tmpFile, plistPath).CombinedOutput(); err != nil {
+		if msg := strings.TrimSpace(string(out)); msg != "" {
+			return nil, fmt.Errorf("convert plist: %v: %s", err, msg)
+		}
 		return nil, fmt.Errorf("convert plist: %w", err)
 	}
 
@@ -109,30 +118,6 @@ func loadGPUCounterGraphFromPath(plistPath string) (*GPUCounterGraph, error) {
 	}
 
 	return &graph, nil
-}
-
-func runCommand(cmd string) error {
-	// Simple shell execution for plutil
-	return runShellCommand(cmd)
-}
-
-func runShellCommand(cmd string) error {
-	// Use /bin/sh -c for shell command execution
-	proc := &os.ProcAttr{
-		Files: []*os.File{nil, nil, nil},
-	}
-	p, err := os.StartProcess("/bin/sh", []string{"/bin/sh", "-c", cmd}, proc)
-	if err != nil {
-		return err
-	}
-	state, err := p.Wait()
-	if err != nil {
-		return err
-	}
-	if !state.Success() {
-		return fmt.Errorf("command failed: %s", cmd)
-	}
-	return nil
 }
 
 func buildVendorMappings() {

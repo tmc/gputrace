@@ -881,7 +881,7 @@ tell application "System Events"
 		repeat with elem in allContents
 			try
 				if role of elem is "AXButton" then
-					if name of elem is "%s" or description of elem is "%s" then
+					if name of elem is %s or description of elem is %s then
 						click elem
 						return "ok"
 					end if
@@ -890,7 +890,7 @@ tell application "System Events"
 		end repeat
 		return "not found"
 	end tell
-end tell`, pid, name, name)
+end tell`, pid, appleScriptString(name), appleScriptString(name))
 
 		out, err := exec.Command("osascript", "-e", script).CombinedOutput()
 		result := strings.TrimSpace(string(out))

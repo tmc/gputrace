@@ -188,8 +188,10 @@ func collectXcodeProfilePreRun(cmd *cobra.Command, args []string) error {
 		if exe, err := os.Executable(); err == nil && strings.Contains(exe, ".app/") {
 			port = "6061"
 		}
-		addr := ":" + port
-		fmt.Fprintf(os.Stderr, "[pprof] starting debug server on http://localhost%s/debug/pprof/\n", addr)
+		// Bind the loopback interface only: /debug/pprof/ exposes heap,
+		// goroutine, and cmdline data that should not leave the host.
+		addr := "127.0.0.1:" + port
+		fmt.Fprintf(os.Stderr, "[pprof] starting debug server on http://%s/debug/pprof/\n", addr)
 		go func() {
 			if err := http.ListenAndServe(addr, nil); err != nil {
 				fmt.Fprintf(os.Stderr, "[pprof] server error: %v\n", err)
