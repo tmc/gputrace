@@ -111,6 +111,48 @@ func TestDecompressStore(t *testing.T) {
 	}
 }
 
+func TestDecompressStoreSections(t *testing.T) {
+	testPath := writeSyntheticTraceBundle(t)
+	want := [][]byte{[]byte("first section"), []byte("second section"), []byte("third section")}
+
+	var store []byte
+	for _, section := range want {
+		store = append(store, zlibData(t, section)...)
+	}
+	writeFile(t, filepath.Join(testPath, "store1"), store)
+
+	trace := &Trace{Path: testPath}
+	sections, err := trace.DecompressStoreSections(1)
+	if err != nil {
+		t.Fatalf("DecompressStoreSections failed: %v", err)
+	}
+	if len(sections) != len(want) {
+		t.Fatalf("sections = %d, want %d", len(sections), len(want))
+	}
+	for i, section := range sections {
+		if !bytes.Equal(section, want[i]) {
+			t.Errorf("section %d = %q, want %q", i, section, want[i])
+		}
+	}
+
+	// DecompressStore reports only the first section; callers that depend on
+	// that behavior must keep working.
+	first, err := trace.DecompressStore(1)
+	if err != nil {
+		t.Fatalf("DecompressStore failed: %v", err)
+	}
+	if !bytes.Equal(first, want[0]) {
+		t.Fatalf("DecompressStore = %q, want %q", first, want[0])
+	}
+}
+
+func TestDecompressStoreSectionsMissing(t *testing.T) {
+	trace := &Trace{Path: writeSyntheticTraceBundle(t)}
+	if _, err := trace.DecompressStoreSections(9); err == nil {
+		t.Fatal("expected an error for a store that does not exist")
+	}
+}
+
 func TestHelperFunctions(t *testing.T) {
 	tests := []struct {
 		name     string

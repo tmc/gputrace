@@ -727,6 +727,49 @@ func (t *Trace) DecompressStore(storeNum int) ([]byte, error) {
 	return io.ReadAll(reader)
 }
 
+// DecompressStoreSections decompresses every zlib stream in a store file.
+//
+// Store files hold a sequence of independently compressed sections rather than
+// a single stream, so DecompressStore only reports the first one. Sections
+// after a stream that fails to decompress are skipped, and a store whose first
+// section is unreadable reports an error.
+func (t *Trace) DecompressStoreSections(storeNum int) ([][]byte, error) {
+	storePath := filepath.Join(t.Path, fmt.Sprintf("store%d", storeNum))
+	compressed, err := os.ReadFile(storePath)
+	if err != nil {
+		return nil, err
+	}
+
+	var sections [][]byte
+	for offset := 0; offset < len(compressed); {
+		// bytes.Reader is an io.ByteReader, so flate consumes exactly the
+		// bytes of one stream and the unread remainder locates the next.
+		rest := bytes.NewReader(compressed[offset:])
+		reader, err := zlib.NewReader(rest)
+		if err != nil {
+			if len(sections) == 0 {
+				return nil, fmt.Errorf("zlib reader: %w", err)
+			}
+			break
+		}
+		section, err := io.ReadAll(reader)
+		reader.Close()
+		if err != nil {
+			if len(sections) == 0 {
+				return nil, fmt.Errorf("read store section: %w", err)
+			}
+			break
+		}
+		sections = append(sections, section)
+		consumed := len(compressed) - offset - rest.Len()
+		if consumed <= 0 {
+			break
+		}
+		offset += consumed
+	}
+	return sections, nil
+}
+
 // MTSPHeader represents the header of an MTSP file.
 type MTSPHeader struct {
 	Magic   [4]byte
