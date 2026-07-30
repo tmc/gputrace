@@ -189,6 +189,6 @@ aluUtil := findFloatInRange(data, 0.0, 5.0)  // Search entire record
 
 **See Also:**
 - [BINARY_FORMAT_REFERENCE.md](BINARY_FORMAT_REFERENCE.md) - Comprehensive documentation
-- [PERFCOUNTER_FIELD_OFFSET_MAP.md](./PERFCOUNTER_FIELD_OFFSET_MAP.md) - Detailed field map
+- [PERFCOUNTERS_REFERENCE.md](./PERFCOUNTERS_REFERENCE.md) - Detailed field map
 
 **Last Updated:** 2025-11-07

@@ -11,8 +11,7 @@ Start with:
 - [BINARY_FORMAT_REFERENCE.md](./BINARY_FORMAT_REFERENCE.md) - counter binary format notes
 - [FIELD_OFFSET_QUICK_REFERENCE.md](./FIELD_OFFSET_QUICK_REFERENCE.md) - field lookup shortcuts
 - [PERF_VS_NONPERF_TRACES.md](./PERF_VS_NONPERF_TRACES.md) - capture mode differences
-- [PERFCOUNTERS_STATUS.md](./PERFCOUNTERS_STATUS.md) - counter support status
-- [PERFCOUNTER_FIELD_OFFSET_MAP.md](./PERFCOUNTER_FIELD_OFFSET_MAP.md) - detailed field offset discoveries
+- [PERFCOUNTERS_REFERENCE.md](./PERFCOUNTERS_REFERENCE.md) - counter record layout, field offsets, metric catalog, parsing status
 - [GPU_PROFILING_APIS_DISCOVERED.md](./GPU_PROFILING_APIS_DISCOVERED.md) - profiler API notes
 - [INSTRUMENTS_TIMING_INVESTIGATION.md](./INSTRUMENTS_TIMING_INVESTIGATION.md) - timing investigation
 - [CRASH_ANALYSIS_LIMITERS.md](./CRASH_ANALYSIS_LIMITERS.md) - crash analysis and limiters

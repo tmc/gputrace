@@ -109,5 +109,5 @@ for i, name := range counter.AllCounterNames {
 
 ## Related Documentation
 
-- [PERFCOUNTERS_STATUS.md](./PERFCOUNTERS_STATUS.md) - Performance counter parsing status
+- [PERFCOUNTERS_REFERENCE.md](./PERFCOUNTERS_REFERENCE.md) - Performance counter parsing status
 - `internal/counter/counter.go` - Counter parsing implementation
