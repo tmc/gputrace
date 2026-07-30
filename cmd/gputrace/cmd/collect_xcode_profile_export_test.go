@@ -570,6 +570,116 @@ func TestRestoredRecoverySourceTarget(t *testing.T) {
 	}
 }
 
+func TestSummaryRecoveryTarget(t *testing.T) {
+	recovery := standaloneExportRecovery{
+		SourcePath: "/Users/tmc/tmp/raw.gputrace",
+		Identity:   xcodeProcessIdentity{PID: 13556, AppPath: "/Applications/Xcode.app"},
+	}
+	base := standaloneRecoveryWindow{
+		xcodeAXWindow: xcodeAXWindow{
+			Element: 31,
+			X:       0,
+			Y:       100,
+			Width:   1376,
+			Height:  900,
+		},
+		PID:         13556,
+		SummaryView: true,
+		Debugging:   true,
+		Progress95:  true,
+		StopCount:   1,
+		StopEnabled: true,
+		ShowCount:   1,
+		ShowEnabled: true,
+	}
+	key := standaloneRecoveryGeometryKey(base)
+	tests := []struct {
+		name    string
+		edit    func(*standaloneRecoveryWindow)
+		wantErr string
+	}{
+		{name: "exact summary"},
+		{name: "wrong pid", edit: func(w *standaloneRecoveryWindow) { w.PID++ }, wantErr: "found 0"},
+		{name: "wrong geometry", edit: func(w *standaloneRecoveryWindow) { w.X++ }, wantErr: "found 0"},
+		{name: "titled", edit: func(w *standaloneRecoveryWindow) { w.Title = "other.gputrace" }, wantErr: "found 0"},
+		{name: "document bound", edit: func(w *standaloneRecoveryWindow) { w.Document = recovery.SourcePath }, wantErr: "found 0"},
+		{name: "summary missing", edit: func(w *standaloneRecoveryWindow) { w.SummaryView = false }, wantErr: "found 0"},
+		{name: "debugging missing", edit: func(w *standaloneRecoveryWindow) { w.Debugging = false }, wantErr: "found 0"},
+		{name: "wrong progress", edit: func(w *standaloneRecoveryWindow) { w.Progress95 = false }, wantErr: "found 0"},
+		{name: "sheet", edit: func(w *standaloneRecoveryWindow) { w.SheetOpen = true }, wantErr: "found 0"},
+		{name: "stop absent", edit: func(w *standaloneRecoveryWindow) { w.StopCount = 0 }, wantErr: "found 0"},
+		{name: "stop disabled", edit: func(w *standaloneRecoveryWindow) { w.StopEnabled = false }, wantErr: "found 0"},
+		{name: "show duplicate", edit: func(w *standaloneRecoveryWindow) { w.ShowCount = 2 }, wantErr: "found 0"},
+		{name: "show disabled", edit: func(w *standaloneRecoveryWindow) { w.ShowEnabled = false }, wantErr: "found 0"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			window := base
+			if test.edit != nil {
+				test.edit(&window)
+			}
+			got, err := summaryRecoveryTarget([]standaloneRecoveryWindow{window}, recovery, key)
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("error = %v, want %q", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Element != base.Element {
+				t.Fatalf("element = %d, want %d", got.Element, base.Element)
+			}
+		})
+	}
+
+	duplicate := base
+	duplicate.Element = 32
+	if _, err := summaryRecoveryTarget([]standaloneRecoveryWindow{base, duplicate}, recovery, key); err != nil {
+		t.Fatalf("duplicate AX representation: %v", err)
+	}
+	other := base
+	other.Element = 33
+	other.X++
+	if _, err := summaryRecoveryTarget([]standaloneRecoveryWindow{base, other}, recovery, ""); err == nil {
+		t.Fatal("distinct Summary windows were not rejected")
+	}
+}
+
+func TestRunningRecoveryPerformanceTarget(t *testing.T) {
+	recovery := standaloneExportRecovery{
+		SourcePath: "/Users/tmc/tmp/raw.gputrace",
+		Identity:   xcodeProcessIdentity{PID: 13556, AppPath: "/Applications/Xcode.app"},
+	}
+	base := standaloneRecoveryWindow{
+		xcodeAXWindow:   xcodeAXWindow{Element: 41, X: 0, Y: 100, Width: 1376, Height: 900},
+		PID:             13556,
+		PerformanceView: true,
+		StopCount:       1,
+		StopEnabled:     true,
+	}
+	key := standaloneRecoveryGeometryKey(base)
+	if _, err := runningRecoveryPerformanceTarget([]standaloneRecoveryWindow{base}, recovery, key); err != nil {
+		t.Fatal(err)
+	}
+	for _, edit := range []func(*standaloneRecoveryWindow){
+		func(w *standaloneRecoveryWindow) { w.PID++ },
+		func(w *standaloneRecoveryWindow) { w.Width++ },
+		func(w *standaloneRecoveryWindow) { w.PerformanceView = false },
+		func(w *standaloneRecoveryWindow) { w.SheetOpen = true },
+		func(w *standaloneRecoveryWindow) { w.StopCount = 0 },
+		func(w *standaloneRecoveryWindow) { w.StopEnabled = false },
+		func(w *standaloneRecoveryWindow) { w.Document = "/Users/tmc/tmp/other.gputrace" },
+	} {
+		window := base
+		edit(&window)
+		if _, err := runningRecoveryPerformanceTarget([]standaloneRecoveryWindow{window}, recovery, key); err == nil {
+			t.Fatalf("invalid running Performance accepted: %+v", window)
+		}
+	}
+}
+
 func TestFinalizedRecoveryPerformanceTarget(t *testing.T) {
 	recovery := standaloneExportRecovery{
 		SourcePath: "/Users/tmc/tmp/raw.gputrace",

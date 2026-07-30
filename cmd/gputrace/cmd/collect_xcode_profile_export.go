@@ -31,8 +31,16 @@ type standaloneRecoveryWindow struct {
 	xcodeAXWindow
 	PID             int
 	PerformanceView bool
+	SummaryView     bool
 	NewEditorView   bool
 	Finished        bool
+	Debugging       bool
+	Progress95      bool
+	SheetOpen       bool
+	StopCount       int
+	StopEnabled     bool
+	ShowCount       int
+	ShowEnabled     bool
 }
 
 type depthElement struct {
@@ -111,7 +119,7 @@ func runExport(cmd *cobra.Command, args []string) (retErr error) {
 		fmt.Fprintf(status, "Recovering source: %s\n", recovery.SourcePath)
 		fmt.Fprintf(status, "Source trace UUID: %s\n", recovery.SourceUUID)
 		fmt.Fprintf(status, "Bound Xcode: PID %d app %s\n", identity.PID, identity.AppPath)
-		fmt.Fprintln(status, "Recovery requires a shallow Performance group; enabled Stop with disabled Export is unfinalized")
+		fmt.Fprintln(status, "Recovery accepts exact Summary, Performance, or source-bound Finished states; replay is never restarted")
 	} else {
 		requestedApp := requestedXcodeAppPath()
 		appAX, identity, err = findSingleXcodeApp(cmd.Context(), requestedApp, 10*time.Second)
@@ -124,7 +132,7 @@ func runExport(cmd *cobra.Command, args []string) (retErr error) {
 	var windowAX uintptr
 	var doc string
 	if recovery.Enabled {
-		if recovery.Finalize {
+		if recovery.Finalize || recovery.CheckOnly {
 			windowAX, err = waitForStandaloneFinalizeWindow(ctx, appAX, recovery, 10*time.Second)
 		} else {
 			windowAX, err = waitForStandaloneRecoveryWindow(ctx, appAX, recovery, 10*time.Second)
@@ -152,8 +160,8 @@ func runExport(cmd *cobra.Command, args []string) (retErr error) {
 			SourceUUID:       recovery.SourceUUID,
 			XcodePID:         recovery.Identity.PID,
 			XcodeApp:         recovery.Identity.AppPath,
-			Phase:            "untitled Performance window verified",
-			Evidence:         "exact PID/app and shallow Performance group stable across two samples",
+			Phase:            "recovery state verified",
+			Evidence:         "exact PID/app and supported Summary, Performance, or source-bound Finished state stable across two samples",
 			TargetBound:      boolPointer(true),
 			SelectedTitle:    "",
 			SelectedDocument: "",
@@ -426,6 +434,21 @@ func standaloneRecoveryGeometryKey(window standaloneRecoveryWindow) string {
 		window.PID, window.X, window.Y, window.Width, window.Height)
 }
 
+func recoveryGeometryKeyForElement(element uintptr, pid int) string {
+	x, y := axPosition(element)
+	width, height := axSize(element)
+	return standaloneRecoveryGeometryKey(standaloneRecoveryWindow{
+		xcodeAXWindow: xcodeAXWindow{
+			Element: element,
+			X:       x,
+			Y:       y,
+			Width:   width,
+			Height:  height,
+		},
+		PID: pid,
+	})
+}
+
 func recoveryWindows(appAX uintptr) []standaloneRecoveryWindow {
 	windows := deduplicateAXWindows(GetAllWindows(appAX))
 	out := make([]standaloneRecoveryWindow, 0, len(windows))
@@ -434,12 +457,22 @@ func recoveryWindows(appAX uintptr) []standaloneRecoveryWindow {
 		if axUIElementGetPid(window.Element, &pid) != kAXErrorSuccess {
 			continue
 		}
+		stops := shallowStopButtons(window.Element)
+		shows := shallowShowPerformanceButtons(window.Element)
 		out = append(out, standaloneRecoveryWindow{
 			xcodeAXWindow:   window,
 			PID:             int(pid),
 			PerformanceView: hasShallowPerformanceGroup(window.Element),
+			SummaryView:     hasShallowNamedGroup(window.Element, "Summary"),
 			NewEditorView:   hasShallowNamedGroup(window.Element, "New Editor"),
 			Finished:        hasShallowFinishedActivity(window.Element),
+			Debugging:       hasShallowActivityText(window.Element, "macOS App - Debugging GPU Workload", false),
+			Progress95:      hasShallowActivityText(window.Element, "95% completed", true),
+			SheetOpen:       shallowSheetOpen(window.Element),
+			StopCount:       len(stops),
+			StopEnabled:     len(stops) == 1 && IsElementEnabled(stops[0]),
+			ShowCount:       len(shows),
+			ShowEnabled:     len(shows) == 1 && IsElementEnabled(shows[0]),
 		})
 	}
 	return out
@@ -467,6 +500,10 @@ func hasShallowNamedGroup(root uintptr, name string) bool {
 }
 
 func hasShallowFinishedActivity(root uintptr) bool {
+	return hasShallowActivityText(root, "Finished running macOS App", false)
+}
+
+func hasShallowActivityText(root uintptr, text string, contains bool) bool {
 	return findElementAtDepth(
 		root,
 		5,
@@ -477,7 +514,8 @@ func hasShallowFinishedActivity(root uintptr) bool {
 		},
 		func(element uintptr) bool {
 			for _, attribute := range []string{"AXValue", "AXTitle", "AXDescription"} {
-				if strings.TrimSpace(axString(element, attribute)) == "Finished running macOS App" {
+				value := strings.TrimSpace(axString(element, attribute))
+				if value == text || contains && strings.Contains(value, text) {
 					return true
 				}
 			}
@@ -574,6 +612,28 @@ func shallowStopButtons(root uintptr) []uintptr {
 	)
 }
 
+func shallowShowPerformanceButtons(root uintptr) []uintptr {
+	return findElementsAtDepth(
+		root,
+		6,
+		512,
+		2,
+		axChildren,
+		func(element uintptr) bool {
+			return axString(element, "AXRole") == "AXOutline"
+		},
+		func(element uintptr) bool {
+			if axString(element, "AXRole") != "AXButton" {
+				return false
+			}
+			title := axString(element, "AXTitle")
+			description := axString(element, "AXDescription")
+			return title == "Show Performance" || description == "Show Performance" ||
+				title == "Open Performance" || description == "Open Performance"
+		},
+	)
+}
+
 func readRecoveryFinalizeSnapshot(appAX uintptr, recovery standaloneExportRecovery) (recoveryFinalizeSnapshot, error) {
 	identity, err := xcodeIdentityForAX(appAX)
 	if err != nil {
@@ -658,18 +718,15 @@ func validateRecoveryFinalizePrecondition(snapshot recoveryFinalizeSnapshot, rec
 
 func finalizeRecoveredWorkload(ctx context.Context, appAX, windowAX uintptr, recovery standaloneExportRecovery, timeout time.Duration) (uintptr, error) {
 	axAction(windowAX, "AXRaise")
-	x, y := axPosition(windowAX)
-	width, height := axSize(windowAX)
-	geometryKey := standaloneRecoveryGeometryKey(standaloneRecoveryWindow{
-		xcodeAXWindow: xcodeAXWindow{
-			Element: windowAX,
-			X:       x,
-			Y:       y,
-			Width:   width,
-			Height:  height,
-		},
-		PID: recovery.Identity.PID,
-	})
+	geometryKey := recoveryGeometryKeyForElement(windowAX, recovery.Identity.PID)
+
+	if _, summaryErr := summaryRecoveryTarget(recoveryWindows(appAX), recovery, geometryKey); summaryErr == nil {
+		transitioned, err := transitionSummaryToPerformance(ctx, appAX, recovery, geometryKey, time.Now().Add(timeout))
+		if err != nil {
+			return 0, err
+		}
+		windowAX = transitioned
+	}
 
 	if _, err := restoredRecoverySourceTarget(recoveryWindows(appAX), recovery, geometryKey); err != nil {
 		before, err := readRecoveryFinalizeSnapshot(appAX, recovery)
@@ -715,6 +772,93 @@ func finalizeRecoveredWorkload(ctx context.Context, appAX, windowAX uintptr, rec
 	}
 
 	return waitForFinalizedRecoveryPerformance(ctx, appAX, recovery, geometryKey, deadline)
+}
+
+func transitionSummaryToPerformance(ctx context.Context, appAX uintptr, recovery standaloneExportRecovery, geometryKey string, deadline time.Time) (uintptr, error) {
+	stable := 0
+	var lastKey string
+	var summary standaloneRecoveryWindow
+	for {
+		if err := checkAutomationCanceled(ctx); err != nil {
+			return 0, err
+		}
+		if err := requireRecoveryIdentity(appAX, recovery); err != nil {
+			return 0, err
+		}
+		window, err := summaryRecoveryTarget(recoveryWindows(appAX), recovery, geometryKey)
+		if err == nil {
+			key := standaloneRecoveryWindowKey(window)
+			if key == lastKey {
+				stable++
+			} else {
+				lastKey = key
+				stable = 1
+			}
+			summary = window
+		} else {
+			lastKey = ""
+			stable = 0
+		}
+		if stable >= 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			return 0, fmt.Errorf("timed out waiting for stable 95%% Summary recovery state: %w", err)
+		}
+		if err := waitForAutomation(ctx, 250*time.Millisecond); err != nil {
+			return 0, err
+		}
+	}
+
+	// Re-read the complete Summary precondition at the only mutating action.
+	summary, err := summaryRecoveryTarget(recoveryWindows(appAX), recovery, geometryKey)
+	if err != nil {
+		return 0, err
+	}
+	shows := shallowShowPerformanceButtons(summary.Element)
+	if len(shows) != 1 || !IsElementEnabled(shows[0]) {
+		return 0, fmt.Errorf("Summary recovery requires exactly one enabled Show Performance control")
+	}
+	var showPID int32
+	if axUIElementGetPid(shows[0], &showPID) != kAXErrorSuccess ||
+		int(showPID) != recovery.Identity.PID {
+		return 0, fmt.Errorf("Show Performance is not owned by bound Xcode PID %d", recovery.Identity.PID)
+	}
+	if err := axPressWithFallbackWindow(shows[0], summary.Element); err != nil {
+		return 0, fmt.Errorf("press Show Performance from Summary: %w", err)
+	}
+
+	stable = 0
+	var lastElement uintptr
+	for {
+		if err := checkAutomationCanceled(ctx); err != nil {
+			return 0, err
+		}
+		if err := requireRecoveryIdentity(appAX, recovery); err != nil {
+			return 0, err
+		}
+		window, err := runningRecoveryPerformanceTarget(recoveryWindows(appAX), recovery, geometryKey)
+		if err == nil {
+			if window.Element == lastElement {
+				stable++
+			} else {
+				lastElement = window.Element
+				stable = 1
+			}
+		} else {
+			lastElement = 0
+			stable = 0
+		}
+		if stable >= 2 {
+			return window.Element, nil
+		}
+		if time.Now().After(deadline) {
+			return 0, fmt.Errorf("timed out waiting for Performance after Summary Show Performance: %w", err)
+		}
+		if err := waitForAutomation(ctx, 250*time.Millisecond); err != nil {
+			return 0, err
+		}
+	}
 }
 
 func waitForRestoredRecoverySource(ctx context.Context, appAX uintptr, recovery standaloneExportRecovery, geometryKey string, deadline time.Time) (standaloneRecoveryWindow, uintptr, error) {
@@ -828,6 +972,69 @@ func requireRecoveryIdentity(appAX uintptr, recovery standaloneExportRecovery) e
 		return fmt.Errorf("recovery Xcode identity changed: got PID %d app %s", identity.PID, identity.AppPath)
 	}
 	return nil
+}
+
+func summaryRecoveryTarget(windows []standaloneRecoveryWindow, recovery standaloneExportRecovery, geometryKey string) (standaloneRecoveryWindow, error) {
+	var matches []standaloneRecoveryWindow
+	seen := make(map[string]bool)
+	for _, window := range windows {
+		key := standaloneRecoveryGeometryKey(window)
+		if window.PID != recovery.Identity.PID ||
+			geometryKey != "" && key != geometryKey ||
+			strings.TrimSpace(window.Title) != "" ||
+			normalizedTraceDocument(window.Document) != "" ||
+			!window.SummaryView || !window.Debugging || !window.Progress95 ||
+			window.SheetOpen || window.StopCount != 1 || !window.StopEnabled ||
+			window.ShowCount != 1 || !window.ShowEnabled ||
+			seen[key] {
+			continue
+		}
+		seen[key] = true
+		matches = append(matches, window)
+	}
+	if len(matches) != 1 {
+		return standaloneRecoveryWindow{}, fmt.Errorf("want one exact untitled 95%% Summary window, found %d", len(matches))
+	}
+	return matches[0], nil
+}
+
+func runningRecoveryPerformanceTarget(windows []standaloneRecoveryWindow, recovery standaloneExportRecovery, geometryKey string) (standaloneRecoveryWindow, error) {
+	window, err := transitionedRecoveryPerformanceTarget(windows, recovery, geometryKey)
+	if err != nil {
+		return standaloneRecoveryWindow{}, err
+	}
+	if window.StopCount != 1 || !window.StopEnabled {
+		return standaloneRecoveryWindow{}, fmt.Errorf("transitioned Performance window is not running")
+	}
+	return window, nil
+}
+
+func transitionedRecoveryPerformanceTarget(windows []standaloneRecoveryWindow, recovery standaloneExportRecovery, geometryKey string) (standaloneRecoveryWindow, error) {
+	var matches []standaloneRecoveryWindow
+	seen := make(map[string]bool)
+	for _, window := range windows {
+		key := standaloneRecoveryGeometryKey(window)
+		if window.PID != recovery.Identity.PID ||
+			key != geometryKey ||
+			!window.PerformanceView || window.SheetOpen ||
+			seen[key] {
+			continue
+		}
+		doc := normalizedTraceDocument(window.Document)
+		title := strings.TrimSpace(window.Title)
+		if doc != "" && doc != filepath.Clean(recovery.SourcePath) {
+			continue
+		}
+		if title != "" && title != filepath.Base(recovery.SourcePath) {
+			continue
+		}
+		seen[key] = true
+		matches = append(matches, window)
+	}
+	if len(matches) != 1 {
+		return standaloneRecoveryWindow{}, fmt.Errorf("want one Performance window with exact transition provenance, found %d", len(matches))
+	}
+	return matches[0], nil
 }
 
 func restoredRecoverySourceTarget(windows []standaloneRecoveryWindow, recovery standaloneExportRecovery, geometryKey string) (standaloneRecoveryWindow, error) {
@@ -969,6 +1176,9 @@ func waitForStandaloneFinalizeWindow(ctx context.Context, appAX uintptr, recover
 		window, err := standaloneRecoveryTarget(windows, recovery)
 		if err != nil {
 			window, err = restoredRecoverySourceAnyGeometry(windows, recovery)
+		}
+		if err != nil {
+			window, err = summaryRecoveryTarget(windows, recovery, "")
 		}
 		if err == nil {
 			key := standaloneRecoveryWindowKey(window)

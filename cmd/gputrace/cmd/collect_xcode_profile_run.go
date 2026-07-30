@@ -150,6 +150,7 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 		}
 		return fmt.Errorf("Xcode window not found: %w", err)
 	}
+	traceGeometryKey := recoveryGeometryKeyForElement(windowAX, xcodeIdentity.PID)
 
 	if err := checkAutomationCanceled(ctx); err != nil {
 		return err
@@ -201,7 +202,9 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 
 	// Verify performance data is actually available after replay.
 	if !alreadyHasPerfData {
-		freshWindow, err := waitForBoundTraceWindow(ctx, appAX, xcodeIdentity, inputPath, 10*time.Second)
+		freshWindow, err := waitForBoundTraceWindowAfterReplay(
+			ctx, appAX, xcodeIdentity, inputPath, traceGeometryKey, true, false, 10*time.Second,
+		)
 		if err != nil {
 			return fmt.Errorf("reacquire completed trace window: %w", err)
 		}
@@ -211,7 +214,9 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	freshWindow, err := waitForBoundTraceWindow(ctx, appAX, xcodeIdentity, inputPath, 10*time.Second)
+	freshWindow, err := waitForBoundTraceWindowAfterReplay(
+		ctx, appAX, xcodeIdentity, inputPath, traceGeometryKey, true, false, 10*time.Second,
+	)
 	if err != nil {
 		return fmt.Errorf("reacquire trace window before Show Performance: %w", err)
 	}
@@ -228,11 +233,36 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 
 	// Export step
 	fmt.Fprintln(status, "  Exporting trace...")
-	freshWindow, err = waitForBoundTraceWindow(ctx, appAX, xcodeIdentity, inputPath, 15*time.Second)
+	freshWindow, err = waitForBoundTraceWindowAfterReplay(
+		ctx, appAX, xcodeIdentity, inputPath, traceGeometryKey, false, true, 15*time.Second,
+	)
 	if err != nil {
 		return fmt.Errorf("reacquire trace window after Show Performance: %w", err)
 	}
 	windowAX = freshWindow
+	transitionRecovery := standaloneExportRecovery{
+		Enabled:    true,
+		Finalize:   true,
+		SourcePath: inputPath,
+		Identity:   xcodeIdentity,
+	}
+	performanceWindow, err := transitionedRecoveryPerformanceTarget(
+		recoveryWindows(appAX), transitionRecovery, traceGeometryKey,
+	)
+	if err != nil {
+		return fmt.Errorf("verify post-replay Performance state: %w", err)
+	}
+	if performanceWindow.StopCount > 1 {
+		return fmt.Errorf("verify post-replay Performance state: multiple Stop GPU workload controls")
+	}
+	if performanceWindow.StopCount == 1 && performanceWindow.StopEnabled {
+		windowAX, err = finalizeRecoveredWorkload(
+			ctx, appAX, windowAX, transitionRecovery, 2*time.Minute,
+		)
+		if err != nil {
+			return fmt.Errorf("finalize post-replay Performance: %w", err)
+		}
+	}
 	axAction(windowAX, "AXRaise")
 	time.Sleep(300 * time.Millisecond)
 
@@ -477,6 +507,91 @@ func waitForBoundTraceWindow(ctx context.Context, appAX uintptr, identity xcodeP
 		if time.Now().After(deadline) {
 			return 0, fmt.Errorf("bound Xcode PID %d app %s did not expose the trace window for %s within %s",
 				identity.PID, identity.AppPath, traceFileName, timeout.Round(time.Second))
+		}
+		if err := waitForAutomation(ctx, 100*time.Millisecond); err != nil {
+			return 0, err
+		}
+	}
+}
+
+func waitForBoundTraceWindowAfterReplay(
+	ctx context.Context,
+	appAX uintptr,
+	identity xcodeProcessIdentity,
+	traceFileName, geometryKey string,
+	allowSummary, allowPerformance bool,
+	timeout time.Duration,
+) (uintptr, error) {
+	deadline := time.Now().Add(timeout)
+	recovery := standaloneExportRecovery{
+		Enabled:    true,
+		SourcePath: filepath.Clean(traceFileName),
+		Identity:   identity,
+	}
+	var candidateKey string
+	stable := 0
+	var lastErr error
+	for {
+		bound, err := xcodeIdentityForAX(appAX)
+		if err != nil || bound.PID != identity.PID ||
+			filepath.Clean(bound.AppPath) != filepath.Clean(identity.AppPath) {
+			return 0, fmt.Errorf("lost Xcode binding: want PID %d app %s", identity.PID, identity.AppPath)
+		}
+
+		var window standaloneRecoveryWindow
+		element := getPreferredTraceWindow(appAX, traceFileName)
+		if element != 0 && !selectionForWindow(traceFileName, element).Bound {
+			lastErr = fmt.Errorf("GPU window lacks exact title or AXDocument source binding")
+			element = 0
+		}
+		if element != 0 && allowPerformance && !hasShallowPerformanceGroup(element) {
+			lastErr = fmt.Errorf("source-bound trace window has not entered Performance")
+			element = 0
+		}
+		if element != 0 {
+			window = standaloneRecoveryWindow{
+				xcodeAXWindow: xcodeAXWindow{
+					Element:  element,
+					Title:    axString(element, "AXTitle"),
+					Document: axString(element, "AXDocument"),
+				},
+				PID: identity.PID,
+			}
+			window.X, window.Y = axPosition(element)
+			window.Width, window.Height = axSize(element)
+		} else {
+			windows := recoveryWindows(appAX)
+			switch {
+			case allowSummary:
+				window, err = summaryRecoveryTarget(windows, recovery, geometryKey)
+			case allowPerformance:
+				window, err = transitionedRecoveryPerformanceTarget(windows, recovery, geometryKey)
+			default:
+				err = fmt.Errorf("no post-replay transition state is allowed")
+			}
+			if err != nil {
+				lastErr = err
+			}
+		}
+
+		if window.Element != 0 {
+			key := standaloneRecoveryWindowKey(window)
+			if key == candidateKey {
+				stable++
+			} else {
+				candidateKey = key
+				stable = 1
+			}
+			if stable >= 2 {
+				return window.Element, nil
+			}
+		} else {
+			candidateKey = ""
+			stable = 0
+		}
+		if time.Now().After(deadline) {
+			return 0, fmt.Errorf("bound Xcode PID %d app %s did not expose the trace or allowed post-replay state for %s within %s: %w",
+				identity.PID, identity.AppPath, traceFileName, timeout.Round(time.Second), lastErr)
 		}
 		if err := waitForAutomation(ctx, 100*time.Millisecond); err != nil {
 			return 0, err
