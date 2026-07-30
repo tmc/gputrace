@@ -7,9 +7,8 @@ the complete method inventory shape for every class without invoking unsafe
 arbitrary ABIs. Pointer-returning methods are counted separately and were not
 messaged as objects.
 
-The measured baseline fixture is the streamData archive documented in
-[GTMIO_SURFACE.md](GTMIO_SURFACE.md): 574 draws, 12 encoders, 18 pipelines,
-980 binaries, and 45,977 instructions.
+The measured baseline fixture is a streamData archive with 574 draws, 12
+encoders, 18 pipelines, 980 binaries, and 45,977 instructions.
 
 ## Demonstrated capabilities
 

@@ -407,7 +407,7 @@ if trace.HasPerfCounters() {
 
 **Documentation:**
 - [GPU_PROFILING_APIS_DISCOVERED.md](./GPU_PROFILING_APIS_DISCOVERED.md) - APS/AGXGPURawCounter reverse engineering
-- [TRACE_FORMAT.md](./TRACE_FORMAT.md) - .gputrace file format documentation
+- [XDIC_INDEX_FORMAT.md](./XDIC_INDEX_FORMAT.md) - .gputrace file format documentation
 
 **Code:**
 - `internal/counter/counter.go` - Main implementation

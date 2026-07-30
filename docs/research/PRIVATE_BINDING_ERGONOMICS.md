@@ -142,11 +142,10 @@ anything, currently include `firstBinaryIndexForCliqueAtIndex:`, the
 
 ## What belongs in tmc/apple
 
-Only item 3, and it is written up separately in
-[UPSTREAM_OBJC_REQUESTS.md](UPSTREAM_OBJC_REQUESTS.md) along with four further
-upstream gaps this work exposed: an autorelease pool that does not pin its
-thread, the absence of a type-encoding parser, no exception-catching send, and
-no object-validity check.
+Only item 3, along with four further upstream gaps this work exposed: an
+autorelease pool that does not pin its thread, the absence of a type-encoding
+parser, no exception-catching send, and no object-validity check. These belong
+on the `github.com/tmc/apple` issue tracker, not in this repository.
 
 Items 1, 2, 4, and 5 encode facts about GTShaderProfiler and its capture data.
 They stay here.
