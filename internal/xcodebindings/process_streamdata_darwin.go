@@ -3,6 +3,7 @@
 package xcodebindings
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"os"
@@ -191,9 +192,30 @@ func ProcessStreamData(path string) (ProcessedStreamData, error) {
 	return summary, err
 }
 
+// WithProcessedModel builds a summary of Xcode's shader trace model and passes
+// it to fn. Context cancellation is checked before and after the synchronous
+// model build; it does not interrupt an in-progress private-framework call.
+func WithProcessedModel(ctx context.Context, path string, fn func(model *ProcessedStreamData) error) error {
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if fn == nil {
+		return fmt.Errorf("callback fn is nil")
+	}
+	model, err := ProcessStreamData(path)
+	if err != nil {
+		return err
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return fn(&model)
+}
+
 func processStreamData(summary *ProcessedStreamData) error {
 	loadPath := summary.Path
-	if os.Getenv("GPUTRACE_MIO_SETUP_DATA_PATH") == "1" && filepath.Base(loadPath) == "streamData" {
+	setupDataPath := mioDataPathRequired()
+	if setupDataPath && filepath.Base(loadPath) == "streamData" {
 		// The data-path setup resolves sibling Counters_f_*.raw files only when
 		// the archive directory, rather than its inner streamData file, is the
 		// URL passed to GTShaderProfilerStreamData.
@@ -205,7 +227,7 @@ func processStreamData(summary *ProcessedStreamData) error {
 	if err != nil {
 		return err
 	}
-	if os.Getenv("GPUTRACE_MIO_SETUP_DATA_PATH") == "1" {
+	if setupDataPath {
 		if !responds(stream, "_setupDataPath") {
 			return fmt.Errorf("GTShaderProfilerStreamData does not respond to _setupDataPath")
 		}
@@ -277,6 +299,20 @@ func processStreamData(summary *ProcessedStreamData) error {
 		summary.USC = readUSCSummary(mio)
 	}
 	return nil
+}
+
+func mioDataPathRequired() bool {
+	for _, name := range []string{
+		"GPUTRACE_MIO_SETUP_DATA_PATH",
+		"GPUTRACE_MIO_TIMELINE_DATA",
+		"GPUTRACE_MIO_TRACE_TRACKS",
+		"GPUTRACE_MIO_USC_CLIQUES",
+	} {
+		if os.Getenv(name) == "1" {
+			return true
+		}
+	}
+	return false
 }
 
 func readUSCSummary(mio objc.ID) USCSummary {
@@ -820,12 +856,23 @@ func int64Property(id objc.ID, selector string) int64 {
 	return objc.Send[int64](id, objc.Sel(selector))
 }
 
-func collectionCount(id objc.ID, selector string) uint64 {
-	collection := objectFor(id, selector)
+// countOf returns the element count of an already-resolved Objective-C collection object.
+func countOf(collection objc.ID) uint64 {
 	if collection == 0 || !objc.RespondsToSelector(collection, objc.Sel("count")) {
 		return 0
 	}
 	return objc.Send[uint64](collection, objc.Sel("count"))
+}
+
+// collectionCountFor resolves selector on id to an Objective-C collection object
+// and returns its count.
+func collectionCountFor(id objc.ID, selector string) uint64 {
+	collection := objectFor(id, selector)
+	return countOf(collection)
+}
+
+func collectionCount(id objc.ID, selector string) uint64 {
+	return collectionCountFor(id, selector)
 }
 
 func newStreamDataProcessor(stream objc.ID, helper string) (objc.ID, error) {
