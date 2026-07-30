@@ -161,6 +161,31 @@ func TestFormatShadersXcodeStyleShowsSourceBackedHighRegister(t *testing.T) {
 	}
 }
 
+func TestFormatShadersLabelsShareBasis(t *testing.T) {
+	tests := []struct {
+		basis string
+		want  string
+	}{
+		{basis: "simd_groups", want: "SIMD Share"},
+		{basis: "dispatch_span", want: "Span Share"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.basis, func(t *testing.T) {
+			report := &ShaderMetricsReport{
+				ShareBasis: tt.basis,
+				Shaders:    []*ShaderMetrics{{Name: "kernel", PercentOfTotal: 50}},
+			}
+			var out strings.Builder
+			if err := FormatShadersSimple(&out, report); err != nil {
+				t.Fatalf("FormatShadersSimple: %v", err)
+			}
+			if !strings.Contains(out.String(), tt.want) {
+				t.Fatalf("output missing %q:\n%s", tt.want, out.String())
+			}
+		})
+	}
+}
+
 func xcodeStyleDataFields(t *testing.T, output string) []string {
 	t.Helper()
 

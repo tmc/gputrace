@@ -169,8 +169,8 @@ func TestFormatCorrelationReportDisplaysTimingSource(t *testing.T) {
 		TraceSource:        "trace.gputrace",
 		ProfilerSource:     "(not available)",
 		TotalShaders:       1,
-		CorrelatedShaders:  1,
-		CorrelationRate:    100,
+		CorrelatedShaders:  0,
+		CorrelationRate:    0,
 		AvgALUUtilization:  50,
 		AvgKernelOccupancy: 25,
 		Shaders: []*CorrelatedShaderMetrics{
@@ -194,5 +194,21 @@ func TestFormatCorrelationReportDisplaysTimingSource(t *testing.T) {
 	}
 	if !strings.Contains(out, "duration-derived frequency is omitted") {
 		t.Fatalf("formatted report missing approximate timing note:\n%s", out)
+	}
+	if !strings.Contains(out, "Timing-only shaders: 1 (no hardware correlation)") {
+		t.Fatalf("formatted report conflates timing with hardware correlation:\n%s", out)
+	}
+	if !strings.Contains(out, "       —") {
+		t.Fatalf("formatted report renders unavailable metrics as numeric zero:\n%s", out)
+	}
+}
+
+func TestCreateTimingOnlyReportHasNoHardwareCorrelations(t *testing.T) {
+	report := createTimingOnlyReport([]*correlationTiming{{
+		Name:         "kernel",
+		TimingSource: timingSourceSyntheticKernel,
+	}}, "trace.gputrace")
+	if report.CorrelatedShaders != 0 || report.CorrelationRate != 0 {
+		t.Fatalf("timing-only correlation = %d %.1f%%, want 0", report.CorrelatedShaders, report.CorrelationRate)
 	}
 }

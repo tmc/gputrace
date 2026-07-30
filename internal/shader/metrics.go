@@ -90,6 +90,7 @@ type ShaderMetricsReport struct {
 	TotalInvocations int     `json:"total_invocations"`
 	TotalGPUTimeNs   uint64  `json:"total_gpu_time_ns"`
 	TotalGPUTimeMs   float64 `json:"total_gpu_time_ms"`
+	ShareBasis       string  `json:"share_basis,omitempty"`
 
 	// Per-Shader Metrics
 	Shaders []*ShaderMetrics `json:"shaders"`
@@ -977,10 +978,10 @@ func repeatStr(s string, n int) string {
 	return result
 }
 
-// FormatShadersSimple formats shader metrics in a simple two-column format (Cost + Name).
+// FormatShadersSimple formats shader metrics in a simple two-column format (share + name).
 func FormatShadersSimple(w io.Writer, report *ShaderMetricsReport) error {
 	// Header
-	fmt.Fprintf(w, "%-8s  %s\n", "Cost", "Name")
+	fmt.Fprintf(w, "%-12s  %s\n", shaderShareLabel(report), "Name")
 
 	for _, metrics := range report.Shaders {
 		// Skip placeholder entries like (dispatch_N) that have no real function name
@@ -992,7 +993,7 @@ func FormatShadersSimple(w io.Writer, report *ShaderMetricsReport) error {
 		cost := fmt.Sprintf("%.2f%%", metrics.PercentOfTotal)
 
 		// Print row
-		fmt.Fprintf(w, "%-8s  %s\n", cost, metrics.Name)
+		fmt.Fprintf(w, "%-12s  %s\n", cost, metrics.Name)
 	}
 
 	return nil
@@ -1004,8 +1005,8 @@ func FormatShadersSimple(w io.Writer, report *ShaderMetricsReport) error {
 // If showEstimates is false, uncomputed fields will show "?" instead of estimates.
 func FormatShadersXcodeStyle(w io.Writer, report *ShaderMetricsReport, trace *Trace, showEstimates bool) error {
 	// Header matching Xcode format with wider columns
-	fmt.Fprintf(w, "%-8s %-50s %-10s %-20s %15s %10s %10s %12s\n",
-		"Cost", "Name", "Type", "Pipeline State",
+	fmt.Fprintf(w, "%-12s %-50s %-10s %-20s %15s %10s %10s %12s\n",
+		shaderShareLabel(report), "Name", "Type", "Pipeline State",
 		"# SIMD Groups", "Registers", "High Reg", "Spilled")
 	fmt.Fprintf(w, "%s\n", repeatStr("─", 145))
 
@@ -1068,12 +1069,22 @@ func FormatShadersXcodeStyle(w io.Writer, report *ShaderMetricsReport, trace *Tr
 		}
 
 		// Print row matching Xcode format
-		fmt.Fprintf(w, "%-8s %-50s %-10s %-20s %15s %10s %10s %12s\n",
+		fmt.Fprintf(w, "%-12s %-50s %-10s %-20s %15s %10s %10s %12s\n",
 			cost, name, shaderType, pipelineState,
 			simdGroups, allocatedRegsStr, highRegStr, spilledBytesStr)
 	}
 
 	return nil
+}
+
+func shaderShareLabel(report *ShaderMetricsReport) string {
+	if report != nil && report.ShareBasis == "simd_groups" {
+		return "SIMD Share"
+	}
+	if report != nil && report.ShareBasis == "dispatch_span" {
+		return "Span Share"
+	}
+	return "Share"
 }
 
 // formatLargeNumber formats large numbers with commas for readability.
