@@ -9,14 +9,18 @@ import (
 
 // BufferAccessAnalysis contains buffer access pattern analysis results.
 type BufferAccessAnalysis struct {
-	BufferAccesses    map[uint64]*BufferAccessInfo `json:"buffer_accesses"`
-	EncoderAccesses   map[int]*EncoderAccessInfo   `json:"encoder_accesses"`
-	TotalBuffers      int                          `json:"total_buffers"`
-	UnusedBuffers     int                          `json:"unused_buffers"`
-	ReadOnlyBuffers   int                          `json:"read_only_buffers"`
-	SharedBuffers     int                          `json:"shared_buffers"`
-	AliasingDetected  bool                         `json:"aliasing_detected"`
-	AliasingInstances []BufferAlias                `json:"aliasing_instances,omitempty"`
+	BufferAccesses      map[uint64]*BufferAccessInfo `json:"buffer_accesses"`
+	EncoderAccesses     map[int]*EncoderAccessInfo   `json:"encoder_accesses"`
+	TotalBuffers        int                          `json:"total_buffers"`
+	UnusedBuffers       int                          `json:"unused_buffers"`
+	ReadOnlyBuffers     int                          `json:"read_only_buffers"`
+	SharedBuffers       int                          `json:"shared_buffers"`
+	AliasingDetected    bool                         `json:"aliasing_detected"`
+	AliasingInstances   []BufferAlias                `json:"aliasing_instances,omitempty"`
+	ExpectedEncoders    int                          `json:"expected_encoders"`
+	AttributedEncoders  int                          `json:"attributed_encoders"`
+	AttributionComplete bool                         `json:"attribution_complete"`
+	AttributionNote     string                       `json:"attribution_note"`
 }
 
 // BufferAccessInfo tracks access patterns for a single buffer.
@@ -126,6 +130,15 @@ func AnalyzeBufferAccess(t *trace.Trace) (*BufferAccessAnalysis, error) {
 
 	// Compute summary statistics
 	analysis.computeStatistics()
+	analysis.ExpectedEncoders, _ = t.CountComputeEncoders()
+	analysis.AttributedEncoders = len(analysis.EncoderAccesses)
+	// This decoder currently observes structured Ct bindings only. Cul and
+	// other resource records are not decoded, so matching bucket counts alone
+	// cannot prove complete attribution.
+	analysis.AttributionComplete = false
+	analysis.AttributionNote = fmt.Sprintf(
+		"attributed encoder buckets: %d; trace-reported compute encoders: %d; Cul and other resource records are not attributed",
+		analysis.AttributedEncoders, analysis.ExpectedEncoders)
 
 	return analysis, nil
 }
@@ -172,6 +185,12 @@ func FormatBufferAccessReport(analysis *BufferAccessAnalysis, verbose bool) stri
 	report += fmt.Sprintf("  Shared Buffers:  %d (accessed by multiple encoders)\n", analysis.SharedBuffers)
 	report += fmt.Sprintf("  Unused Buffers:  %d\n", analysis.UnusedBuffers)
 	report += fmt.Sprintf("  Total Encoders:  %d\n", len(analysis.EncoderAccesses))
+	if analysis.AttributionComplete {
+		report += "  Attribution:     complete\n"
+	} else {
+		report += "  Attribution:     incomplete\n"
+		report += fmt.Sprintf("    %s\n", analysis.AttributionNote)
+	}
 	report += "\n"
 
 	// Aliasing detection
@@ -254,8 +273,14 @@ func FormatBufferAccessReport(analysis *BufferAccessAnalysis, verbose bool) stri
 		report += "\n"
 	}
 
+	if !analysis.AttributionComplete {
+		report += "Interpretation:\n"
+		report += "  Optimization advice withheld because encoder attribution is incomplete.\n"
+		report += "  Treat access counts as observed buffer references, not a complete usage model.\n"
+		return report
+	}
 	// Optimization recommendations
-	report += "Optimization Opportunities:\n"
+	report += "Heuristic Opportunities (validate before acting):\n"
 	if analysis.SharedBuffers > 0 {
 		report += fmt.Sprintf("  • %d buffers are shared across encoders\n", analysis.SharedBuffers)
 		report += "    Consider analyzing access patterns for potential memory reuse\n"

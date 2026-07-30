@@ -44,6 +44,8 @@ type PerformanceInsight struct {
 	Type            InsightType            `json:"type"`
 	Severity        InsightSeverity        `json:"severity"`
 	ShaderName      string                 `json:"shader_name,omitempty"`
+	TimingSource    string                 `json:"timing_source,omitempty"`
+	TimingApprox    bool                   `json:"timing_approximate,omitempty"`
 	Title           string                 `json:"title"`
 	Description     string                 `json:"description"`
 	Metrics         map[string]interface{} `json:"metrics,omitempty"`
@@ -59,6 +61,8 @@ type InsightsReport struct {
 	MediumCount    int                   `json:"medium_count"`
 	LowCount       int                   `json:"low_count"`
 	TotalGPUTimeMs float64               `json:"total_gpu_time_ms"`
+	TimingSources  []string              `json:"timing_sources,omitempty"`
+	TimingApprox   bool                  `json:"timing_approximate,omitempty"`
 	TopBottlenecks []string              `json:"top_bottlenecks"`
 }
 
@@ -75,6 +79,7 @@ func GenerateInsights(t *trace.Trace) (*InsightsReport, error) {
 	}
 
 	report.TotalGPUTimeMs = shaderMetrics.TotalGPUTimeMs
+	report.TimingSources, report.TimingApprox = insightTimingSources(shaderMetrics.Shaders)
 
 	// Analyze each shader for insights
 	for _, shader := range shaderMetrics.Shaders {
@@ -125,13 +130,20 @@ func GenerateInsights(t *trace.Trace) (*InsightsReport, error) {
 
 // detectBottlenecks identifies memory-bound vs compute-bound shaders.
 func detectBottlenecks(shader *ShaderMetrics, report *InsightsReport) {
-	// High GPU time percentage indicates a bottleneck
+	if shader.TimingApprox {
+		return
+	}
+
+	// A large attributed share identifies a place to investigate. It does not
+	// establish where boundary or gap time belongs.
 	if shader.PercentOfTotal > 20.0 {
 		insight := &PerformanceInsight{
-			Type:       InsightBottleneck,
-			ShaderName: shader.Name,
-			Title:      fmt.Sprintf("%s is a major bottleneck", shader.Name),
-			Description: fmt.Sprintf("This shader consumes %.1f%% of total GPU time (%.2f ms)",
+			Type:         InsightBottleneck,
+			ShaderName:   shader.Name,
+			TimingSource: shader.TimingSource,
+			TimingApprox: shader.TimingApprox,
+			Title:        fmt.Sprintf("%s is a major attributed-span contributor", shader.Name),
+			Description: fmt.Sprintf("This shader accounts for %.1f%% of attributed dispatch span (%.2f ms). Cumulative-offset timing can include boundary or gap time.",
 				shader.PercentOfTotal, float64(shader.TotalDurationNs)/1e6),
 			Metrics: map[string]interface{}{
 				"percent_of_total": shader.PercentOfTotal,
@@ -143,13 +155,13 @@ func detectBottlenecks(shader *ShaderMetrics, report *InsightsReport) {
 		// Determine severity based on percentage
 		if shader.PercentOfTotal > 50.0 {
 			insight.Severity = SeverityCritical
-			insight.Impact = "Dominates GPU execution time"
+			insight.Impact = "Highest-priority attribution hypothesis"
 		} else if shader.PercentOfTotal > 30.0 {
 			insight.Severity = SeverityHigh
-			insight.Impact = "Major contributor to GPU time"
+			insight.Impact = "High-priority attribution hypothesis"
 		} else {
 			insight.Severity = SeverityMedium
-			insight.Impact = "Significant contributor to GPU time"
+			insight.Impact = "Attribution hypothesis worth investigating"
 		}
 
 		// Generate recommendations
@@ -157,30 +169,6 @@ func detectBottlenecks(shader *ShaderMetrics, report *InsightsReport) {
 			"Profile this shader in detail to identify hotspots",
 			"Consider algorithmic optimizations or alternative approaches",
 			"Evaluate if work can be distributed across multiple passes",
-		}
-
-		// Try to determine if memory-bound or compute-bound
-		totalThreads := shader.TotalThreadgroups * shader.ThreadsPerGroupX *
-			shader.ThreadsPerGroupY * shader.ThreadsPerGroupZ
-		if totalThreads > 0 {
-			avgThreads := totalThreads / uint64(shader.InvocationCount)
-
-			// Heuristic: Low thread count with high time = likely memory-bound
-			if avgThreads < 1024 {
-				insight.Description += "\n\nLikely MEMORY-BOUND: Low thread count suggests memory bandwidth limitation."
-				insight.Recommendations = append([]string{
-					"Consider reducing memory bandwidth via data tiling",
-					"Explore data layout optimizations (structure of arrays vs array of structures)",
-					"Use shared memory / threadgroup memory for data reuse",
-				}, insight.Recommendations...)
-			} else {
-				insight.Description += "\n\nLikely COMPUTE-BOUND: High thread count suggests computational limitation."
-				insight.Recommendations = append([]string{
-					"Profile ALU utilization to identify compute inefficiencies",
-					"Consider algorithmic optimizations to reduce arithmetic operations",
-					"Evaluate vectorization opportunities",
-				}, insight.Recommendations...)
-			}
 		}
 
 		report.Insights = append(report.Insights, insight)
@@ -197,12 +185,14 @@ func detectOptimizations(t *trace.Trace, shader *ShaderMetrics, report *Insights
 	const maxThreadsPerGroup = 1024
 	occupancy := float64(threadsPerGroup) / float64(maxThreadsPerGroup)
 
-	if threadsPerGroup > 0 && occupancy < 0.5 && shader.PercentOfTotal > 5.0 {
+	if !shader.TimingApprox && threadsPerGroup > 0 && occupancy < 0.5 && shader.PercentOfTotal > 5.0 {
 		insight := &PerformanceInsight{
-			Type:       InsightOptimization,
-			Severity:   SeverityMedium,
-			ShaderName: shader.Name,
-			Title:      fmt.Sprintf("%s has suboptimal occupancy", shader.Name),
+			Type:         InsightOptimization,
+			Severity:     SeverityMedium,
+			ShaderName:   shader.Name,
+			TimingSource: shader.TimingSource,
+			TimingApprox: shader.TimingApprox,
+			Title:        fmt.Sprintf("%s has suboptimal occupancy", shader.Name),
 			Description: fmt.Sprintf("Threadgroup size is %d threads (%.0f%% occupancy). Low occupancy can limit GPU utilization.",
 				threadsPerGroup, occupancy*100),
 			Metrics: map[string]interface{}{
@@ -220,14 +210,16 @@ func detectOptimizations(t *trace.Trace, shader *ShaderMetrics, report *Insights
 	}
 
 	// Many small invocations detection
-	if shader.InvocationCount > 100 && shader.PercentOfTotal > 5.0 {
+	if !shader.TimingApprox && shader.InvocationCount > 100 && shader.PercentOfTotal > 5.0 {
 		avgDurationUs := float64(shader.AvgDurationNs) / 1000.0
 		if avgDurationUs < 50.0 { // Less than 50 microseconds per call
 			insight := &PerformanceInsight{
-				Type:       InsightOptimization,
-				Severity:   SeverityHigh,
-				ShaderName: shader.Name,
-				Title:      fmt.Sprintf("%s has excessive dispatch overhead", shader.Name),
+				Type:         InsightOptimization,
+				Severity:     SeverityHigh,
+				ShaderName:   shader.Name,
+				TimingSource: shader.TimingSource,
+				TimingApprox: shader.TimingApprox,
+				Title:        fmt.Sprintf("%s has excessive dispatch overhead", shader.Name),
 				Description: fmt.Sprintf("Dispatched %d times with average duration %.1f μs. CPU dispatch overhead may be significant.",
 					shader.InvocationCount, avgDurationUs),
 				Metrics: map[string]interface{}{
@@ -299,8 +291,10 @@ func detectAntiPatterns(t *trace.Trace, shader *ShaderMetrics, report *InsightsR
 		report.Insights = append(report.Insights, insight)
 	}
 
-	// High variability in execution time (indicates branches or synchronization issues)
-	if shader.InvocationCount > 1 {
+	// High variability is a triage signal. Dispatch durations recovered from
+	// streamData are cumulative offsets, so boundary or gap time may be charged
+	// to the following dispatch.
+	if !shader.TimingApprox && shader.InvocationCount > 1 {
 		minMs := float64(shader.MinDurationNs) / 1e6
 		maxMs := float64(shader.MaxDurationNs) / 1e6
 		avgMs := float64(shader.AvgDurationNs) / 1e6
@@ -308,11 +302,13 @@ func detectAntiPatterns(t *trace.Trace, shader *ShaderMetrics, report *InsightsR
 		if minMs > 0 && maxMs > minMs*3 { // Max is more than 3x min
 			variability := ((maxMs - minMs) / avgMs) * 100
 			insight := &PerformanceInsight{
-				Type:       InsightAntiPattern,
-				Severity:   SeverityMedium,
-				ShaderName: shader.Name,
-				Title:      fmt.Sprintf("%s has high execution time variability", shader.Name),
-				Description: fmt.Sprintf("Execution time varies from %.2f ms to %.2f ms (%.0f%% variability). This suggests divergent branches or synchronization issues.",
+				Type:         InsightAntiPattern,
+				Severity:     SeverityMedium,
+				ShaderName:   shader.Name,
+				TimingSource: shader.TimingSource,
+				TimingApprox: shader.TimingApprox,
+				Title:        fmt.Sprintf("%s has high observed timing variability", shader.Name),
+				Description: fmt.Sprintf("Observed duration varies from %.2f ms to %.2f ms (%.0f%% variability). Cumulative-offset timing can include boundary or gap time, so this does not by itself establish branch divergence or synchronization overhead.",
 					minMs, maxMs, variability),
 				Metrics: map[string]interface{}{
 					"min_ms":      minMs,
@@ -321,11 +317,11 @@ func detectAntiPatterns(t *trace.Trace, shader *ShaderMetrics, report *InsightsR
 					"variability": variability,
 				},
 				Recommendations: []string{
-					"Profile for branch divergence and warp/SIMD lane stalls",
-					"Consider restructuring conditionals to reduce divergence",
-					"Check for synchronization primitives that may cause variation",
+					"Inspect neighboring dispatches and command-buffer boundaries",
+					"Corroborate with source-backed counters before attributing the variation",
+					"Repeat the capture to distinguish stable workload variation from a boundary artifact",
 				},
-				Impact: "Indicates potential SIMD efficiency issues",
+				Impact: "Triage signal; the cause is not established",
 			}
 			report.Insights = append(report.Insights, insight)
 		}
@@ -465,7 +461,7 @@ func detectOverallPatterns(t *trace.Trace, metrics *ShaderMetricsReport, report 
 	}
 
 	// Check for highly concentrated GPU time (one shader dominates)
-	if len(metrics.Shaders) > 0 && metrics.Shaders[0].PercentOfTotal > 70.0 {
+	if len(metrics.Shaders) > 0 && !metrics.Shaders[0].TimingApprox && metrics.Shaders[0].PercentOfTotal > 70.0 {
 		insight := &PerformanceInsight{
 			Type:     InsightInfo,
 			Severity: SeverityInfo,
@@ -491,13 +487,41 @@ func FormatInsightsReport(report *InsightsReport) string {
 	var sb strings.Builder
 
 	sb.WriteString("=== GPU Performance Insights ===\n\n")
-	sb.WriteString(fmt.Sprintf("Total GPU Time: %.2f ms\n", report.TotalGPUTimeMs))
+	timeLabel := "Total GPU Time"
+	if report.TimingApprox {
+		timeLabel = "Estimated GPU Time"
+	}
+	sb.WriteString(fmt.Sprintf("%s: %.2f ms\n", timeLabel, report.TotalGPUTimeMs))
+	if len(report.TimingSources) > 0 {
+		kind := "measured"
+		if report.TimingApprox {
+			kind = "approximate"
+		}
+		sb.WriteString(fmt.Sprintf("Timing Source: %s (%s)\n", strings.Join(report.TimingSources, "; "), kind))
+		for _, source := range report.TimingSources {
+			if strings.Contains(source, "gpuCommandInfoData") {
+				sb.WriteString("Attribution Note: per-dispatch values are cumulative-offset deltas and may include boundary or gap time.\n")
+				break
+			}
+		}
+	}
 	sb.WriteString(fmt.Sprintf("Insights Found: %d\n", len(report.Insights)))
 	sb.WriteString(fmt.Sprintf("  Critical: %d, High: %d, Medium: %d, Low: %d\n\n",
 		report.CriticalCount, report.HighCount, report.MediumCount, report.LowCount))
 
+	attributionLimited := false
+	for _, source := range report.TimingSources {
+		if strings.Contains(source, "gpuCommandInfoData") {
+			attributionLimited = true
+			break
+		}
+	}
 	if len(report.TopBottlenecks) > 0 {
-		sb.WriteString("Top Bottlenecks:\n")
+		if attributionLimited {
+			sb.WriteString("Top Attributed-Span Contributors:\n")
+		} else {
+			sb.WriteString("Top Bottlenecks:\n")
+		}
 		for i, name := range report.TopBottlenecks {
 			if i >= 5 {
 				break
@@ -530,8 +554,19 @@ func FormatInsightsReport(report *InsightsReport) string {
 		if insight.ShaderName != "" {
 			sb.WriteString(fmt.Sprintf("    Shader: %s\n", insight.ShaderName))
 		}
+		if insight.TimingSource != "" {
+			kind := "measured"
+			if insight.TimingApprox {
+				kind = "approximate"
+			}
+			sb.WriteString(fmt.Sprintf("    Timing Source: %s (%s)\n", insight.TimingSource, kind))
+		}
 
-		sb.WriteString(fmt.Sprintf("    Type: %s\n", insight.Type))
+		if attributionLimited && !insight.TimingApprox {
+			sb.WriteString("    Finding Class: TRIAGE HYPOTHESIS\n")
+		} else {
+			sb.WriteString(fmt.Sprintf("    Type: %s\n", insight.Type))
+		}
 		sb.WriteString(fmt.Sprintf("\n    %s\n\n", insight.Description))
 
 		if insight.Impact != "" {
@@ -550,4 +585,22 @@ func FormatInsightsReport(report *InsightsReport) string {
 	}
 
 	return sb.String()
+}
+
+func insightTimingSources(shaders []*ShaderMetrics) ([]string, bool) {
+	seen := make(map[string]bool)
+	var sources []string
+	approximate := false
+	for _, shader := range shaders {
+		if shader.TimingApprox {
+			approximate = true
+		}
+		if shader.TimingSource == "" || seen[shader.TimingSource] {
+			continue
+		}
+		seen[shader.TimingSource] = true
+		sources = append(sources, shader.TimingSource)
+	}
+	sort.Strings(sources)
+	return sources, approximate
 }

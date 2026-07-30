@@ -23,6 +23,11 @@ type BufferTimelineAnalysis struct {
 	// Timeline bounds (in record indices)
 	MinRecordIndex int
 	MaxRecordIndex int
+
+	ExpectedEncoders    int
+	AttributedEncoders  int
+	AttributionComplete bool
+	AttributionNote     string
 }
 
 // BufferLifecycle tracks the lifecycle of a single buffer.
@@ -126,6 +131,21 @@ func ExtractBufferTimeline(t *trace.Trace) (*BufferTimelineAnalysis, error) {
 
 	// Compute summary statistics
 	analysis.computeStatistics()
+	analysis.ExpectedEncoders, _ = t.CountComputeEncoders()
+	encoderIDs := make(map[int]struct{})
+	for _, lifecycle := range analysis.BufferEvents {
+		for _, id := range lifecycle.EncoderIDs {
+			encoderIDs[id] = struct{}{}
+		}
+	}
+	analysis.AttributedEncoders = len(encoderIDs)
+	// This decoder currently observes structured Ct bindings only. Cul and
+	// other resource records are not decoded, so matching bucket counts alone
+	// cannot prove complete attribution.
+	analysis.AttributionComplete = false
+	analysis.AttributionNote = fmt.Sprintf(
+		"attributed encoder buckets: %d; trace-reported compute encoders: %d; Cul and other resource records are not attributed",
+		analysis.AttributedEncoders, analysis.ExpectedEncoders)
 
 	return analysis, nil
 }
@@ -166,18 +186,19 @@ func (analysis *BufferTimelineAnalysis) computeStatistics() {
 func FormatBufferTimelineASCII(analysis *BufferTimelineAnalysis, width int) string {
 	var out strings.Builder
 
-	out.WriteString("=== Buffer Timeline ===\n\n")
+	out.WriteString("=== Buffer Observed-Access Timeline ===\n\n")
 
 	// Summary statistics
 	out.WriteString("Summary:\n")
 	out.WriteString(fmt.Sprintf("  Total Buffers:      %d\n", analysis.TotalBuffers))
-	out.WriteString(fmt.Sprintf("  Total Allocations:  %d\n", analysis.TotalAllocations))
-	out.WriteString(fmt.Sprintf("  Average Lifetime:   %.1f records\n", analysis.AverageLifetime))
+	out.WriteString(fmt.Sprintf("  Buffers First Seen:  %d\n", analysis.TotalAllocations))
+	out.WriteString(fmt.Sprintf("  Average Access Span: %.1f records\n", analysis.AverageLifetime))
 	out.WriteString(fmt.Sprintf("  Timeline Range:     %d - %d records\n",
 		analysis.MinRecordIndex, analysis.MaxRecordIndex))
 	if analysis.PeakMemoryBytes > 0 {
-		out.WriteString(fmt.Sprintf("  Peak Memory:        %.2f MB\n", analysis.PeakMemoryMB))
+		out.WriteString(fmt.Sprintf("  Memory Upper Bound: %s (approximate)\n", formatBufferBytes(analysis.PeakMemoryBytes)))
 	}
+	writeBufferTimelineAttribution(&out, analysis)
 	out.WriteString("\n")
 
 	// Get buffers sorted by first access time
@@ -186,7 +207,10 @@ func FormatBufferTimelineASCII(analysis *BufferTimelineAnalysis, width int) stri
 		lifecycles = append(lifecycles, lifecycle)
 	}
 	sort.Slice(lifecycles, func(i, j int) bool {
-		return lifecycles[i].FirstSeen < lifecycles[j].FirstSeen
+		if lifecycles[i].FirstSeen != lifecycles[j].FirstSeen {
+			return lifecycles[i].FirstSeen < lifecycles[j].FirstSeen
+		}
+		return lifecycles[i].Address < lifecycles[j].Address
 	})
 
 	// Limit display to top 20 buffers for readability
@@ -298,16 +322,20 @@ func drawTimelineBar(lifecycle *BufferLifecycle, minIndex, maxIndex, width int) 
 func FormatBufferTimelineSummary(analysis *BufferTimelineAnalysis) string {
 	var out strings.Builder
 
-	out.WriteString("=== Buffer Timeline Summary ===\n\n")
+	out.WriteString("=== Buffer Observed-Access Summary ===\n\n")
 
 	// Overall statistics
 	out.WriteString("Overall Statistics:\n")
 	out.WriteString(fmt.Sprintf("  Total Unique Buffers:  %d\n", analysis.TotalBuffers))
-	out.WriteString(fmt.Sprintf("  Total Allocations:     %d\n", analysis.TotalAllocations))
-	out.WriteString(fmt.Sprintf("  Average Lifetime:      %.1f records\n", analysis.AverageLifetime))
+	out.WriteString(fmt.Sprintf("  Buffers First Seen:    %d\n", analysis.TotalAllocations))
+	out.WriteString(fmt.Sprintf("  Average Access Span:   %.1f records\n", analysis.AverageLifetime))
 	out.WriteString(fmt.Sprintf("  Timeline Range:        %d - %d records (span: %d)\n",
 		analysis.MinRecordIndex, analysis.MaxRecordIndex,
 		analysis.MaxRecordIndex-analysis.MinRecordIndex))
+	if analysis.PeakMemoryBytes > 0 {
+		out.WriteString(fmt.Sprintf("  Memory Upper Bound:    %s (approximate)\n", formatBufferBytes(analysis.PeakMemoryBytes)))
+	}
+	writeBufferTimelineAttribution(&out, analysis)
 	out.WriteString("\n")
 
 	// Top longest-lived buffers
@@ -320,7 +348,10 @@ func FormatBufferTimelineSummary(analysis *BufferTimelineAnalysis) string {
 	sort.Slice(lifecycles, func(i, j int) bool {
 		lifetimeI := lifecycles[i].LastSeen - lifecycles[i].FirstSeen
 		lifetimeJ := lifecycles[j].LastSeen - lifecycles[j].FirstSeen
-		return lifetimeI > lifetimeJ
+		if lifetimeI != lifetimeJ {
+			return lifetimeI > lifetimeJ
+		}
+		return lifecycles[i].Address < lifecycles[j].Address
 	})
 
 	out.WriteString("Top 10 Longest-Lived Buffers:\n")
@@ -338,7 +369,10 @@ func FormatBufferTimelineSummary(analysis *BufferTimelineAnalysis) string {
 
 	// Most frequently accessed buffers
 	sort.Slice(lifecycles, func(i, j int) bool {
-		return lifecycles[i].AccessCount > lifecycles[j].AccessCount
+		if lifecycles[i].AccessCount != lifecycles[j].AccessCount {
+			return lifecycles[i].AccessCount > lifecycles[j].AccessCount
+		}
+		return lifecycles[i].Address < lifecycles[j].Address
 	})
 
 	out.WriteString("Top 10 Most Frequently Accessed Buffers:\n")
@@ -349,8 +383,14 @@ func FormatBufferTimelineSummary(analysis *BufferTimelineAnalysis) string {
 	}
 	out.WriteString("\n")
 
+	if !analysis.AttributionComplete {
+		out.WriteString("Interpretation:\n")
+		out.WriteString("  Optimization advice withheld because encoder attribution is incomplete.\n")
+		out.WriteString("  Treat access spans as observed buffer references, not allocation lifetimes.\n")
+		return out.String()
+	}
 	// Optimization insights
-	out.WriteString("Optimization Insights:\n")
+	out.WriteString("Heuristic Opportunities (validate before acting):\n")
 
 	// Find short-lived buffers that could be pooled
 	var shortLived int
@@ -397,4 +437,31 @@ func FormatBufferTimelineSummary(analysis *BufferTimelineAnalysis) string {
 	}
 
 	return out.String()
+}
+
+func writeBufferTimelineAttribution(out *strings.Builder, analysis *BufferTimelineAnalysis) {
+	if analysis.AttributionComplete {
+		out.WriteString("  Attribution:           complete\n")
+		return
+	}
+	out.WriteString("  Attribution:           incomplete\n")
+	out.WriteString(fmt.Sprintf("    %s\n", analysis.AttributionNote))
+}
+
+func formatBufferBytes(n uint64) string {
+	const (
+		kib = uint64(1024)
+		mib = 1024 * kib
+		gib = 1024 * mib
+	)
+	switch {
+	case n >= gib:
+		return fmt.Sprintf("%.2f GB", float64(n)/float64(gib))
+	case n >= mib:
+		return fmt.Sprintf("%.2f MB", float64(n)/float64(mib))
+	case n >= kib:
+		return fmt.Sprintf("%.2f KB", float64(n)/float64(kib))
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
 }
