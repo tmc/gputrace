@@ -741,6 +741,7 @@ func (re *ReplayEngine) AnalyzeReplayWithCounters() (*ReplayPlan, *CounterSampli
 		EncoderMetrics:  encoderMetrics,
 		DispatchMetrics: dispatchMetrics,
 		SampleCount:     len(re.CounterSampler.Samples),
+		RawData:         re.CounterSampler.RawData,
 		EncoderCount:    len(plan.Encoders),
 		DispatchCount:   plan.ComputeDispatches,
 	}

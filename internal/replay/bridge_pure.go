@@ -288,37 +288,54 @@ func (h *MetalCommandBufferHandle) CreateComputeEncoder() *MetalComputeEncoderHa
 // counter sampling. This works on Apple Silicon (TBDR architecture) where explicit counter
 // sampling is not supported. Samples are taken at start (index 0) and end (index 1) of encoder.
 func (h *MetalCommandBufferHandle) CreateComputeEncoderWithStageSampling(sampleBuffer *MetalCounterSampleBufferHandle) *MetalComputeEncoderHandle {
+	return h.CreateComputeEncoderWithStageSamplingAt(sampleBuffer, 0, 1)
+}
+
+// CreateComputeEncoderWithStageSamplingAt creates a stage-sampled encoder with
+// caller-selected sample indices. Distinct command encoders must use distinct
+// indices when sharing one sample buffer.
+func (h *MetalCommandBufferHandle) CreateComputeEncoderWithStageSamplingAt(sampleBuffer *MetalCounterSampleBufferHandle, startIndex, endIndex int) *MetalComputeEncoderHandle {
+	encoder, err := h.createComputeEncoderWithStageSamplingAt(sampleBuffer, startIndex, endIndex)
+	if err != nil {
+		return h.CreateComputeEncoder()
+	}
+	return encoder
+}
+
+func (h *MetalCommandBufferHandle) createComputeEncoderWithStageSamplingAt(sampleBuffer *MetalCounterSampleBufferHandle, startIndex, endIndex int) (*MetalComputeEncoderHandle, error) {
+	if sampleBuffer == nil || sampleBuffer.buffer == nil {
+		return nil, fmt.Errorf("nil counter sample buffer")
+	}
 	// Create compute pass descriptor
 	passDesc := metal.NewMTLComputePassDescriptor()
 
 	// Get sample buffer attachments array
 	attachments := passDesc.SampleBufferAttachments()
 	if attachments == nil {
-		// Fall back to non-instrumented encoder
-		return h.CreateComputeEncoder()
+		return nil, fmt.Errorf("counter sample attachments unavailable")
 	}
 
 	// Get attachment at index 0
 	attachment0 := attachments.ObjectAtIndexedSubscript(0)
 	if attachment0 == nil {
-		return h.CreateComputeEncoder()
+		return nil, fmt.Errorf("counter sample attachment unavailable")
 	}
 
 	// Set the sample buffer
 	attachment0.SetSampleBuffer(sampleBuffer.buffer)
 
 	// Set sample indices: 0 for start, 1 for end of encoder
-	attachment0.SetStartOfEncoderSampleIndex(0)
-	attachment0.SetEndOfEncoderSampleIndex(1)
+	attachment0.SetStartOfEncoderSampleIndex(uint(startIndex))
+	attachment0.SetEndOfEncoderSampleIndex(uint(endIndex))
 
 	// Create encoder with descriptor
 	encoderID := objc.Send[objc.ID](h.cmdBuffer.GetID(), objc.Sel("computeCommandEncoderWithDescriptor:"), passDesc)
 	if encoderID == 0 {
-		return h.CreateComputeEncoder()
+		return nil, fmt.Errorf("create stage-sampled compute encoder")
 	}
 	encoder := metal.MTLComputeCommandEncoderObjectFromID(encoderID)
 
-	return &MetalComputeEncoderHandle{encoder: encoder}
+	return &MetalComputeEncoderHandle{encoder: encoder}, nil
 }
 
 // Commit commits the command buffer for execution.
@@ -416,6 +433,11 @@ func (h *MetalCounterSampleBufferHandle) SampleCount() int {
 
 // Release frees the counter sample buffer.
 func (h *MetalCounterSampleBufferHandle) Release() {
+	if h == nil || h.buffer.GetID() == 0 {
+		return
+	}
+	objc.Send[objc.ID](h.buffer.GetID(), objc.Sel("release"))
+	h.buffer = nil
 }
 
 // ResolveCounterSamples resolves counter sample data from the buffer.

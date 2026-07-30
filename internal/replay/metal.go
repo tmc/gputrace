@@ -9,6 +9,7 @@ import (
 
 	"github.com/tmc/apple/metal"
 	"github.com/tmc/apple/objc"
+	"github.com/tmc/gputrace/internal/counter"
 	"github.com/tmc/gputrace/internal/metallib"
 )
 
@@ -29,9 +30,15 @@ type MetalReplayEngine struct {
 // matching private-framework ABI can use GPUToolsReplayCommandBuffer to
 // invoke the loaded dispatch and commit functions explicitly.
 func (mre *MetalReplayEngine) EnableGPUToolsReplay() error {
+	if mre == nil || mre.Bridge == nil {
+		return fmt.Errorf("Metal replay engine is not initialized")
+	}
 	replay, err := OpenGPUToolsReplay()
 	if err != nil {
 		return err
+	}
+	if err := replay.InitializeSupport(mre.Bridge.device.GetID()); err != nil {
+		return fmt.Errorf("initialize GPUToolsReplay support: %w", err)
 	}
 	mre.GPUToolsReplay = replay
 	return nil
@@ -65,6 +72,32 @@ func NewMetalReplayEngine(trace *Trace) (*MetalReplayEngine, error) {
 		MetalPipelines: make(map[uint64]*MetalPipelineHandle),
 		MTLBLibraries:  make([]*metallib.MetalLibrary, 0),
 	}, nil
+}
+
+// NewCounterSampler creates a replay-time sampler backed by this engine's
+// public Metal counter APIs. Resolved counter bytes remain undecoded until a
+// validated hardware-layout decoder is available.
+func (mre *MetalReplayEngine) NewCounterSampler(config *counter.CounterSamplingConfig) (*counter.CounterSampler, error) {
+	if mre == nil || mre.Bridge == nil {
+		return nil, fmt.Errorf("Metal replay engine is not initialized")
+	}
+	backend, err := NewMetalCounterBackend(mre.Bridge)
+	if err != nil {
+		return nil, err
+	}
+	if config == nil {
+		config = counter.DefaultCounterSamplingConfig()
+	}
+	if backend.StageBoundarySampling() && config.SampleAtDispatchBoundaries {
+		return nil, fmt.Errorf("device supports stage-boundary counter sampling only; disable dispatch boundaries")
+	}
+	if backend.StageBoundarySampling() && len(config.EnabledCounterSets) != 1 {
+		return nil, fmt.Errorf("stage-boundary sampling supports one counter set; select one counter set")
+	}
+	if !backend.StageBoundarySampling() && !mre.Bridge.SupportsExplicitCounterSampling() {
+		return nil, fmt.Errorf("device does not support counter sampling")
+	}
+	return counter.NewCounterSamplerWithBackend(config, backend), nil
 }
 
 // Close releases Metal resources.
@@ -144,6 +177,7 @@ func (mre *MetalReplayEngine) RestoreFunctionsToMetal() error {
 	if err != nil {
 		return fmt.Errorf("discover functions: %w", err)
 	}
+	shaderSources := mre.extractShaderSources()
 
 	// Map discovered functions to pipelines
 	for _, funcInfo := range functions {
@@ -155,7 +189,6 @@ func (mre *MetalReplayEngine) RestoreFunctionsToMetal() error {
 		}
 
 		// Fall back to source compilation if available
-		shaderSources := mre.extractShaderSources()
 		source, ok := shaderSources[funcInfo.Name]
 		if !ok {
 			// No source and no MTLB pipeline - skip this function
@@ -183,17 +216,51 @@ func (mre *MetalReplayEngine) RestoreFunctionsToMetal() error {
 		mre.State.PipelineStates[funcInfo.Address] = metalPipeline
 	}
 
+	// Replay commands refer to pipeline-state addresses. Preserve the
+	// function-address entries above for diagnostics, then add the captured
+	// pipeline-address aliases used by set-pipeline records.
+	pipelines, err := mre.State.DiscoverPipelines()
+	if err != nil {
+		return fmt.Errorf("discover pipelines: %w", err)
+	}
+	for _, pipelineInfo := range pipelines {
+		pipeline, ok := mre.MetalPipelines[pipelineInfo.FunctionAddr]
+		if !ok && pipelineInfo.FunctionName != "" {
+			for address, name := range mre.State.FunctionNames {
+				if name == pipelineInfo.FunctionName {
+					pipeline = mre.MetalPipelines[address]
+					break
+				}
+			}
+		}
+		if pipeline == nil {
+			continue
+		}
+		mre.MetalPipelines[pipelineInfo.Address] = pipeline
+		mre.State.PipelineStates[pipelineInfo.Address] = pipeline
+	}
+
 	return nil
 }
 
 // extractShaderSources extracts shader source code from trace metadata.
 // Returns a map of function name -> shader source.
-// Note: MTLB files contain compiled shaders, not source. This method returns
-// empty for MTLB-based traces. Use loadMTLBLibraries for pre-compiled pipelines.
+// MTLB libraries remain the preferred replay source; store0 source is used
+// when a capture has archived Metal text but no usable compiled library.
 func (mre *MetalReplayEngine) extractShaderSources() map[string]string {
 	sources := make(map[string]string)
-	// MTLB files are compiled - no source available.
-	// Source would only be available in debug/development traces with embedded MSL.
+	if mre == nil || mre.Trace == nil {
+		return sources
+	}
+	stats, err := counter.ExtractStoreStats(mre.Trace, 0)
+	if err != nil || stats.Source == "" {
+		return sources
+	}
+	for _, pipeline := range stats.Pipelines {
+		if pipeline.FunctionName != "" {
+			sources[pipeline.FunctionName] = stats.Source
+		}
+	}
 	return sources
 }
 
@@ -272,6 +339,21 @@ func (mre *MetalReplayEngine) createPipelinesFromMTLB() (map[string]*MetalPipeli
 
 // ExecuteReplayPlan executes a replay plan on actual Metal GPU.
 func (mre *MetalReplayEngine) ExecuteReplayPlan(plan *ReplayPlan) (*MetalReplayResult, error) {
+	return mre.executeReplayPlan(plan, nil)
+}
+
+// ExecuteReplayPlanWithCounters executes a replay plan while inserting public
+// Metal counter samples at the configured encoder and dispatch boundaries.
+// Counter bytes remain raw because their layout is GPU- and counter-set-
+// specific; callers can inspect sampler.RawData without fabricated metrics.
+func (mre *MetalReplayEngine) ExecuteReplayPlanWithCounters(plan *ReplayPlan, sampler *counter.CounterSampler) (*MetalReplayResult, error) {
+	if sampler == nil {
+		return nil, fmt.Errorf("counter sampler is nil")
+	}
+	return mre.executeReplayPlan(plan, sampler)
+}
+
+func (mre *MetalReplayEngine) executeReplayPlan(plan *ReplayPlan, sampler *counter.CounterSampler) (*MetalReplayResult, error) {
 	result := &MetalReplayResult{
 		TraceePath:    plan.TraceePath,
 		Success:       true,
@@ -293,6 +375,25 @@ func (mre *MetalReplayEngine) ExecuteReplayPlan(plan *ReplayPlan) (*MetalReplayR
 		result.Success = false
 		result.Error = fmt.Sprintf("validate replay plan: %v", err)
 		return result, err
+	}
+	if sampler != nil {
+		maxSamples := 0
+		for _, encoder := range plan.Encoders {
+			if sampler.Config.SampleAtEncoderBoundaries {
+				maxSamples += 2
+			}
+			if sampler.Config.SampleAtDispatchBoundaries {
+				for _, cmd := range plan.EncoderCommands(encoder.Index) {
+					if cmd.Type == "compute_dispatch" {
+						maxSamples += 2
+					}
+				}
+			}
+		}
+		if err := sampler.CreateCounterSampleBuffers(mre.State.Device, maxSamples); err != nil {
+			return result, fmt.Errorf("create counter sample buffers: %w", err)
+		}
+		defer sampler.Close()
 	}
 
 	// Restore buffers and functions first
@@ -323,10 +424,50 @@ func (mre *MetalReplayEngine) ExecuteReplayPlan(plan *ReplayPlan) (*MetalReplayR
 
 		// Create command buffer for this encoder
 		cmdBuffer := mre.Bridge.CreateCommandBuffer()
-		encoder := cmdBuffer.CreateComputeEncoder()
+		sampleStart := 0
+		if sampler != nil {
+			sampleStart = sampler.NextSampleIndex
+		}
+		var encoder *MetalComputeEncoderHandle
+		if sampler != nil {
+			if factory, ok := sampler.Backend.(interface {
+				CreateComputeEncoder(*MetalCommandBufferHandle, any, int, int) (*MetalComputeEncoderHandle, error)
+			}); ok {
+				if len(sampler.Config.EnabledCounterSets) == 0 {
+					cmdBuffer.Release()
+					return result, fmt.Errorf("counter sampler has no enabled counter sets")
+				}
+				var err error
+				encoder, err = factory.CreateComputeEncoder(cmdBuffer, sampler.BackendBuffer(sampler.Config.EnabledCounterSets[0]), sampleStart, sampleStart+1)
+				if err != nil {
+					cmdBuffer.Release()
+					return result, fmt.Errorf("create sampled encoder: %w", err)
+				}
+			} else {
+				encoder = cmdBuffer.CreateComputeEncoder()
+			}
+		} else {
+			encoder = cmdBuffer.CreateComputeEncoder()
+		}
+		if sampler != nil {
+			if sampler.Config.SampleAtEncoderBoundaries {
+				if err := sampler.SampleCounters(encoder, "encoder_start", encoderIdx, -1); err != nil {
+					encoder.Release()
+					cmdBuffer.Release()
+					return result, fmt.Errorf("sample encoder start: %w", err)
+				}
+			}
+		}
 
 		// Encode all commands for this encoder
-		for _, cmd := range commands {
+		for commandIndex, cmd := range commands {
+			if sampler != nil && sampler.Config.SampleAtDispatchBoundaries && cmd.Type == "compute_dispatch" {
+				if err := sampler.SampleCounters(encoder, "dispatch_start", encoderIdx, commandIndex); err != nil {
+					encoder.Release()
+					cmdBuffer.Release()
+					return result, fmt.Errorf("sample dispatch start: %w", err)
+				}
+			}
 			if err := mre.encodeCommand(encoder, cmd); err != nil {
 				encoder.Release()
 				cmdBuffer.Release()
@@ -337,6 +478,20 @@ func (mre *MetalReplayEngine) ExecuteReplayPlan(plan *ReplayPlan) (*MetalReplayR
 
 			if cmd.Type == "compute_dispatch" {
 				result.DispatchesRun++
+				if sampler != nil && sampler.Config.SampleAtDispatchBoundaries {
+					if err := sampler.SampleCounters(encoder, "dispatch_end", encoderIdx, commandIndex); err != nil {
+						encoder.Release()
+						cmdBuffer.Release()
+						return result, fmt.Errorf("sample dispatch end: %w", err)
+					}
+				}
+			}
+		}
+		if sampler != nil && sampler.Config.SampleAtEncoderBoundaries {
+			if err := sampler.SampleCounters(encoder, "encoder_end", encoderIdx, len(commands)-1); err != nil {
+				encoder.Release()
+				cmdBuffer.Release()
+				return result, fmt.Errorf("sample encoder end: %w", err)
 			}
 		}
 
@@ -344,6 +499,13 @@ func (mre *MetalReplayEngine) ExecuteReplayPlan(plan *ReplayPlan) (*MetalReplayR
 		encoder.EndEncoding()
 		cmdBuffer.Commit()
 		cmdBuffer.WaitUntilCompleted()
+		if sampler != nil {
+			if err := sampler.ResolveCounterSamplesWithCommandBufferRange(cmdBuffer, sampleStart, sampler.NextSampleIndex-sampleStart); err != nil {
+				encoder.Release()
+				cmdBuffer.Release()
+				return result, fmt.Errorf("resolve counter samples: %w", err)
+			}
+		}
 
 		// Cleanup
 		encoder.Release()
@@ -370,9 +532,13 @@ func (mre *MetalReplayEngine) encodeCommand(encoder *MetalComputeEncoderHandle, 
 	switch cmd.Type {
 	case "compute_dispatch":
 		// Set pipeline state
-		pipeline, ok := mre.MetalPipelines[cmd.FunctionAddr]
+		pipelineAddress := cmd.PipelineAddr
+		if pipelineAddress == 0 {
+			pipelineAddress = cmd.FunctionAddr
+		}
+		pipeline, ok := mre.MetalPipelines[pipelineAddress]
 		if !ok {
-			return fmt.Errorf("pipeline not found for function 0x%x", cmd.FunctionAddr)
+			return fmt.Errorf("pipeline not found for address 0x%x", pipelineAddress)
 		}
 		encoder.SetPipeline(pipeline)
 
