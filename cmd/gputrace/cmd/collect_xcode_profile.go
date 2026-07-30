@@ -22,27 +22,30 @@ import (
 )
 
 type xcodeProfileActionOutput struct {
-	Success          bool   `json:"success"`
-	Action           string `json:"action"`
-	Target           string `json:"target,omitempty"`
-	Method           string `json:"method,omitempty"`
-	Input            string `json:"input,omitempty"`
-	Output           string `json:"output,omitempty"`
-	Source           string `json:"source,omitempty"`
-	RequestedOutput  string `json:"requested_output,omitempty"`
-	Copied           bool   `json:"copied,omitempty"`
-	Reused           bool   `json:"reused,omitempty"`
-	RequestedTrace   string `json:"requested_trace,omitempty"`
-	SelectedTitle    string `json:"selected_title,omitempty"`
-	SelectedDocument string `json:"selected_document,omitempty"`
-	Phase            string `json:"phase,omitempty"`
-	Evidence         string `json:"evidence,omitempty"`
-	TargetBound      *bool  `json:"target_bound,omitempty"`
-	PayloadClass     string `json:"payload_class,omitempty"`
-	SelfContained    *bool  `json:"self_contained,omitempty"`
-	ProfilerTimingAvailable *bool `json:"profiler_timing_available,omitempty"`
-	StructuralAnalysisAvailable *bool `json:"structural_analysis_available,omitempty"`
-	Warning          string `json:"warning,omitempty"`
+	Success                     bool   `json:"success"`
+	Action                      string `json:"action"`
+	Target                      string `json:"target,omitempty"`
+	Method                      string `json:"method,omitempty"`
+	Input                       string `json:"input,omitempty"`
+	Output                      string `json:"output,omitempty"`
+	Source                      string `json:"source,omitempty"`
+	SourceUUID                  string `json:"source_uuid,omitempty"`
+	XcodePID                    int    `json:"xcode_pid,omitempty"`
+	XcodeApp                    string `json:"xcode_app,omitempty"`
+	RequestedOutput             string `json:"requested_output,omitempty"`
+	Copied                      bool   `json:"copied,omitempty"`
+	Reused                      bool   `json:"reused,omitempty"`
+	RequestedTrace              string `json:"requested_trace,omitempty"`
+	SelectedTitle               string `json:"selected_title,omitempty"`
+	SelectedDocument            string `json:"selected_document,omitempty"`
+	Phase                       string `json:"phase,omitempty"`
+	Evidence                    string `json:"evidence,omitempty"`
+	TargetBound                 *bool  `json:"target_bound,omitempty"`
+	PayloadClass                string `json:"payload_class,omitempty"`
+	SelfContained               *bool  `json:"self_contained,omitempty"`
+	ProfilerTimingAvailable     *bool  `json:"profiler_timing_available,omitempty"`
+	StructuralAnalysisAvailable *bool  `json:"structural_analysis_available,omitempty"`
+	Warning                     string `json:"warning,omitempty"`
 }
 
 type xcodeWindowSelection struct {

@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 func writeStandaloneExportFixture(t *testing.T, name, uuid string, full bool) string {
@@ -125,5 +127,148 @@ func TestStandaloneExportTargetRequiresUniqueDocumentBinding(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "multiple .gputrace windows") {
 		t.Fatalf("ambiguous target error = %v", err)
+	}
+}
+
+func TestStandaloneExportRecoveryFlagsRequireCompleteIdentity(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "mode only", args: []string{"--recover-untitled"}},
+		{name: "source only", args: []string{"--source", "/trace.gputrace"}},
+		{name: "missing app", args: []string{"--recover-untitled", "--source", "/trace.gputrace", "--xcode-pid", "81051"}},
+		{name: "missing pid", args: []string{"--recover-untitled", "--source", "/trace.gputrace", "--xcode-app", "/Applications/Xcode.app"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cmd := &cobra.Command{}
+			standaloneExportFlags(cmd)
+			if err := cmd.ParseFlags(test.args); err != nil {
+				t.Fatal(err)
+			}
+			_, err := standaloneExportRecoveryFromFlags(cmd)
+			if err == nil || !strings.Contains(err.Error(), "requires --recover-untitled") {
+				t.Fatalf("error = %v, want incomplete recovery flags", err)
+			}
+		})
+	}
+}
+
+func TestStandaloneRecoveryTarget(t *testing.T) {
+	recovery := standaloneExportRecovery{
+		Enabled:    true,
+		SourcePath: "/Users/tmc/tmp/raw.gputrace",
+		SourceUUID: "RAW-UUID",
+		Identity: xcodeProcessIdentity{
+			PID:     81051,
+			AppPath: "/Applications/Xcode.app",
+		},
+	}
+	eligible := standaloneRecoveryWindow{
+		xcodeAXWindow:   xcodeAXWindow{Element: 11},
+		PID:             81051,
+		PerformanceView: true,
+	}
+	tests := []struct {
+		name    string
+		windows []standaloneRecoveryWindow
+		want    uintptr
+		wantErr string
+	}{
+		{name: "unique", windows: []standaloneRecoveryWindow{eligible}, want: 11},
+		{name: "duplicate AX representation", windows: []standaloneRecoveryWindow{eligible, eligible}, want: 11},
+		{name: "none", wantErr: "no untitled Performance window"},
+		{
+			name: "wrong pid",
+			windows: []standaloneRecoveryWindow{{
+				xcodeAXWindow:   xcodeAXWindow{Element: 12},
+				PID:             74001,
+				PerformanceView: true,
+			}},
+			wantErr: "no untitled Performance window",
+		},
+		{
+			name: "document bound",
+			windows: []standaloneRecoveryWindow{{
+				xcodeAXWindow:   xcodeAXWindow{Element: 13, Document: "/Users/tmc/tmp/other.gputrace"},
+				PID:             81051,
+				PerformanceView: true,
+			}},
+			wantErr: "no untitled Performance window",
+		},
+		{
+			name: "titled",
+			windows: []standaloneRecoveryWindow{{
+				xcodeAXWindow:   xcodeAXWindow{Element: 14, Title: "Other"},
+				PID:             81051,
+				PerformanceView: true,
+			}},
+			wantErr: "no untitled Performance window",
+		},
+		{
+			name: "no performance evidence",
+			windows: []standaloneRecoveryWindow{{
+				xcodeAXWindow: xcodeAXWindow{Element: 15},
+				PID:           81051,
+			}},
+			wantErr: "no untitled Performance window",
+		},
+		{
+			name: "ambiguous",
+			windows: []standaloneRecoveryWindow{
+				eligible,
+				{
+					xcodeAXWindow:   xcodeAXWindow{Element: 16},
+					PID:             81051,
+					PerformanceView: true,
+				},
+			},
+			wantErr: "multiple untitled Performance windows",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := standaloneRecoveryTarget(test.windows, recovery)
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("error = %v, want %q", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.want {
+				t.Fatalf("window = %d, want %d", got, test.want)
+			}
+		})
+	}
+}
+
+func TestValidateStandaloneRecoveryIdentity(t *testing.T) {
+	identity := xcodeProcessIdentity{PID: 81051, AppPath: "/Applications/Xcode.app"}
+	if err := validateStandaloneRecoveryIdentity(identity, "/Applications/Xcode.app"); err != nil {
+		t.Fatal(err)
+	}
+	err := validateStandaloneRecoveryIdentity(identity, "/Applications/Xcode-rc.app")
+	if err == nil || !strings.Contains(err.Error(), "not requested app") {
+		t.Fatalf("error = %v, want cross-app rejection", err)
+	}
+}
+
+func TestFinalizeStandaloneExportRejectsUUIDMismatchAndPreservesOutput(t *testing.T) {
+	input := writeStandaloneExportFixture(t, "input", "wanted", true)
+	output := writeStandaloneExportFixture(t, "output", "other", true)
+	var status bytes.Buffer
+	_, err := finalizeStandaloneExport(&status, input, output)
+	if err == nil || !strings.Contains(err.Error(), "UUID") {
+		t.Fatalf("error = %v, want UUID mismatch", err)
+	}
+	if strings.Contains(status.String(), "Exported to:") {
+		t.Fatalf("mismatched export printed success:\n%s", status.String())
+	}
+	if _, err := os.Stat(output); err != nil {
+		t.Fatalf("mismatched output was not preserved: %v", err)
 	}
 }

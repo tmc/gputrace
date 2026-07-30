@@ -1666,6 +1666,11 @@ func exportTrace(ctx context.Context, appAX, windowAX uintptr, outputPath string
 	status := xcodeProfileStatusWriter()
 	axAction(windowAX, "AXRaise")
 	time.Sleep(300 * time.Millisecond)
+	if sheet := findElement(windowAX, func(el uintptr) bool {
+		return axString(el, "AXRole") == "AXSheet"
+	}); sheet != 0 {
+		return fmt.Errorf("selected export window already has an open sheet; refusing to reuse stale UI")
+	}
 
 	// Try clicking Export button in Summary panel first
 	exportBtn := FindExportButton(windowAX)
@@ -1698,26 +1703,18 @@ func exportTrace(ctx context.Context, appAX, windowAX uintptr, outputPath string
 	}
 	defer cfRelease(freshApp)
 
-	// Search ALL windows for Save button (sheet might be in any window)
-	var saveWindow uintptr
+	// The export sheet must descend from the selected trace window. Searching
+	// every Xcode window can bind a stale sheet from another trace.
 	sheetFound := false
 	for i := 0; i < 30; i++ {
 		if err := checkAutomationCanceled(ctx); err != nil {
 			return err
 		}
-		windows := GetAllWindows(freshApp)
-		for _, w := range windows {
-			// Detect export sheet by looking for Save button or AXSheet role
-			sheet := findElement(w, func(el uintptr) bool {
-				return axString(el, "AXRole") == "AXSheet"
-			})
-			if sheet != 0 {
-				sheetFound = true
-				saveWindow = w
-				break
-			}
-		}
-		if sheetFound {
+		sheet := findElement(windowAX, func(el uintptr) bool {
+			return axString(el, "AXRole") == "AXSheet"
+		})
+		if sheet != 0 {
+			sheetFound = true
 			break
 		}
 		if err := waitForAutomation(ctx, 500*time.Millisecond); err != nil {
@@ -1727,29 +1724,16 @@ func exportTrace(ctx context.Context, appAX, windowAX uintptr, outputPath string
 
 	if !sheetFound {
 		if collectProfileOpts.debug {
-			windows := GetAllWindows(freshApp)
-			fmt.Fprintf(os.Stderr, "    Debug: Found %d windows\n", len(windows))
-			for i, w := range windows {
-				title := axString(w, "AXTitle")
-				fmt.Fprintf(os.Stderr, "    Debug: Window %d: %q\n", i+1, title)
-			}
+			fmt.Fprintf(os.Stderr, "    Debug: selected window title=%q document=%q\n",
+				axString(windowAX, "AXTitle"), axString(windowAX, "AXDocument"))
 		}
-		return fmt.Errorf("export sheet did not appear (Save button not found)")
+		return fmt.Errorf("export sheet did not appear under the selected trace window")
 	}
 
 	fmt.Fprintln(status, "    Export sheet detected")
-	// Use the window containing the Save button for subsequent operations
-	windowAX = saveWindow
 
-	// Helper to find element across all windows (using freshApp from above)
-	findInAllWindows := func(finder func(uintptr) uintptr) uintptr {
-		windows := GetAllWindows(freshApp)
-		for _, w := range windows {
-			if el := finder(w); el != 0 {
-				return el
-			}
-		}
-		return 0
+	findInExportWindow := func(finder func(uintptr) uintptr) uintptr {
+		return finder(windowAX)
 	}
 
 	// Check "Embed performance data" checkbox if available and enabled
@@ -1826,7 +1810,7 @@ func exportTrace(ctx context.Context, appAX, windowAX uintptr, outputPath string
 
 	// Set just the filename (never include path prefix - macOS converts "/" to ":")
 	fmt.Fprintf(status, "    Setting filename: %s\n", outputName)
-	saveNameField := findInAllWindows(FindSaveAsTextField)
+	saveNameField := findInExportWindow(FindSaveAsTextField)
 	if saveNameField != 0 {
 		if err := setSaveName(saveNameField, outputName); err != nil {
 			return err

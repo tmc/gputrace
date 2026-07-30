@@ -12,8 +12,22 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	gputraceTrace "github.com/tmc/gputrace/internal/trace"
 	"github.com/tmc/gputrace/internal/tracebundle"
 )
+
+type standaloneExportRecovery struct {
+	Enabled    bool
+	SourcePath string
+	SourceUUID string
+	Identity   xcodeProcessIdentity
+}
+
+type standaloneRecoveryWindow struct {
+	xcodeAXWindow
+	PID             int
+	PerformanceView bool
+}
 
 func runExport(cmd *cobra.Command, args []string) error {
 	status := xcodeProfileStatusWriter()
@@ -30,16 +44,44 @@ func runExport(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	requestedApp := requestedXcodeAppPath()
-	appAX, identity, err := findSingleXcodeApp(cmd.Context(), requestedApp, 10*time.Second)
+	recovery, err := standaloneExportRecoveryFromFlags(cmd)
 	if err != nil {
-		return fmt.Errorf("cannot establish exact Xcode selection: %w", err)
+		return err
+	}
+
+	var appAX uintptr
+	var identity xcodeProcessIdentity
+	if recovery.Enabled {
+		identity = recovery.Identity
+		appAX, err = reacquireXcodeApp(identity)
+		if err != nil {
+			return fmt.Errorf("cannot establish recovery Xcode selection: %w", err)
+		}
+		fmt.Fprintf(status, "Recovering source: %s\n", recovery.SourcePath)
+		fmt.Fprintf(status, "Source trace UUID: %s\n", recovery.SourceUUID)
+		fmt.Fprintf(status, "Bound Xcode: PID %d app %s\n", identity.PID, identity.AppPath)
+	} else {
+		requestedApp := requestedXcodeAppPath()
+		appAX, identity, err = findSingleXcodeApp(cmd.Context(), requestedApp, 10*time.Second)
+		if err != nil {
+			return fmt.Errorf("cannot establish exact Xcode selection: %w", err)
+		}
 	}
 	defer cfRelease(appAX)
 
-	windowAX, doc, err := waitForStandaloneExportWindow(cmd.Context(), appAX, identity, 10*time.Second)
-	if err != nil {
-		return err
+	var windowAX uintptr
+	var doc string
+	if recovery.Enabled {
+		windowAX, err = waitForStandaloneRecoveryWindow(cmd.Context(), appAX, recovery, 10*time.Second)
+		if err != nil {
+			return err
+		}
+		doc = recovery.SourcePath
+	} else {
+		windowAX, doc, err = waitForStandaloneExportWindow(cmd.Context(), appAX, identity, 10*time.Second)
+		if err != nil {
+			return err
+		}
 	}
 
 	if err := requireStandaloneExportTarget(doc); err != nil {
@@ -88,8 +130,81 @@ func runExport(cmd *cobra.Command, args []string) error {
 		Target: doc,
 		Output: outputPath,
 	}
+	if recovery.Enabled {
+		actionOutput.Source = recovery.SourcePath
+		actionOutput.SourceUUID = recovery.SourceUUID
+		actionOutput.XcodePID = recovery.Identity.PID
+		actionOutput.XcodeApp = recovery.Identity.AppPath
+		actionOutput.Evidence = "explicit untitled-window recovery; exported UUID verified against source"
+		actionOutput.TargetBound = boolPointer(true)
+	}
 	applyXcodePayload(&actionOutput, payload)
 	return writeXcodeProfileActionOutput(actionOutput)
+}
+
+func standaloneExportRecoveryFromFlags(cmd *cobra.Command) (standaloneExportRecovery, error) {
+	enabled, _ := cmd.Flags().GetBool("recover-untitled")
+	source, _ := cmd.Flags().GetString("source")
+	pid, _ := cmd.Flags().GetInt("xcode-pid")
+	app, _ := cmd.Flags().GetString("xcode-app")
+
+	any := enabled || source != "" || pid != 0 || app != ""
+	if !any {
+		return standaloneExportRecovery{}, nil
+	}
+	if !enabled || source == "" || pid <= 0 || app == "" {
+		return standaloneExportRecovery{}, fmt.Errorf(
+			"untitled recovery requires --recover-untitled, --source, --xcode-pid, and --xcode-app",
+		)
+	}
+	if !filepath.IsAbs(app) {
+		return standaloneExportRecovery{}, fmt.Errorf("--xcode-app must be an absolute .app path")
+	}
+	app = filepath.Clean(app)
+	if !strings.HasSuffix(strings.ToLower(app), ".app") {
+		return standaloneExportRecovery{}, fmt.Errorf("--xcode-app must name an .app bundle")
+	}
+	source, err := filepath.Abs(source)
+	if err != nil {
+		return standaloneExportRecovery{}, fmt.Errorf("resolve recovery source: %w", err)
+	}
+	source = filepath.Clean(source)
+	if !strings.HasSuffix(strings.ToLower(source), ".gputrace") {
+		return standaloneExportRecovery{}, fmt.Errorf("--source must name a .gputrace bundle")
+	}
+	payload, err := tracebundle.InspectPayload(source)
+	if err != nil {
+		return standaloneExportRecovery{}, fmt.Errorf("inspect recovery source: %w", err)
+	}
+	if payload.Class != tracebundle.PayloadFull {
+		return standaloneExportRecovery{}, fmt.Errorf("recovery source is not self-contained: %s", source)
+	}
+	metadata, err := gputraceTrace.ReadMetadata(source)
+	if err != nil {
+		return standaloneExportRecovery{}, fmt.Errorf("read recovery source metadata: %w", err)
+	}
+	if metadata.UUID == "" {
+		return standaloneExportRecovery{}, fmt.Errorf("recovery source has no trace UUID: %s", source)
+	}
+	identity := xcodeProcessIdentity{PID: pid, AppPath: app, BundleID: "com.apple.dt.Xcode"}
+	if err := validateStandaloneRecoveryIdentity(identity, xcodeProcessPath(pid)); err != nil {
+		return standaloneExportRecovery{}, err
+	}
+	return standaloneExportRecovery{
+		Enabled:    true,
+		SourcePath: source,
+		SourceUUID: metadata.UUID,
+		Identity:   identity,
+	}, nil
+}
+
+func validateStandaloneRecoveryIdentity(identity xcodeProcessIdentity, actualApp string) error {
+	actualApp = filepath.Clean(actualApp)
+	if identity.PID <= 0 || actualApp != filepath.Clean(identity.AppPath) {
+		return fmt.Errorf("Xcode PID %d runs from %s, not requested app %s",
+			identity.PID, actualApp, identity.AppPath)
+	}
+	return nil
 }
 
 func standaloneExportTarget(windows []xcodeAXWindow) (uintptr, string, error) {
@@ -140,6 +255,90 @@ func waitForStandaloneExportWindow(ctx context.Context, appAX uintptr, identity 
 		}
 		if err := waitForAutomation(ctx, 100*time.Millisecond); err != nil {
 			return 0, "", err
+		}
+	}
+}
+
+func standaloneRecoveryTarget(windows []standaloneRecoveryWindow, recovery standaloneExportRecovery) (uintptr, error) {
+	var matches []standaloneRecoveryWindow
+	seen := make(map[uintptr]bool)
+	for _, window := range windows {
+		if window.PID != recovery.Identity.PID || window.Document != "" ||
+			strings.TrimSpace(window.Title) != "" || !window.PerformanceView {
+			continue
+		}
+		if seen[window.Element] {
+			continue
+		}
+		seen[window.Element] = true
+		matches = append(matches, window)
+	}
+	switch len(matches) {
+	case 0:
+		return 0, fmt.Errorf("no untitled Performance window is bound to Xcode PID %d app %s",
+			recovery.Identity.PID, recovery.Identity.AppPath)
+	case 1:
+		return matches[0].Element, nil
+	default:
+		var elements []string
+		for _, match := range matches {
+			elements = append(elements, fmt.Sprintf("%d", match.Element))
+		}
+		return 0, fmt.Errorf("multiple untitled Performance windows are ambiguous for Xcode PID %d app %s: AX elements %s",
+			recovery.Identity.PID, recovery.Identity.AppPath, strings.Join(elements, ", "))
+	}
+}
+
+func recoveryWindows(appAX uintptr) []standaloneRecoveryWindow {
+	windows := deduplicateAXWindows(GetAllWindows(appAX))
+	out := make([]standaloneRecoveryWindow, 0, len(windows))
+	for _, window := range windows {
+		var pid int32
+		if axUIElementGetPid(window.Element, &pid) != kAXErrorSuccess {
+			continue
+		}
+		out = append(out, standaloneRecoveryWindow{
+			xcodeAXWindow:   window,
+			PID:             int(pid),
+			PerformanceView: hasPerformanceViewIndicators(window.Element),
+		})
+	}
+	return out
+}
+
+func waitForStandaloneRecoveryWindow(ctx context.Context, appAX uintptr, recovery standaloneExportRecovery, timeout time.Duration) (uintptr, error) {
+	deadline := time.Now().Add(timeout)
+	var last uintptr
+	stable := 0
+	var lastErr error
+	for {
+		bound, err := xcodeIdentityForAX(appAX)
+		if err != nil || bound.PID != recovery.Identity.PID ||
+			filepath.Clean(bound.AppPath) != filepath.Clean(recovery.Identity.AppPath) {
+			return 0, fmt.Errorf("untitled recovery lost exact Xcode PID/app binding: want PID %d app %s",
+				recovery.Identity.PID, recovery.Identity.AppPath)
+		}
+		window, err := standaloneRecoveryTarget(recoveryWindows(appAX), recovery)
+		if err == nil {
+			if window == last {
+				stable++
+			} else {
+				last = window
+				stable = 1
+			}
+			if stable >= 2 {
+				return window, nil
+			}
+		} else {
+			last = 0
+			stable = 0
+			lastErr = err
+		}
+		if time.Now().After(deadline) {
+			return 0, fmt.Errorf("untitled recovery target not established: %w", lastErr)
+		}
+		if err := waitForAutomation(ctx, 100*time.Millisecond); err != nil {
+			return 0, err
 		}
 	}
 }
