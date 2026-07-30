@@ -240,6 +240,73 @@ func findSelectedXcodeApp(ctx context.Context, requestedApp string) (uintptr, xc
 	}
 }
 
+func selectSingleXcodeProcess(identities []xcodeProcessIdentity, requestedApp string) (xcodeProcessIdentity, error) {
+	switch len(identities) {
+	case 0:
+		return xcodeProcessIdentity{}, fmt.Errorf("no Xcode process is running from %s", requestedApp)
+	case 1:
+		return identities[0], nil
+	default:
+		var pids []string
+		for _, identity := range identities {
+			pids = append(pids, strconv.Itoa(identity.PID))
+		}
+		return xcodeProcessIdentity{}, fmt.Errorf("multiple Xcode processes are running from %s (PIDs %s); cannot select one safely",
+			requestedApp, strings.Join(pids, ", "))
+	}
+}
+
+func findSingleXcodeApp(ctx context.Context, requestedApp string, timeout time.Duration) (uintptr, xcodeProcessIdentity, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		identities := xcodeProcessesForApp(requestedApp)
+		if len(identities) > 0 {
+			identity, err := selectSingleXcodeProcess(identities, requestedApp)
+			if err != nil {
+				return 0, xcodeProcessIdentity{}, err
+			}
+			appAX := axCreateApplication(int32(identity.PID))
+			if appAX == 0 {
+				return 0, xcodeProcessIdentity{}, fmt.Errorf("create AX application for Xcode PID %d", identity.PID)
+			}
+			return appAX, identity, nil
+		}
+		if time.Now().After(deadline) {
+			return 0, xcodeProcessIdentity{}, fmt.Errorf("no Xcode process is running from %s", requestedApp)
+		}
+		if err := waitForAutomation(ctx, 100*time.Millisecond); err != nil {
+			return 0, xcodeProcessIdentity{}, err
+		}
+	}
+}
+
+func xcodeIdentityForAX(appAX uintptr) (xcodeProcessIdentity, error) {
+	var pid int32
+	if appAX == 0 || axUIElementGetPid(appAX, &pid) != kAXErrorSuccess || pid == 0 {
+		return xcodeProcessIdentity{}, fmt.Errorf("cannot read bound Xcode PID")
+	}
+	appPath := xcodeProcessPath(int(pid))
+	if appPath == "" {
+		return xcodeProcessIdentity{}, fmt.Errorf("cannot read app path for Xcode PID %d", pid)
+	}
+	return xcodeProcessIdentity{
+		PID:      int(pid),
+		AppPath:  appPath,
+		BundleID: "com.apple.dt.Xcode",
+	}, nil
+}
+
+func reacquireXcodeApp(identity xcodeProcessIdentity) (uintptr, error) {
+	if identity.PID == 0 || filepath.Clean(xcodeProcessPath(identity.PID)) != filepath.Clean(identity.AppPath) {
+		return 0, fmt.Errorf("bound Xcode PID %d is no longer running from %s", identity.PID, identity.AppPath)
+	}
+	appAX := axCreateApplication(int32(identity.PID))
+	if appAX == 0 {
+		return 0, fmt.Errorf("cannot reacquire Xcode PID %d from %s", identity.PID, identity.AppPath)
+	}
+	return appAX, nil
+}
+
 func snapshotXcodeCrashReports(dir string) (map[string]crashReportState, error) {
 	snapshot := make(map[string]crashReportState)
 	if dir == "" {

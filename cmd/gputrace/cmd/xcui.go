@@ -826,14 +826,20 @@ func axPressWithFallbackWindow(el uintptr, windowAX uintptr) error {
 
 		// AXPress truly failed. Try AppleScript click first (most reliable on Xcode 26).
 		verboseLog("axPressWithFallbackWindow: AXPress failed, trying AppleScript click for %q/%q", title, desc)
+		var targetPID int32
 		if windowAX != 0 {
-			ActivateXcode()
+			if axUIElementGetPid(windowAX, &targetPID) != kAXErrorSuccess || targetPID == 0 {
+				return fmt.Errorf("cannot identify owning process for %q/%q", title, desc)
+			}
+			if err := activateProcessPID(targetPID); err != nil {
+				return fmt.Errorf("activate owning process for %q/%q: %w", title, desc, err)
+			}
 			time.Sleep(200 * time.Millisecond)
 			axAction(windowAX, "AXRaise")
 			time.Sleep(200 * time.Millisecond)
 		}
 
-		if osErr := clickButtonViaAppleScript(title, desc); osErr == nil {
+		if osErr := clickButtonViaAppleScript(targetPID, title, desc); osErr == nil {
 			return nil
 		} else {
 			verboseLog("axPressWithFallbackWindow: AppleScript failed: %v, trying CGEvent", osErr)
@@ -851,7 +857,7 @@ func axPressWithFallbackWindow(el uintptr, windowAX uintptr) error {
 // clickButtonViaAppleScript clicks a button in the frontmost Xcode window using AppleScript.
 // Uses `entire contents` + `first UI element whose role is "AXWindow"` which reliably
 // resolves element positions on Xcode 26, even when the Go AX API returns (0,0).
-func clickButtonViaAppleScript(title, description string) error {
+func clickButtonViaAppleScript(pid int32, title, description string) error {
 	candidates := []string{}
 	if title != "" && title != "missing value" {
 		candidates = append(candidates, title)
@@ -866,7 +872,7 @@ func clickButtonViaAppleScript(title, description string) error {
 	for _, name := range candidates {
 		script := fmt.Sprintf(`
 tell application "System Events"
-	tell process "Xcode"
+	tell first process whose unix id is %d
 		set frontmost to true
 		delay 0.3
 		set w to first UI element whose role is "AXWindow"
@@ -883,7 +889,7 @@ tell application "System Events"
 		end repeat
 		return "not found"
 	end tell
-end tell`, name, name)
+end tell`, pid, name, name)
 
 		out, err := exec.Command("osascript", "-e", script).CombinedOutput()
 		result := strings.TrimSpace(string(out))
@@ -1492,6 +1498,11 @@ func ActivateXcode() error {
 	return cmd.Run()
 }
 
+func activateProcessPID(pid int32) error {
+	script := fmt.Sprintf(`tell application "System Events" to set frontmost of first process whose unix id is %d to true`, pid)
+	return exec.Command("osascript", "-e", script).Run()
+}
+
 // NavigateToFolderInSaveDialog navigates to a folder in a save dialog.
 // Uses AX APIs to avoid stealing focus from the user.
 // The window parameter should be the main window containing the save sheet.
@@ -1530,13 +1541,12 @@ func NavigateToFolderInSaveDialog(window uintptr, folderPath string) error {
 	// CGEventPostToPid is unreliable for keyboard shortcuts in sheets.
 	var pid int32
 	if axUIElementGetPid(window, &pid) != kAXErrorSuccess {
-		pid = getXcodePID()
-	}
-	if pid == 0 {
-		return fmt.Errorf("could not find Xcode PID")
+		return fmt.Errorf("could not read Xcode PID from bound export window")
 	}
 
-	ActivateXcode()
+	if err := activateProcessPID(pid); err != nil {
+		return fmt.Errorf("activate bound Xcode PID %d: %w", pid, err)
+	}
 	sleepMs(200)
 	axAction(window, "AXRaise")
 	sleepMs(200)

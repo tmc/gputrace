@@ -3,6 +3,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -29,19 +30,18 @@ func runExport(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Try AX-based approach first
-	appAX, err := FindXcodeApp()
+	requestedApp := requestedXcodeAppPath()
+	appAX, identity, err := findSingleXcodeApp(cmd.Context(), requestedApp, 10*time.Second)
 	if err != nil {
-		return fmt.Errorf("AX not available: %w", err)
+		return fmt.Errorf("cannot establish exact Xcode selection: %w", err)
 	}
 	defer cfRelease(appAX)
 
-	windowAX, err := waitForWindow(cmd.Context(), appAX, "", 10*time.Second)
+	windowAX, doc, err := waitForStandaloneExportWindow(cmd.Context(), appAX, identity, 10*time.Second)
 	if err != nil {
-		return fmt.Errorf("Xcode window not found: %w", err)
+		return err
 	}
 
-	doc := axString(windowAX, "AXDocument")
 	if err := requireStandaloneExportTarget(doc); err != nil {
 		return err
 	}
@@ -90,6 +90,58 @@ func runExport(cmd *cobra.Command, args []string) error {
 	}
 	applyXcodePayload(&actionOutput, payload)
 	return writeXcodeProfileActionOutput(actionOutput)
+}
+
+func standaloneExportTarget(windows []xcodeAXWindow) (uintptr, string, error) {
+	var matches []xcodeAXWindow
+	for _, window := range windows {
+		doc := filepath.Clean(strings.TrimSpace(window.Document))
+		if doc == "." || !filepath.IsAbs(doc) || !strings.HasSuffix(strings.ToLower(doc), ".gputrace") {
+			continue
+		}
+		matches = append(matches, window)
+	}
+	switch len(matches) {
+	case 0:
+		return 0, "", fmt.Errorf("cannot establish standalone export target: no AXDocument-bound .gputrace window")
+	case 1:
+		return matches[0].Element, matches[0].Document, nil
+	default:
+		var docs []string
+		for _, match := range matches {
+			docs = append(docs, match.Document)
+		}
+		return 0, "", fmt.Errorf("cannot establish standalone export target: multiple .gputrace windows are open: %s",
+			strings.Join(docs, ", "))
+	}
+}
+
+func waitForStandaloneExportWindow(ctx context.Context, appAX uintptr, identity xcodeProcessIdentity, timeout time.Duration) (uintptr, string, error) {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for {
+		bound, err := xcodeIdentityForAX(appAX)
+		if err != nil || bound.PID != identity.PID || filepath.Clean(bound.AppPath) != filepath.Clean(identity.AppPath) {
+			return 0, "", fmt.Errorf("standalone export lost exact Xcode PID/app binding: want PID %d app %s",
+				identity.PID, identity.AppPath)
+		}
+		window, doc, err := standaloneExportTarget(deduplicateAXWindows(GetAllWindows(appAX)))
+		if err == nil {
+			var pid int32
+			if axUIElementGetPid(window, &pid) != kAXErrorSuccess || int(pid) != identity.PID {
+				return 0, "", fmt.Errorf("standalone export target window is not owned by bound Xcode PID %d", identity.PID)
+			}
+			return window, doc, nil
+		}
+		lastErr = err
+		if time.Now().After(deadline) {
+			return 0, "", fmt.Errorf("standalone export target not established for PID %d app %s: %w",
+				identity.PID, identity.AppPath, lastErr)
+		}
+		if err := waitForAutomation(ctx, 100*time.Millisecond); err != nil {
+			return 0, "", err
+		}
+	}
 }
 
 func finalizeStandaloneExport(w io.Writer, targetPath, outputPath string) (tracebundle.Payload, error) {

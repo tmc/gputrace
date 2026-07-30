@@ -105,3 +105,25 @@ func TestFinalizeStandaloneExportAcceptsFullPayloadFields(t *testing.T) {
 		}
 	}
 }
+
+func TestStandaloneExportTargetRequiresUniqueDocumentBinding(t *testing.T) {
+	trace := "/Users/tmc/tmp/trace.gputrace"
+	window, doc, err := standaloneExportTarget([]xcodeAXWindow{
+		{Element: 1, Title: "Source", Document: "/Users/tmc/project/main.swift"},
+		{Element: 2, Title: "Performance", Document: trace},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if window != 2 || doc != trace {
+		t.Fatalf("target = (%d, %q)", window, doc)
+	}
+
+	_, _, err = standaloneExportTarget([]xcodeAXWindow{
+		{Element: 2, Document: trace},
+		{Element: 3, Document: "/Users/tmc/tmp/other.gputrace"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "multiple .gputrace windows") {
+		t.Fatalf("ambiguous target error = %v", err)
+	}
+}

@@ -235,3 +235,22 @@ func TestWaitForXcodeCrashReportGraceExpires(t *testing.T) {
 		t.Fatalf("grace returned too early: %v", elapsed)
 	}
 }
+
+func TestSelectSingleXcodeProcessPreservesExactApp(t *testing.T) {
+	xcode := xcodeProcessIdentity{PID: 81051, AppPath: "/Applications/Xcode.app"}
+	got, err := selectSingleXcodeProcess([]xcodeProcessIdentity{xcode}, xcode.AppPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != xcode {
+		t.Fatalf("identity = %+v, want %+v", got, xcode)
+	}
+
+	_, err = selectSingleXcodeProcess([]xcodeProcessIdentity{
+		xcode,
+		{PID: 81052, AppPath: "/Applications/Xcode.app"},
+	}, xcode.AppPath)
+	if err == nil || !strings.Contains(err.Error(), "cannot select one safely") {
+		t.Fatalf("ambiguous selection error = %v", err)
+	}
+}

@@ -201,21 +201,21 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 
 	// Verify performance data is actually available after replay.
 	if !alreadyHasPerfData {
-		if freshWindow := getPreferredTraceWindow(appAX, inputPath); freshWindow != 0 {
-			windowAX = freshWindow
-		} else if freshWindow := findTraceWindowByButtons(appAX); freshWindow != 0 {
-			windowAX = freshWindow
+		freshWindow, err := waitForBoundTraceWindow(ctx, appAX, xcodeIdentity, inputPath, 10*time.Second)
+		if err != nil {
+			return fmt.Errorf("reacquire completed trace window: %w", err)
 		}
+		windowAX = freshWindow
 		if !hasShowPerformance(windowAX) {
 			return fmt.Errorf("replay completed but performance data is not available — the trace may not contain enough GPU work to profile")
 		}
 	}
 
-	if freshWindow := getPreferredTraceWindow(appAX, inputPath); freshWindow != 0 {
-		windowAX = freshWindow
-	} else if freshWindow := findTraceWindowByButtons(appAX); freshWindow != 0 {
-		windowAX = freshWindow
+	freshWindow, err := waitForBoundTraceWindow(ctx, appAX, xcodeIdentity, inputPath, 10*time.Second)
+	if err != nil {
+		return fmt.Errorf("reacquire trace window before Show Performance: %w", err)
 	}
+	windowAX = freshWindow
 	if shown, err := showPerformanceBeforeExport(windowAX); err != nil {
 		return fmt.Errorf("show performance before export: %w", err)
 	} else if shown {
@@ -228,12 +228,11 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 
 	// Export step
 	fmt.Fprintln(status, "  Exporting trace...")
-	if freshWindow := getPreferredTraceWindow(appAX, inputPath); freshWindow != 0 {
-		windowAX = freshWindow
-	} else if freshWindow := findTraceWindowByButtons(appAX); freshWindow != 0 {
-		windowAX = freshWindow
+	freshWindow, err = waitForBoundTraceWindow(ctx, appAX, xcodeIdentity, inputPath, 15*time.Second)
+	if err != nil {
+		return fmt.Errorf("reacquire trace window after Show Performance: %w", err)
 	}
-	activateXcodeQuick(ctx)
+	windowAX = freshWindow
 	axAction(windowAX, "AXRaise")
 	time.Sleep(300 * time.Millisecond)
 
@@ -446,6 +445,43 @@ func waitForWindow(ctx context.Context, appAX uintptr, traceFileName string, tim
 		return 0, fmt.Errorf("could not find AX-visible Xcode window for %s (%s)", traceFileName, diagnostic)
 	}
 	return 0, fmt.Errorf("could not find Xcode window for %s (no Xcode windows found - check Accessibility permissions)", traceFileName)
+}
+
+func waitForBoundTraceWindow(ctx context.Context, appAX uintptr, identity xcodeProcessIdentity, traceFileName string, timeout time.Duration) (uintptr, error) {
+	deadline := time.Now().Add(timeout)
+	var candidate uintptr
+	stable := 0
+	for {
+		bound, err := xcodeIdentityForAX(appAX)
+		if err != nil || bound.PID != identity.PID ||
+			filepath.Clean(bound.AppPath) != filepath.Clean(identity.AppPath) {
+			return 0, fmt.Errorf("lost Xcode binding: want PID %d app %s", identity.PID, identity.AppPath)
+		}
+		if window := getPreferredTraceWindow(appAX, traceFileName); window != 0 {
+			var pid int32
+			if axUIElementGetPid(window, &pid) == kAXErrorSuccess && int(pid) == identity.PID {
+				if window == candidate {
+					stable++
+				} else {
+					candidate = window
+					stable = 1
+				}
+				if stable >= 2 {
+					return window, nil
+				}
+			}
+		} else {
+			candidate = 0
+			stable = 0
+		}
+		if time.Now().After(deadline) {
+			return 0, fmt.Errorf("bound Xcode PID %d app %s did not expose the trace window for %s within %s",
+				identity.PID, identity.AppPath, traceFileName, timeout.Round(time.Second))
+		}
+		if err := waitForAutomation(ctx, 100*time.Millisecond); err != nil {
+			return 0, err
+		}
+	}
 }
 
 // getPreferredTraceWindow finds the best matching window for a trace filename.
@@ -1619,8 +1655,15 @@ func exportTrace(ctx context.Context, appAX, windowAX uintptr, outputPath string
 	if err := checkAutomationCanceled(ctx); err != nil {
 		return err
 	}
+	identity, err := xcodeIdentityForAX(appAX)
+	if err != nil {
+		return fmt.Errorf("establish export Xcode identity: %w", err)
+	}
+	var windowPID int32
+	if axUIElementGetPid(windowAX, &windowPID) != kAXErrorSuccess || int(windowPID) != identity.PID {
+		return fmt.Errorf("export window is not owned by bound Xcode PID %d app %s", identity.PID, identity.AppPath)
+	}
 	status := xcodeProfileStatusWriter()
-	activateXcodeQuick(ctx)
 	axAction(windowAX, "AXRaise")
 	time.Sleep(300 * time.Millisecond)
 
@@ -1633,9 +1676,6 @@ func exportTrace(ctx context.Context, appAX, windowAX uintptr, outputPath string
 		}
 	} else {
 		// Fall back to menu
-		if freshApp, err := FindXcodeApp(); err == nil && freshApp != 0 {
-			appAX = freshApp
-		}
 		if collectProfileOpts.debug || collectProfileOpts.verbose {
 			if err := debugCheckExportMenu(appAX); err != nil {
 				fmt.Fprintf(os.Stderr, "    Debug: Export menu check failed: %v\n", err)
@@ -1652,9 +1692,9 @@ func exportTrace(ctx context.Context, appAX, windowAX uintptr, outputPath string
 	}
 
 	// Refresh app reference since the UI might have changed
-	freshApp, err := FindXcodeApp()
+	freshApp, err := reacquireXcodeApp(identity)
 	if err != nil {
-		return fmt.Errorf("Xcode not accessible after clicking Export: %w", err)
+		return fmt.Errorf("bound Xcode not accessible after clicking Export: %w", err)
 	}
 	defer cfRelease(freshApp)
 
