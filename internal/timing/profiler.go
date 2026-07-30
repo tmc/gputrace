@@ -214,7 +214,10 @@ func (te *TimingExtractorProfilerRaw) parseCounterRecord(record *profilerraw.Rec
 func (te *TimingExtractorProfilerRaw) convertToEncoderTiming(profilerTimings []*ProfilerRawTiming) []*EncoderTiming {
 	// Sort by offset/index
 	sort.Slice(profilerTimings, func(i, j int) bool {
-		return profilerTimings[i].EncoderIndex < profilerTimings[j].EncoderIndex
+		if profilerTimings[i].EncoderIndex != profilerTimings[j].EncoderIndex {
+			return profilerTimings[i].EncoderIndex < profilerTimings[j].EncoderIndex
+		}
+		return profilerTimings[i].KernelName < profilerTimings[j].KernelName
 	})
 
 	// Match with encoder labels

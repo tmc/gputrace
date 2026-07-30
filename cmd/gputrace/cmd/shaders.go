@@ -223,7 +223,10 @@ func runShadersFromFullTrace(tracePath string, opts *shadersOptions) error {
 
 	// Re-sort by SIMD-based cost
 	sort.Slice(report.Shaders, func(i, j int) bool {
-		return report.Shaders[i].PercentOfTotal > report.Shaders[j].PercentOfTotal
+		if report.Shaders[i].PercentOfTotal != report.Shaders[j].PercentOfTotal {
+			return report.Shaders[i].PercentOfTotal > report.Shaders[j].PercentOfTotal
+		}
+		return report.Shaders[i].Name < report.Shaders[j].Name
 	})
 
 	// Output based on format
@@ -366,7 +369,10 @@ func extractSIMDBasedMetrics(trace *gputrace.Trace, profilerDir string) (*gputra
 
 	// Sort by SIMD-based cost (highest first)
 	sort.Slice(report.Shaders, func(i, j int) bool {
-		return report.Shaders[i].PercentOfTotal > report.Shaders[j].PercentOfTotal
+		if report.Shaders[i].PercentOfTotal != report.Shaders[j].PercentOfTotal {
+			return report.Shaders[i].PercentOfTotal > report.Shaders[j].PercentOfTotal
+		}
+		return report.Shaders[i].Name < report.Shaders[j].Name
 	})
 
 	report.TotalShaders = len(report.Shaders)
@@ -529,7 +535,10 @@ func convertPipelineStatsToShaderReport(stats *counter.StreamDataStats, execCost
 
 	// Sort by cost (highest first) like Xcode does
 	sort.Slice(report.Shaders, func(i, j int) bool {
-		return report.Shaders[i].PercentOfTotal > report.Shaders[j].PercentOfTotal
+		if report.Shaders[i].PercentOfTotal != report.Shaders[j].PercentOfTotal {
+			return report.Shaders[i].PercentOfTotal > report.Shaders[j].PercentOfTotal
+		}
+		return report.Shaders[i].Name < report.Shaders[j].Name
 	})
 
 	report.TotalShaders = len(report.Shaders)

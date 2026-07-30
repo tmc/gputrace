@@ -211,12 +211,21 @@ func ExtractShaderMetrics(t *trace.Trace) (*ShaderMetricsReport, error) {
 		}
 	}
 
-	// Sort shaders by weighted cost if available, otherwise by duration
-	sort.Slice(report.Shaders, func(i, j int) bool {
+	// Sort shaders by weighted cost if available, otherwise by duration.
+	// Shaders arrive in map order, so equal costs break by name to keep the
+	// report identical from run to run.
+	cost := func(m *ShaderMetrics) float64 {
 		if hasWeightedCosts {
-			return report.Shaders[i].WeightedCost > report.Shaders[j].WeightedCost
+			return m.WeightedCost
 		}
-		return report.Shaders[i].TotalDurationNs > report.Shaders[j].TotalDurationNs
+		return float64(m.TotalDurationNs)
+	}
+	sort.Slice(report.Shaders, func(i, j int) bool {
+		a, b := report.Shaders[i], report.Shaders[j]
+		if cost(a) != cost(b) {
+			return cost(a) > cost(b)
+		}
+		return a.Name < b.Name
 	})
 
 	// Populate report summary

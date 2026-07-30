@@ -204,7 +204,10 @@ func (tme *TimingMetricsExtractor) Extract() (*TimingMetrics, error) {
 
 	// Sort kernels by total duration (descending)
 	sort.Slice(metrics.KernelTimings, func(i, j int) bool {
-		return metrics.KernelTimings[i].TotalDuration > metrics.KernelTimings[j].TotalDuration
+		if metrics.KernelTimings[i].TotalDuration != metrics.KernelTimings[j].TotalDuration {
+			return metrics.KernelTimings[i].TotalDuration > metrics.KernelTimings[j].TotalDuration
+		}
+		return metrics.KernelTimings[i].Name < metrics.KernelTimings[j].Name
 	})
 
 	metrics.TotalDuration = totalDuration

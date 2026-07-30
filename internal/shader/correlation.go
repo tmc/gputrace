@@ -121,7 +121,10 @@ func CorrelateShaderMetrics(trace *Trace) (*ShaderCorrelationReport, error) {
 
 	// Sort by total duration (descending)
 	sort.Slice(report.Shaders, func(i, j int) bool {
-		return report.Shaders[i].TotalDuration > report.Shaders[j].TotalDuration
+		if report.Shaders[i].TotalDuration != report.Shaders[j].TotalDuration {
+			return report.Shaders[i].TotalDuration > report.Shaders[j].TotalDuration
+		}
+		return report.Shaders[i].ShaderName < report.Shaders[j].ShaderName
 	})
 
 	return report, nil
