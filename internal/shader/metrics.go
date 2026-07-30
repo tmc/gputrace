@@ -241,13 +241,14 @@ func ExtractShaderMetrics(t *trace.Trace) (*ShaderMetricsReport, error) {
 
 // populateThreadMetrics extracts thread configuration from dispatch calls.
 func populateThreadMetrics(t *trace.Trace, metricsMap map[string]*ShaderMetrics) error {
-	commandBuffers, err := t.ParseCommandBuffers()
+	capture, err := command.OpenCapture(t)
 	if err != nil {
 		return err
 	}
+	commandBuffers := capture.CommandBuffers()
 
 	for _, cb := range commandBuffers {
-		dcb, err := command.ParseDetailedCommandBuffer(t, cb.Index)
+		dcb, err := capture.Detailed(cb.Index)
 		if err != nil {
 			continue
 		}

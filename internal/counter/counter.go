@@ -317,16 +317,17 @@ func parseCounterFileWithMetrics(path string) (*counterFileStats, []*ShaderHardw
 // correlateShaderNames attempts to match pipeline state addresses with shader names from the trace.
 func correlateShaderNames(t *trace.Trace, stats *PerfCounterStats) error {
 	// Parse command buffers to get encoder/shader information
-	commandBuffers, err := t.ParseCommandBuffers()
+	capture, err := command.OpenCapture(t)
 	if err != nil {
 		return fmt.Errorf("parse command buffers: %w", err)
 	}
+	commandBuffers := capture.CommandBuffers()
 
 	// Build map of pipeline state address to shader name
 	pipelineToName := make(map[uint64]string)
 
 	for _, cb := range commandBuffers {
-		dcb, err := command.ParseDetailedCommandBuffer(t, cb.Index)
+		dcb, err := capture.Detailed(cb.Index)
 		if err != nil {
 			continue
 		}

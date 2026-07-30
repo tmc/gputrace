@@ -253,16 +253,17 @@ func (kt *KernelTiming) calculatePercentiles() {
 
 // extractCommandBufferTimings extracts command buffer level timing.
 func (tme *TimingMetricsExtractor) extractCommandBufferTimings(metrics *TimingMetrics) error {
-	commandBuffers, err := tme.trace.ParseCommandBuffers()
+	capture, err := command.OpenCapture(tme.trace)
 	if err != nil {
 		return fmt.Errorf("parse command buffers: %w", err)
 	}
+	commandBuffers := capture.CommandBuffers()
 
 	metrics.TotalCommandBuffers = len(commandBuffers)
 
 	for _, cb := range commandBuffers {
 		// Parse detailed command buffer to get encoders
-		dcb, err := command.ParseDetailedCommandBuffer(tme.trace, cb.Index)
+		dcb, err := capture.Detailed(cb.Index)
 		if err != nil {
 			// Skip command buffers we can't parse
 			continue

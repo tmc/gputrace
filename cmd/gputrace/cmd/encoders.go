@@ -89,11 +89,12 @@ func runEncoders(cmd *cobra.Command, args []string, opts *encodersOptions) error
 	commandBufferCount := 0
 	var commandBuffers []encodersCommandBufferSummary
 	if opts.verbose {
-		cbs, err := trace.ParseCommandBuffers()
-		if err == nil && len(cbs) > 0 {
+		capture, err := gputrace.OpenCapture(trace)
+		if err == nil && len(capture.CommandBuffers()) > 0 {
+			cbs := capture.CommandBuffers()
 			commandBufferCount = len(cbs)
 			for _, cb := range cbs {
-				dcb, err := gputrace.ParseDetailedCommandBuffer(trace, cb.Index)
+				dcb, err := capture.Detailed(cb.Index)
 				if err != nil {
 					continue
 				}

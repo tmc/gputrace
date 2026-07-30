@@ -64,20 +64,60 @@ type APICall struct {
 type DispatchThreads = trace.DispatchThreads
 
 // ParseDetailedCommandBuffer extracts all API calls from a specific command buffer.
+//
+// It reads and rescans the whole capture file on every call. Callers walking
+// every command buffer should use ParseDetailedCommandBuffers instead, which
+// does that work once.
 func ParseDetailedCommandBuffer(t *trace.Trace, cbIndex int) (*DetailedCommandBuffer, error) {
-	capturePath := filepath.Join(t.Path, "capture")
-
-	data, err := os.ReadFile(capturePath)
-	if err != nil {
-		return nil, fmt.Errorf("read capture file: %w", err)
-	}
-
-	// Get all command buffers
-	commandBuffers, err := t.ParseCommandBuffers()
+	data, commandBuffers, err := loadCapture(t)
 	if err != nil {
 		return nil, err
 	}
+	return parseDetailedCommandBuffer(t, data, commandBuffers, cbIndex)
+}
 
+// Capture holds the capture file and its command-buffer index so a caller
+// walking every command buffer reads and scans the file once instead of once
+// per buffer. Detailed reports the same value and error as
+// ParseDetailedCommandBuffer, so callers keep their per-buffer error handling.
+type Capture struct {
+	trace          *trace.Trace
+	data           []byte
+	commandBuffers []*trace.CommandBuffer
+}
+
+// OpenCapture reads the capture file and parses the command-buffer index.
+func OpenCapture(t *trace.Trace) (*Capture, error) {
+	data, commandBuffers, err := loadCapture(t)
+	if err != nil {
+		return nil, err
+	}
+	return &Capture{trace: t, data: data, commandBuffers: commandBuffers}, nil
+}
+
+// CommandBuffers returns the parsed command-buffer index.
+func (c *Capture) CommandBuffers() []*trace.CommandBuffer { return c.commandBuffers }
+
+// Detailed extracts all API calls from the command buffer at cbIndex.
+func (c *Capture) Detailed(cbIndex int) (*DetailedCommandBuffer, error) {
+	return parseDetailedCommandBuffer(c.trace, c.data, c.commandBuffers, cbIndex)
+}
+
+// loadCapture reads the capture file and the command-buffer index together,
+// since every detailed parse needs both.
+func loadCapture(t *trace.Trace) ([]byte, []*trace.CommandBuffer, error) {
+	data, err := os.ReadFile(filepath.Join(t.Path, "capture"))
+	if err != nil {
+		return nil, nil, fmt.Errorf("read capture file: %w", err)
+	}
+	commandBuffers, err := t.ParseCommandBuffers()
+	if err != nil {
+		return nil, nil, err
+	}
+	return data, commandBuffers, nil
+}
+
+func parseDetailedCommandBuffer(t *trace.Trace, data []byte, commandBuffers []*trace.CommandBuffer, cbIndex int) (*DetailedCommandBuffer, error) {
 	if cbIndex < 0 || cbIndex >= len(commandBuffers) {
 		return nil, fmt.Errorf("invalid command buffer index: %d (have %d)", cbIndex, len(commandBuffers))
 	}
