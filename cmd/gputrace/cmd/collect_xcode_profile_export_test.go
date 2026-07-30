@@ -136,6 +136,7 @@ func TestStandaloneExportRecoveryFlagsRequireCompleteIdentity(t *testing.T) {
 		args []string
 	}{
 		{name: "mode only", args: []string{"--recover-untitled"}},
+		{name: "check only", args: []string{"--check-recovery"}},
 		{name: "source only", args: []string{"--source", "/trace.gputrace"}},
 		{name: "missing app", args: []string{"--recover-untitled", "--source", "/trace.gputrace", "--xcode-pid", "81051"}},
 		{name: "missing pid", args: []string{"--recover-untitled", "--source", "/trace.gputrace", "--xcode-app", "/Applications/Xcode.app"}},
@@ -239,8 +240,8 @@ func TestStandaloneRecoveryTarget(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got != test.want {
-				t.Fatalf("window = %d, want %d", got, test.want)
+			if got.Element != test.want {
+				t.Fatalf("window = %d, want %d", got.Element, test.want)
 			}
 		})
 	}
@@ -254,6 +255,108 @@ func TestValidateStandaloneRecoveryIdentity(t *testing.T) {
 	err := validateStandaloneRecoveryIdentity(identity, "/Applications/Xcode-rc.app")
 	if err == nil || !strings.Contains(err.Error(), "not requested app") {
 		t.Fatalf("error = %v, want cross-app rejection", err)
+	}
+}
+
+func TestFindElementAtDepth(t *testing.T) {
+	tests := []struct {
+		name     string
+		tree     map[uintptr][]uintptr
+		pruned   map[uintptr]bool
+		target   uintptr
+		maxDepth int
+		want     uintptr
+	}{
+		{
+			name:     "root",
+			target:   1,
+			maxDepth: 4,
+			want:     1,
+		},
+		{
+			name: "depth four",
+			tree: map[uintptr][]uintptr{
+				1: {2},
+				2: {3},
+				3: {4},
+				4: {5},
+			},
+			target:   5,
+			maxDepth: 4,
+			want:     5,
+		},
+		{
+			name: "reject depth five",
+			tree: map[uintptr][]uintptr{
+				1: {2},
+				2: {3},
+				3: {4},
+				4: {5},
+				5: {6},
+			},
+			target:   6,
+			maxDepth: 4,
+		},
+		{
+			name: "prune outline",
+			tree: map[uintptr][]uintptr{
+				1: {2},
+				2: {3},
+			},
+			pruned:   map[uintptr]bool{2: true},
+			target:   3,
+			maxDepth: 4,
+		},
+		{
+			name: "cycle",
+			tree: map[uintptr][]uintptr{
+				1: {2},
+				2: {1, 3},
+			},
+			target:   3,
+			maxDepth: 4,
+			want:     3,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			childCalls := make(map[uintptr]int)
+			got := findElementAtDepth(
+				1,
+				test.maxDepth,
+				32,
+				func(element uintptr) []uintptr {
+					childCalls[element]++
+					return test.tree[element]
+				},
+				func(element uintptr) bool {
+					return test.pruned[element]
+				},
+				func(element uintptr) bool {
+					return element == test.target
+				},
+			)
+			if got != test.want {
+				t.Fatalf("element = %d, want %d", got, test.want)
+			}
+			for element := range test.pruned {
+				if childCalls[element] != 0 {
+					t.Fatalf("children called for pruned element %d", element)
+				}
+			}
+		})
+	}
+}
+
+func TestStandaloneRecoveryWindowKeyIgnoresAXHandle(t *testing.T) {
+	left := standaloneRecoveryWindow{
+		xcodeAXWindow: xcodeAXWindow{Element: 11, X: 229, Y: 320, Width: 1376, Height: 900},
+		PID:           81051,
+	}
+	right := left
+	right.Element = 22
+	if standaloneRecoveryWindowKey(left) != standaloneRecoveryWindowKey(right) {
+		t.Fatal("logical window key depends on transient AX element handle")
 	}
 }
 

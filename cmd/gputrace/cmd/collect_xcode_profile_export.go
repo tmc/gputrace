@@ -18,6 +18,7 @@ import (
 
 type standaloneExportRecovery struct {
 	Enabled    bool
+	CheckOnly  bool
 	SourcePath string
 	SourceUUID string
 	Identity   xcodeProcessIdentity
@@ -27,6 +28,11 @@ type standaloneRecoveryWindow struct {
 	xcodeAXWindow
 	PID             int
 	PerformanceView bool
+}
+
+type depthElement struct {
+	Element uintptr
+	Depth   int
 }
 
 func runExport(cmd *cobra.Command, args []string) error {
@@ -60,6 +66,7 @@ func runExport(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(status, "Recovering source: %s\n", recovery.SourcePath)
 		fmt.Fprintf(status, "Source trace UUID: %s\n", recovery.SourceUUID)
 		fmt.Fprintf(status, "Bound Xcode: PID %d app %s\n", identity.PID, identity.AppPath)
+		fmt.Fprintln(status, "Recovery requires a shallow Performance group; Stop/activity progress is advisory")
 	} else {
 		requestedApp := requestedXcodeAppPath()
 		appAX, identity, err = findSingleXcodeApp(cmd.Context(), requestedApp, 10*time.Second)
@@ -86,6 +93,22 @@ func runExport(cmd *cobra.Command, args []string) error {
 
 	if err := requireStandaloneExportTarget(doc); err != nil {
 		return err
+	}
+	if recovery.CheckOnly {
+		fmt.Fprintln(status, "Recovery target verified; no UI action performed")
+		return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+			Action:           "check_recovery",
+			Target:           recovery.SourcePath,
+			Source:           recovery.SourcePath,
+			SourceUUID:       recovery.SourceUUID,
+			XcodePID:         recovery.Identity.PID,
+			XcodeApp:         recovery.Identity.AppPath,
+			Phase:            "untitled Performance window verified",
+			Evidence:         "exact PID/app and shallow Performance group stable across two samples",
+			TargetBound:      boolPointer(true),
+			SelectedTitle:    "",
+			SelectedDocument: "",
+		})
 	}
 	// If no output path specified, try to infer from window document
 	if outputPath == "" {
@@ -144,11 +167,12 @@ func runExport(cmd *cobra.Command, args []string) error {
 
 func standaloneExportRecoveryFromFlags(cmd *cobra.Command) (standaloneExportRecovery, error) {
 	enabled, _ := cmd.Flags().GetBool("recover-untitled")
+	checkOnly, _ := cmd.Flags().GetBool("check-recovery")
 	source, _ := cmd.Flags().GetString("source")
 	pid, _ := cmd.Flags().GetInt("xcode-pid")
 	app, _ := cmd.Flags().GetString("xcode-app")
 
-	any := enabled || source != "" || pid != 0 || app != ""
+	any := enabled || checkOnly || source != "" || pid != 0 || app != ""
 	if !any {
 		return standaloneExportRecovery{}, nil
 	}
@@ -192,6 +216,7 @@ func standaloneExportRecoveryFromFlags(cmd *cobra.Command) (standaloneExportReco
 	}
 	return standaloneExportRecovery{
 		Enabled:    true,
+		CheckOnly:  checkOnly,
 		SourcePath: source,
 		SourceUUID: metadata.UUID,
 		Identity:   identity,
@@ -259,7 +284,7 @@ func waitForStandaloneExportWindow(ctx context.Context, appAX uintptr, identity 
 	}
 }
 
-func standaloneRecoveryTarget(windows []standaloneRecoveryWindow, recovery standaloneExportRecovery) (uintptr, error) {
+func standaloneRecoveryTarget(windows []standaloneRecoveryWindow, recovery standaloneExportRecovery) (standaloneRecoveryWindow, error) {
 	var matches []standaloneRecoveryWindow
 	seen := make(map[uintptr]bool)
 	for _, window := range windows {
@@ -275,18 +300,30 @@ func standaloneRecoveryTarget(windows []standaloneRecoveryWindow, recovery stand
 	}
 	switch len(matches) {
 	case 0:
-		return 0, fmt.Errorf("no untitled Performance window is bound to Xcode PID %d app %s",
+		return standaloneRecoveryWindow{}, fmt.Errorf("no untitled Performance window is bound to Xcode PID %d app %s",
 			recovery.Identity.PID, recovery.Identity.AppPath)
 	case 1:
-		return matches[0].Element, nil
+		return matches[0], nil
 	default:
 		var elements []string
 		for _, match := range matches {
 			elements = append(elements, fmt.Sprintf("%d", match.Element))
 		}
-		return 0, fmt.Errorf("multiple untitled Performance windows are ambiguous for Xcode PID %d app %s: AX elements %s",
+		return standaloneRecoveryWindow{}, fmt.Errorf("multiple untitled Performance windows are ambiguous for Xcode PID %d app %s: AX elements %s",
 			recovery.Identity.PID, recovery.Identity.AppPath, strings.Join(elements, ", "))
 	}
+}
+
+func standaloneRecoveryWindowKey(window standaloneRecoveryWindow) string {
+	return fmt.Sprintf("%d\x00%s\x00%s\x00%d,%d,%d,%d",
+		window.PID,
+		strings.TrimSpace(window.Title),
+		filepath.Clean(window.Document),
+		window.X,
+		window.Y,
+		window.Width,
+		window.Height,
+	)
 }
 
 func recoveryWindows(appAX uintptr) []standaloneRecoveryWindow {
@@ -300,15 +337,65 @@ func recoveryWindows(appAX uintptr) []standaloneRecoveryWindow {
 		out = append(out, standaloneRecoveryWindow{
 			xcodeAXWindow:   window,
 			PID:             int(pid),
-			PerformanceView: hasPerformanceViewIndicators(window.Element),
+			PerformanceView: hasShallowPerformanceGroup(window.Element),
 		})
 	}
 	return out
 }
 
+func hasShallowPerformanceGroup(root uintptr) bool {
+	return findElementAtDepth(
+		root,
+		4,
+		128,
+		axChildren,
+		func(element uintptr) bool {
+			return axString(element, "AXRole") == "AXOutline"
+		},
+		func(element uintptr) bool {
+			role := axString(element, "AXRole")
+			description := strings.TrimSpace(axString(element, "AXDescription"))
+			return (role == "AXGroup" || role == "AXSplitGroup") && description == "Performance"
+		},
+	) != 0
+}
+
+func findElementAtDepth(
+	root uintptr,
+	maxDepth, maxVisit int,
+	children func(uintptr) []uintptr,
+	prune, match func(uintptr) bool,
+) uintptr {
+	if root == 0 || maxDepth < 0 || maxVisit <= 0 {
+		return 0
+	}
+	queue := []depthElement{{Element: root}}
+	seen := make(map[uintptr]bool)
+	visited := 0
+	for len(queue) > 0 && visited < maxVisit {
+		item := queue[0]
+		queue = queue[1:]
+		if item.Element == 0 || seen[item.Element] {
+			continue
+		}
+		seen[item.Element] = true
+		visited++
+		if match(item.Element) {
+			return item.Element
+		}
+		if item.Depth >= maxDepth || prune(item.Element) {
+			continue
+		}
+		for _, child := range children(item.Element) {
+			queue = append(queue, depthElement{Element: child, Depth: item.Depth + 1})
+		}
+	}
+	return 0
+}
+
 func waitForStandaloneRecoveryWindow(ctx context.Context, appAX uintptr, recovery standaloneExportRecovery, timeout time.Duration) (uintptr, error) {
 	deadline := time.Now().Add(timeout)
-	var last uintptr
+	var lastKey string
 	stable := 0
 	var lastErr error
 	for {
@@ -320,17 +407,19 @@ func waitForStandaloneRecoveryWindow(ctx context.Context, appAX uintptr, recover
 		}
 		window, err := standaloneRecoveryTarget(recoveryWindows(appAX), recovery)
 		if err == nil {
-			if window == last {
+			key := standaloneRecoveryWindowKey(window)
+			if key == lastKey {
 				stable++
 			} else {
-				last = window
+				lastKey = key
 				stable = 1
+				lastErr = fmt.Errorf("untitled Performance window identity is not yet stable")
 			}
 			if stable >= 2 {
-				return window, nil
+				return window.Element, nil
 			}
 		} else {
-			last = 0
+			lastKey = ""
 			stable = 0
 			lastErr = err
 		}
