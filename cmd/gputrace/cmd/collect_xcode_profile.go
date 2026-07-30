@@ -449,7 +449,10 @@ func accessibilityPermissionError() error {
 	fmt.Fprintln(os.Stderr, "\nPlease grant Accessibility permission to gputrace in:")
 	fmt.Fprintln(os.Stderr, "  System Settings > Privacy & Security > Accessibility")
 	fmt.Fprintln(os.Stderr, "\nThen re-run the command.")
-	exec.Command("open", "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility").Run()
+	const pane = "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility"
+	if err := exec.Command("open", pane).Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not open Settings (%v); open the pane above manually\n", err)
+	}
 	return fmt.Errorf("accessibility permission required")
 }
 

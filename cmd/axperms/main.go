@@ -21,6 +21,16 @@ import (
 
 //
 
+// openSettingsPane opens a System Settings pane with `open`. A failure is not
+// fatal: every caller also prints instructions or falls back to polling. It
+// must not be silent though, or a headless run sleeps and then reports a
+// confusing downstream error instead of the actual cause.
+func openSettingsPane(url string) {
+	if err := exec.Command("open", url).Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not open %s: %v\n", url, err)
+	}
+}
+
 var (
 	axIsProcessTrusted            func() bool
 	axIsProcessTrustedWithOptions func(uintptr) bool
@@ -172,17 +182,17 @@ func main() {
 	}
 
 	if *openSettings {
-		exec.Command("open", paneURLs[PaneAccessibility]).Run()
+		openSettingsPane(paneURLs[PaneAccessibility])
 		return
 	}
 
 	if *openScreenRecording {
-		exec.Command("open", paneURLs[PaneScreenRecording]).Run()
+		openSettingsPane(paneURLs[PaneScreenRecording])
 		return
 	}
 
 	if *openFDA {
-		exec.Command("open", paneURLs[PaneFullDiskAccess]).Run()
+		openSettingsPane(paneURLs[PaneFullDiskAccess])
 		return
 	}
 
@@ -261,7 +271,7 @@ func main() {
 			if !axIsProcessTrusted() {
 				fmt.Fprintf(os.Stderr, "\nPlease grant Accessibility permission to axperms in System Settings,\n")
 				fmt.Fprintf(os.Stderr, "then run this command again.\n")
-				exec.Command("open", paneURLs[PaneAccessibility]).Run()
+				openSettingsPane(paneURLs[PaneAccessibility])
 				os.Exit(1)
 			}
 		}
@@ -438,7 +448,7 @@ func findAppInPrivacyList(appName string, paneURL string) (found bool, enabled b
 	if debugMode {
 		fmt.Printf("[DEBUG] Opening pane: %s\n", paneURL)
 	}
-	exec.Command("open", paneURL).Run()
+	openSettingsPane(paneURL)
 	time.Sleep(1 * time.Second)
 
 	pid := findSystemSettingsPID()
@@ -559,7 +569,7 @@ func listPrivacyApps(paneName string, paneURL string) {
 	pid := findSystemSettingsPID()
 	if pid == 0 {
 		fmt.Println("System Settings not running. Opening...")
-		exec.Command("open", paneURL).Run()
+		openSettingsPane(paneURL)
 		time.Sleep(2 * time.Second)
 		pid = findSystemSettingsPID()
 		if pid == 0 {
@@ -759,7 +769,7 @@ func findRowForApp(appName string, paneURL string) (found bool, row uintptr) {
 	pid := findSystemSettingsPID()
 	if pid == 0 {
 		fmt.Println("System Settings not running. Opening...")
-		exec.Command("open", paneURL).Run()
+		openSettingsPane(paneURL)
 		time.Sleep(2 * time.Second)
 		pid = findSystemSettingsPID()
 		if pid == 0 {
@@ -922,7 +932,7 @@ func watchPermission() {
 	fmt.Println("Please grant Accessibility permission in System Settings.")
 
 	// Open settings
-	exec.Command("open", "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility").Run()
+	openSettingsPane("x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility")
 
 	// Trigger initial prompt
 	triggerPrompt()
