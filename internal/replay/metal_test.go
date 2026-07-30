@@ -176,6 +176,28 @@ func TestMetalReplayEngineRejectsICBPlanBeforeMetalWork(t *testing.T) {
 	}
 }
 
+func TestFormatMetalReplayResultStatesValidationBoundary(t *testing.T) {
+	got := FormatMetalReplayResult(&MetalReplayResult{
+		TraceePath:    "trace.gputrace",
+		Success:       true,
+		EncodersRun:   2,
+		DispatchesRun: 3,
+	})
+	for _, want := range []string{
+		"Status: replay execution completed",
+		"Encoders executed: 2",
+		"Dispatches executed: 3",
+		"Output validation: not performed by replay-metal",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("result missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "successfully") {
+		t.Fatalf("result overclaims success:\n%s", got)
+	}
+}
+
 func TestMetalReplayEngineEncodeCommandRejectsICB(t *testing.T) {
 	cmd := ReplayCommand{
 		Type:         "execute_icb",

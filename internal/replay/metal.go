@@ -704,9 +704,9 @@ func FormatMetalReplayResult(result *MetalReplayResult) string {
 	output += fmt.Sprintf("Trace: %s\n\n", result.TraceePath)
 
 	if result.Success {
-		output += "Status: ✓ Replay completed successfully\n\n"
+		output += "Status: replay execution completed\n\n"
 	} else {
-		output += "Status: ✗ Replay failed\n\n"
+		output += "Status: replay execution failed or stopped\n\n"
 		if result.Error != "" {
 			output += fmt.Sprintf("Error: %s\n\n", result.Error)
 		}
@@ -715,6 +715,7 @@ func FormatMetalReplayResult(result *MetalReplayResult) string {
 	output += "Execution Summary:\n"
 	output += fmt.Sprintf("  Encoders executed: %d\n", result.EncodersRun)
 	output += fmt.Sprintf("  Dispatches executed: %d\n", result.DispatchesRun)
+	output += "Output validation: not performed by replay-metal\n"
 
 	return output
 }

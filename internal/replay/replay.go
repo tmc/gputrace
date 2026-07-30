@@ -862,7 +862,8 @@ func FormatCounterSamplingSimulation(sim *CounterSamplingSimulation) string {
 	output += "  - Barrier overhead assumes ~250ns per sample\n"
 	output += "  - Actual overhead may vary based on GPU workload\n"
 	output += "  - Buffer size is conservative estimate\n"
-	output += "  - This is a simulation; actual Metal implementation required\n"
+	output += "  - Simulation does not replay GPU work or collect counters\n"
+	output += "  - Public Metal collection is a separate non-simulated mode on supported macOS builds\n"
 
 	return output
 }
