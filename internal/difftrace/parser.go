@@ -12,6 +12,8 @@ import (
 	"strings"
 
 	"github.com/tmc/gputrace/internal/counter"
+	"github.com/tmc/gputrace/internal/trace"
+	"github.com/tmc/gputrace/internal/tracebundle"
 )
 
 // LoadTraceData parses profiler dispatch data from a trace bundle.
@@ -21,32 +23,102 @@ func LoadTraceData(path string, onlyEncoder int, onlyFunction *regexp.Regexp) (*
 
 	profilerDir := findProfilerDir(path)
 	if profilerDir == "" {
+		if onlyEncoder >= 0 || onlyFunction != nil {
+			return nil, fmt.Errorf("cannot filter trace %s without profiler data", path)
+		}
+		count, err := structuralDispatchCount(path)
+		if err != nil {
+			return nil, fmt.Errorf("trace %s has no profiler data and its structural dispatch count is unavailable: %w", path, err)
+		}
+		out.StructuralDispatches = &count
 		out.Warnings = append(out.Warnings, fmt.Sprintf("no profiler data found for %s", path))
 		return out, nil
 	}
 
 	stats, err := counter.ParseStreamData(profilerDir, nil)
 	if err != nil {
+		if onlyEncoder >= 0 || onlyFunction != nil {
+			return nil, fmt.Errorf("cannot filter trace %s: parse streamData: %w", path, err)
+		}
+		count, countErr := structuralDispatchCount(path)
+		if countErr != nil {
+			return nil, fmt.Errorf("parse streamData for %s: %w; structural dispatch count unavailable: %v", path, err, countErr)
+		}
+		out.StructuralDispatches = &count
 		out.Warnings = append(out.Warnings, fmt.Sprintf("parse streamData failed for %s: %v", path, err))
 		return out, nil
 	}
 
 	pipelineHashes := buildPipelineHashes(stats)
 	out.Pipelines = buildPipelineInfo(stats, pipelineHashes)
-	threadgroupSigs, sigErr := loadDispatchThreadgroupSignatures(path)
-	if sigErr != nil {
-		out.Warnings = append(out.Warnings, fmt.Sprintf("threadgroup signatures unavailable for %s: %v", path, sigErr))
+	payload, payloadErr := tracebundle.InspectPayload(path)
+	var threadgroupSigs []string
+	switch {
+	case payloadErr != nil:
+		out.Warnings = append(out.Warnings, fmt.Sprintf("trace payload completeness unavailable for %s: %v", path, payloadErr))
+	case payload.Class != tracebundle.PayloadFull:
+		out.Warnings = append(out.Warnings, payloadLimitationWarning(path, payload))
+	default:
+		var sigErr error
+		threadgroupSigs, sigErr = loadDispatchThreadgroupSignatures(path)
+		if sigErr != nil {
+			out.Warnings = append(out.Warnings, fmt.Sprintf("threadgroup signatures unavailable for %s: %v", path, sigErr))
+		}
 	}
 	if len(threadgroupSigs) > 0 && len(stats.Dispatches) > 0 && absInt(len(threadgroupSigs)-len(stats.Dispatches)) > len(stats.Dispatches)/10 {
 		out.Warnings = append(out.Warnings, fmt.Sprintf("dispatch/threadgroup count mismatch for %s: dispatches=%d threadgroups=%d", path, len(stats.Dispatches), len(threadgroupSigs)))
 	}
 
-	out.Dispatches = sanitizeDispatches(stats, onlyEncoder, onlyFunction, pipelineHashes, threadgroupSigs)
-	out.Encoders = summarizeEncoders(out.Dispatches, stats.EncoderTimings)
+	encoderAttribution := hasDispatchEncoderAttribution(stats)
+	if onlyEncoder >= 0 && !encoderAttribution {
+		out.Warnings = append(out.Warnings, fmt.Sprintf("cannot apply encoder filter %d: encoder attribution is unavailable", onlyEncoder))
+	} else {
+		out.Dispatches = sanitizeDispatches(stats, onlyEncoder, onlyFunction, pipelineHashes, threadgroupSigs)
+	}
+	out.AttributionLimited = true
+	out.Warnings = append(out.Warnings, "dispatch timing is a cumulative-offset delta; boundary and gap time may be attributed to the following function")
+	if !encoderAttribution {
+		for i := range out.Dispatches {
+			out.Dispatches[i].EncoderIndex = -1
+		}
+		out.Warnings = append(out.Warnings, "encoder attribution unavailable: dispatch records use one degenerate encoder index across multiple encoder timings")
+	}
+	if encoderAttribution {
+		out.Encoders = summarizeEncoders(out.Dispatches, stats.EncoderTimings)
+	} else {
+		out.Encoders = summarizeEncoders(out.Dispatches, nil)
+	}
+	out.EffectiveGPUTimeUs = stats.EffectiveGPUTimeUs
+	out.CommandBufferActiveUs = int(stats.CommandBufferActiveNs / 1000)
+	out.TimingSource = stats.TimingSource
+	out.TimingAvailable = true
 	if len(out.Dispatches) == 0 {
 		out.Warnings = append(out.Warnings, fmt.Sprintf("no dispatches after filtering in %s", path))
 	}
 	return out, nil
+}
+
+func structuralDispatchCount(path string) (int, error) {
+	t, err := trace.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	return t.CountDispatchCalls()
+}
+
+func payloadLimitationWarning(path string, payload tracebundle.Payload) string {
+	return fmt.Sprintf("%s has %s payload: aggregate profiler timing is available, but structural and threadgroup comparisons are unavailable", path, payload.Class)
+}
+
+func hasDispatchEncoderAttribution(stats *counter.StreamDataStats) bool {
+	if stats == nil || len(stats.EncoderTimings) <= 1 {
+		return true
+	}
+	indices := make(map[int]bool)
+	for _, dispatch := range stats.Dispatches {
+		indices[dispatch.EncoderIndex] = true
+	}
+	return len(indices) > 1
 }
 
 func buildPipelineInfo(stats *counter.StreamDataStats, hashes map[int]string) map[int]PipelineInfo {

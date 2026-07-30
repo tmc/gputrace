@@ -48,7 +48,7 @@ spike windows, unnamed dispatch impact, and matched/unmatched dispatches.
 
 Examples:
   gputrace diff go-perfdata.gputrace py-perfdata.gputrace
-  gputrace diff --bench-dir ~/bench-traces --quick --by-encoder
+  gputrace diff --bench-dir ~/bench-traces --quick --explain --by-encoder
   gputrace diff --bench-dir ~/bench-traces --left go.gputrace --right py.gputrace
   gputrace diff a.gputrace b.gputrace --by function --limit 25 --explain
   gputrace diff a.gputrace b.gputrace --by encoder --only-encoder 2
@@ -167,7 +167,7 @@ func runDiff(cmd *cobra.Command, args []string, opts diffOptions) error {
 
 	var text string
 	if opts.Quick {
-		text = difftrace.RenderQuick(report, 10)
+		text = difftrace.RenderQuick(report, 10, opts.Explain)
 		if opts.ByEncoder {
 			text += "\n" + difftrace.RenderEncoderFocus(report, opts.Limit)
 		}
@@ -242,8 +242,8 @@ func (o diffOptions) validate(args []string) error {
 		if strings.TrimSpace(o.By) != "" {
 			return fmt.Errorf("--quick cannot be combined with --by")
 		}
-		if o.ShowMatches || o.ShowUnmatched || o.ShowOccur || o.Explain {
-			return fmt.Errorf("--quick cannot be combined with --show-matches/--show-unmatched/--show-occurrences/--explain")
+		if o.ShowMatches || o.ShowUnmatched || o.ShowOccur {
+			return fmt.Errorf("--quick cannot be combined with --show-matches/--show-unmatched/--show-occurrences")
 		}
 	}
 	if o.ByEncoder && strings.TrimSpace(o.By) != "" {

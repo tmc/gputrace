@@ -4,12 +4,18 @@ const SchemaVersion = "gputrace.diff.v2"
 
 // TraceData is parsed dispatch-level timing data for a single trace.
 type TraceData struct {
-	Path       string
-	Label      string
-	Dispatches []Dispatch
-	Encoders   []EncoderInfo
-	Pipelines  map[int]PipelineInfo
-	Warnings   []string
+	Path                  string
+	Label                 string
+	Dispatches            []Dispatch
+	Encoders              []EncoderInfo
+	Pipelines             map[int]PipelineInfo
+	EffectiveGPUTimeUs    *int
+	CommandBufferActiveUs int
+	TimingSource          string
+	TimingAvailable       bool
+	StructuralDispatches  *int
+	AttributionLimited    bool
+	Warnings              []string
 }
 
 // Dispatch is one GPU dispatch entry from streamData.
@@ -189,17 +195,26 @@ type SpikeWindow struct {
 
 // Summary is top-level diagnostics.
 type Summary struct {
-	TraceALabel        string `json:"trace_a_label"`
-	TraceBLabel        string `json:"trace_b_label"`
-	DispatchCountA     int    `json:"dispatch_count_a"`
-	DispatchCountB     int    `json:"dispatch_count_b"`
-	DispatchCountDelta int    `json:"dispatch_count_delta"`
-	TotalGPUTimeAUs    int    `json:"total_gpu_time_a_us"`
-	TotalGPUTimeBUs    int    `json:"total_gpu_time_b_us"`
-	TotalDeltaUs       int    `json:"total_delta_us"`
-	MatchedDeltaUs     int    `json:"matched_delta_us"`
-	UnmatchedDeltaUs   int    `json:"unmatched_delta_us"`
-	LikelyCause        string `json:"likely_cause"`
+	TraceALabel            string `json:"trace_a_label"`
+	TraceBLabel            string `json:"trace_b_label"`
+	DispatchCountA         int    `json:"dispatch_count_a"`
+	DispatchCountB         int    `json:"dispatch_count_b"`
+	DispatchCountDelta     int    `json:"dispatch_count_delta"`
+	TimingAvailable        bool   `json:"timing_available"`
+	TotalGPUTimeAUs        int    `json:"total_gpu_time_a_us"`
+	TotalGPUTimeBUs        int    `json:"total_gpu_time_b_us"`
+	DispatchSpanAUs        int    `json:"dispatch_span_a_us"`
+	DispatchSpanBUs        int    `json:"dispatch_span_b_us"`
+	EffectiveGPUTimeAUs    *int   `json:"effective_gpu_time_a_us,omitempty"`
+	EffectiveGPUTimeBUs    *int   `json:"effective_gpu_time_b_us,omitempty"`
+	CommandBufferActiveAUs int    `json:"command_buffer_active_a_us,omitempty"`
+	CommandBufferActiveBUs int    `json:"command_buffer_active_b_us,omitempty"`
+	TimingMetric           string `json:"timing_metric,omitempty"`
+	AttributionLimited     bool   `json:"attribution_limited,omitempty"`
+	TotalDeltaUs           int    `json:"total_delta_us"`
+	MatchedDeltaUs         int    `json:"matched_delta_us"`
+	UnmatchedDeltaUs       int    `json:"unmatched_delta_us"`
+	LikelyCause            string `json:"likely_cause"`
 }
 
 // EncoderDivergence summarizes the first material encoder timing split.

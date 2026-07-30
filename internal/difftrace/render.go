@@ -20,17 +20,31 @@ func RenderText(report Report, by string, showMatches, showUnmatched, showOccurr
 	var b strings.Builder
 	fmt.Fprintf(&b, "Trace A: %s\n", report.TraceAPath)
 	fmt.Fprintf(&b, "Trace B: %s\n\n", report.TraceBPath)
-	fmt.Fprintf(&b, "Total GPU delta (A-B): %+dus  |  A=%dus B=%dus\n", report.Summary.TotalDeltaUs, report.Summary.TotalGPUTimeAUs, report.Summary.TotalGPUTimeBUs)
-	fmt.Fprintf(&b, "Dispatch delta (A-B): %+d      |  matched=%+dus unmatched=%+dus\n", report.Summary.DispatchCountDelta, report.Summary.MatchedDeltaUs, report.Summary.UnmatchedDeltaUs)
+	if report.Summary.TimingAvailable {
+		fmt.Fprintf(&b, "Dispatch span delta (A-B): %+dus  |  A=%dus B=%dus\n", report.Summary.TotalDeltaUs, report.Summary.DispatchSpanAUs, report.Summary.DispatchSpanBUs)
+		writeMeasuredTimingSummary(&b, report.Summary)
+		writeAttributionNotice(&b, report.Summary)
+		fmt.Fprintf(&b, "Dispatch count delta (A-B): %+d  (A=%d B=%d) | matched=%+dus unmatched=%+dus\n", report.Summary.DispatchCountDelta, report.Summary.DispatchCountA, report.Summary.DispatchCountB, report.Summary.MatchedDeltaUs, report.Summary.UnmatchedDeltaUs)
+	} else {
+		fmt.Fprintln(&b, "Timing comparison: unavailable (profiler data required for both traces)")
+		fmt.Fprintf(&b, "Dispatch count delta (A-B): %+d  (A=%d B=%d)\n", report.Summary.DispatchCountDelta, report.Summary.DispatchCountA, report.Summary.DispatchCountB)
+	}
 	fmt.Fprintf(&b, "Likely cause: %s\n", report.Summary.LikelyCause)
 	if explain {
-		fmt.Fprintf(&b, "Interpretation: Trace A is %+dus vs Trace B, with unmatched dispatch impact %+dus and dominant function-level shifts in the top contributors below.\n", report.Summary.TotalDeltaUs, report.Summary.UnmatchedDeltaUs)
+		if report.Summary.TimingAvailable {
+			fmt.Fprintf(&b, "Interpretation: Trace A dispatch span is %+dus vs Trace B, with unmatched dispatch impact %+dus and dominant function-level shifts in the top contributors below.\n", report.Summary.TotalDeltaUs, report.Summary.UnmatchedDeltaUs)
+		} else {
+			fmt.Fprintln(&b, "Interpretation: structural dispatch counts are comparable; timing and dispatch attribution are unavailable.")
+		}
 	}
 	if len(report.Warnings) > 0 {
 		fmt.Fprintf(&b, "Warnings:\n")
 		for _, w := range report.Warnings {
 			fmt.Fprintf(&b, "  - %s\n", w)
 		}
+	}
+	if !report.Summary.TimingAvailable {
+		return b.String()
 	}
 
 	if all || sections["function"] {
@@ -51,7 +65,7 @@ func RenderText(report Report, by string, showMatches, showUnmatched, showOccurr
 			if i >= limit {
 				break
 			}
-			fmt.Fprintf(&b, "%-10d %8d %8d %+12d %12d %+10d\n", e.EncoderIndex, e.DispatchCountA, e.DispatchCountB, e.MatchedDeltaUs, e.UnmatchedCount, e.UnmatchedDeltaUs)
+			fmt.Fprintf(&b, "%-10s %8d %8d %+12d %12d %+10d\n", humanEncoder(e.EncoderIndex), e.DispatchCountA, e.DispatchCountB, e.MatchedDeltaUs, e.UnmatchedCount, e.UnmatchedDeltaUs)
 		}
 	}
 
@@ -87,7 +101,7 @@ func RenderText(report Report, by string, showMatches, showUnmatched, showOccurr
 			if i >= limit {
 				break
 			}
-			fmt.Fprintf(&b, "%-7d %-7d %-7d %-9d %-44s %8d %8d %+9d\n", m.SourceIndexA, m.SourceIndexB, m.EncoderIndex, m.PipelineIDA, fmtutil.TruncateString(safeFunctionName(m.FunctionName), 44), m.DurationAUs, m.DurationBUs, m.DeltaUs)
+			fmt.Fprintf(&b, "%-7d %-7d %-7s %-9d %-44s %8d %8d %+9d\n", m.SourceIndexA, m.SourceIndexB, humanEncoder(m.EncoderIndex), m.PipelineIDA, fmtutil.TruncateString(safeFunctionName(m.FunctionName), 44), m.DurationAUs, m.DurationBUs, m.DeltaUs)
 		}
 	}
 
@@ -95,7 +109,7 @@ func RenderText(report Report, by string, showMatches, showUnmatched, showOccurr
 		fmt.Fprintf(&b, "\nPer-Occurrence Matches\n")
 		fmt.Fprintf(&b, "%-44s %-7s %-7s %-7s %-7s %8s %8s %9s\n", "function", "occA", "occB", "a_idx", "b_idx", "left", "right", "delta")
 		for i, m := range report.OccurrenceMatches {
-			if i >= limit*4 {
+			if i >= limit {
 				break
 			}
 			fmt.Fprintf(&b, "%-44s %-7d %-7d %-7d %-7d %8d %8d %+9d\n", fmtutil.TruncateString(m.FunctionName, 44), m.OccurrenceOrdinalA, m.OccurrenceOrdinalB, m.SourceIndexA, m.SourceIndexB, m.LeftUs, m.RightUs, m.DeltaUs)
@@ -109,7 +123,7 @@ func RenderText(report Report, by string, showMatches, showUnmatched, showOccurr
 			if i >= limit {
 				break
 			}
-			fmt.Fprintf(&b, "%-7d %-10d %-10d %-10d %-10d %-8d %+10d\n", w.EncoderIndex, w.StartSourceIndexA, w.EndSourceIndexA, w.StartSourceIndexB, w.EndSourceIndexB, w.MatchCount, w.TotalDeltaUs)
+			fmt.Fprintf(&b, "%-7s %-10d %-10d %-10d %-10d %-8d %+10d\n", humanEncoder(w.EncoderIndex), w.StartSourceIndexA, w.EndSourceIndexA, w.StartSourceIndexB, w.EndSourceIndexB, w.MatchCount, w.TotalDeltaUs)
 		}
 	}
 
@@ -131,21 +145,50 @@ func RenderText(report Report, by string, showMatches, showUnmatched, showOccurr
 			if i >= limit {
 				break
 			}
-			fmt.Fprintf(&b, "%-7d %-7d %-7d %-44s %8d %8d %+9d %8.2f\n", m.SourceIndexA, m.SourceIndexB, m.EncoderIndex, fmtutil.TruncateString(safeFunctionName(m.FunctionName), 44), m.DurationAUs, m.DurationBUs, m.DeltaUs, m.Confidence)
+			fmt.Fprintf(&b, "%-7d %-7d %-7s %-44s %8d %8d %+9d %8.2f\n", m.SourceIndexA, m.SourceIndexB, humanEncoder(m.EncoderIndex), fmtutil.TruncateString(safeFunctionName(m.FunctionName), 44), m.DurationAUs, m.DurationBUs, m.DeltaUs, m.Confidence)
 		}
 	}
 	if showUnmatched || sections["unmatched"] {
 		fmt.Fprintf(&b, "\nUnmatched Dispatches\n")
 		fmt.Fprintf(&b, "%-6s %-7s %-7s %-10s %-24s %-24s %8s\n", "trace", "idx", "enc", "pipeline", "function", "kernel_id", "dur")
 		for i, u := range report.Unmatched {
-			if i >= limit*4 {
+			if i >= limit {
 				break
 			}
-			fmt.Fprintf(&b, "%-6s %-7d %-7d %-10d %-24s %-24s %8d\n", u.Trace, u.SourceIndex, u.EncoderIndex, u.PipelineID, fmtutil.TruncateString(u.FunctionName, 24), fmtutil.TruncateString(u.KernelID, 24), u.DurationUs)
+			fmt.Fprintf(&b, "%-6s %-7d %-7s %-10d %-24s %-24s %8d\n", u.Trace, u.SourceIndex, humanEncoder(u.EncoderIndex), u.PipelineID, fmtutil.TruncateString(u.FunctionName, 24), fmtutil.TruncateString(u.KernelID, 24), u.DurationUs)
 		}
 	}
 
 	return b.String()
+}
+
+func writeMeasuredTimingSummary(b *strings.Builder, summary Summary) {
+	if summary.CommandBufferActiveAUs > 0 || summary.CommandBufferActiveBUs > 0 {
+		fmt.Fprintf(b, "Command-buffer active time: A=%dus B=%dus\n", summary.CommandBufferActiveAUs, summary.CommandBufferActiveBUs)
+	}
+	if summary.EffectiveGPUTimeAUs != nil || summary.EffectiveGPUTimeBUs != nil {
+		fmt.Fprintf(b, "Xcode Effective GPU Time: A=%s B=%s\n", optionalMicros(summary.EffectiveGPUTimeAUs), optionalMicros(summary.EffectiveGPUTimeBUs))
+	}
+}
+
+func writeAttributionNotice(b *strings.Builder, summary Summary) {
+	if summary.AttributionLimited {
+		fmt.Fprintln(b, "Attribution: limited; per-dispatch values are cumulative-offset deltas and may include boundary/gap time")
+	}
+}
+
+func optionalMicros(value *int) string {
+	if value == nil {
+		return "n/a"
+	}
+	return fmt.Sprintf("%dus", *value)
+}
+
+func humanEncoder(index int) string {
+	if index < 0 {
+		return "n/a"
+	}
+	return strconv.Itoa(index)
 }
 
 // RenderCSV renders one report view as CSV.
@@ -201,7 +244,7 @@ func RenderCSV(report Report, by string, limit int) (string, error) {
 	case "unmatched":
 		rows = append(rows, []string{"trace", "source_index", "encoder_index", "pipeline_id", "function_name", "kernel_id", "pipeline_hash", "threadgroup_signature", "duration_us"})
 		for i, u := range report.Unmatched {
-			if i >= limit*4 {
+			if i >= limit {
 				break
 			}
 			rows = append(rows, []string{u.Trace, itoa(u.SourceIndex), itoa(u.EncoderIndex), itoa(u.PipelineID), u.FunctionName, u.KernelID, u.PipelineHash, u.ThreadgroupSig, itoa(u.DurationUs)})
@@ -263,7 +306,6 @@ func parseViews(by string) map[string]bool {
 	}
 	return out
 }
-
 
 func itoa(v int) string {
 	return strconv.Itoa(v)
