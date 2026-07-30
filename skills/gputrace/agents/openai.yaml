@@ -1,0 +1,4 @@
+interface:
+  display_name: "GPUTrace"
+  short_description: "Analyze and compare Apple Metal GPU traces"
+  default_prompt: "Use $gputrace to inspect a Metal GPU trace and explain the performance evidence."
