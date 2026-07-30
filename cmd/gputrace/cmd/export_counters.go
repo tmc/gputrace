@@ -22,8 +22,9 @@ func newExportCountersCommand(opts *exportCountersOptions) *cobra.Command {
 		Hidden: true,
 		Long: `Export performance counter data in Xcode Instruments Counters.csv format.
 
-Generates a 246-column CSV file matching the exact format used by Xcode
-Instruments when exporting GPU performance counter data. This includes:
+Generates a 246-column CSV with the same column schema used by an Xcode
+Instruments counter export. Schema compatibility does not mean that every row
+contains source-backed Xcode measurements. This includes:
 
 Metadata Columns (1-5):
   - Index: Sequential row number
@@ -51,7 +52,7 @@ Data Source:
   rows can replace remaining fallback rows with hardware measurements.
 
 Output Format:
-  Standard CSV with quoted strings, matching Xcode's export format exactly.
+  Standard CSV with quoted strings and an Xcode-compatible column schema.
   Can be imported into spreadsheet tools or compared with Xcode's output.
 
 Examples:
@@ -126,7 +127,7 @@ func runExportCounters(cmd *cobra.Command, args []string, opts *exportCountersOp
 
 	// Print success message to stderr (not stdout which has CSV data)
 	if opts.output != "" {
-		fmt.Fprintf(cmd.ErrOrStderr(), "✓ Exported counters to: %s\n", opts.output)
+		fmt.Fprintf(cmd.ErrOrStderr(), "Counter CSV written: %s\n", opts.output)
 	}
 
 	return nil

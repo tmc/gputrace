@@ -111,8 +111,25 @@ func runDump(cmd *cobra.Command, args []string, opts dumpOptions) error {
 	if err != nil {
 		return fmt.Errorf("format api calls: %w", err)
 	}
+	if opts.dispatchOnly && dumpFormattedCallCount(apiList) == 0 {
+		if statistics, statErr := gputrace.ExtractStatistics(trace); statErr == nil && statistics.DispatchCalls > 0 {
+			fmt.Fprintf(w, "\nDecoded dispatch API calls: 0/%d\n", statistics.DispatchCalls)
+			fmt.Fprintln(w, "The trace contains dispatch work, but this API-call decoder did not recover its dispatch records.")
+		}
+	}
 
 	return nil
+}
+
+func dumpFormattedCallCount(apiList *gputrace.APICallList) int {
+	if apiList == nil {
+		return 0
+	}
+	total := 0
+	for _, cb := range apiList.CommandBuffers {
+		total += len(cb.Calls)
+	}
+	return total
 }
 
 func validateDumpOptions(opts dumpOptions) error {

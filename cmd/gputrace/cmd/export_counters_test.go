@@ -99,4 +99,9 @@ func TestExportCountersHelpDistinguishesSyntheticFallback(t *testing.T) {
 			t.Fatalf("export-counters help does not contain %q", want)
 		}
 	}
+	for _, misleading := range []string{"matching the exact format", "matching Xcode's export format exactly"} {
+		if strings.Contains(help, misleading) {
+			t.Fatalf("export-counters help makes exactness claim %q", misleading)
+		}
+	}
 }

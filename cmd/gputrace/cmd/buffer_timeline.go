@@ -27,21 +27,22 @@ type bufferTimelineOptions struct {
 func newBufferTimelineCommand(opts *bufferTimelineOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "buffer-timeline <trace.gputrace>",
-		Short: "Visualize buffer allocation and usage timeline",
-		Long: `Analyze and visualize buffer lifecycle events across the trace.
+		Short: "Visualize observed buffer-access spans",
+		Long: `Analyze and visualize observed buffer accesses across trace record order.
 
-This command extracts buffer allocation, usage, and deallocation patterns
-and presents them in various formats:
+The first and last references are access observations, not allocation or
+deallocation events. Memory totals are approximate upper bounds because the
+capture does not provide complete lifetime attribution.
 
-  - ASCII: Terminal-based bar chart showing buffer lifetimes
+  - ASCII: Terminal-based bar chart showing observed access spans
   - summary: Text summary with statistics and top buffers
   - chrome: Chrome tracing format for ui.perfetto.dev
   - json: Raw JSON data
 
 The timeline shows:
-  - Buffer allocation/deallocation times
-  - Memory usage over time
-  - Peak memory usage
+  - First and last observed access
+  - Approximate memory upper bounds over record order
+  - Approximate peak memory upper bound
   - Buffer sizes and usage patterns
 
 Examples:
@@ -143,14 +144,21 @@ func writeBufferTimelineOutput(outputPath, output string) error {
 }
 
 type bufferTimelineJSON struct {
-	TotalBuffers     int                        `json:"total_buffers"`
-	PeakMemoryBytes  uint64                     `json:"peak_memory_bytes"`
-	PeakMemoryMB     float64                    `json:"peak_memory_mb"`
-	TotalAllocations int                        `json:"total_allocations"`
-	AverageLifetime  float64                    `json:"average_lifetime_records"`
-	MinRecordIndex   int                        `json:"min_record_index"`
-	MaxRecordIndex   int                        `json:"max_record_index"`
-	Buffers          []bufferTimelineJSONBuffer `json:"buffers"`
+	TotalBuffers        int                        `json:"total_buffers"`
+	PeakMemoryBytes     uint64                     `json:"peak_memory_bytes"`
+	PeakMemoryMB        float64                    `json:"peak_memory_mb"`
+	MemorySemantics     string                     `json:"memory_semantics"`
+	TotalAllocations    int                        `json:"total_allocations"`        // Deprecated: use BuffersFirstSeen.
+	AverageLifetime     float64                    `json:"average_lifetime_records"` // Deprecated: use AverageAccessSpan.
+	BuffersFirstSeen    int                        `json:"buffers_first_seen"`
+	AverageAccessSpan   float64                    `json:"average_observed_access_span_records"`
+	MinRecordIndex      int                        `json:"min_record_index"`
+	MaxRecordIndex      int                        `json:"max_record_index"`
+	ExpectedEncoders    int                        `json:"expected_encoders"`
+	AttributedEncoders  int                        `json:"attributed_encoders"`
+	AttributionComplete bool                       `json:"attribution_complete"`
+	AttributionNote     string                     `json:"attribution_note,omitempty"`
+	Buffers             []bufferTimelineJSONBuffer `json:"buffers"`
 }
 
 type bufferTimelineJSONBuffer struct {
@@ -171,13 +179,16 @@ type bufferTimelineChromeTrace struct {
 }
 
 type bufferTimelineChromeTraceHeader struct {
-	TotalBuffers     int     `json:"total_buffers"`
-	PeakMemoryBytes  uint64  `json:"peak_memory_bytes"`
-	TotalAllocations int     `json:"total_allocations"`
-	AverageLifetime  float64 `json:"average_lifetime_records"`
-	MinRecordIndex   int     `json:"min_record_index"`
-	MaxRecordIndex   int     `json:"max_record_index"`
-	TimeUnit         string  `json:"time_unit"`
+	TotalBuffers        int     `json:"total_buffers"`
+	PeakMemoryBytes     uint64  `json:"peak_memory_bytes"`
+	TotalAllocations    int     `json:"total_allocations"`
+	AverageLifetime     float64 `json:"average_lifetime_records"`
+	MinRecordIndex      int     `json:"min_record_index"`
+	MaxRecordIndex      int     `json:"max_record_index"`
+	TimeUnit            string  `json:"time_unit"`
+	MemorySemantics     string  `json:"memory_semantics"`
+	AttributionComplete bool    `json:"attribution_complete"`
+	AttributionNote     string  `json:"attribution_note,omitempty"`
 }
 
 type bufferTimelineCounterDelta struct {
@@ -188,13 +199,20 @@ type bufferTimelineCounterDelta struct {
 
 func formatBufferTimelineJSON(timeline *gputrace.BufferTimelineAnalysis) (string, error) {
 	doc := bufferTimelineJSON{
-		TotalBuffers:     timeline.TotalBuffers,
-		PeakMemoryBytes:  timeline.PeakMemoryBytes,
-		PeakMemoryMB:     timeline.PeakMemoryMB,
-		TotalAllocations: timeline.TotalAllocations,
-		AverageLifetime:  timeline.AverageLifetime,
-		MinRecordIndex:   timeline.MinRecordIndex,
-		MaxRecordIndex:   timeline.MaxRecordIndex,
+		TotalBuffers:        timeline.TotalBuffers,
+		PeakMemoryBytes:     timeline.PeakMemoryBytes,
+		PeakMemoryMB:        timeline.PeakMemoryMB,
+		MemorySemantics:     "approximate upper bound from buffers referenced in decoded records",
+		TotalAllocations:    timeline.TotalAllocations,
+		AverageLifetime:     timeline.AverageLifetime,
+		BuffersFirstSeen:    timeline.TotalAllocations,
+		AverageAccessSpan:   timeline.AverageLifetime,
+		MinRecordIndex:      timeline.MinRecordIndex,
+		MaxRecordIndex:      timeline.MaxRecordIndex,
+		ExpectedEncoders:    timeline.ExpectedEncoders,
+		AttributedEncoders:  timeline.AttributedEncoders,
+		AttributionComplete: timeline.AttributionComplete,
+		AttributionNote:     timeline.AttributionNote,
 	}
 
 	lifecycles := sortedBufferLifecycles(timeline)
@@ -223,13 +241,16 @@ func formatBufferTimelineJSON(timeline *gputrace.BufferTimelineAnalysis) (string
 func formatBufferTimelineChrome(timeline *gputrace.BufferTimelineAnalysis) (string, error) {
 	doc := bufferTimelineChromeTrace{
 		Metadata: bufferTimelineChromeTraceHeader{
-			TotalBuffers:     timeline.TotalBuffers,
-			PeakMemoryBytes:  timeline.PeakMemoryBytes,
-			TotalAllocations: timeline.TotalAllocations,
-			AverageLifetime:  timeline.AverageLifetime,
-			MinRecordIndex:   timeline.MinRecordIndex,
-			MaxRecordIndex:   timeline.MaxRecordIndex,
-			TimeUnit:         "record_index_as_microseconds",
+			TotalBuffers:        timeline.TotalBuffers,
+			PeakMemoryBytes:     timeline.PeakMemoryBytes,
+			TotalAllocations:    timeline.TotalAllocations,
+			AverageLifetime:     timeline.AverageLifetime,
+			MinRecordIndex:      timeline.MinRecordIndex,
+			MaxRecordIndex:      timeline.MaxRecordIndex,
+			TimeUnit:            "record_index_as_microseconds",
+			MemorySemantics:     "approximate upper bound from buffers referenced in decoded records",
+			AttributionComplete: timeline.AttributionComplete,
+			AttributionNote:     timeline.AttributionNote,
 		},
 	}
 

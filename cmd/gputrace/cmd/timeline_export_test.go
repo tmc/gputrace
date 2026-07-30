@@ -252,6 +252,48 @@ func TestExportTextTimelineWritesOutputFile(t *testing.T) {
 	}
 }
 
+func TestExportTextTimelineSummarizesUnitsAndMissingDuration(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "timeline.txt")
+	timeline := &Timeline{
+		TracePath: "/trace/example.gputrace",
+		Events: []TimelineEvent{
+			{Name: "CB#0", Category: "command_buffer", Duration: 250, Args: map[string]interface{}{"index": 0}},
+			{Name: "CB#1", Category: "command_buffer", Timestamp: 250, Args: map[string]interface{}{"index": 1}},
+		},
+		Encoders: []EncoderInfo{{Index: 0}},
+		Kernels:  []KernelInfo{{Name: "kernel", Encoder: 0}},
+		Timing: &TimelineTiming{
+			EncoderSpanNs:         1_000_000,
+			DispatchSpanNs:        2_000_000,
+			CommandBufferActiveNs: 500_000,
+			CommandBufferWallNs:   3_000_000,
+			EncoderTimingSource:   "profiler",
+		},
+	}
+	if err := exportTextTimeline(timeline, out); err != nil {
+		t.Fatalf("exportTextTimeline: %v", err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	got := string(data)
+	for _, want := range []string{
+		"Trace: /trace/example.gputrace",
+		"Events: 2 command buffers, 1 encoder, 1 kernel dispatch",
+		"Timing source: profiler (measured)",
+		"Dispatch span: 2.00 ms",
+		"Command-buffer active time: 500.00 us",
+		"Xcode Effective GPU Time: unavailable",
+		"Row units: start and duration are milliseconds",
+		"CB#1 [0.2ms, duration unavailable: no end timestamp]",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestGenerateTimelineAnnotatesSyntheticTimingSource(t *testing.T) {
 	tr := &gputrace.Trace{
 		Path:        timelineTimingSourceTraceDir(t),

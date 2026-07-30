@@ -88,6 +88,26 @@ func TestXcodeCountersRejectsInvalidOptionsBeforeTraceIO(t *testing.T) {
 	}
 }
 
+func TestXcodeCountersTopRequiresMetricBeforeTraceIO(t *testing.T) {
+	err := runXcodeCounters(nil, []string{"missing.gputrace"}, &xcodeCountersOptions{
+		format: "summary",
+		top:    5,
+	})
+	if err == nil || err.Error() != "--top requires --metric" {
+		t.Fatalf("error=%v, want --top requires --metric", err)
+	}
+}
+
+func TestContainsXcodeMetricRequiresExactImportedName(t *testing.T) {
+	metrics := []string{"ALU Utilization", "Kernel Occupancy"}
+	if !containsXcodeMetric(metrics, "ALU Utilization") {
+		t.Fatal("known metric not found")
+	}
+	if containsXcodeMetric(metrics, "alu utilization") {
+		t.Fatal("case-mismatched metric unexpectedly found")
+	}
+}
+
 func TestXcodeCountersFilterTopEncodersNonPositiveTop(t *testing.T) {
 	data := &gputrace.XcodeCounterData{
 		Encoders: []gputrace.XcodeEncoderCounters{

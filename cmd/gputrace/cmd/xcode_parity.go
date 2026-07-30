@@ -65,6 +65,9 @@ func runXcodeParity(cmd *cobra.Command, args []string, opts *xcodeParityOptions)
 	}
 
 	fmt.Fprintf(w, "Trace: %s\n", report.Trace)
+	status := xcodeParityStatus(report)
+	fmt.Fprintf(w, "Parity status: %s (%d present fields, %d absent fields)\n", status, len(report.PresentFields), len(report.AbsentFields))
+	fmt.Fprintln(w, "Scope: trace evidence and adapter coverage; binding presence alone does not prove decoded values.")
 	fmt.Fprintf(w, "Kernel events: %d\n", report.KernelEvents)
 	fmt.Fprintf(w, "Bindings: %d/%d classes, %d/%d selectors\n",
 		report.Bindings["classes_present"],
@@ -106,9 +109,20 @@ func runXcodeParity(cmd *cobra.Command, args []string, opts *xcodeParityOptions)
 	return nil
 }
 
+func xcodeParityStatus(report xcodeParityReport) string {
+	if len(report.AbsentFields) > 0 || len(report.RemainingGaps) > 0 {
+		return "partial"
+	}
+	return "complete"
+}
+
 func parityTracePath(path string) (string, error) {
 	info, err := os.Stat(path)
 	if err != nil || !info.IsDir() {
+		return path, nil
+	}
+	switch filepath.Ext(path) {
+	case ".gputrace", ".gpuprofiler_raw":
 		return path, nil
 	}
 	entries, err := os.ReadDir(path)

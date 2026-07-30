@@ -3,6 +3,8 @@
 package cmd
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -17,6 +19,32 @@ func TestParityTracePathFindsSingleBundle(t *testing.T) {
 	}
 	if want := "06-six-encoders-run1.gputrace"; len(path) < len(want) || path[len(path)-len(want):] != want {
 		t.Fatalf("parityTracePath = %q, want suffix %q", path, want)
+	}
+}
+
+func TestParityTracePathAcceptsBundle(t *testing.T) {
+	for _, ext := range []string{".gputrace", ".gpuprofiler_raw"} {
+		path := filepath.Join(t.TempDir(), "trace"+ext)
+		if err := os.Mkdir(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		got, err := parityTracePath(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != path {
+			t.Errorf("parityTracePath(%q) = %q, want unchanged", path, got)
+		}
+	}
+}
+
+func TestXcodeParityStatusReportsPartialCoverage(t *testing.T) {
+	if got := xcodeParityStatus(xcodeParityReport{}); got != "complete" {
+		t.Fatalf("empty report status=%q, want complete", got)
+	}
+	report := xcodeParityReport{AbsentFields: []string{"occupancy_pct"}}
+	if got := xcodeParityStatus(report); got != "partial" {
+		t.Fatalf("report status=%q, want partial", got)
 	}
 }
 

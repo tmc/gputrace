@@ -26,8 +26,8 @@ Supported formats:
   - mermaid: Mermaid diagram format
 
 Graph types:
-  - hierarchy: Command buffer → encoder → shader hierarchy (default)
-  - flow: Execution flow (temporal order)
+  - hierarchy: Command buffer → CS-label hierarchy (default); ownership is heuristic
+  - flow: Observed CS-label order (not verified dispatch flow)
   - resources: Resource usage and buffer allocations
 
 Examples:

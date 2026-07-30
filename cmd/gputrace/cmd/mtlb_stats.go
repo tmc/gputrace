@@ -40,7 +40,8 @@ func runMTLBStats(cmd *cobra.Command, args []string, _ *mtlbStatsOptions) error 
 		return fmt.Errorf("open trace: %w", err)
 	}
 
-	fmt.Println("\n=== Metal Library Statistics ===")
+	out := cmd.OutOrStdout()
+	fmt.Fprintln(out, "\n=== Metal Library Statistics ===")
 
 	// Collect all functions
 	var allFuncs []string
@@ -104,8 +105,8 @@ func runMTLBStats(cmd *cobra.Command, args []string, _ *mtlbStatsOptions) error 
 		}
 	}
 
-	fmt.Println("\nFunction Categories:")
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 4, ' ', 0)
+	fmt.Fprintln(out, "\nFunction-name Categories (heuristic):")
+	w := tabwriter.NewWriter(out, 0, 0, 4, ' ', 0)
 
 	// Sort categories for consistent output (except Other last)
 	var cats []string
@@ -122,7 +123,7 @@ func runMTLBStats(cmd *cobra.Command, args []string, _ *mtlbStatsOptions) error 
 	}
 	w.Flush()
 
-	fmt.Println("\nData Type Coverage:")
+	fmt.Fprintln(out, "\nFunction-name Data Type Matches:")
 	var types []string
 	for t := range dataTypes {
 		types = append(types, t)
@@ -169,14 +170,17 @@ func runMTLBStats(cmd *cobra.Command, args []string, _ *mtlbStatsOptions) error 
 	totalFuncs := len(allFuncs)
 	unusedCount := totalFuncs - usedCount
 	usedPct := 0.0
+	unusedPct := 0.0
 	if totalFuncs > 0 {
 		usedPct = float64(usedCount) / float64(totalFuncs) * 100
+		unusedPct = float64(unusedCount) / float64(totalFuncs) * 100
 	}
 
-	fmt.Println("\nUsage Analysis:")
-	fmt.Fprintf(w, "  Functions used:\t%d (%.1f%%)\n", usedCount, usedPct)
-	fmt.Fprintf(w, "  Functions unused:\t%d (%.1f%%)\n", unusedCount, 100-usedPct)
+	fmt.Fprintln(out, "\nObserved Usage Attribution:")
+	fmt.Fprintf(w, "  Functions matched to decoded pipeline records:\t%d (%.1f%%)\n", usedCount, usedPct)
+	fmt.Fprintf(w, "  Functions not matched:\t%d (%.1f%%)\n", unusedCount, unusedPct)
 	w.Flush()
+	fmt.Fprintln(out, "  Note: not matched does not mean unused; pipeline/function decoding is incomplete.")
 
 	return nil
 }

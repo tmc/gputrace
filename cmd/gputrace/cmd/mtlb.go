@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -9,12 +10,14 @@ import (
 	"github.com/tmc/gputrace/internal/trace"
 )
 
-type mtlbOptions struct{}
+type mtlbOptions struct {
+	all bool
+}
 
 var mtlbCmd = newMTLBCommand(new(mtlbOptions))
 
 func newMTLBCommand(opts *mtlbOptions) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "mtlb <trace-path/mtlb-file>",
 		Short: "Inspect and analyze Metal Library Binary (MTLB) files",
 		Long: `Inspect and analyze Metal Library Binary (MTLB) files.
@@ -29,14 +32,17 @@ Displays header info, function table, and extraction stats.`,
 			return runMTLB(cmd, args, opts)
 		},
 	}
+	cmd.Flags().BoolVar(&opts.all, "all", opts.all, "Show every function in direct inspection output")
+	return cmd
 }
 
 func init() {
 	rootCmd.AddCommand(mtlbCmd)
 }
 
-func runMTLB(cmd *cobra.Command, args []string, _ *mtlbOptions) error {
+func runMTLB(cmd *cobra.Command, args []string, opts *mtlbOptions) error {
 	path := args[0]
+	w := cmd.OutOrStdout()
 
 	// Check if it's a trace bundle
 	info, err := os.Stat(path)
@@ -47,13 +53,15 @@ func runMTLB(cmd *cobra.Command, args []string, _ *mtlbOptions) error {
 			return err
 		}
 
-		fmt.Printf("Trace: %s\n", path)
-		fmt.Printf("Found %d MTLB Libraries associated with parsing:\n\n", len(t.MTLBLibraries))
+		fmt.Fprintf(w, "Trace: %s\n", path)
+		fmt.Fprintf(w, "Found %d parsed MTLB libraries:\n\n", len(t.MTLBLibraries))
 
 		for i, lib := range t.MTLBLibraries {
-			fmt.Printf("=== Library %d ===\n", i+1)
-			printMTLBDetails(lib)
-			fmt.Println()
+			fmt.Fprintf(w, "=== Library %d ===\n", i+1)
+			if err := printMTLBDetails(w, lib.Header, lib.ListFunctions, opts.all); err != nil {
+				return err
+			}
+			fmt.Fprintln(w)
 		}
 		return nil
 	}
@@ -74,26 +82,32 @@ func runMTLB(cmd *cobra.Command, args []string, _ *mtlbOptions) error {
 		return err
 	}
 
-	fmt.Printf("File: %s\n", path)
-	printMTLBDetails(mtlbFile)
-	return nil
+	fmt.Fprintf(w, "File: %s\n", path)
+	return printMTLBDetails(w, mtlbFile.Header, mtlbFile.ListFunctions, opts.all)
 }
 
-func printMTLBDetails(lib *metallib.File) {
-	fmt.Printf("Header:\n")
-	fmt.Printf("  Version:        %d\n", lib.Header.Version)
-	fmt.Printf("  Total Size:     %d bytes\n", lib.Header.TotalSize)
-	fmt.Printf("  Function Table: 0x%x\n", lib.Header.FunctionTable)
-	fmt.Printf("  String Table:   0x%x\n", lib.Header.StringTable)
+func printMTLBDetails(w io.Writer, header metallib.Header, listFunctions func() ([]string, error), all bool) error {
+	fmt.Fprintln(w, "Header:")
+	fmt.Fprintf(w, "  Version:        %d\n", header.Version)
+	fmt.Fprintf(w, "  Total Size:     %d bytes\n", header.TotalSize)
+	fmt.Fprintf(w, "  Function Table: 0x%x\n", header.FunctionTable)
+	fmt.Fprintf(w, "  String Table:   0x%x\n", header.StringTable)
 
-	funcs, err := lib.ListFunctions()
+	funcs, err := listFunctions()
 	if err != nil {
-		fmt.Printf("Error listing functions: %v\n", err)
-		return
+		return fmt.Errorf("list MTLB functions: %w", err)
 	}
 
-	fmt.Printf("\nFunctions (%d found):\n", len(funcs))
-	for i, f := range funcs {
-		fmt.Printf("  %d. %s\n", i, f)
+	fmt.Fprintf(w, "\nFunctions (%d found):\n", len(funcs))
+	shown := limitedCount(len(funcs), defaultHumanLimit)
+	if all {
+		shown = len(funcs)
 	}
+	for i, f := range funcs[:shown] {
+		fmt.Fprintf(w, "  %d. %s\n", i+1, f)
+	}
+	if shown < len(funcs) {
+		fmt.Fprintf(w, "  ... %d more functions omitted (use --all)\n", len(funcs)-shown)
+	}
+	return nil
 }

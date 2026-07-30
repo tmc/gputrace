@@ -19,8 +19,14 @@ var replayMetalCmd = newReplayMetalCommand(&replayMetalOptions{})
 
 func newReplayMetalCommand(opts *replayMetalOptions) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:          "replay-metal <trace.gputrace>",
-		Short:        "Execute a trace through the public Metal replay engine",
+		Use:   "replay-metal <trace.gputrace>",
+		Short: "Execute a trace through the public Metal replay engine",
+		Long: `Execute supported trace commands through the public Metal replay engine.
+
+This command is available only in builds made with the metal build tag. A
+successful result means command submission completed for the supported replay
+plan; it does not validate replayed buffer contents against the capture. Any
+unsupported command fails closed and may leave a partial execution count.`,
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {

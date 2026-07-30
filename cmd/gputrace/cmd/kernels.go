@@ -19,6 +19,8 @@ type kernelsOptions struct {
 	verbose bool
 	stats   bool
 	json    bool
+	limit   int
+	all     bool
 }
 
 func newKernelsCommand(opts *kernelsOptions) *cobra.Command {
@@ -54,6 +56,8 @@ Examples:
 	cmd.Flags().BoolVarP(&opts.verbose, "verbose", "v", opts.verbose, "Show verbose output with additional details")
 	cmd.Flags().BoolVar(&opts.stats, "stats", opts.stats, "Show detailed statistics (debug groups, encoder labels)")
 	cmd.Flags().BoolVar(&opts.json, "json", opts.json, "Output in JSON format")
+	cmd.Flags().IntVar(&opts.limit, "limit", 50, "Maximum rows to show")
+	cmd.Flags().BoolVar(&opts.all, "all", false, "Show every row")
 	return cmd
 }
 
@@ -79,46 +83,33 @@ func runKernels(cmd *cobra.Command, args []string, opts *kernelsOptions) error {
 		return fmt.Errorf("analyze kernels: %w", err)
 	}
 
-	// Try to get timing stats
 	var timingStats map[string]*gputrace.TimingStat
-	// We check for perf counters availability
-	if trace.HasPerfCounters() {
-		// Use extracted timing data
-		// Note: We need to bridge internal/timing to something usable here without import cycles in core packages.
-		// Since cmd can import anything, we can implement extraction here or use a helper.
-		// But gputrace package re-exports ExtractTimingData.
-
-		timings, err := gputrace.ExtractTimingData(trace)
-		if err == nil {
-			timingStats = make(map[string]*gputrace.TimingStat)
-			for _, t := range timings {
-				name := t.Label
-				// Normalize name to match kernel stats if possible
-				// Encoder timing labels usually match encoder labels
-
-				// Clean up name if it's an "Encoder_X_kernel" style
-				if strings.Contains(name, "_") {
-					parts := strings.SplitN(name, "_", 3)
-					if len(parts) >= 3 && parts[0] == "Encoder" {
-						name = parts[2]
-					}
-				}
-
-				if _, exists := timingStats[name]; !exists {
-					timingStats[name] = &gputrace.TimingStat{
-						MinTime: 1e9,
-					}
-				}
-
-				s := timingStats[name]
-				s.TotalTime += t.DurationMs
-				if t.DurationMs < s.MinTime {
-					s.MinTime = t.DurationMs
-				}
-				if t.DurationMs > s.MaxTime {
-					s.MaxTime = t.DurationMs
-				}
+	source := "capture records"
+	if _, profilerStats, err := loadProfilerStats(tracePath); err == nil && len(profilerStats.Dispatches) > 0 {
+		source = "profiler streamData dispatches"
+		stats = make(map[string]*gputrace.KernelStat)
+		timingStats = make(map[string]*gputrace.TimingStat)
+		for _, dispatch := range profilerStats.Dispatches {
+			name := dispatch.FunctionName
+			if name == "" {
+				name = fmt.Sprintf("(pipeline_%d)", dispatch.PipelineIndex)
 			}
+			k := stats[name]
+			if k == nil {
+				k = &gputrace.KernelStat{
+					Name:          name,
+					DebugGroups:   make(map[string]int),
+					EncoderLabels: make(map[string]int),
+				}
+				stats[name] = k
+			}
+			k.DispatchCount++
+			s := timingStats[name]
+			if s == nil {
+				s = &gputrace.TimingStat{}
+				timingStats[name] = s
+			}
+			s.TotalTime += float64(dispatch.DurationUs) / 1000
 		}
 	}
 
@@ -146,25 +137,51 @@ func runKernels(cmd *cobra.Command, args []string, opts *kernelsOptions) error {
 	}
 
 	out := cmd.OutOrStdout()
+	hasTiming := len(timingStats) > 0
+	totalDispatches := 0
+	attributedDispatches := 0
+	for _, k := range stats {
+		totalDispatches += k.DispatchCount
+		if k.Name != "unknown" && k.Name != "" {
+			attributedDispatches += k.DispatchCount
+		}
+	}
 
-	// Count unique kernels
-	uniqueKernels := len(kernels)
+	namedKernels, unknownBucket := splitKernelRows(kernels)
+	uniqueKernels := len(namedKernels)
 
 	// Output header
+	rowSingular, rowPlural := "named inventory kernel label", "named inventory kernel labels"
+	if hasTiming {
+		rowSingular, rowPlural = "timed function", "timed functions"
+	}
 	if opts.filter != "" {
-		fmt.Fprintf(out, "%d %s matching %q:\n", uniqueKernels, Pluralize(uniqueKernels, "kernel", "kernels"), opts.filter)
+		fmt.Fprintf(out, "%d %s matching %q:\n", uniqueKernels, Pluralize(uniqueKernels, rowSingular, rowPlural), opts.filter)
 	} else {
-		fmt.Fprintf(out, "%d %s:\n", uniqueKernels, Pluralize(uniqueKernels, "kernel", "kernels"))
+		fmt.Fprintf(out, "%d %s:\n", uniqueKernels, Pluralize(uniqueKernels, rowSingular, rowPlural))
+	}
+	fmt.Fprintf(out, "Source: %s\n", source)
+	fmt.Fprintf(out, "Dispatch attribution: %d/%d", attributedDispatches, totalDispatches)
+	if attributedDispatches < totalDispatches {
+		fmt.Fprint(out, " (unattributed dispatches are reported as unknown)")
+	}
+	fmt.Fprintln(out)
+	if hasTiming {
+		fmt.Fprintln(out, "Timing: cumulative dispatch offsets; spans may include boundary or gap time")
 	}
 	fmt.Fprintln(out)
 
-	if uniqueKernels == 0 {
+	if uniqueKernels == 0 && unknownBucket == nil {
 		return nil
 	}
 
 	// Determine column widths
 	maxNameLen := 30
-	for _, k := range kernels {
+	shown := namedKernels
+	if !opts.all && opts.limit >= 0 && len(shown) > opts.limit {
+		shown = shown[:opts.limit]
+	}
+	for _, k := range shown {
 		if len(k.Name) > maxNameLen {
 			maxNameLen = len(k.Name)
 		}
@@ -176,9 +193,6 @@ func runKernels(cmd *cobra.Command, args []string, opts *kernelsOptions) error {
 
 	// Print table header
 	nameFmt := fmt.Sprintf("%%-%ds", maxNameLen)
-
-	// Adjust columns if we have timing
-	hasTiming := len(timingStats) > 0
 
 	fmt.Fprintf(out, nameFmt+"  %-18s  %-10s", "Name", "Pipeline State", "Dispatches")
 	if hasTiming {
@@ -199,14 +213,18 @@ func runKernels(cmd *cobra.Command, args []string, opts *kernelsOptions) error {
 	fmt.Fprintln(out, TableSeparator(sepWidth))
 
 	// Print rows
-	for _, k := range kernels {
+	for _, k := range shown {
 		name := k.Name
 		displayName := name
 		if len(displayName) > maxNameLen {
 			displayName = displayName[:maxNameLen-3] + "..."
 		}
 
-		fmt.Fprintf(out, nameFmt+"  0x%-16x  %-10d", displayName, k.PipelineAddr, k.DispatchCount)
+		pipeline := "—"
+		if k.PipelineAddr != 0 {
+			pipeline = fmt.Sprintf("0x%x", k.PipelineAddr)
+		}
+		fmt.Fprintf(out, nameFmt+"  %-18s  %-10d", displayName, pipeline, k.DispatchCount)
 
 		if hasTiming {
 			if tStat, ok := timingStats[name]; ok {
@@ -268,18 +286,40 @@ func runKernels(cmd *cobra.Command, args []string, opts *kernelsOptions) error {
 		}
 		fmt.Fprintln(out)
 	}
+	if len(shown) < len(namedKernels) {
+		fmt.Fprintf(out, "... %d more; use --all to show every row\n", len(namedKernels)-len(shown))
+	}
 
-	// Print summary of unknown pipelines if any
-	if k, ok := stats["unknown"]; ok && k.DispatchCount > 0 {
-		fmt.Fprintf(out, "\nUnknown Pipelines: %d dispatches (encoder: %v)\n", k.DispatchCount, k.EncoderLabels)
+	if unknownBucket != nil {
+		writeUnknownKernelBucket(out, unknownBucket)
 	}
 
 	return nil
 }
 
+func splitKernelRows(kernels []*gputrace.KernelStat) (named []*gputrace.KernelStat, unknown *gputrace.KernelStat) {
+	for _, k := range kernels {
+		if k.Name == "unknown" {
+			unknown = k
+			continue
+		}
+		named = append(named, k)
+	}
+	return named, unknown
+}
+
+func writeUnknownKernelBucket(w io.Writer, unknown *gputrace.KernelStat) {
+	fmt.Fprintf(w, "\nSynthetic unattributed bucket: %d dispatches", unknown.DispatchCount)
+	if len(unknown.EncoderLabels) > 0 {
+		fmt.Fprintf(w, " (encoder labels: %v)", unknown.EncoderLabels)
+	}
+	fmt.Fprintln(w)
+}
+
 func writeKernelsJSON(w io.Writer, kernels []*gputrace.KernelStat, timingStats map[string]*gputrace.TimingStat) error {
 	type kernelJSON struct {
 		Name          string         `json:"name"`
+		RowKind       string         `json:"row_kind"`
 		PipelineAddr  string         `json:"pipeline_addr"`
 		DispatchCount int            `json:"dispatch_count"`
 		DebugGroups   map[string]int `json:"debug_groups,omitempty"`
@@ -290,8 +330,13 @@ func writeKernelsJSON(w io.Writer, kernels []*gputrace.KernelStat, timingStats m
 
 	out := make([]kernelJSON, len(kernels))
 	for i, k := range kernels {
+		rowKind := "named_inventory"
+		if k.Name == "unknown" {
+			rowKind = "synthetic_unattributed_bucket"
+		}
 		kj := kernelJSON{
 			Name:          k.Name,
+			RowKind:       rowKind,
 			PipelineAddr:  fmt.Sprintf("0x%x", k.PipelineAddr),
 			DispatchCount: k.DispatchCount,
 			DebugGroups:   k.DebugGroups,

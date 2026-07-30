@@ -100,20 +100,22 @@ func runTimeline(cmd *cobra.Command, args []string, opts *timelineOptions) error
 		return fmt.Errorf("failed to generate timeline: %w", err)
 	}
 
-	// Enhance with raw GPRWCNTR data if available
-	if err := EnhanceTimelineWithRawData(timeline, tracePath); err != nil {
-		// Just warn, don't fail as this is optional/experimental
-		fmt.Fprintf(os.Stderr, "Warning: failed to enhance timeline with raw data: %v\n", err)
-	} else {
-		// Check if we actually added samples
-		sampleCount := 0
-		for _, ev := range timeline.Events {
-			if ev.Category == "gprwcntr" {
-				sampleCount++
+	// Enhance with raw GPRWCNTR data if available.
+	if findProfilerDir(tracePath) != "" {
+		if err := EnhanceTimelineWithRawData(timeline, tracePath); err != nil {
+			// Just warn, don't fail as this is optional/experimental
+			fmt.Fprintf(os.Stderr, "Warning: failed to enhance timeline with raw data: %v\n", err)
+		} else {
+			// Check if we actually added samples
+			sampleCount := 0
+			for _, ev := range timeline.Events {
+				if ev.Category == "gprwcntr" {
+					sampleCount++
+				}
 			}
-		}
-		if sampleCount > 0 {
-			fmt.Fprintf(os.Stderr, "✓ Enhanced with %d GPRWCNTR samples\n", sampleCount)
+			if sampleCount > 0 {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Profiler samples: %d GPRWCNTR records\n", sampleCount)
+			}
 		}
 	}
 
@@ -170,7 +172,7 @@ func printTimelineExportStatus(output, format string, profilerOnly bool) {
 	if profilerOnly {
 		suffix = " (profiler-only mode)"
 	}
-	fmt.Fprintf(os.Stderr, "✓ Timeline written to: %s%s\n", output, suffix)
+	fmt.Fprintf(os.Stderr, "Timeline written: %s%s\n", output, suffix)
 	if format == "chrome" {
 		fmt.Fprintln(os.Stderr, "\nView in Chrome:")
 		fmt.Fprintln(os.Stderr, "  1. Open chrome://tracing")
@@ -202,6 +204,23 @@ func exportTextTimeline(timeline *Timeline, outputPath string) error {
 		return nil
 	}
 
+	fmt.Fprintln(w, "GPU Timeline")
+	if timeline.TracePath != "" {
+		fmt.Fprintf(w, "Trace: %s\n", timeline.TracePath)
+	}
+
+	// Find command buffer events before printing the summary.
+	var cbs []TimelineEvent
+	for _, event := range timeline.Events {
+		if event.Category == "command_buffer" {
+			cbs = append(cbs, event)
+		}
+	}
+	fmt.Fprintf(w, "Events: %d %s, %d %s, %d %s\n",
+		len(cbs), Pluralize(len(cbs), "command buffer", "command buffers"),
+		len(timeline.Encoders), Pluralize(len(timeline.Encoders), "encoder", "encoders"),
+		len(timeline.Kernels), Pluralize(len(timeline.Kernels), "kernel dispatch", "kernel dispatches"))
+
 	if timeline.Timing != nil && timeline.Timing.EncoderTimingSource != "" {
 		sourceKind := "measured"
 		if timeline.Timing.EncoderTimingApproximate {
@@ -209,14 +228,27 @@ func exportTextTimeline(timeline *Timeline, outputPath string) error {
 		}
 		fmt.Fprintf(w, "Timing source: %s (%s)\n", timeline.Timing.EncoderTimingSource, sourceKind)
 	}
-
-	// Find command buffer events
-	var cbs []TimelineEvent
-	for _, event := range timeline.Events {
-		if event.Category == "command_buffer" {
-			cbs = append(cbs, event)
+	if timing := timeline.Timing; timing != nil {
+		if timing.EncoderSpanNs > 0 {
+			fmt.Fprintf(w, "Encoder span: %s\n", FormatDurationNs(timing.EncoderSpanNs))
+		}
+		if timing.DispatchSpanNs > 0 {
+			fmt.Fprintf(w, "Dispatch span: %s\n", FormatDurationNs(timing.DispatchSpanNs))
+		}
+		if timing.CommandBufferActiveNs > 0 {
+			fmt.Fprintf(w, "Command-buffer active time: %s\n", FormatDurationNs(timing.CommandBufferActiveNs))
+		}
+		if timing.CommandBufferWallNs > 0 {
+			fmt.Fprintf(w, "Command-buffer wall span: %s\n", FormatDurationNs(timing.CommandBufferWallNs))
+		}
+		if timing.EffectiveGPUTimeNs != nil {
+			fmt.Fprintf(w, "Xcode Effective GPU Time: %s\n", FormatDurationNs(*timing.EffectiveGPUTimeNs))
+		} else if !timing.EncoderTimingApproximate {
+			fmt.Fprintln(w, "Xcode Effective GPU Time: unavailable")
 		}
 	}
+	fmt.Fprintln(w, "Row units: start and duration are milliseconds; capture-only coordinates are byte offsets.")
+	fmt.Fprintln(w)
 
 	// If no CB events, create a dummy one
 	if len(cbs) == 0 {
@@ -233,18 +265,20 @@ func exportTextTimeline(timeline *Timeline, outputPath string) error {
 	}
 
 	for _, cb := range cbs {
-		var cbStart float64
-		if cb.Timestamp >= firstTimestamp {
-			cbStart = float64(cb.Timestamp-firstTimestamp) / 1000000.0
+		if source, _ := cb.Args["coordinate_source"].(string); source == "capture byte offset" {
+			fmt.Fprintf(w, "%s [capture offset %v]\n", cb.Name, cb.Args["offset"])
 		} else {
-			cbStart = 0.0
-		}
-		// Show duration if available (from APSTimelineData)
-		if cb.Duration > 0 {
-			cbDurationMs := float64(cb.Duration) / 1000.0 // Duration is in µs, convert to ms
-			fmt.Fprintf(w, "%s [%.1fms, duration=%.2fms]\n", cb.Name, cbStart, cbDurationMs)
-		} else {
-			fmt.Fprintf(w, "%s [%.1fms]\n", cb.Name, cbStart)
+			var cbStart float64
+			if cb.Timestamp >= firstTimestamp {
+				cbStart = float64(cb.Timestamp-firstTimestamp) / 1000.0
+			}
+			// Show duration if available (from APSTimelineData)
+			if cb.Duration > 0 {
+				cbDurationMs := float64(cb.Duration) / 1000.0 // Duration is in µs, convert to ms
+				fmt.Fprintf(w, "%s [%.1fms, duration=%.2fms]\n", cb.Name, cbStart, cbDurationMs)
+			} else {
+				fmt.Fprintf(w, "%s [%.1fms, duration unavailable: no end timestamp]\n", cb.Name, cbStart)
+			}
 		}
 
 		cbIndex, ok := cb.Args["index"].(int)
@@ -318,6 +352,7 @@ func getKernelCBIndex(timeline *Timeline, k KernelInfo) (int, bool) {
 
 // Timeline represents the complete timeline data.
 type Timeline struct {
+	TracePath     string          `json:"trace_path,omitempty"`
 	StartTime     uint64          `json:"start_time"`
 	EndTime       uint64          `json:"end_time"`
 	Duration      uint64          `json:"duration"`
@@ -407,6 +442,7 @@ type CounterSample struct {
 // generateTimeline creates timeline data from a trace.
 func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 	timeline := &Timeline{
+		TracePath:  trace.Path,
 		Events:     make([]TimelineEvent, 0),
 		Encoders:   make([]EncoderInfo, 0),
 		Kernels:    make([]KernelInfo, 0),
@@ -723,12 +759,14 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 					Name:      fmt.Sprintf("CommandBuffer %d", i),
 					Category:  "command_buffer",
 					Phase:     "i",
-					Timestamp: uint64(cb.Offset),
+					Timestamp: uint64(i),
 					ProcessID: 1,
 					ThreadID:  0,
 					Args: map[string]interface{}{
-						"offset": cb.Offset,
-						"index":  i,
+						"offset":            cb.Offset,
+						"index":             i,
+						"coordinate_source": "capture byte offset",
+						"real_timing":       false,
 					},
 				}
 				timeline.Events = append(timeline.Events, event)
@@ -2381,6 +2419,7 @@ func runTimelineFromProfiler(tracePath string, opts *timelineOptions) error {
 // buildTimelineFromProfilerData creates a Timeline from StreamDataStats.
 func buildTimelineFromProfilerData(tracePath string, stats *counter.StreamDataStats) *Timeline {
 	timeline := &Timeline{
+		TracePath:  tracePath,
 		Events:     make([]TimelineEvent, 0),
 		Encoders:   make([]EncoderInfo, 0),
 		Kernels:    make([]KernelInfo, 0),

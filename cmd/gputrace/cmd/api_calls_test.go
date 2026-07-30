@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/tmc/gputrace"
 )
 
@@ -43,5 +44,25 @@ func TestWriteAPICallsJSON(t *testing.T) {
 	}
 	if len(got.CommandBuffers) != 1 || len(got.CommandBuffers[0].Calls) != 1 {
 		t.Fatalf("decoded command buffers = %+v", got.CommandBuffers)
+	}
+}
+
+func TestRunAPICallsTextIsBoundedAndUsesCommandOutput(t *testing.T) {
+	tracePath := testCommandBuffersTracePath(t)
+	var out bytes.Buffer
+	command := &cobra.Command{}
+	command.SetOut(&out)
+
+	stdout, err := captureStdout(t, func() error {
+		return runAPICalls(command, []string{tracePath}, &apiCallsOptions{limit: 1})
+	})
+	if err != nil {
+		t.Fatalf("runAPICalls: %v", err)
+	}
+	if stdout != "" {
+		t.Fatalf("os stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(out.String(), "Decoded API subset:") {
+		t.Fatalf("command output missing coverage:\n%s", out.String())
 	}
 }

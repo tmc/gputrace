@@ -169,7 +169,7 @@ func runPprof(cmd *cobra.Command, args []string, opts *pprofOptions) error {
 			return fmt.Errorf("failed to write profiles: %w", err)
 		}
 
-		fmt.Printf("✅ Generated profiles:\n")
+		fmt.Printf("Generated profiles:\n")
 		fmt.Printf("   %s.gpu.pprof       - Hierarchical GPU profile\n", outputPrefix)
 		fmt.Printf("   %s.gpu-flat.pprof  - Flat GPU profile\n", outputPrefix)
 		fmt.Printf("   %s.combined.pprof  - Combined multi-view profile\n", outputPrefix)
@@ -188,7 +188,7 @@ func runPprof(cmd *cobra.Command, args []string, opts *pprofOptions) error {
 			return fmt.Errorf("failed to write text report: %w", err)
 		}
 
-		fmt.Fprintf(pprofStatusWriter(outputPath), "✅ Text report written to: %s\n", outputPath)
+		fmt.Fprintf(pprofStatusWriter(outputPath), "Text report written: %s\n", outputPath)
 
 	} else {
 		// Generate single pprof file
@@ -206,7 +206,7 @@ func runPprof(cmd *cobra.Command, args []string, opts *pprofOptions) error {
 			return fmt.Errorf("failed to write pprof: %w", err)
 		}
 
-		fmt.Fprintf(status, "✅ GPU profile written to: %s\n", outputPath)
+		fmt.Fprintf(status, "GPU profile written: %s\n", outputPath)
 		fmt.Fprintf(status, "\nView with: go tool pprof -top %s\n", outputPath)
 		fmt.Fprintf(status, "Or:        go tool pprof -http=:8080 %s\n", outputPath)
 	}
@@ -283,7 +283,7 @@ func generateSourceLinesPprof(tracePath string, opts *pprofOptions) error {
 		return fmt.Errorf("failed to write pprof: %w", err)
 	}
 
-	fmt.Fprintf(status, "✅ Source-lines pprof written to: %s\n", outputPath)
+	fmt.Fprintf(status, "Source-lines pprof written: %s\n", outputPath)
 	fmt.Fprintf(status, "\nView per-line costs with:\n")
 	fmt.Fprintf(status, "  go tool pprof -list <kernel_name> %s\n", outputPath)
 	fmt.Fprintf(status, "\nOr interactive mode:\n")

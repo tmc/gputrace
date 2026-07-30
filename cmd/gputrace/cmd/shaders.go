@@ -31,7 +31,7 @@ func newShadersCommand(opts *shadersOptions) *cobra.Command {
 		Long: `Display shader/kernel performance statistics.
 
 By default shows a simple two-column output:
-  - Cost % (percentage of total GPU time)
+  - Share % (SIMD-group share for full traces; dispatch-span share for profiler-only traces)
   - Shader name
 
 Use --all for full Xcode Instruments format with additional columns:
@@ -142,7 +142,7 @@ func runShadersNoCost(tracePath string, opts *shadersOptions) error {
 }
 
 func writeShadersNoCost(report *gputrace.ShaderMetricsReport, tracePath string, opts *shadersOptions) error {
-	fmt.Fprintf(os.Stderr, "No profiler data. To get Cost %%, run:\n")
+	fmt.Fprintf(os.Stderr, "No profiler data. To get a measured shader share, run:\n")
 	fmt.Fprintf(os.Stderr, "  gputrace xp run %s -o profiled.gputrace\n\n", tracePath)
 
 	switch opts.format {
@@ -158,7 +158,7 @@ func writeShadersNoCost(report *gputrace.ShaderMetricsReport, tracePath string, 
 }
 
 func formatShadersNoCostText(w io.Writer, report *gputrace.ShaderMetricsReport) error {
-	fmt.Fprintf(w, "Cost      Name\n")
+	fmt.Fprintf(w, "Share     Name\n")
 	for _, shader := range report.Shaders {
 		fmt.Fprintf(w, "    ?     %s\n", shader.Name)
 	}
@@ -180,6 +180,8 @@ func runShadersFromFullTrace(tracePath string, opts *shadersOptions) error {
 		// Use combined approach: capture file dispatches + profiler function names
 		report, err := extractSIMDBasedMetrics(trace, profilerDir)
 		if err == nil && len(report.Shaders) > 0 {
+			report.ShareBasis = "simd_groups"
+			writeShaderShareBasis(opts.format, "SIMD groups (Xcode Cost basis)")
 			// Output based on format
 			switch opts.format {
 			case "csv":
@@ -215,6 +217,8 @@ func runShadersFromFullTrace(tracePath string, opts *shadersOptions) error {
 			shader.PercentOfTotal = float64(shader.TotalThreadgroups) / float64(totalSIMDGroups) * 100.0
 		}
 	}
+	report.ShareBasis = "simd_groups"
+	writeShaderShareBasis(opts.format, "SIMD groups (Xcode Cost basis)")
 
 	// Re-sort by SIMD-based cost
 	sort.Slice(report.Shaders, func(i, j int) bool {
@@ -397,8 +401,8 @@ func findProfilerDir(tracePath string) string {
 // Note: This uses dispatch duration for Cost %, NOT SIMD groups (Xcode uses SIMD groups).
 // For Xcode-matching Cost %, use a full trace with unsorted-capture directory.
 func runShadersFromProfiler(tracePath string, opts *shadersOptions) error {
-	fmt.Fprintln(os.Stderr, "Note: Using dispatch duration for Cost % (profiler-only trace).")
-	fmt.Fprintln(os.Stderr, "      Xcode uses SIMD Groups for Cost %. For matching values, use a full trace.")
+	fmt.Fprintln(os.Stderr, "Note: Share is based on cumulative dispatch span for this profiler-only trace.")
+	fmt.Fprintln(os.Stderr, "      Xcode's SIMD Share uses SIMD groups; use a full trace when that basis is required.")
 	fmt.Fprintln(os.Stderr, "")
 	// Find .gpuprofiler_raw directory
 	profilerDir := ""
@@ -436,6 +440,7 @@ func runShadersFromProfiler(tracePath string, opts *shadersOptions) error {
 	// Note: Uses dispatch duration for Cost %. Statistical sampling from Profiling_f_*.raw
 	// has a complex format that needs further reverse engineering to match Xcode exactly.
 	report := convertPipelineStatsToShaderReport(stats, nil)
+	report.ShareBasis = "dispatch_span"
 	if err := applySourceBackedShaderMetrics(filepath.Join(profilerDir, "streamData"), stats, report); err != nil {
 		fmt.Fprintf(os.Stderr, "Note: source-backed high-register metrics unavailable: %v\n", err)
 	}
@@ -451,6 +456,7 @@ func runShadersFromProfiler(tracePath string, opts *shadersOptions) error {
 			return fmt.Errorf("failed to export JSON: %w", err)
 		}
 	case "text":
+		writeShaderShareBasis(opts.format, "dispatch cumulative-offset span")
 		if opts.all {
 			// Format as Xcode Instruments style output (no trace available)
 			gputrace.FormatShadersXcodeStyle(os.Stdout, report, nil, opts.estimate)
@@ -462,6 +468,12 @@ func runShadersFromProfiler(tracePath string, opts *shadersOptions) error {
 	}
 
 	return nil
+}
+
+func writeShaderShareBasis(format, basis string) {
+	if format == "text" {
+		fmt.Fprintf(os.Stdout, "Share basis: %s\n", basis)
+	}
 }
 
 // convertPipelineStatsToShaderReport converts PipelineStats from streamData to ShaderMetricsReport.

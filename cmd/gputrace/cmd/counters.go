@@ -29,6 +29,7 @@ func init() {
 }
 
 func runCounters(cmd *cobra.Command, args []string) error {
+	w := cmd.OutOrStdout()
 	// 1. Get Default Device
 	device := metal.MTLCreateSystemDefaultDevice()
 	if device.GetID() == 0 {
@@ -39,7 +40,7 @@ func runCounters(cmd *cobra.Command, args []string) error {
 	if nameID != 0 {
 		cstr := objc.Send[*byte](nameID, objc.Sel("UTF8String"))
 		if cstr != nil {
-			fmt.Printf("Device: %s\n", objc.GoString(cstr))
+			fmt.Fprintf(w, "Device: %s\n", objc.GoString(cstr))
 		}
 	}
 
@@ -53,7 +54,7 @@ func runCounters(cmd *cobra.Command, args []string) error {
 	if counterSetCount == 0 {
 		return fmt.Errorf("device returned no counter sets")
 	}
-	fmt.Printf("Found %d counter sets:\n", counterSetCount)
+	fmt.Fprintf(w, "Counter sets: %d\n", counterSetCount)
 	for i := uint(0); i < counterSetCount; i++ {
 		setID := objc.Send[objc.ID](counterSetsID, objc.Sel("objectAtIndex:"), i)
 		if setID == 0 {
@@ -61,7 +62,7 @@ func runCounters(cmd *cobra.Command, args []string) error {
 		}
 		cs := metal.MTLCounterSetObjectFromID(setID)
 		csName := cs.Name()
-		fmt.Printf(" - %s\n", csName)
+		fmt.Fprintf(w, "  %s\n", csName)
 		if csName == "timestamp" {
 			timestampCounterSet = cs
 		}
@@ -93,7 +94,7 @@ func runCounters(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create counter sample buffer: unknown error")
 	}
 	sampleBuffer := metal.MTLCounterSampleBufferObjectFromID(sampleBufferID)
-	fmt.Println("Created Sample Buffer")
+	fmt.Fprintln(w, "Counter sample buffer: ready (2 timestamp samples)")
 
 	// 4. Create Library and Pipeline
 	// 2. Load Kernel
@@ -253,15 +254,17 @@ func runCounters(cmd *cobra.Command, args []string) error {
 	// Get timestamp frequency for conversion
 	freq := objc.Send[uint64](device.GetID(), objc.Sel("queryTimestampFrequency"))
 
-	fmt.Printf("Timestamp 0: %d\n", t0)
-	fmt.Printf("Timestamp 1: %d\n", t1)
-	fmt.Printf("Duration: %d ticks\n", durationTicks)
+	fmt.Fprintf(w, "Timestamp start: %d ticks\n", t0)
+	fmt.Fprintf(w, "Timestamp end:   %d ticks\n", t1)
+	fmt.Fprintf(w, "Tick delta:      %d ticks\n", durationTicks)
 
 	if freq > 0 {
 		durationNs := float64(durationTicks) * 1e9 / float64(freq)
 		durationUs := durationNs / 1000
-		fmt.Printf("Timestamp Frequency: %d Hz (%.1f MHz)\n", freq, float64(freq)/1e6)
-		fmt.Printf("Duration: %.2f ns (%.2f µs)\n", durationNs, durationUs)
+		fmt.Fprintf(w, "Timestamp frequency: %d Hz (%.1f MHz)\n", freq, float64(freq)/1e6)
+		fmt.Fprintf(w, "Elapsed: %.2f ns (%.2f µs)\n", durationNs, durationUs)
+	} else {
+		fmt.Fprintln(w, "Elapsed: unavailable (device did not report a timestamp frequency)")
 	}
 
 	return nil

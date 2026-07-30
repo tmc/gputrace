@@ -46,6 +46,10 @@ func TestWriteKernelsJSON(t *testing.T) {
 				"encoder": 4,
 			},
 		},
+		{
+			Name:          "unknown",
+			DispatchCount: 7,
+		},
 	}
 	timingStats := map[string]*gputrace.TimingStat{
 		"copy_kernel": {
@@ -61,6 +65,7 @@ func TestWriteKernelsJSON(t *testing.T) {
 	const want = `[
   {
     "name": "copy_kernel",
+    "row_kind": "named_inventory",
     "pipeline_addr": "0x1234",
     "dispatch_count": 4,
     "debug_groups": {
@@ -71,11 +76,45 @@ func TestWriteKernelsJSON(t *testing.T) {
     },
     "total_time_ms": 10,
     "avg_time_ms": 2.5
+  },
+  {
+    "name": "unknown",
+    "row_kind": "synthetic_unattributed_bucket",
+    "pipeline_addr": "0x0",
+    "dispatch_count": 7
   }
 ]
 `
 	if got := out.String(); got != want {
 		t.Fatalf("json = %q, want %q", got, want)
+	}
+}
+
+func TestSplitKernelRows(t *testing.T) {
+	kernels := []*gputrace.KernelStat{
+		{Name: "kernel_b"},
+		{Name: "unknown", DispatchCount: 435},
+		{Name: "kernel_a"},
+	}
+
+	named, unknown := splitKernelRows(kernels)
+	if len(named) != 2 || named[0].Name != "kernel_b" || named[1].Name != "kernel_a" {
+		t.Fatalf("named rows = %#v, want kernel_b and kernel_a", named)
+	}
+	if unknown == nil || unknown.DispatchCount != 435 {
+		t.Fatalf("unknown bucket = %#v, want 435 dispatches", unknown)
+	}
+}
+
+func TestWriteUnknownKernelBucket(t *testing.T) {
+	var out bytes.Buffer
+	writeUnknownKernelBucket(&out, &gputrace.KernelStat{
+		Name:          "unknown",
+		DispatchCount: 435,
+	})
+	const want = "\nSynthetic unattributed bucket: 435 dispatches\n"
+	if got := out.String(); got != want {
+		t.Fatalf("output = %q, want %q", got, want)
 	}
 }
 

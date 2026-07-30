@@ -33,10 +33,11 @@ func runMTLBList(cmd *cobra.Command, args []string, _ *mtlbListOptions) error {
 		return err
 	}
 
-	fmt.Println("\n=== Metal Library Files ===")
-	fmt.Println("")
+	out := cmd.OutOrStdout()
+	fmt.Fprintln(out, "\n=== Metal Library Files ===")
+	fmt.Fprintln(out)
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 4, ' ', 0)
+	w := tabwriter.NewWriter(out, 0, 0, 4, ' ', 0)
 	fmt.Fprintln(w, "File\tSize\tFunctions")
 	fmt.Fprintln(w, "----\t----\t---------")
 
@@ -61,8 +62,8 @@ func runMTLBList(cmd *cobra.Command, args []string, _ *mtlbListOptions) error {
 	}
 
 	w.Flush()
-	fmt.Println("")
-	fmt.Printf("Total: %d libraries, %d functions\n", totalFiles, totalFuncs)
+	fmt.Fprintln(out)
+	fmt.Fprintf(out, "Total: %d libraries, %d functions\n", totalFiles, totalFuncs)
 
 	return nil
 }

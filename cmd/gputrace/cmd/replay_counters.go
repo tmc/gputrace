@@ -67,10 +67,7 @@ Use profiler when you need existing profiler data:
    - No GPU execution required
    - Binary format undocumented (reverse engineering needed)
 
-Current Status:
-Replay-time counter collection currently fails closed until Metal API bindings
-are connected and the replay path can collect counters safely. The planned
-counter sets are:
+Counter sets requested by the replay or simulation plan:
   - Timestamp counters (GPU cycles)
   - Stage utilization (vertex/fragment/compute)
   - Statistics (draw/dispatch counts)
@@ -178,7 +175,8 @@ func runReplayCounters(cmd *cobra.Command, args []string, opts *replayCountersOp
 		if opts.output != "" && isJSONOutput(opts.output) {
 			data = simulation
 		} else {
-			output = gputrace.FormatCounterSamplingSimulation(simulation)
+			output = "Mode: SIMULATION — NO GPU WORK EXECUTED; existing profiler data is not used\n\n"
+			output += gputrace.FormatCounterSamplingSimulation(simulation)
 		}
 	} else {
 		// Perform full analysis with counter sampling
@@ -232,7 +230,7 @@ func writeOutput(filename, textOutput string, jsonData interface{}) error {
 	}
 
 	if filename != "" {
-		fmt.Fprintf(os.Stderr, "✓ Written to: %s\n", filename)
+		fmt.Fprintf(os.Stderr, "Written: %s\n", filename)
 	}
 
 	return nil

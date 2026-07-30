@@ -24,7 +24,7 @@ func newInsightsCommand(opts *insightsOptions) *cobra.Command {
 	}
 	cmd := &cobra.Command{
 		Use:   "insights <trace.gputrace>",
-		Short: "Generate actionable performance insights from GPU trace",
+		Short: "Report supported GPU performance hypotheses",
 		Long: `Analyze GPU trace and generate actionable performance insights.
 
 This command performs comprehensive analysis to identify:
@@ -121,20 +121,38 @@ func writeInsightsText(w io.Writer, report *gputrace.InsightsReport) error {
 
 	// Print summary at the end
 	if len(report.Insights) == 0 {
-		out.WriteString("✓ No performance issues detected!\n")
+		if report.TimingApprox {
+			out.WriteString("No supported issues identified from the available approximate data.\n")
+			out.WriteString("Measured timing is required for bottleneck ranking.\n")
+		} else {
+			out.WriteString("No supported performance issues identified.\n")
+		}
 	} else {
 		out.WriteString("\n=== Summary ===\n")
+		attributionLimited := insightsAttributionLimited(report)
 		if report.CriticalCount > 0 {
-			fmt.Fprintf(&out, "⚠️  %d CRITICAL issues require immediate attention\n", report.CriticalCount)
+			if attributionLimited {
+				fmt.Fprintf(&out, "%d CRITICAL attribution hypotheses require corroboration\n", report.CriticalCount)
+			} else {
+				fmt.Fprintf(&out, "%d CRITICAL issues require immediate attention\n", report.CriticalCount)
+			}
 		}
 		if report.HighCount > 0 {
-			fmt.Fprintf(&out, "⚠️  %d HIGH priority optimizations recommended\n", report.HighCount)
+			if attributionLimited {
+				fmt.Fprintf(&out, "%d HIGH-priority attribution hypotheses\n", report.HighCount)
+			} else {
+				fmt.Fprintf(&out, "%d HIGH-priority optimizations recommended\n", report.HighCount)
+			}
 		}
 		if report.MediumCount > 0 {
-			fmt.Fprintf(&out, "ℹ️  %d MEDIUM priority suggestions available\n", report.MediumCount)
+			if attributionLimited {
+				fmt.Fprintf(&out, "%d MEDIUM-priority triage signals\n", report.MediumCount)
+			} else {
+				fmt.Fprintf(&out, "%d MEDIUM-priority suggestions available\n", report.MediumCount)
+			}
 		}
 		if report.LowCount > 0 {
-			fmt.Fprintf(&out, "ℹ️  %d LOW priority observations noted\n", report.LowCount)
+			fmt.Fprintf(&out, "%d LOW-priority observations noted\n", report.LowCount)
 		}
 	}
 
@@ -142,6 +160,15 @@ func writeInsightsText(w io.Writer, report *gputrace.InsightsReport) error {
 		return fmt.Errorf("write insights report: %w", err)
 	}
 	return nil
+}
+
+func insightsAttributionLimited(report *gputrace.InsightsReport) bool {
+	for _, source := range report.TimingSources {
+		if strings.Contains(source, "gpuCommandInfoData") {
+			return true
+		}
+	}
+	return false
 }
 
 // filterInsightsBySeverity filters insights by minimum severity level.
@@ -164,6 +191,8 @@ func filterInsightsBySeverity(report *gputrace.InsightsReport, minLevel string) 
 	filtered := &gputrace.InsightsReport{
 		Insights:       make([]*gputrace.PerformanceInsight, 0),
 		TotalGPUTimeMs: report.TotalGPUTimeMs,
+		TimingSources:  report.TimingSources,
+		TimingApprox:   report.TimingApprox,
 		TopBottlenecks: report.TopBottlenecks,
 	}
 
