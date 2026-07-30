@@ -169,8 +169,8 @@ func Probe() Report {
 		{
 			Metric:  "high_register",
 			Binding: "GTMioShaderBinaryData.liveRegisterForInstructionAtIndex:",
-			Status:  "parent-validated adapter present; exporter integration missing",
-			Next:    "map streamData pipeline or shader binary records to kernel events, then apply ApplyShaderBinaryMetrics",
+			Status:  "parent-validated adapter and private exporter seam present; runtime selector compatibility unresolved",
+			Next:    "obtain a GTMioTraceData-compatible child from streamData before enumerating parent-owned binaries",
 		},
 		{
 			Metric:    "occupancy_pct",
