@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -12,6 +11,7 @@ import (
 	"github.com/google/pprof/profile"
 
 	"github.com/tmc/gputrace/internal/counter"
+	"github.com/tmc/gputrace/internal/profilerraw"
 	"github.com/tmc/gputrace/internal/timing"
 	"github.com/tmc/gputrace/internal/trace"
 )
@@ -205,29 +205,7 @@ func dispatchSIMDGroups(d trace.DispatchThreads) int64 {
 }
 
 func findTraceProfilerDir(tracePath string) string {
-	if tracePath == "" {
-		return ""
-	}
-	if filepath.Ext(tracePath) == ".gpuprofiler_raw" {
-		if info, err := os.Stat(tracePath); err == nil && info.IsDir() {
-			return tracePath
-		}
-		return ""
-	}
-	profilerDir := tracePath + ".gpuprofiler_raw"
-	if info, err := os.Stat(profilerDir); err == nil && info.IsDir() {
-		return profilerDir
-	}
-	entries, err := os.ReadDir(tracePath)
-	if err != nil {
-		return ""
-	}
-	for _, entry := range entries {
-		if entry.IsDir() && filepath.Ext(entry.Name()) == ".gpuprofiler_raw" {
-			return filepath.Join(tracePath, entry.Name())
-		}
-	}
-	return ""
+	return profilerraw.FindDir(tracePath)
 }
 
 func applyProfilingExecutionCosts(stats *counter.StreamDataStats, tracePath string) *counter.ExecutionCostMetrics {

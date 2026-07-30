@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/tmc/gputrace/internal/counter"
+	"github.com/tmc/gputrace/internal/profilerraw"
 	"github.com/tmc/gputrace/internal/trace"
 	"github.com/tmc/gputrace/internal/tracebundle"
 )
@@ -230,41 +231,11 @@ func summarizeEncoders(dispatches []Dispatch, timings []counter.EncoderTimingInf
 	return encoders
 }
 
+// findProfilerDir locates profiler output for a trace. diff compares
+// pipelines and dispatches, which come from streamData, so a profiler
+// directory without it is treated as absent.
 func findProfilerDir(path string) string {
-	if st, err := os.Stat(path); err != nil || !st.IsDir() {
-		return ""
-	}
-
-	if filepath.Ext(path) == ".gpuprofiler_raw" {
-		if hasStreamData(path) {
-			return path
-		}
-	}
-
-	adjacent := path + ".gpuprofiler_raw"
-	if hasStreamData(adjacent) {
-		return adjacent
-	}
-
-	entries, err := os.ReadDir(path)
-	if err != nil {
-		return ""
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() || filepath.Ext(entry.Name()) != ".gpuprofiler_raw" {
-			continue
-		}
-		dir := filepath.Join(path, entry.Name())
-		if hasStreamData(dir) {
-			return dir
-		}
-	}
-	return ""
-}
-
-func hasStreamData(dir string) bool {
-	_, err := os.Stat(filepath.Join(dir, "streamData"))
-	return err == nil
+	return profilerraw.FindDirWithStreamData(path)
 }
 
 func buildPipelineHashes(stats *counter.StreamDataStats) map[int]string {

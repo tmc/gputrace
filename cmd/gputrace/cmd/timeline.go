@@ -13,6 +13,7 @@ import (
 
 	"github.com/tmc/gputrace"
 	"github.com/tmc/gputrace/internal/counter"
+	"github.com/tmc/gputrace/internal/profilerraw"
 	tracepkg "github.com/tmc/gputrace/internal/trace"
 )
 
@@ -2342,21 +2343,7 @@ func runTimelineFromProfiler(tracePath string, opts *timelineOptions) error {
 	}
 
 	// Find .gpuprofiler_raw directory
-	profilerDir := ""
-	if filepath.Ext(tracePath) == ".gpuprofiler_raw" {
-		profilerDir = tracePath
-	} else {
-		entries, err := os.ReadDir(tracePath)
-		if err != nil {
-			return fmt.Errorf("read directory: %w", err)
-		}
-		for _, e := range entries {
-			if e.IsDir() && filepath.Ext(e.Name()) == ".gpuprofiler_raw" {
-				profilerDir = filepath.Join(tracePath, e.Name())
-				break
-			}
-		}
-	}
+	profilerDir := profilerraw.FindDir(tracePath)
 
 	if profilerDir == "" {
 		fmt.Fprintf(os.Stderr, "Hint: To generate performance data, run:\n")

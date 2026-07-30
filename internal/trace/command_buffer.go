@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/tmc/apple/x/plist"
+	"github.com/tmc/gputrace/internal/profilerraw"
 )
 
 // CommandBuffer represents a Metal command buffer captured in the trace.
@@ -399,17 +400,7 @@ func plistNumberToInt(v any) (int, bool) {
 
 // findGPUProfilerDir returns the path to the .gpuprofiler_raw directory, or empty string.
 func (t *Trace) findGPUProfilerDir() string {
-	// Check inside the trace bundle
-	entries, err := os.ReadDir(t.Path)
-	if err != nil {
-		return ""
-	}
-	for _, e := range entries {
-		if e.IsDir() && filepath.Ext(e.Name()) == ".gpuprofiler_raw" {
-			return filepath.Join(t.Path, e.Name())
-		}
-	}
-	return ""
+	return profilerraw.FindDir(t.Path)
 }
 
 // ParseDispatchCalls extracts all compute kernel dispatch calls from the trace.

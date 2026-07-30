@@ -40,24 +40,9 @@ func NewTimingExtractorProfilerRaw(trace *Trace) *TimingExtractorProfilerRaw {
 // findProfilerDir locates the .gpuprofiler_raw directory.
 // It checks both adjacent to the trace and inside the trace bundle.
 func (te *TimingExtractorProfilerRaw) findProfilerDir() (string, error) {
-	// Check adjacent to trace
-	profilerDir := te.trace.Path + ".gpuprofiler_raw"
-	if info, err := os.Stat(profilerDir); err == nil && info.IsDir() {
-		return profilerDir, nil
+	if dir := profilerraw.FindDir(te.trace.Path); dir != "" {
+		return dir, nil
 	}
-
-	// Check inside trace bundle
-	entries, err := os.ReadDir(te.trace.Path)
-	if err != nil {
-		return "", fmt.Errorf("failed to read trace directory: %w", err)
-	}
-
-	for _, entry := range entries {
-		if entry.IsDir() && filepath.Ext(entry.Name()) == ".gpuprofiler_raw" {
-			return filepath.Join(te.trace.Path, entry.Name()), nil
-		}
-	}
-
 	return "", fmt.Errorf(".gpuprofiler_raw directory not found")
 }
 

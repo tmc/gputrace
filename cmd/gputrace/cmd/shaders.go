@@ -11,6 +11,7 @@ import (
 
 	"github.com/tmc/gputrace"
 	"github.com/tmc/gputrace/internal/counter"
+	"github.com/tmc/gputrace/internal/profilerraw"
 )
 
 var shadersCmd = newShadersCommand(&shadersOptions{
@@ -374,27 +375,9 @@ func extractSIMDBasedMetrics(trace *gputrace.Trace, profilerDir string) (*gputra
 }
 
 // findProfilerDir finds the .gpuprofiler_raw directory if it exists.
+// Shader metrics come from streamData, so a directory without it is absent.
 func findProfilerDir(tracePath string) string {
-	// Check if it's directly a .gpuprofiler_raw directory
-	if filepath.Ext(tracePath) == ".gpuprofiler_raw" {
-		if _, err := os.Stat(filepath.Join(tracePath, "streamData")); err == nil {
-			return tracePath
-		}
-	}
-	// Look inside for .gpuprofiler_raw
-	entries, err := os.ReadDir(tracePath)
-	if err != nil {
-		return ""
-	}
-	for _, e := range entries {
-		if e.IsDir() && filepath.Ext(e.Name()) == ".gpuprofiler_raw" {
-			dir := filepath.Join(tracePath, e.Name())
-			if _, err := os.Stat(filepath.Join(dir, "streamData")); err == nil {
-				return dir
-			}
-		}
-	}
-	return ""
+	return profilerraw.FindDirWithStreamData(tracePath)
 }
 
 // runShadersFromProfiler extracts shader info from .gpuprofiler_raw when unsorted-capture is missing.
@@ -404,25 +387,7 @@ func runShadersFromProfiler(tracePath string, opts *shadersOptions) error {
 	fmt.Fprintln(os.Stderr, "Note: Share is based on cumulative dispatch span for this profiler-only trace.")
 	fmt.Fprintln(os.Stderr, "      Xcode's SIMD Share uses SIMD groups; use a full trace when that basis is required.")
 	fmt.Fprintln(os.Stderr, "")
-	// Find .gpuprofiler_raw directory
-	profilerDir := ""
-
-	// Check if it's directly a .gpuprofiler_raw directory
-	if filepath.Ext(tracePath) == ".gpuprofiler_raw" {
-		profilerDir = tracePath
-	} else {
-		// Look inside for .gpuprofiler_raw
-		entries, err := os.ReadDir(tracePath)
-		if err != nil {
-			return fmt.Errorf("read directory: %w", err)
-		}
-		for _, e := range entries {
-			if e.IsDir() && filepath.Ext(e.Name()) == ".gpuprofiler_raw" {
-				profilerDir = filepath.Join(tracePath, e.Name())
-				break
-			}
-		}
-	}
+	profilerDir := profilerraw.FindDir(tracePath)
 
 	if profilerDir == "" {
 		fmt.Fprintf(os.Stderr, "Hint: To generate performance data, run:\n")

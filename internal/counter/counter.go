@@ -124,28 +124,10 @@ type EncoderGroup struct {
 //
 // Returns PerfCounterStats with hardware metrics, or error if parsing fails.
 func ParsePerfCounters(t *trace.Trace) (*PerfCounterStats, error) {
-	// Find .gpuprofiler_raw directory (adjacent or inside trace bundle)
-	perfDir := t.Path + ".gpuprofiler_raw"
-	if _, err := os.Stat(perfDir); os.IsNotExist(err) {
-		// Check inside trace bundle
-		entries, err := os.ReadDir(t.Path)
-		if err != nil {
-			return nil, fmt.Errorf("no performance counter data: %s not found", perfDir)
-		}
-
-		// Look for .gpuprofiler_raw directory inside bundle
-		found := false
-		for _, entry := range entries {
-			if entry.IsDir() && filepath.Ext(entry.Name()) == ".gpuprofiler_raw" {
-				perfDir = filepath.Join(t.Path, entry.Name())
-				found = true
-				break
-			}
-		}
-
-		if !found {
-			return nil, fmt.Errorf("no performance counter data: .gpuprofiler_raw not found")
-		}
+	// Find .gpuprofiler_raw directory (adjacent to, inside, or equal to the bundle)
+	perfDir := profilerraw.FindDir(t.Path)
+	if perfDir == "" {
+		return nil, fmt.Errorf("no performance counter data: .gpuprofiler_raw not found")
 	}
 
 	stats := &PerfCounterStats{

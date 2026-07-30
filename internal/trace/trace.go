@@ -18,6 +18,7 @@ import (
 
 	"github.com/tmc/apple/x/plist"
 	"github.com/tmc/gputrace/internal/metallib"
+	"github.com/tmc/gputrace/internal/profilerraw"
 )
 
 // DebugGroupLabel represents a hierarchical debug group label with its position in the capture.
@@ -964,23 +965,7 @@ func (t *Trace) Close() error {
 
 // HasPerfCounters returns true if the trace has performance counter data.
 func (t *Trace) HasPerfCounters() bool {
-	// Check for .gpuprofiler_raw directory adjacent to trace
-	perfDir := t.Path + ".gpuprofiler_raw"
-	if info, err := os.Stat(perfDir); err == nil && info.IsDir() {
-		return true
-	}
-
-	// Check for .gpuprofiler_raw directory inside trace bundle
-	entries, err := os.ReadDir(t.Path)
-	if err != nil {
-		return false
-	}
-	for _, entry := range entries {
-		if entry.IsDir() && strings.HasSuffix(entry.Name(), ".gpuprofiler_raw") {
-			return true
-		}
-	}
-	return false
+	return profilerraw.FindDir(t.Path) != ""
 }
 
 // PipelineFunctionMap maps pipeline state addresses to kernel function names.
