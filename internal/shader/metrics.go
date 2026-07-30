@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"sort"
+	"strings"
 
 	"github.com/tmc/gputrace/internal/command"
 	"github.com/tmc/gputrace/internal/counter"
@@ -680,22 +681,17 @@ func applyHardwareMetrics(metrics *ShaderMetrics, hw *counter.ShaderHardwareMetr
 	}
 }
 
-// fuzzyMatch checks if two shader names are similar (handles type suffixes).
+// fuzzyMatch reports whether one shader name contains the other, ignoring
+// case. It handles type suffixes, so "vn_copyfloat16" matches "vn_copy".
 func fuzzyMatch(name1, name2 string) bool {
-	// One contains the other
-	if len(name1) > 3 && len(name2) > 3 {
-		if len(name1) < len(name2) {
-			return containsIgnoreCase(name2, name1)
-		}
-		return containsIgnoreCase(name1, name2)
+	if len(name1) <= 3 || len(name2) <= 3 {
+		return false
 	}
-	return false
-}
-
-// containsIgnoreCase checks if s1 contains s2 (case-insensitive).
-func containsIgnoreCase(s1, s2 string) bool {
-	return len(s1) >= len(s2) && (s1 == s2 ||
-		(len(s1) > len(s2) && (s1[:len(s2)] == s2 || s1[len(s1)-len(s2):] == s2)))
+	name1, name2 = strings.ToLower(name1), strings.ToLower(name2)
+	if len(name1) < len(name2) {
+		name1, name2 = name2, name1
+	}
+	return strings.Contains(name1, name2)
 }
 
 // calculateOccupancy estimates GPU occupancy based on thread configuration.
@@ -1195,7 +1191,7 @@ func applyCounterDataToMetrics(metrics *ShaderMetrics, name string, counterData 
 		// Try substring matching (CSV label contains shader name)
 		// e.g., "encoder1simpleadd" contains "simpleadd"
 		if len(normalizedLabel) > 0 && len(normalizedName) > 0 {
-			if contains(normalizedLabel, normalizedName) {
+			if strings.Contains(normalizedLabel, normalizedName) {
 				if substringMatch == nil {
 					substringMatch = enc
 				}
@@ -1238,31 +1234,6 @@ func applyCounterDataToMetrics(metrics *ShaderMetrics, name string, counterData 
 		// Fallback to base cost if no performance data
 		metrics.WeightedCost = baseCost
 	}
-}
-
-// contains checks if s contains substr (case-insensitive).
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && indexOfSubstring(s, substr) >= 0
-}
-
-// indexOfSubstring returns the index of substr in s, or -1 if not found.
-func indexOfSubstring(s, substr string) int {
-	if len(substr) == 0 {
-		return 0
-	}
-	for i := 0; i <= len(s)-len(substr); i++ {
-		match := true
-		for j := 0; j < len(substr); j++ {
-			if s[i+j] != substr[j] {
-				match = false
-				break
-			}
-		}
-		if match {
-			return i
-		}
-	}
-	return -1
 }
 
 // normalizeForMatching normalizes a shader/encoder name for fuzzy matching.

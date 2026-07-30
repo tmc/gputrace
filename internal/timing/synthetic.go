@@ -1,6 +1,10 @@
 package timing
 
-import "github.com/tmc/gputrace/internal/trace"
+import (
+	"strings"
+
+	"github.com/tmc/gputrace/internal/trace"
+)
 
 // GenerateSyntheticTiming creates timing data from kernel names when no real timing is available.
 // This is useful for qualitative analysis even when performance counters weren't captured.
@@ -76,52 +80,52 @@ func estimateKernelDuration(kernelName string) uint64 {
 	name := toLowerSimple(kernelName)
 
 	// Matrix operations (usually slowest)
-	if containsSubstring(name, "affine_qmm") {
+	if strings.Contains(name, "affine_qmm") {
 		return matmulNs
 	}
-	if containsSubstring(name, "affine_qmv") {
+	if strings.Contains(name, "affine_qmv") {
 		return qmvNs
 	}
-	if containsSubstring(name, "matmul") || containsSubstring(name, "gemm") {
+	if strings.Contains(name, "matmul") || strings.Contains(name, "gemm") {
 		return matmulNs
 	}
 
 	// Quantization operations
-	if containsSubstring(name, "dequantize") || containsSubstring(name, "quantize") {
+	if strings.Contains(name, "dequantize") || strings.Contains(name, "quantize") {
 		return dequantNs
 	}
 
 	// Attention operations
-	if containsSubstring(name, "attention") || containsSubstring(name, "sdpa") || containsSubstring(name, "steel") {
+	if strings.Contains(name, "attention") || strings.Contains(name, "sdpa") || strings.Contains(name, "steel") {
 		return attentionNs
 	}
 
 	// RoPE and positional encodings
-	if containsSubstring(name, "rope") || containsSubstring(name, "rotary") {
+	if strings.Contains(name, "rope") || strings.Contains(name, "rotary") {
 		return ropeNs
 	}
 
 	// Normalization
-	if containsSubstring(name, "norm") || containsSubstring(name, "softmax") {
+	if strings.Contains(name, "norm") || strings.Contains(name, "softmax") {
 		return normalizationNs
 	}
 
 	// Sampling operations
-	if containsSubstring(name, "argmax") || containsSubstring(name, "sample") {
+	if strings.Contains(name, "argmax") || strings.Contains(name, "sample") {
 		return samplingNs
 	}
 
 	// Element-wise operations (typically fast)
-	if containsSubstring(name, "add") || containsSubstring(name, "multiply") ||
-		containsSubstring(name, "sigmoid") || containsSubstring(name, "divide") ||
-		containsSubstring(name, "subtract") || containsSubstring(name, "minimum") ||
-		containsSubstring(name, "log") || containsSubstring(name, "negative") ||
-		containsSubstring(name, "copy") {
+	if strings.Contains(name, "add") || strings.Contains(name, "multiply") ||
+		strings.Contains(name, "sigmoid") || strings.Contains(name, "divide") ||
+		strings.Contains(name, "subtract") || strings.Contains(name, "minimum") ||
+		strings.Contains(name, "log") || strings.Contains(name, "negative") ||
+		strings.Contains(name, "copy") {
 		return elementWiseNs
 	}
 
 	// Gather/scatter operations
-	if containsSubstring(name, "gather") || containsSubstring(name, "scatter") {
+	if strings.Contains(name, "gather") || strings.Contains(name, "scatter") {
 		return baseNs
 	}
 

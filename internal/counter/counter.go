@@ -1124,9 +1124,15 @@ func enhanceFromStreamData(t *trace.Trace, stats *PerfCounterStats) error {
 			continue
 		}
 
-		// Try substring match (kernel names may have prefixes/suffixes)
+		// Try substring match (kernel names may have prefixes/suffixes).
+		// An empty name on either side must not match everything.
+		shaderName := strings.ToLower(metric.ShaderName)
 		for funcName, p := range pipelineByFunc {
-			if containsSubstring(metric.ShaderName, funcName) || containsSubstring(funcName, metric.ShaderName) {
+			funcName := strings.ToLower(funcName)
+			if shaderName == "" || funcName == "" {
+				continue
+			}
+			if strings.Contains(shaderName, funcName) || strings.Contains(funcName, shaderName) {
 				applyPipelineStats(metric, p)
 				enhanced++
 				break
@@ -1176,15 +1182,4 @@ func applyPipelineStats(metric *ShaderHardwareMetrics, p *PipelineStats) {
 	metric.INT16InstructionCount = p.INT16InstructionCount
 	metric.BranchInstructionCount = p.BranchInstructionCount
 	metric.ThreadgroupMemory = p.ThreadgroupMemory
-}
-
-// containsSubstring checks if s1 contains s2 or vice versa (case-insensitive).
-func containsSubstring(s1, s2 string) bool {
-	if len(s1) == 0 || len(s2) == 0 {
-		return false
-	}
-	// Simple lowercase contains check
-	s1Lower := strings.ToLower(s1)
-	s2Lower := strings.ToLower(s2)
-	return strings.Contains(s1Lower, s2Lower)
 }

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -871,19 +872,6 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 	return timeline, nil
 }
 
-// containsSubstr checks if s contains substr.
-func containsSubstr(s, substr string) bool {
-	if len(substr) > len(s) {
-		return false
-	}
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
-
 // generateCounterTracks creates performance counter tracks for the timeline.
 // Only returns real data from .gpuprofiler_raw files - no synthetic data.
 func generateCounterTracks(trace *gputrace.Trace, timeline *Timeline) []CounterTrack {
@@ -1276,9 +1264,13 @@ func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, str
 		if p, exists := pipelineByName[encoder.Label]; exists {
 			pipeline = p
 		} else {
-			// Try fuzzy match - encoder label may contain or be contained in function name
+			// Try fuzzy match - encoder label may contain or be contained in
+			// function name. An empty name must not match everything.
 			for funcName, p := range pipelineByName {
-				if containsSubstr(encoder.Label, funcName) || containsSubstr(funcName, encoder.Label) {
+				if encoder.Label == "" || funcName == "" {
+					continue
+				}
+				if strings.Contains(encoder.Label, funcName) || strings.Contains(funcName, encoder.Label) {
 					pipeline = p
 					break
 				}
