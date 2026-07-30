@@ -94,6 +94,20 @@ gputrace diff A.gputrace B.gputrace --md-out /tmp/report.md
 
 See [docs/TRACE_DIFF_WORKFLOW.md](./docs/TRACE_DIFF_WORKFLOW.md) for the full workflow and sample output.
 
+## Go benchmark output
+
+`stats`, `profiler`, and `timing` can write Go benchmark format for direct use
+with `benchstat`:
+
+```bash
+gputrace profiler trace.gputrace --benchfmt \
+  --bench-config runtime=go \
+  --bench-config model=Qwen2.5-0.5B > go.txt
+benchstat -ignore trace-uuid go.txt python.txt
+```
+
+See [docs/BENCHFMT.md](./docs/BENCHFMT.md) for the unit and provenance mapping.
+
 ## Testing
 
 ```bash
@@ -124,6 +138,7 @@ Detailed format and workflow documentation lives in `docs/`:
 
 - [README.md](./docs/README.md) -- docs index
 - [ENVIRONMENT.md](./docs/ENVIRONMENT.md) -- environment variables
+- [BENCHFMT.md](./docs/BENCHFMT.md) -- Go benchmark and benchstat output
 - [TESTING.md](./docs/TESTING.md) -- test fixtures and opt-in integration tests
 - [TRACE_DIFF_WORKFLOW.md](./docs/TRACE_DIFF_WORKFLOW.md) -- trace diff workflow and output interpretation
 - [STREAMDATA_FORMAT.md](./docs/STREAMDATA_FORMAT.md) -- streamData plist format

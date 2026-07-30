@@ -9,9 +9,11 @@ require (
 	github.com/spf13/pflag v1.0.9
 	github.com/tmc/apple v0.5.5
 	github.com/tmc/macgo v0.1.2
+	golang.org/x/perf v0.0.0-20260312031701-16a31bc5fbd0
 )
 
 require (
+	github.com/aclements/go-moremath v0.0.0-20210112150236-f10218a38794 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
 )

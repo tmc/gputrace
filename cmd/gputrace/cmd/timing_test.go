@@ -3,7 +3,11 @@ package cmd
 import (
 	"io"
 	"os"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/tmc/gputrace/internal/counter"
 )
 
 func TestTimingReportWriterUsesStderrForStdoutExports(t *testing.T) {
@@ -31,6 +35,47 @@ func TestTimingReportWriterUsesStderrForStdoutExports(t *testing.T) {
 				t.Fatalf("timingReportWriter() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestProfilerTimingReportStatesMetricAndLimitation(t *testing.T) {
+	stats := &counter.StreamDataStats{
+		TotalDispatchTimeUs: 12,
+		EncoderTimings:      []counter.EncoderTimingInfo{{Index: 0, DurationMicros: 20}},
+		Dispatches: []counter.DispatchInfo{
+			{FunctionName: "kernel", DurationUs: 12},
+		},
+		Timeline: &counter.TimelineInfo{
+			TimebaseNumer: 1,
+			TimebaseDenom: 1,
+			CommandBufferTimestamps: []counter.CommandBufferTimestamp{
+				{Index: 0, StartTicks: 10, EndTicks: 30},
+			},
+		},
+	}
+	metrics := convertStreamDataToTimingMetrics("trace.gputrace", stats)
+	if metrics.TimingSource != "profiler" || metrics.TimingApproximate {
+		t.Fatalf("timing provenance = %q approximate=%v", metrics.TimingSource, metrics.TimingApproximate)
+	}
+	if got, want := metrics.CommandBufferTimings[0].Duration, 20*time.Nanosecond; got != want {
+		t.Fatalf("command buffer duration = %v, want %v", got, want)
+	}
+
+	report := formatProfilerTimingMetrics(metrics)
+	for _, want := range []string{
+		"Source: profiler streamData",
+		"Dispatch span:",
+		"1 timed function",
+		"cumulative offsets",
+		"Functions by Dispatch Span",
+		"Span Share",
+	} {
+		if !strings.Contains(report, want) {
+			t.Errorf("report missing %q:\n%s", want, report)
+		}
+	}
+	if strings.Contains(report, "Unique Kernels") || strings.Contains(report, "Cost") {
+		t.Errorf("report uses misleading kernel/cost terminology:\n%s", report)
 	}
 }
 

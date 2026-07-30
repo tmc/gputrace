@@ -22,15 +22,21 @@ type ProfilerOutputStats struct {
 	// (StreamDataStats.Timeline is already included via embedding, but this ensures visibility)
 }
 
-var profilerCmd = newProfilerCommand(new(profilerOptions))
+var profilerCmd = newProfilerCommand(&profilerOptions{limit: 20})
 
 type profilerOptions struct {
-	json     bool
-	limiters bool
-	kernels  bool
+	json        bool
+	limiters    bool
+	kernels     bool
+	limit       int
+	benchfmt    bool
+	benchConfig benchfmtConfigFlags
 }
 
 func newProfilerCommand(opts *profilerOptions) *cobra.Command {
+	if opts.limit == 0 {
+		opts.limit = 20
+	}
 	cmd := &cobra.Command{
 		Use:   "profiler <trace.gputrace>",
 		Short: "Extract GPU profiler data (timing, dispatches, pipelines) from trace",
@@ -57,6 +63,8 @@ Example:
 	cmd.Flags().BoolVar(&opts.json, "json", opts.json, "Output in JSON format")
 	cmd.Flags().BoolVar(&opts.limiters, "limiters", opts.limiters, "Show performance limiter data from Counter files")
 	cmd.Flags().BoolVar(&opts.kernels, "kernels", opts.kernels, "Show kernel/function names and per-dispatch details")
+	cmd.Flags().IntVar(&opts.limit, "limit", opts.limit, "Maximum non-zero limiter rows to show")
+	addBenchfmtFlags(cmd, &opts.benchfmt, &opts.benchConfig)
 	return cmd
 }
 
@@ -65,6 +73,15 @@ func init() {
 }
 
 func runProfiler(cmd *cobra.Command, args []string, opts *profilerOptions) error {
+	if opts.limit <= 0 {
+		return fmt.Errorf("--limit must be > 0")
+	}
+	if err := validateBenchfmtFlags(opts.benchfmt, opts.benchConfig); err != nil {
+		return err
+	}
+	if opts.benchfmt && opts.json {
+		return fmt.Errorf("--benchfmt and --json are mutually exclusive")
+	}
 	tracePath := args[0]
 
 	profilerDir, stats, err := loadProfilerStats(tracePath)
@@ -73,9 +90,11 @@ func runProfiler(cmd *cobra.Command, args []string, opts *profilerOptions) error
 		fmt.Fprintf(os.Stderr, "  gputrace xcode-profile run %s\n\n", tracePath)
 		return err
 	}
-
 	// Parse execution cost from Profiling_f_*.raw files
 	execCost := aggregateExecutionCost(profilerDir, stats)
+	if opts.benchfmt {
+		return writeProfilerBenchfmt(cmd.OutOrStdout(), tracePath, stats, execCost, opts.benchConfig)
+	}
 
 	if opts.json {
 		output := ProfilerOutputStats{
@@ -171,7 +190,7 @@ func runProfiler(cmd *cobra.Command, args []string, opts *profilerOptions) error
 		fmt.Println()
 		fmt.Println(Colorize("Function Calls", ColorBold))
 		fmt.Println(TableSeparator(80))
-		fmt.Printf("%-50s %8s %10s %8s\n", "Function", "Calls", "Span(us)", "Cost")
+		fmt.Printf("%-50s %8s %10s %10s\n", "Function", "Calls", "Span(us)", "Span Share")
 		fmt.Println(TableSeparator(80))
 		for _, fs := range sortedFuncs {
 			pct := 0.0
@@ -180,25 +199,29 @@ func runProfiler(cmd *cobra.Command, args []string, opts *profilerOptions) error
 			}
 			fmt.Printf("%-50s %8s %10s %7s\n", fs.name, FormatCount(fs.count), FormatCount(fs.time), FormatPercent(pct))
 		}
+		if strings.Contains(stats.TimingSource, "gpuCommandInfoData") {
+			fmt.Println("Attribution note: span values are cumulative-offset deltas and may include boundary or gap time.")
+		}
 	}
 
 	// Detailed kernel info only with --kernels flag
 	if opts.kernels {
+		functionNames := dispatchedFunctionNames(stats.Dispatches)
+		pipelines := dispatchedPipelines(stats.Pipelines, stats.Dispatches)
+
 		// Function names
 		fmt.Println()
 		fmt.Println(Colorize("Kernel Details", ColorBold))
 		fmt.Println(TableSeparator(40))
-		fmt.Printf("%d %s:\n", len(stats.FunctionNames), Pluralize(len(stats.FunctionNames), "function", "functions"))
-		for i, name := range stats.FunctionNames {
-			if name != "" {
-				fmt.Printf("  [%d] %s\n", i, name)
-			}
+		fmt.Printf("%d dispatched %s:\n", len(functionNames), Pluralize(len(functionNames), "function", "functions"))
+		for i, name := range functionNames {
+			fmt.Printf("  [%d] %s\n", i, name)
 		}
 
 		// Pipelines with addresses
-		if len(stats.Pipelines) > 0 {
-			fmt.Printf("\n%d %s:\n", len(stats.Pipelines), Pluralize(len(stats.Pipelines), "pipeline", "pipelines"))
-			for i, p := range stats.Pipelines {
+		if len(pipelines) > 0 {
+			fmt.Printf("\n%d dispatched %s:\n", len(pipelines), Pluralize(len(pipelines), "pipeline", "pipelines"))
+			for i, p := range pipelines {
 				if p.PipelineAddress != 0 {
 					fmt.Printf("  [%d] 0x%x ID=%d %s\n", i, p.PipelineAddress, p.PipelineID, p.FunctionName)
 				} else {
@@ -409,22 +432,87 @@ func runProfiler(cmd *cobra.Command, args []string, opts *profilerOptions) error
 	if opts.limiters {
 		limiterData := extractLimiterData(profilerDir)
 		if len(limiterData) > 0 {
+			rows, nonzero, zero := selectLimiterRows(limiterData, opts.limit)
 			fmt.Println()
-			fmt.Println(Colorize("Performance Limiters (from Counter files)", ColorBold))
+			fmt.Println(Colorize("Candidate Performance Limiters (heuristic Counter-file decoder)", ColorBold))
+			fmt.Printf("Showing %d of %d non-zero rows", len(rows), nonzero)
+			if zero > 0 {
+				fmt.Printf(" (%d zero rows omitted)", zero)
+			}
+			fmt.Println()
 			fmt.Println(TableSeparator(95))
 			fmt.Printf("%-5s %-16s %-18s %-16s %-16s %-16s\n",
-				"Enc", "Occupancy Mgr", "Instr Throughput", "Int & Complex", "F32 Limiter", "L1 Cache")
+				"Record", "Occupancy Mgr", "Instr Throughput", "Int & Complex", "F32 Limiter", "L1 Cache")
 			fmt.Println(TableSeparator(95))
-			for _, ld := range limiterData {
+			for _, ld := range rows {
 				fmt.Printf("%-5d %15s %17s %15s %15s %15s\n",
 					ld.EncoderIndex, FormatPercent(ld.OccupancyManager), FormatPercent(ld.InstructionThroughput),
 					FormatPercent(ld.IntegerComplex), FormatPercent(ld.F32Limiter), FormatPercent(ld.L1Cache))
 			}
-			fmt.Println("\nNote: Limiter percentages indicate bottleneck sources (higher = more constrained)")
+			fmt.Println("\nNote: Values are heuristic candidates, not source-backed bottleneck measurements.")
+			fmt.Println("Higher values mean more constrained only if the candidate field mapping is correct.")
+			if nonzero > len(rows) {
+				fmt.Printf("Use --limit %d or higher to show all non-zero rows.\n", nonzero)
+			}
 		}
 	}
 
 	return nil
+}
+
+func selectLimiterRows(all []limiterMetrics, limit int) (rows []limiterMetrics, nonzero, zero int) {
+	for _, row := range all {
+		if limiterPeak(row) < 0.05 {
+			zero++
+			continue
+		}
+		rows = append(rows, row)
+	}
+	nonzero = len(rows)
+	sort.SliceStable(rows, func(i, j int) bool {
+		return limiterPeak(rows[i]) > limiterPeak(rows[j])
+	})
+	if limit > 0 && len(rows) > limit {
+		rows = rows[:limit]
+	}
+	return rows, nonzero, zero
+}
+
+func limiterPeak(row limiterMetrics) float64 {
+	return max(row.OccupancyManager, row.InstructionThroughput, row.IntegerComplex, row.F32Limiter, row.L1Cache)
+}
+
+func dispatchedFunctionNames(dispatches []counter.DispatchInfo) []string {
+	seen := make(map[string]bool)
+	var names []string
+	for _, dispatch := range dispatches {
+		name := dispatch.DisplayName()
+		if !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+func dispatchedPipelines(pipelines []counter.PipelineStats, dispatches []counter.DispatchInfo) []counter.PipelineStats {
+	ids := make(map[int]bool)
+	names := make(map[string]bool)
+	for _, dispatch := range dispatches {
+		if dispatch.PipelineID != 0 {
+			ids[dispatch.PipelineID] = true
+		}
+		if dispatch.FunctionName != "" {
+			names[dispatch.FunctionName] = true
+		}
+	}
+	var dispatched []counter.PipelineStats
+	for _, pipeline := range pipelines {
+		if ids[pipeline.PipelineID] || names[pipeline.FunctionName] {
+			dispatched = append(dispatched, pipeline)
+		}
+	}
+	return dispatched
 }
 
 func writeProfilerJSON(w io.Writer, output ProfilerOutputStats) error {

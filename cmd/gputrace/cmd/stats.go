@@ -11,13 +11,18 @@ import (
 
 	"github.com/tmc/gputrace"
 	"github.com/tmc/gputrace/internal/counter"
+	"github.com/tmc/gputrace/internal/tracebundle"
 )
 
 var statsCmd = newStatsCommand(new(statsOptions))
 
 type statsOptions struct {
-	verbose bool
-	json    bool
+	verbose     bool
+	json        bool
+	limit       int
+	all         bool
+	benchfmt    bool
+	benchConfig benchfmtConfigFlags
 }
 
 func newStatsCommand(opts *statsOptions) *cobra.Command {
@@ -45,6 +50,9 @@ Examples:
 
 	cmd.Flags().BoolVarP(&opts.verbose, "verbose", "v", opts.verbose, "Show verbose statistics including detailed analysis")
 	cmd.Flags().BoolVar(&opts.json, "json", opts.json, "Output statistics in JSON format")
+	cmd.Flags().IntVar(&opts.limit, "limit", 50, "Maximum rows in each verbose list")
+	cmd.Flags().BoolVar(&opts.all, "all", false, "Show every row in verbose lists")
+	addBenchfmtFlags(cmd, &opts.benchfmt, &opts.benchConfig)
 	return cmd
 }
 
@@ -54,11 +62,27 @@ func init() {
 
 func runStats(cmd *cobra.Command, args []string, opts *statsOptions) error {
 	tracePath := args[0]
+	if err := validateBenchfmtFlags(opts.benchfmt, opts.benchConfig); err != nil {
+		return err
+	}
+	if opts.benchfmt && opts.json {
+		return fmt.Errorf("--benchfmt and --json are mutually exclusive")
+	}
 
 	// Verify trace file exists
 	if err := checkTraceFile(tracePath); err != nil {
 		return err
 	}
+	if opts.benchfmt {
+		if findProfilerDir(tracePath) != "" {
+			_, streamStats, err := loadProfilerStats(tracePath)
+			if err != nil {
+				return fmt.Errorf("parse streamData: %w", err)
+			}
+			return writeProfilerBenchfmt(cmd.OutOrStdout(), tracePath, streamStats, nil, opts.benchConfig)
+		}
+	}
+	payload, payloadErr := tracebundle.InspectPayload(tracePath)
 
 	// Open trace
 	trace, err := gputrace.Open(tracePath)
@@ -74,6 +98,16 @@ func runStats(cmd *cobra.Command, args []string, opts *statsOptions) error {
 	if err != nil {
 		return fmt.Errorf("failed to extract statistics: %w", err)
 	}
+	if opts.benchfmt {
+		config, err := mergeBenchfmtConfig(benchfmtDefaults(tracePath, ""), opts.benchConfig)
+		if err != nil {
+			return err
+		}
+		return writeBenchfmt(cmd.OutOrStdout(), benchfmtRecord{
+			Config: config,
+			Values: benchfmtStructuralValues(statistics),
+		})
+	}
 
 	// Handle JSON output
 	if opts.json {
@@ -82,9 +116,13 @@ func runStats(cmd *cobra.Command, args []string, opts *statsOptions) error {
 
 	// Quick one-liner summary
 	parts := []string{
-		fmt.Sprintf("%d %s", statistics.ComputeEncoders, Pluralize(statistics.ComputeEncoders, "encoder", "encoders")),
 		fmt.Sprintf("%d %s", statistics.DispatchCalls, Pluralize(statistics.DispatchCalls, "dispatch", "dispatches")),
-		fmt.Sprintf("%d %s", statistics.UniqueKernels, Pluralize(statistics.UniqueKernels, "kernel", "kernels")),
+		fmt.Sprintf("%d observed kernel %s", statistics.ObservedKernelLabels, Pluralize(statistics.ObservedKernelLabels, "label", "labels")),
+	}
+	if statistics.ComputeEncodersAvailable {
+		parts = append([]string{
+			fmt.Sprintf("%d %s", statistics.ComputeEncoders, Pluralize(statistics.ComputeEncoders, "encoder", "encoders")),
+		}, parts...)
 	}
 	if statistics.BufferUsageGB >= 0.001 {
 		parts = append(parts, FormatBytes(statistics.BufferUsageBytes))
@@ -96,6 +134,9 @@ func runStats(cmd *cobra.Command, args []string, opts *statsOptions) error {
 	fmt.Println(Colorize("Trace Info", ColorBold))
 	fmt.Println(TableSeparator(40))
 	fmt.Printf("  Path: %s\n", tracePath)
+	if payloadErr == nil {
+		fmt.Printf("  Raw Payload: %s\n", formatPayloadCompleteness(payload))
+	}
 	if trace.Metadata != nil {
 		fmt.Printf("  UUID: %s\n", trace.Metadata.UUID)
 		apiName := "Metal"
@@ -110,9 +151,15 @@ func runStats(cmd *cobra.Command, args []string, opts *statsOptions) error {
 	fmt.Println(Colorize("Workload", ColorBold))
 	fmt.Println(TableSeparator(40))
 	fmt.Printf("  Command Buffers:  %s\n", FormatCount(statistics.CommandBuffers))
-	fmt.Printf("  Compute Encoders: %s\n", FormatCount(statistics.ComputeEncoders))
+	if statistics.ComputeEncodersAvailable {
+		fmt.Printf("  Compute Encoders: %s\n", FormatCount(statistics.ComputeEncoders))
+	} else {
+		fmt.Printf("  Compute Encoders: (unavailable)\n")
+	}
+	fmt.Printf("  Encoder Count Source: %s\n", statistics.ComputeEncodersSource)
 	fmt.Printf("  Dispatch Calls:   %s\n", FormatCount(statistics.DispatchCalls))
-	fmt.Printf("  Unique Kernels:   %s\n", FormatCount(statistics.UniqueKernels))
+	fmt.Printf("  Observed Kernel Labels: %s\n", FormatCount(statistics.ObservedKernelLabels))
+	fmt.Printf("  Discovered Functions:  %s\n", FormatCount(statistics.DiscoveredFunctions))
 	fmt.Println()
 
 	// Memory Section
@@ -144,9 +191,9 @@ func runStats(cmd *cobra.Command, args []string, opts *statsOptions) error {
 	fmt.Println(Colorize("Timing", ColorBold))
 	fmt.Println(TableSeparator(40))
 	if gpuTimeUs > 0 {
-		fmt.Printf("  GPU Time:         %s\n", FormatDuration(gpuTimeUs))
+		fmt.Printf("  Encoder Span:     %s\n", FormatDuration(gpuTimeUs))
 	} else {
-		fmt.Printf("  GPU Time:         (no profiler data)\n")
+		fmt.Printf("  Encoder Span:     (no profiler data)\n")
 	}
 	if hasProfilerData && profilerDir != "" {
 		if streamStats, err := counter.ParseStreamData(profilerDir, nil); err == nil {
@@ -172,8 +219,9 @@ func runStats(cmd *cobra.Command, args []string, opts *statsOptions) error {
 	// Top Kernels Section (if we have data)
 	if hasProfilerData && profilerDir != "" {
 		if streamStats, err := counter.ParseStreamData(profilerDir, nil); err == nil && len(streamStats.Dispatches) > 0 {
-			fmt.Println(Colorize("Top Kernels (by time)", ColorBold))
+			fmt.Println(Colorize("Functions by Dispatch Span", ColorBold))
 			fmt.Println(TableSeparator(40))
+			fmt.Println("  Cumulative offsets may include boundary or gap time.")
 
 			// Aggregate by function name
 			funcTotals := make(map[string]int)
@@ -198,7 +246,10 @@ func runStats(cmd *cobra.Command, args []string, opts *statsOptions) error {
 				sorted = append(sorted, funcStat{name, time, funcCounts[name]})
 			}
 			sort.Slice(sorted, func(i, j int) bool {
-				return sorted[i].time > sorted[j].time
+				if sorted[i].time != sorted[j].time {
+					return sorted[i].time > sorted[j].time
+				}
+				return sorted[i].name < sorted[j].name
 			})
 
 			// Show top 5
@@ -226,7 +277,7 @@ func runStats(cmd *cobra.Command, args []string, opts *statsOptions) error {
 				fmt.Printf("  %5.1f%%  %-35s  (%dx)\n", pct, name, fs.count)
 			}
 			if len(sorted) > 5 {
-				fmt.Printf("  ...and %d more kernels\n", len(sorted)-5)
+				fmt.Printf("  ...and %d more functions\n", len(sorted)-5)
 			}
 			fmt.Println()
 		}
@@ -277,27 +328,30 @@ func runStats(cmd *cobra.Command, args []string, opts *statsOptions) error {
 		// Show all encoder labels
 		if len(trace.EncoderLabels) > 0 {
 			fmt.Printf("%s (%d):\n", Colorize("All Encoder Labels", ColorGreen), len(trace.EncoderLabels))
-			for i, label := range trace.EncoderLabels {
+			for i, label := range limitedStrings(trace.EncoderLabels, opts.limit, opts.all) {
 				fmt.Printf("  [%d] %s\n", i, label)
 			}
+			printOmittedRows(len(trace.EncoderLabels), opts.limit, opts.all)
 			fmt.Println()
 		}
 
 		// Show all kernel names
 		if len(trace.KernelNames) > 0 {
-			fmt.Printf("%s (%d):\n", Colorize("All Kernel Names", ColorGreen), len(trace.KernelNames))
-			for i, name := range trace.KernelNames {
+			fmt.Printf("%s (%d discovered; not necessarily dispatched):\n", Colorize("Library Functions", ColorGreen), len(trace.KernelNames))
+			for i, name := range limitedStrings(trace.KernelNames, opts.limit, opts.all) {
 				fmt.Printf("  [%d] %s\n", i, name)
 			}
+			printOmittedRows(len(trace.KernelNames), opts.limit, opts.all)
 			fmt.Println()
 		}
 
 		// Show buffer labels
 		if len(trace.BufferLabels) > 0 {
 			fmt.Printf("%s (%d):\n", Colorize("All Buffer Labels", ColorGreen), len(trace.BufferLabels))
-			for i, label := range trace.BufferLabels {
+			for i, label := range limitedStrings(trace.BufferLabels, opts.limit, opts.all) {
 				fmt.Printf("  [%d] %s\n", i, label)
 			}
+			printOmittedRows(len(trace.BufferLabels), opts.limit, opts.all)
 			fmt.Println()
 		}
 
@@ -321,6 +375,27 @@ func runStats(cmd *cobra.Command, args []string, opts *statsOptions) error {
 	}
 
 	return nil
+}
+
+func limitedStrings(values []string, limit int, all bool) []string {
+	if all || limit < 0 || len(values) <= limit {
+		return values
+	}
+	if limit == 0 {
+		return nil
+	}
+	return values[:limit]
+}
+
+func printOmittedRows(total, limit int, all bool) {
+	if all || limit < 0 || total <= limit {
+		return
+	}
+	shown := limit
+	if shown < 0 {
+		shown = 0
+	}
+	fmt.Printf("  ... %d more; use --all to show every row\n", total-shown)
 }
 
 type profilerStatsJSONOutput struct {
@@ -347,6 +422,9 @@ func runStatsFromProfiler(w io.Writer, tracePath string, opts *statsOptions) err
 	profilerDir, streamStats, err := loadProfilerStats(tracePath)
 	if err != nil {
 		return err
+	}
+	if opts.benchfmt {
+		return writeProfilerBenchfmt(w, tracePath, streamStats, nil, opts.benchConfig)
 	}
 
 	commandBuffers := 0
@@ -388,7 +466,10 @@ func runStatsFromProfiler(w io.Writer, tracePath string, opts *statsOptions) err
 	fmt.Println(TableSeparator(40))
 	fmt.Printf("  Path:          %s\n", tracePath)
 	fmt.Printf("  Profiler Data: %s\n", profilerDir)
-	fmt.Printf("  Note:          no MTSP capture data; use profiler for kernel timing details\n")
+	if payload, err := tracebundle.InspectPayload(tracePath); err == nil {
+		fmt.Printf("  Raw Payload:   %s\n", formatPayloadCompleteness(payload))
+	}
+	fmt.Printf("  Note:          aggregate profiler timing is available; structural and threadgroup analysis requires a full raw payload\n")
 	fmt.Println()
 
 	fmt.Println(Colorize("Workload", ColorBold))
@@ -425,6 +506,17 @@ func runStatsFromProfiler(w io.Writer, tracePath string, opts *statsOptions) err
 	return nil
 }
 
+func formatPayloadCompleteness(payload tracebundle.Payload) string {
+	switch payload.Class {
+	case tracebundle.PayloadFull:
+		return "full (capture and raw resources present)"
+	case tracebundle.PayloadProfilerOnly:
+		return "profiler-only (aggregate timing available; structural/threadgroup data unavailable)"
+	default:
+		return "incomplete (structural/threadgroup data unavailable)"
+	}
+}
+
 // StatsJSONOutput represents the JSON output structure for stats command.
 type StatsJSONOutput struct {
 	Statistics *StatsJSON    `json:"statistics"`
@@ -434,23 +526,27 @@ type StatsJSONOutput struct {
 
 // StatsJSON represents statistics in JSON format.
 type StatsJSON struct {
-	BufferUsageBytes uint64         `json:"buffer_usage_bytes"`
-	BufferUsageGB    float64        `json:"buffer_usage_gb"`
-	BufferSizeSum    uint64         `json:"buffer_size_sum"`
-	UniqueBuffers    int            `json:"unique_buffers"`
-	HeapUsageBytes   uint64         `json:"heap_usage_bytes"`
-	HeapUsageMB      float64        `json:"heap_usage_mb"`
-	UniqueHeaps      int            `json:"unique_heaps"`
-	UnusedBuffers    int            `json:"unused_buffers,omitempty"`
-	UnusedTextures   int            `json:"unused_textures,omitempty"`
-	UnusedFunctions  int            `json:"unused_functions,omitempty"`
-	UniqueKernels    int            `json:"unique_kernels"`
-	CommandBuffers   int            `json:"command_buffers"`
-	ComputeEncoders  int            `json:"compute_encoders"`
-	DispatchCalls    int            `json:"dispatch_calls"`
-	TotalRecords     int            `json:"total_records"`
-	RecordTypes      map[string]int `json:"record_types"`
-	MTLBLibraries    int            `json:"mtlb_libraries"`
+	BufferUsageBytes         uint64         `json:"buffer_usage_bytes"`
+	BufferUsageGB            float64        `json:"buffer_usage_gb"`
+	BufferSizeSum            uint64         `json:"buffer_size_sum"`
+	UniqueBuffers            int            `json:"unique_buffers"`
+	HeapUsageBytes           uint64         `json:"heap_usage_bytes"`
+	HeapUsageMB              float64        `json:"heap_usage_mb"`
+	UniqueHeaps              int            `json:"unique_heaps"`
+	UnusedBuffers            int            `json:"unused_buffers,omitempty"`
+	UnusedTextures           int            `json:"unused_textures,omitempty"`
+	UnusedFunctions          int            `json:"unused_functions,omitempty"`
+	UniqueKernels            int            `json:"unique_kernels"`
+	ObservedKernelLabels     int            `json:"observed_kernel_labels"`
+	DiscoveredFunctions      int            `json:"discovered_functions"`
+	CommandBuffers           int            `json:"command_buffers"`
+	ComputeEncoders          *int           `json:"compute_encoders"`
+	ComputeEncodersAvailable bool           `json:"compute_encoders_available"`
+	ComputeEncodersSource    string         `json:"compute_encoders_source"`
+	DispatchCalls            int            `json:"dispatch_calls"`
+	TotalRecords             int            `json:"total_records"`
+	RecordTypes              map[string]int `json:"record_types"`
+	MTLBLibraries            int            `json:"mtlb_libraries"`
 }
 
 // MetadataJSON represents trace metadata in JSON format.
@@ -481,23 +577,30 @@ type TimingJSON struct {
 // outputStatsJSON outputs statistics in JSON format.
 func outputStatsJSON(w io.Writer, stats *gputrace.TraceStatistics, trace *gputrace.Trace, verbose bool) error {
 	s := &StatsJSON{
-		BufferUsageBytes: stats.BufferUsageBytes,
-		BufferUsageGB:    stats.BufferUsageGB,
-		BufferSizeSum:    stats.BufferSizeSum,
-		UniqueBuffers:    stats.UniqueBuffers,
-		HeapUsageBytes:   stats.HeapUsageBytes,
-		HeapUsageMB:      stats.HeapUsageMB,
-		UniqueHeaps:      stats.UniqueHeaps,
-		UnusedBuffers:    stats.UnusedBuffers,
-		UnusedTextures:   stats.UnusedTextures,
-		UnusedFunctions:  stats.UnusedFunctions,
-		UniqueKernels:    stats.UniqueKernels,
-		CommandBuffers:   stats.CommandBuffers,
-		ComputeEncoders:  stats.ComputeEncoders,
-		DispatchCalls:    stats.DispatchCalls,
-		TotalRecords:     stats.TotalRecords,
-		RecordTypes:      stats.RecordTypes,
-		MTLBLibraries:    stats.MTLBLibraries,
+		BufferUsageBytes:         stats.BufferUsageBytes,
+		BufferUsageGB:            stats.BufferUsageGB,
+		BufferSizeSum:            stats.BufferSizeSum,
+		UniqueBuffers:            stats.UniqueBuffers,
+		HeapUsageBytes:           stats.HeapUsageBytes,
+		HeapUsageMB:              stats.HeapUsageMB,
+		UniqueHeaps:              stats.UniqueHeaps,
+		UnusedBuffers:            stats.UnusedBuffers,
+		UnusedTextures:           stats.UnusedTextures,
+		UnusedFunctions:          stats.UnusedFunctions,
+		UniqueKernels:            stats.UniqueKernels,
+		ObservedKernelLabels:     stats.ObservedKernelLabels,
+		DiscoveredFunctions:      stats.DiscoveredFunctions,
+		CommandBuffers:           stats.CommandBuffers,
+		ComputeEncodersAvailable: stats.ComputeEncodersAvailable,
+		ComputeEncodersSource:    stats.ComputeEncodersSource,
+		DispatchCalls:            stats.DispatchCalls,
+		TotalRecords:             stats.TotalRecords,
+		RecordTypes:              stats.RecordTypes,
+		MTLBLibraries:            stats.MTLBLibraries,
+	}
+	if stats.ComputeEncodersAvailable {
+		count := stats.ComputeEncoders
+		s.ComputeEncoders = &count
 	}
 
 	output := &StatsJSONOutput{
