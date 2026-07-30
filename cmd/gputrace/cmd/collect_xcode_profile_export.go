@@ -816,16 +816,25 @@ func transitionSummaryToPerformance(ctx context.Context, appAX uintptr, recovery
 		return 0, err
 	}
 	shows := shallowShowPerformanceButtons(summary.Element)
-	if len(shows) != 1 || !IsElementEnabled(shows[0]) {
-		return 0, fmt.Errorf("Summary recovery requires exactly one enabled Show Performance control")
-	}
-	var showPID int32
-	if axUIElementGetPid(shows[0], &showPID) != kAXErrorSuccess ||
-		int(showPID) != recovery.Identity.PID {
-		return 0, fmt.Errorf("Show Performance is not owned by bound Xcode PID %d", recovery.Identity.PID)
-	}
-	if err := axPressWithFallbackWindow(shows[0], summary.Element); err != nil {
-		return 0, fmt.Errorf("press Show Performance from Summary: %w", err)
+	switch len(shows) {
+	case 0:
+		if err := clickSummaryPerformanceOCR(ctx, appAX, summary, recovery, geometryKey); err != nil {
+			return 0, err
+		}
+	case 1:
+		if !IsElementEnabled(shows[0]) {
+			return 0, fmt.Errorf("Summary Show Performance control is disabled")
+		}
+		var showPID int32
+		if axUIElementGetPid(shows[0], &showPID) != kAXErrorSuccess ||
+			int(showPID) != recovery.Identity.PID {
+			return 0, fmt.Errorf("Show Performance is not owned by bound Xcode PID %d", recovery.Identity.PID)
+		}
+		if err := axPressWithFallbackWindow(shows[0], summary.Element); err != nil {
+			return 0, fmt.Errorf("press Show Performance from Summary: %w", err)
+		}
+	default:
+		return 0, fmt.Errorf("multiple AX Show Performance controls are ambiguous")
 	}
 
 	stable = 0
@@ -985,7 +994,6 @@ func summaryRecoveryTarget(windows []standaloneRecoveryWindow, recovery standalo
 			normalizedTraceDocument(window.Document) != "" ||
 			!window.SummaryView || !window.Debugging || !window.Progress95 ||
 			window.SheetOpen || window.StopCount != 1 || !window.StopEnabled ||
-			window.ShowCount != 1 || !window.ShowEnabled ||
 			seen[key] {
 			continue
 		}

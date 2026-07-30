@@ -609,8 +609,7 @@ func TestSummaryRecoveryTarget(t *testing.T) {
 		{name: "sheet", edit: func(w *standaloneRecoveryWindow) { w.SheetOpen = true }, wantErr: "found 0"},
 		{name: "stop absent", edit: func(w *standaloneRecoveryWindow) { w.StopCount = 0 }, wantErr: "found 0"},
 		{name: "stop disabled", edit: func(w *standaloneRecoveryWindow) { w.StopEnabled = false }, wantErr: "found 0"},
-		{name: "show duplicate", edit: func(w *standaloneRecoveryWindow) { w.ShowCount = 2 }, wantErr: "found 0"},
-		{name: "show disabled", edit: func(w *standaloneRecoveryWindow) { w.ShowEnabled = false }, wantErr: "found 0"},
+		{name: "AX show absent uses OCR", edit: func(w *standaloneRecoveryWindow) { w.ShowCount = 0; w.ShowEnabled = false }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

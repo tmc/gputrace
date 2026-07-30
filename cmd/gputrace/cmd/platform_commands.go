@@ -115,7 +115,8 @@ of --recover-untitled, --source, --xcode-pid, and --xcode-app. Recovery stays
 bound to that exact process and verifies the exported UUID against --source.
 Use --check-recovery to verify the binding without opening the export sheet.
 An exact untitled 95% Summary state is resumed by opening Performance once;
-recovery never starts Replay.
+when Xcode omits the AX control, two stable Vision OCR samples are required
+inside the selected window's right pane. Recovery never starts Replay.
 If the recovered window still has an enabled Stop GPU workload control and
 disabled Export, --finalize-workload explicitly presses Stop once and requires
 Xcode to restore the exact source-bound Finished state. It then presses Show
