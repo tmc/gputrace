@@ -26,20 +26,35 @@ type replayCountersOptions struct {
 	output             string
 }
 
+func replayCounterConfig(opts *replayCountersOptions) *gputrace.CounterSamplingConfig {
+	config := &gputrace.CounterSamplingConfig{
+		EnabledCounterSets:         opts.counterSets,
+		SampleAtEncoderBoundaries:  opts.encoderBoundaries,
+		SampleAtDispatchBoundaries: opts.dispatchBoundaries,
+		UseBarriers:                opts.useBarriers,
+	}
+	if len(config.EnabledCounterSets) == 0 {
+		config.EnabledCounterSets = []string{"timestamp", "stage_utilization", "statistics"}
+	}
+	return config
+}
+
 func newReplayCountersCommand(opts *replayCountersOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:    "replay-counters <trace.gputrace>",
-		Short:  "Plan MTLCounterSampleBuffer sampling; real collection is disabled",
+		Short:  "Collect or plan MTLCounterBuffer samples during replay",
 		Hidden: true,
 		Long: `Plan Metal performance counter sampling for trace replay.
 
-IMPORTANT: This command is fail-closed for real replay counter collection.
+On macOS with the metal build tag, this command replays through public Metal
+and retains resolved counter bytes without guessing their hardware layout.
+Other builds remain simulation-only.
 
 Current Behavior:
   - --simulate builds a sampling plan only
   - --simulate does not replay GPU work
-  - Running without --simulate fails closed before trace replay or GPU work
-  - No replay-time MTLCounterSampleBuffer collection is attempted
+  - Running without --simulate performs replay-time collection on macOS+metal
+  - Raw resolved bytes are retained; metric decoding remains explicit and gated
 
 Use this command to inspect:
   - Where counter samples would be taken (encoder/dispatch boundaries)
@@ -90,9 +105,8 @@ Examples:
   gputrace replay-counters trace.gputrace --simulate -o counters.json
 
 Implementation Status:
-  This command provides only a planning/simulation path today. Actual replay-time
-  GPU counter collection is intentionally unavailable and fails closed before
-  trace replay or GPU work.
+  Public Metal MTLCounterSampleBuffer collection is available on macOS+metal.
+  Private APS counters and unverified hardware-byte decoders remain separate.
 
 Related Commands:
   - gputrace profiler: Extract profiler timing data from .gpuprofiler_raw/streamData
@@ -131,7 +145,7 @@ func runReplayCounters(cmd *cobra.Command, args []string, opts *replayCountersOp
 	}
 
 	if !opts.simulate {
-		return fmt.Errorf("real replay counter collection is unavailable without replay-time Metal bindings; rerun with --simulate to inspect the sampling plan")
+		return runReplayCountersReal(tracePath, opts)
 	}
 
 	// Open trace
@@ -144,18 +158,7 @@ func runReplayCounters(cmd *cobra.Command, args []string, opts *replayCountersOp
 	engine := gputrace.NewReplayEngine(trace)
 
 	// Configure counter sampling
-	config := &gputrace.CounterSamplingConfig{
-		EnabledCounterSets:         opts.counterSets,
-		SampleAtEncoderBoundaries:  opts.encoderBoundaries,
-		SampleAtDispatchBoundaries: opts.dispatchBoundaries,
-		UseBarriers:                opts.useBarriers,
-		GPUFrequency:               0, // Auto-detect
-	}
-
-	// Use defaults if no counter sets specified
-	if len(config.EnabledCounterSets) == 0 {
-		config.EnabledCounterSets = []string{"timestamp", "stage_utilization", "statistics"}
-	}
+	config := replayCounterConfig(opts)
 
 	// Enable counter sampling
 	if err := engine.EnableCounterSampling(config); err != nil {
