@@ -77,7 +77,7 @@ func runXcodeParity(cmd *cobra.Command, args []string, opts *xcodeParityOptions)
 		fmt.Fprintf(w, "Timing: %s\n", source)
 	}
 	if has, _ := report.Timing["has_effective_gpu_time"].(bool); !has {
-		fmt.Fprintln(w, "Effective GPU time: not archived; using reported display-duration fallback")
+		fmt.Fprintln(w, "Effective GPU time: unavailable; reported display-duration fallback is not Xcode effective GPU time")
 	}
 	if report.StreamData != nil {
 		fmt.Fprintf(w, "StreamData: %d encoders, %d GPU commands, %d pipeline states, %d functions\n",
@@ -241,7 +241,7 @@ func (r *xcodeParityReport) applyStreamDataEvidence() {
 	if r.streamValueCount("Binaries") > 0 {
 		r.updateGap("high_register",
 			"binary blobs present in Xcode streamData; parent-enumeration adapter present",
-			"map enumerated parent-owned binaries to kernel events and apply pipeline shader metrics; the nil-parent constructor path remains disabled")
+			"use the private exporter seam only with a GTMioTraceData-compatible child; this archive's stream parent does not expose the generated enumeration selector")
 	}
 	if r.streamValueCount("Derived Counter Sample Data") > 0 {
 		next := "decode Derived Counter Sample Data and map ALU utilization into dispatch timeline and pprof samples"
