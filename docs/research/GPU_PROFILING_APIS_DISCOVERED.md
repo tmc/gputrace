@@ -307,6 +307,51 @@ Any future IOReport implementation must fail closed unless it can provide:
 4. **Keep IOReport claims narrow** - Treat IOReport as channel discovery until
    evidence supports per-dispatch or per-encoder timing
 
+## Host Validation Notes (2026-07-28)
+
+On the test host, `GPUToolsReplay` loads and its two command-buffer entry
+points are local Mach-O symbols rather than export-trie entries. Apple calls
+the internal `_GTMTLReplaySupport_init` with a live Metal device before
+constructing a replay controller; gputrace now exposes that initialization as
+an explicit opt-in step. The initialization smoke test passes, but this is
+loadability and support initialization evidence, not proof of command-buffer
+re-execution. The remaining controller context and private storage ABI are
+intentionally not guessed.
+
+Disassembly of the current image narrows the private ABI further:
+`GTMTLReplayController_defaultDispatchFunction_noPinning` receives a
+controller context and a trace-command record, obtains the command buffer from
+the controller, and calls `GTMTLReplay_commitCommandBuffer` with that command
+buffer and the same controller context. It is not a helper for an ordinary
+caller-created Metal command buffer; calling it without the controller-owned
+context would be an ABI guess.
+
+The same host returns `GPURawCounterErrorDomain` code `-1` (`Fail to
+instantiate AGXGPURawCounterSourceGroup`) from the exported source-group probe.
+APS therefore remains fail-closed rather than being reported as active hardware
+streaming on an unsupported target. An opt-in `DTGPUDataSource` probe does
+advertise raw APS profile selectors 13 and 14, but both are only advertised
+profiles; neither proves that the driver can instantiate the source group.
+
+The archived `GTMutableShaderProfilerStreamData` object on the large local
+fixture also does not respond to the generated
+`enumerateBinariesForPipelineState:enumerator:` selector. The private
+high-register exporter seam now checks that selector and skips safely; a
+`GTMioTraceData`-compatible child object is still required before binary
+enumeration can be enabled.
+
+Runtime method encoding explains why treating `pipelineStates` as an
+Objective-C collection is unsafe: on this host it returns
+`r^{?=QQQIIII}16@0:8`, a pointer to a C struct. The generated Go wrapper's
+object-shaped return must not be used for binary enumeration without a
+separately verified struct definition.
+
+An opt-in probe also attempted the non-mutating
+`GTMioTraceData.traceDataFromData:error:` conversion on
+`pipelineStateInfoData`; the framework rejected that NSData as the wrong
+format. No verified child-object route is available from the archived
+streamData fields tested so far.
+
 ## References
 
 - IOReport: `/System/Library/Frameworks/IOKit.framework/Headers/IOReport.h`
