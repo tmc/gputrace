@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"unsafe"
 
 	"github.com/tmc/apple/objc"
@@ -213,9 +214,77 @@ func ProcessStreamData(path string) (ProcessedStreamData, error) {
 	return summary, err
 }
 
+// processedModel is one in-flight or completed ProcessStreamData call.
+// done closes when model and err are final.
+type processedModel struct {
+	done  chan struct{}
+	model ProcessedStreamData
+	err   error
+}
+
+// modelCache holds successful results keyed by archive identity, so repeated
+// reads of the same archive pay the disassembly cost once. Failures are
+// evicted: they are usually environmental (missing Xcode, absent helper) and
+// should not be sticky for the life of the process.
+var (
+	modelCacheMu sync.Mutex
+	modelCache   = map[string]*processedModel{}
+)
+
+// modelCacheKey identifies an archive by path, size, and modification time, so
+// a recaptured archive at the same path is not served from the cache. It
+// returns false when the archive cannot be stat'd, which disables caching
+// rather than risking a stale hit.
+func modelCacheKey(path string) (string, bool) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", false
+	}
+	return fmt.Sprintf("%s\x00%d\x00%d", path, info.Size(), info.ModTime().UnixNano()), true
+}
+
+// sharedProcessedModel returns the in-flight or cached build for path, starting
+// one if needed. Concurrent callers for the same archive share a single build
+// instead of each spawning GTLLVMHelper.
+func sharedProcessedModel(path string) *processedModel {
+	key, cacheable := modelCacheKey(path)
+	if !cacheable {
+		entry := &processedModel{done: make(chan struct{})}
+		go runProcessedModel(entry, path, "", false)
+		return entry
+	}
+
+	modelCacheMu.Lock()
+	if entry, ok := modelCache[key]; ok {
+		modelCacheMu.Unlock()
+		return entry
+	}
+	entry := &processedModel{done: make(chan struct{})}
+	modelCache[key] = entry
+	modelCacheMu.Unlock()
+
+	go runProcessedModel(entry, path, key, true)
+	return entry
+}
+
+func runProcessedModel(entry *processedModel, path, key string, cacheable bool) {
+	entry.model, entry.err = ProcessStreamData(path)
+	if entry.err != nil && cacheable {
+		modelCacheMu.Lock()
+		delete(modelCache, key)
+		modelCacheMu.Unlock()
+	}
+	close(entry.done)
+}
+
 // WithProcessedModel builds a summary of Xcode's shader trace model and passes
-// it to fn. Context cancellation is checked before and after the synchronous
-// model build; it does not interrupt an in-progress private-framework call.
+// it to fn.
+//
+// The build runs on its own goroutine, so a canceled context returns promptly.
+// The private-framework call itself cannot be interrupted: it continues in the
+// background, and its result is cached for a later caller rather than
+// discarded. Repeated calls for the same archive reuse that result, since a
+// build spawns GTLLVMHelper and disassembles every shader in the capture.
 func WithProcessedModel(ctx context.Context, path string, fn func(model *ProcessedStreamData) error) error {
 	if ctx != nil && ctx.Err() != nil {
 		return ctx.Err()
@@ -223,13 +292,26 @@ func WithProcessedModel(ctx context.Context, path string, fn func(model *Process
 	if fn == nil {
 		return fmt.Errorf("callback fn is nil")
 	}
-	model, err := ProcessStreamData(path)
-	if err != nil {
-		return err
+
+	entry := sharedProcessedModel(path)
+
+	var done <-chan struct{}
+	if ctx != nil {
+		done = ctx.Done()
+	}
+	select {
+	case <-entry.done:
+	case <-done:
+		return ctx.Err()
+	}
+
+	if entry.err != nil {
+		return entry.err
 	}
 	if ctx != nil && ctx.Err() != nil {
 		return ctx.Err()
 	}
+	model := entry.model
 	return fn(&model)
 }
 
