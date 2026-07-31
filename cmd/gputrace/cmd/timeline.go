@@ -252,14 +252,18 @@ func exportTextTimeline(timeline *Timeline, outputPath string) error {
 	fmt.Fprintln(w, "Row units: start and duration are milliseconds; capture-only coordinates are byte offsets.")
 	fmt.Fprintln(w)
 
-	// If no CB events, create a dummy one
+	// If no CB events, create a dummy one. It carries an index so encoders
+	// attribute to it like any other command buffer.
 	if len(cbs) == 0 {
 		cbs = append(cbs, TimelineEvent{
 			Name:      "CB#0",
 			Timestamp: timeline.StartTime,
 			Duration:  timeline.Duration,
+			Args:      map[string]interface{}{"index": 0},
 		})
 	}
+
+	encodersByCB, unattributed := attributeEncodersToCBs(timeline, cbs)
 
 	firstTimestamp := timeline.StartTime
 	if len(cbs) > 0 && cbs[0].Timestamp < firstTimestamp {
@@ -288,68 +292,148 @@ func exportTextTimeline(timeline *Timeline, outputPath string) error {
 			continue
 		}
 
-		var cbEncoders []EncoderInfo
-		for _, encoder := range timeline.Encoders {
-			belongsToCB := false
-			for _, k := range timeline.Kernels {
-				if k.Encoder == encoder.Index {
-					if kArgCB, ok := getKernelCBIndex(timeline, k); ok && kArgCB == cbIndex {
-						belongsToCB = true
-						break
-					}
-				}
-			}
-			if belongsToCB {
-				cbEncoders = append(cbEncoders, encoder)
-			}
-		}
+		writeTimelineEncoders(w, timeline, encodersByCB[cbIndex], firstTimestamp)
+	}
 
-		for i, encoder := range cbEncoders {
-			startMs := float64(encoder.StartTime-firstTimestamp) / 1e6
-			durationMs := float64(encoder.Duration) / 1e6
-
-			label := encoder.Label
-			if label == "" {
-				label = "Unknown Encoder"
-			}
-
-			var encoderKernels []KernelInfo
-			for _, k := range timeline.Kernels {
-				if k.Encoder == encoder.Index {
-					encoderKernels = append(encoderKernels, k)
-				}
-			}
-
-			prefix := "├─"
-			if i == len(cbEncoders)-1 {
-				prefix = "└─"
-			}
-
-			if len(encoderKernels) > 0 {
-				for _, k := range encoderKernels {
-					kStartMs := float64(k.StartTime-firstTimestamp) / 1e6
-					kDurationMs := float64(k.Duration) / 1e6
-					fmt.Fprintf(w, "  %s %.2fms: %s (%.2fms) - %s\n",
-						prefix, kStartMs, k.Name, kDurationMs, label)
-				}
-			} else {
-				fmt.Fprintf(w, "  %s %.2fms: %s (%.2fms) - %s\n", prefix, startMs, label, durationMs, "Encoder")
-			}
-		}
+	if len(unattributed) > 0 {
+		fmt.Fprintf(w, "\nEncoders not attributed to a command buffer (%d):\n", len(unattributed))
+		writeTimelineEncoders(w, timeline, unattributed, firstTimestamp)
 	}
 
 	return nil
 }
 
-func getKernelCBIndex(timeline *Timeline, k KernelInfo) (int, bool) {
-	for _, e := range timeline.Events {
-		if e.Category == "kernel" && e.Name == k.Name && e.Timestamp == k.StartTime/1000 {
-			if cbIdx, ok := e.Args["cb_index"].(int); ok {
-				return cbIdx, true
+// writeTimelineEncoders prints one command buffer's encoders and the kernels
+// each ran, as a tree under the command buffer line.
+func writeTimelineEncoders(w io.Writer, timeline *Timeline, encoders []EncoderInfo, firstTimestamp uint64) {
+	for i, encoder := range encoders {
+		startMs := float64(encoder.StartTime-firstTimestamp) / 1e6
+		durationMs := float64(encoder.Duration) / 1e6
+
+		label := encoder.Label
+		if label == "" {
+			label = "Unknown Encoder"
+		}
+
+		var encoderKernels []KernelInfo
+		for _, k := range timeline.Kernels {
+			if k.Encoder == encoder.Index {
+				encoderKernels = append(encoderKernels, k)
 			}
+		}
+
+		prefix := "├─"
+		if i == len(encoders)-1 {
+			prefix = "└─"
+		}
+
+		if len(encoderKernels) > 0 {
+			for _, k := range encoderKernels {
+				kStartMs := float64(k.StartTime-firstTimestamp) / 1e6
+				kDurationMs := float64(k.Duration) / 1e6
+				fmt.Fprintf(w, "  %s %.2fms: %s (%.2fms) - %s\n",
+					prefix, kStartMs, k.Name, kDurationMs, label)
+			}
+		} else {
+			fmt.Fprintf(w, "  %s %.2fms: %s (%.2fms) - %s\n", prefix, startMs, label, durationMs, "Encoder")
+		}
+	}
+}
+
+// attributeEncodersToCBs groups encoders under the command buffer they ran in.
+// Encoders that cannot be placed are returned separately so the report still
+// accounts for them.
+//
+// streamData records no encoder-to-command-buffer link. Dispatch and command
+// buffer timestamps do share one absolute GPU tick base, so a dispatch that
+// starts inside a command buffer's tick window ran in that command buffer, and
+// its encoder did too. A trace with a single command buffer needs no ticks:
+// every encoder can only belong to it.
+func attributeEncodersToCBs(timeline *Timeline, cbs []TimelineEvent) (map[int][]EncoderInfo, []EncoderInfo) {
+	byCB := make(map[int][]EncoderInfo)
+	var unattributed []EncoderInfo
+
+	soleCB, hasSoleCB := -1, false
+	if len(cbs) == 1 {
+		soleCB, hasSoleCB = timelineEventArgInt(cbs[0].Args, "index")
+	}
+
+	for _, encoder := range timeline.Encoders {
+		cbIndex, found := -1, false
+		for _, k := range timeline.Kernels {
+			if k.Encoder != encoder.Index {
+				continue
+			}
+			if idx, ok := kernelCBIndex(cbs, k); ok {
+				cbIndex, found = idx, true
+				break
+			}
+		}
+		if !found && hasSoleCB {
+			cbIndex, found = soleCB, true
+		}
+		if found {
+			byCB[cbIndex] = append(byCB[cbIndex], encoder)
+		} else {
+			unattributed = append(unattributed, encoder)
+		}
+	}
+	return byCB, unattributed
+}
+
+// kernelCBIndex reports the command buffer whose tick window contains the
+// kernel's start tick. Kernels synthesized from an encoder span carry no
+// ticks and cannot be placed this way.
+func kernelCBIndex(cbs []TimelineEvent, k KernelInfo) (int, bool) {
+	start, ok := timelineEventArgUint64(k.Args, "start_ticks")
+	if !ok || start == 0 {
+		return -1, false
+	}
+	for _, cb := range cbs {
+		cbStart, okStart := timelineEventArgUint64(cb.Args, "start_ticks")
+		cbEnd, okEnd := timelineEventArgUint64(cb.Args, "end_ticks")
+		if !okStart || !okEnd || cbEnd < cbStart {
+			continue
+		}
+		if start < cbStart || start > cbEnd {
+			continue
+		}
+		if idx, ok := timelineEventArgInt(cb.Args, "index"); ok {
+			return idx, true
 		}
 	}
 	return -1, false
+}
+
+// timelineEventArgUint64 reads a tick count from event args. Args round-trip
+// through JSON, where every number decodes as float64, so both forms are
+// accepted.
+func timelineEventArgUint64(args map[string]interface{}, key string) (uint64, bool) {
+	switch v := args[key].(type) {
+	case uint64:
+		return v, true
+	case int:
+		if v < 0 {
+			return 0, false
+		}
+		return uint64(v), true
+	case float64:
+		if v < 0 {
+			return 0, false
+		}
+		return uint64(v), true
+	}
+	return 0, false
+}
+
+func timelineEventArgInt(args map[string]interface{}, key string) (int, bool) {
+	switch v := args[key].(type) {
+	case int:
+		return v, true
+	case float64:
+		return int(v), true
+	}
+	return 0, false
 }
 
 // Timeline represents the complete timeline data.
