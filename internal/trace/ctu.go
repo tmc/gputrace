@@ -16,7 +16,9 @@ import (
 //	+0x0c  first address (8 bytes, little-endian)
 //	+0x14  buffer address
 //	+0x1c  buffer name, NUL-terminated
-var ctuMarker = []byte("CtU<b>ulul")
+const CtUMarker = "CtU<b>ulul"
+
+var ctuMarker = []byte(CtUMarker)
 
 const (
 	ctuAddrOffset = 0x14

@@ -378,7 +378,7 @@ func detectRecordType(data []byte) string {
 			return RecordTypeCiulul
 		}
 		// Check for CtU (Buffer Definition)
-		if i+10 <= len(data) && bytes.Equal(data[i:i+10], []byte("CtU<b>ulul")) {
+		if i+len(ctuMarker) <= len(data) && bytes.Equal(data[i:i+len(ctuMarker)], ctuMarker) {
 			return RecordTypeCtU
 		}
 		if i+6 <= len(data) && bytes.Equal(data[i:i+6], []byte("Ctulul")) {

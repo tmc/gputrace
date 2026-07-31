@@ -969,7 +969,7 @@ func resourceRecordMarkerAt(data []byte, nameStart int) (string, int) {
 	window := data[windowStart:nameStart]
 	markers := []string{
 		"CU<b>ulul",
-		"CtU<b>ulul",
+		tracepkg.CtUMarker,
 		"Cuw",
 	}
 	bestMarker := ""
@@ -1108,27 +1108,14 @@ func extractBufferCommandUses(trace *gputrace.Trace, finalSizes map[string]uint6
 	return uses, nil
 }
 
+// extractBufferAddressNames maps buffer addresses to the buffer files they
+// name. Only MTLBuffer- names resolve to a file in the bundle.
 func extractBufferAddressNames(captureData []byte) map[uint64]string {
 	addrToName := make(map[uint64]string)
-	marker := []byte{0x43, 0x74, 0x55, 0x3c, 0x62, 0x3e, 0x75, 0x6c, 0x75, 0x6c}
-	offset := 0
-	for {
-		pos := bytes.Index(captureData[offset:], marker)
-		if pos == -1 {
-			break
+	for addr, name := range tracepkg.ScanBufferNames(captureData) {
+		if strings.HasPrefix(name, "MTLBuffer-") {
+			addrToName[addr] = name
 		}
-		absolutePos := offset + pos
-		if absolutePos+0x24 <= len(captureData) {
-			bufAddr := binary.LittleEndian.Uint64(captureData[absolutePos+0x14 : absolutePos+0x1c])
-			nameStart := absolutePos + 0x1c
-			if bytes.HasPrefix(captureData[nameStart:], []byte("MTLBuffer-")) {
-				nameEnd := bytes.IndexByte(captureData[nameStart:], 0)
-				if nameEnd > 0 && nameEnd < 100 {
-					addrToName[bufAddr] = string(captureData[nameStart : nameStart+nameEnd])
-				}
-			}
-		}
-		offset += pos + len(marker)
 	}
 	return addrToName
 }
