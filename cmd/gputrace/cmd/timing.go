@@ -22,6 +22,7 @@ type timingOptions struct {
 	csv         string
 	compare     string
 	table       bool
+	minCalls    int
 	benchfmt    bool
 	benchConfig benchfmtConfigFlags
 }
@@ -69,6 +70,7 @@ supported timing source such as streamData/APSTimelineData.`,
 	cmd.Flags().StringVar(&opts.csv, "csv", opts.csv, "Export timing metrics to CSV file")
 	cmd.Flags().StringVar(&opts.compare, "compare", opts.compare, "Compare with baseline trace for regression detection")
 	cmd.Flags().BoolVar(&opts.table, "table", opts.table, "Show human-readable table output")
+	cmd.Flags().IntVar(&opts.minCalls, "min-calls", opts.minCalls, "Only table rows for functions dispatched at least N times (off by default; reports what it drops; JSON and CSV are never filtered)")
 	addBenchfmtFlags(cmd, &opts.benchfmt, &opts.benchConfig)
 	return cmd
 }
@@ -77,8 +79,25 @@ func init() {
 	rootCmd.AddCommand(timingCmd)
 }
 
+// tableMetrics applies --min-calls to a copy of metrics and returns the note
+// naming what it dropped. The original is left alone: JSON and CSV exports
+// carry every row regardless of the flag, because a filtered export is a
+// partial file that reads as a complete one long after the flag is forgotten.
+func tableMetrics(metrics *gputrace.TimingMetrics, minCalls int) (*gputrace.TimingMetrics, string) {
+	kept, dropped := gputrace.FilterMinCalls(metrics.KernelTimings, minCalls)
+	if dropped == 0 {
+		return metrics, ""
+	}
+	filtered := *metrics
+	filtered.KernelTimings = kept
+	return &filtered, gputrace.MinCallsNote(minCalls, dropped, len(metrics.KernelTimings))
+}
+
 func runTiming(cmd *cobra.Command, args []string, opts *timingOptions) error {
 	tracePath := args[0]
+	if opts.minCalls < 0 {
+		return fmt.Errorf("--min-calls must be >= 0")
+	}
 	if err := validateBenchfmtFlags(opts.benchfmt, opts.benchConfig); err != nil {
 		return err
 	}
@@ -125,8 +144,8 @@ func runTiming(cmd *cobra.Command, args []string, opts *timingOptions) error {
 
 	// Show table if requested
 	if opts.table {
-		report := gputrace.FormatTimingMetrics(metrics)
-		fmt.Fprintln(timingReportWriter(opts), report)
+		shown, note := tableMetrics(metrics, opts.minCalls)
+		fmt.Fprintln(timingReportWriter(opts), gputrace.FormatTimingMetrics(shown)+note)
 	}
 
 	// Export JSON if requested
@@ -201,8 +220,8 @@ func runTimingFromProfiler(tracePath string, opts *timingOptions) error {
 
 	// Show table if requested
 	if opts.table {
-		report := formatProfilerTimingMetrics(metrics)
-		fmt.Fprintln(timingReportWriter(opts), report)
+		shown, note := tableMetrics(metrics, opts.minCalls)
+		fmt.Fprintln(timingReportWriter(opts), formatProfilerTimingMetrics(shown)+note)
 	}
 
 	// Export JSON if requested
@@ -397,14 +416,20 @@ func formatProfilerTimingMetrics(metrics *gputrace.TimingMetrics) string {
 		if len(name) > 50 {
 			name = name[:47] + "..."
 		}
-		out += fmt.Sprintf("%-50s %8s %10s %10s %10s %7s\n",
+		marker := ""
+		if kt.IsLowSample() {
+			marker = gputrace.LowSampleMarker
+		}
+		out += fmt.Sprintf("%-50s %8s %10s %10s %10s %7s%s\n",
 			name,
 			FormatCount(kt.InvocationCount),
 			FormatCount(int(kt.TotalDuration.Microseconds())),
 			FormatCount(int(kt.AvgDuration.Microseconds())),
 			FormatCount(int(kt.MaxDuration.Microseconds())),
-			FormatPercent(kt.PercentOfTotal))
+			FormatPercent(kt.PercentOfTotal),
+			marker)
 	}
+	out += gputrace.LowSampleFootnote(metrics.KernelTimings)
 
 	return out
 }

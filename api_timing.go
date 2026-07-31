@@ -36,6 +36,25 @@ func FormatTimingMetrics(metrics *TimingMetrics) string {
 	return timing.FormatTimingMetrics(metrics)
 }
 
+// LowSampleMarker follows a row measured from a single dispatch.
+const LowSampleMarker = timing.LowSampleMarker
+
+// LowSampleFootnote explains LowSampleMarker, or returns "" when unused.
+func LowSampleFootnote(timings []*KernelTiming) string {
+	return timing.LowSampleFootnote(timings)
+}
+
+// FilterMinCalls keeps rows measured from at least min dispatches and reports
+// how many it dropped.
+func FilterMinCalls(timings []*KernelTiming, min int) ([]*KernelTiming, int) {
+	return timing.FilterMinCalls(timings, min)
+}
+
+// MinCallsNote states what a --min-calls filter removed.
+func MinCallsNote(min, dropped, total int) string {
+	return timing.MinCallsNote(min, dropped, total)
+}
+
 // ExportTimingMetricsJSON writes timing metrics as JSON.
 func ExportTimingMetricsJSON(w io.Writer, metrics *TimingMetrics) error {
 	return timing.ExportTimingMetricsJSON(w, metrics)

@@ -391,11 +391,8 @@ func WriteTimingMetrics(w io.Writer, metrics *TimingMetrics) error {
 		}
 	}
 
-	if low := CountLowSample(metrics.KernelTimings); low > 0 {
-		if _, err := fmt.Fprintf(w, "\n%s marks a row measured from a single dispatch (%d of %d). A lone span\n"+
-			"  carries the boundary and gap time before the next dispatch, so it ranks by\n"+
-			"  cost it may not have spent. Compare against a repeated row before citing it.\n",
-			LowSampleMarker, low, len(metrics.KernelTimings)); err != nil {
+	if footnote := LowSampleFootnote(metrics.KernelTimings); footnote != "" {
+		if _, err := fmt.Fprint(w, footnote); err != nil {
 			return err
 		}
 	}
