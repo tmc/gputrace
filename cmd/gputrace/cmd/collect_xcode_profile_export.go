@@ -1030,7 +1030,7 @@ func transitionedRecoveryPerformanceTarget(windows []standaloneRecoveryWindow, r
 		}
 		doc := normalizedTraceDocument(window.Document)
 		title := strings.TrimSpace(window.Title)
-		if doc != "" && doc != filepath.Clean(recovery.SourcePath) {
+		if doc != "" && !traceDocumentMatches(window.Document, recovery.SourcePath) {
 			continue
 		}
 		if title != "" && title != filepath.Base(recovery.SourcePath) {
@@ -1075,7 +1075,7 @@ func restoredRecoverySourceAnyGeometry(windows []standaloneRecoveryWindow, recov
 }
 
 func isRestoredRecoverySource(window standaloneRecoveryWindow, recovery standaloneExportRecovery) bool {
-	return normalizedTraceDocument(window.Document) == filepath.Clean(recovery.SourcePath) &&
+	return traceDocumentMatches(window.Document, recovery.SourcePath) &&
 		strings.TrimSpace(window.Title) == filepath.Base(recovery.SourcePath) &&
 		window.NewEditorView && window.Finished
 }
@@ -1090,7 +1090,7 @@ func finalizedRecoveryPerformanceTarget(windows []standaloneRecoveryWindow, reco
 		}
 		doc := normalizedTraceDocument(window.Document)
 		title := strings.TrimSpace(window.Title)
-		if doc != "" && doc != filepath.Clean(recovery.SourcePath) {
+		if doc != "" && !traceDocumentMatches(window.Document, recovery.SourcePath) {
 			continue
 		}
 		if title != "" && title != filepath.Base(recovery.SourcePath) {
@@ -1115,6 +1115,39 @@ func normalizedTraceDocument(document string) string {
 		}
 	}
 	return filepath.Clean(document)
+}
+
+func traceDocumentMatches(document, source string) bool {
+	for _, value := range []string{document, source} {
+		parsed, err := url.Parse(strings.TrimSpace(value))
+		if err != nil || parsed.Scheme != "" && parsed.Scheme != "file" {
+			return false
+		}
+	}
+	document = normalizedTraceDocument(document)
+	source = normalizedTraceDocument(source)
+	if document == "" || source == "" {
+		return false
+	}
+	document, err := filepath.Abs(document)
+	if err != nil {
+		return false
+	}
+	source, err = filepath.Abs(source)
+	if err != nil {
+		return false
+	}
+	if document == source {
+		return true
+	}
+	resolvedDocument, documentErr := filepath.EvalSymlinks(document)
+	resolvedSource, sourceErr := filepath.EvalSymlinks(source)
+	if documentErr == nil && sourceErr == nil && resolvedDocument == resolvedSource {
+		return true
+	}
+	documentInfo, documentErr := os.Stat(document)
+	sourceInfo, sourceErr := os.Stat(source)
+	return documentErr == nil && sourceErr == nil && os.SameFile(documentInfo, sourceInfo)
 }
 
 func shallowSheetOpen(window uintptr) bool {

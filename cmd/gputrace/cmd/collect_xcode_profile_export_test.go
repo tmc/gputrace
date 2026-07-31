@@ -747,6 +747,40 @@ func TestNormalizedTraceDocument(t *testing.T) {
 	}
 }
 
+func TestTraceDocumentMatchesFilesystemIdentity(t *testing.T) {
+	root := t.TempDir()
+	real := filepath.Join(root, "real", "raw trace.gputrace")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	aliasRoot := filepath.Join(root, "alias")
+	if err := os.Symlink(filepath.Join(root, "real"), aliasRoot); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(aliasRoot, "raw trace.gputrace")
+	fileURL := "file://" + strings.ReplaceAll(real, " ", "%20")
+	for _, test := range []struct {
+		name     string
+		document string
+		source   string
+		want     bool
+	}{
+		{name: "alias to real", document: alias, source: real, want: true},
+		{name: "real to alias", document: real, source: alias, want: true},
+		{name: "escaped file URL", document: fileURL, source: alias, want: true},
+		{name: "empty", document: "", source: real},
+		{name: "non-file URL", document: "https://example.com/raw.gputrace", source: real},
+		{name: "missing unequal", document: filepath.Join(root, "a", "raw.gputrace"), source: filepath.Join(root, "b", "raw.gputrace")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := traceDocumentMatches(test.document, test.source); got != test.want {
+				t.Fatalf("traceDocumentMatches(%q, %q) = %t, want %t",
+					test.document, test.source, got, test.want)
+			}
+		})
+	}
+}
+
 func TestFinalizeStandaloneExportRejectsUUIDMismatchAndPreservesOutput(t *testing.T) {
 	input := writeStandaloneExportFixture(t, "input", "wanted", true)
 	output := writeStandaloneExportFixture(t, "output", "other", true)
