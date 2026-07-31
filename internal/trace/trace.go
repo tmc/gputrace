@@ -982,34 +982,9 @@ type PipelineFunctionMap map[uint64]string
 func (t *Trace) BuildPipelineFunctionMap() PipelineFunctionMap {
 	result := make(PipelineFunctionMap)
 
-	// Build label map from both capture data and device-resources
-	labelMap := make(map[uint64]string)
-
-	// Parse CS records from capture data
-	// Using ParseMTSPRecords to get all records, including CS with valid addresses
-	records, _ := t.ParseMTSPRecords()
-	for _, rec := range records {
-		if rec.Type == RecordTypeCS && rec.Label != "" && rec.Address != 0 {
-			labelMap[rec.Address] = rec.Label
-		}
-	}
-
-	// Also parse CS records from device resources
-	for _, data := range t.DeviceResources {
-		// Create a temporary trace with just this data to use ParseMTSPRecords
-		tempTrace := &Trace{CaptureData: data}
-		if resRecords, err := tempTrace.ParseMTSPRecords(); err == nil {
-			for _, rec := range resRecords {
-				if rec.Type == RecordTypeCS && rec.Label != "" && rec.Address != 0 {
-					labelMap[rec.Address] = rec.Label
-				}
-			}
-		}
-	}
-
 	// A CS record's address field identifies the Metal object, not the shader
-	// function, so labelMap alone cannot answer the question Ctt asks. The
-	// function address is stored after the label; collect it separately.
+	// function, so keying by that address cannot answer the question Ctt asks.
+	// The function address is stored after the label.
 	funcNames := make(map[uint64]string)
 	scanFunctionNames(t.CaptureData, funcNames)
 	for _, data := range t.DeviceResources {
@@ -1017,9 +992,9 @@ func (t *Trace) BuildPipelineFunctionMap() PipelineFunctionMap {
 	}
 
 	// Parse Ctt records from both capture and device-resources
-	t.parseCttRecords(t.CaptureData, labelMap, funcNames, result)
+	t.parseCttRecords(t.CaptureData, funcNames, result)
 	for _, data := range t.DeviceResources {
-		t.parseCttRecords(data, labelMap, funcNames, result)
+		t.parseCttRecords(data, funcNames, result)
 	}
 
 	return result
@@ -1079,7 +1054,7 @@ func scanFunctionNames(data []byte, into map[uint64]string) {
 }
 
 // parseCttRecords parses Ctt records from data and adds pipeline→function mappings to result.
-func (t *Trace) parseCttRecords(data []byte, labelMap, funcNames map[uint64]string, result PipelineFunctionMap) {
+func (t *Trace) parseCttRecords(data []byte, funcNames map[uint64]string, result PipelineFunctionMap) {
 	// Ctt record structure:
 	// +0x00: "Ctt\x00" (4 bytes)
 	// +0x04: device address (8 bytes)
@@ -1103,8 +1078,6 @@ func (t *Trace) parseCttRecords(data []byte, labelMap, funcNames map[uint64]stri
 			if pipelineAddr != 0 {
 				// Look up function name
 				if funcName, exists := funcNames[funcAddr]; exists {
-					result[pipelineAddr] = funcName
-				} else if funcName, exists := labelMap[funcAddr]; exists {
 					result[pipelineAddr] = funcName
 				}
 			}
