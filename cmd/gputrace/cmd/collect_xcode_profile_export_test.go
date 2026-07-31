@@ -781,6 +781,17 @@ func TestTraceDocumentMatchesFilesystemIdentity(t *testing.T) {
 	}
 }
 
+func TestRecoveryTimeoutErrorDoesNotWrapNil(t *testing.T) {
+	err := recoveryTimeoutError("timed out", nil)
+	if got := err.Error(); got != "timed out" || strings.Contains(got, "%!w") {
+		t.Fatalf("error = %q", got)
+	}
+	cause := errors.New("last state")
+	if err := recoveryTimeoutError("timed out", cause); !errors.Is(err, cause) {
+		t.Fatalf("error = %v, want wrapped cause", err)
+	}
+}
+
 func TestFinalizeStandaloneExportRejectsUUIDMismatchAndPreservesOutput(t *testing.T) {
 	input := writeStandaloneExportFixture(t, "input", "wanted", true)
 	output := writeStandaloneExportFixture(t, "output", "other", true)

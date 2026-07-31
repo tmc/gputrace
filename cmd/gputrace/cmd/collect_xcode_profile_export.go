@@ -758,17 +758,30 @@ func finalizeRecoveredWorkload(ctx context.Context, appAX, windowAX uintptr, rec
 	}
 
 	deadline := time.Now().Add(timeout)
-	sourceWindow, showPerformance, err := waitForRestoredRecoverySource(ctx, appAX, recovery, geometryKey, deadline)
+	sourceWindow, err := waitForRestoredRecoverySource(ctx, appAX, recovery, geometryKey, deadline)
 	if err != nil {
 		return 0, err
 	}
-	var showPID int32
-	if axUIElementGetPid(showPerformance, &showPID) != kAXErrorSuccess ||
-		int(showPID) != recovery.Identity.PID {
-		return 0, fmt.Errorf("Show Performance is not owned by bound Xcode PID %d", recovery.Identity.PID)
-	}
-	if err := axPressWithFallbackWindow(showPerformance, sourceWindow.Element); err != nil {
-		return 0, fmt.Errorf("press Show Performance: %w", err)
+	shows := shallowShowPerformanceButtons(sourceWindow.Element)
+	switch len(shows) {
+	case 0:
+		if err := clickFinishedPerformanceOCR(ctx, appAX, sourceWindow, recovery, geometryKey); err != nil {
+			return 0, err
+		}
+	case 1:
+		if !IsElementEnabled(shows[0]) {
+			return 0, fmt.Errorf("Finished Show Performance control is disabled")
+		}
+		var showPID int32
+		if axUIElementGetPid(shows[0], &showPID) != kAXErrorSuccess ||
+			int(showPID) != recovery.Identity.PID {
+			return 0, fmt.Errorf("Show Performance is not owned by bound Xcode PID %d", recovery.Identity.PID)
+		}
+		if err := axPressWithFallbackWindow(shows[0], sourceWindow.Element); err != nil {
+			return 0, fmt.Errorf("press Show Performance: %w", err)
+		}
+	default:
+		return 0, fmt.Errorf("multiple AX Show Performance controls are ambiguous")
 	}
 
 	return waitForFinalizedRecoveryPerformance(ctx, appAX, recovery, geometryKey, deadline)
@@ -803,7 +816,7 @@ func transitionSummaryToPerformance(ctx context.Context, appAX uintptr, recovery
 			break
 		}
 		if time.Now().After(deadline) {
-			return 0, fmt.Errorf("timed out waiting for stable 95%% Summary recovery state: %w", err)
+			return 0, recoveryTimeoutError("timed out waiting for stable 95% Summary recovery state", err)
 		}
 		if err := waitForAutomation(ctx, 250*time.Millisecond); err != nil {
 			return 0, err
@@ -838,7 +851,7 @@ func transitionSummaryToPerformance(ctx context.Context, appAX uintptr, recovery
 	}
 
 	stable = 0
-	var lastElement uintptr
+	lastKey = ""
 	for {
 		if err := checkAutomationCanceled(ctx); err != nil {
 			return 0, err
@@ -848,21 +861,22 @@ func transitionSummaryToPerformance(ctx context.Context, appAX uintptr, recovery
 		}
 		window, err := runningRecoveryPerformanceTarget(recoveryWindows(appAX), recovery, geometryKey)
 		if err == nil {
-			if window.Element == lastElement {
+			key := standaloneRecoveryWindowKey(window)
+			if key == lastKey {
 				stable++
 			} else {
-				lastElement = window.Element
+				lastKey = key
 				stable = 1
 			}
 		} else {
-			lastElement = 0
+			lastKey = ""
 			stable = 0
 		}
 		if stable >= 2 {
 			return window.Element, nil
 		}
 		if time.Now().After(deadline) {
-			return 0, fmt.Errorf("timed out waiting for Performance after Summary Show Performance: %w", err)
+			return 0, recoveryTimeoutError("timed out waiting for Performance after Summary Show Performance", err)
 		}
 		if err := waitForAutomation(ctx, 250*time.Millisecond); err != nil {
 			return 0, err
@@ -870,26 +884,19 @@ func transitionSummaryToPerformance(ctx context.Context, appAX uintptr, recovery
 	}
 }
 
-func waitForRestoredRecoverySource(ctx context.Context, appAX uintptr, recovery standaloneExportRecovery, geometryKey string, deadline time.Time) (standaloneRecoveryWindow, uintptr, error) {
+func waitForRestoredRecoverySource(ctx context.Context, appAX uintptr, recovery standaloneExportRecovery, geometryKey string, deadline time.Time) (standaloneRecoveryWindow, error) {
 	stable := 0
 	var lastKey string
 	for {
 		if err := checkAutomationCanceled(ctx); err != nil {
-			return standaloneRecoveryWindow{}, 0, err
+			return standaloneRecoveryWindow{}, err
 		}
 		if err := requireRecoveryIdentity(appAX, recovery); err != nil {
-			return standaloneRecoveryWindow{}, 0, err
+			return standaloneRecoveryWindow{}, err
 		}
 		window, err := restoredRecoverySourceTarget(recoveryWindows(appAX), recovery, geometryKey)
-		var show uintptr
 		if err == nil {
-			show = findShowPerformanceButton(window.Element)
-			switch {
-			case show == 0:
-				err = fmt.Errorf("restored source window has no Show Performance control")
-			case !IsElementEnabled(show):
-				err = fmt.Errorf("restored source window has disabled Show Performance control")
-			case shallowSheetOpen(window.Element):
+			if shallowSheetOpen(window.Element) {
 				err = fmt.Errorf("restored source window has an open sheet")
 			}
 		}
@@ -906,20 +913,20 @@ func waitForRestoredRecoverySource(ctx context.Context, appAX uintptr, recovery 
 			stable = 0
 		}
 		if stable >= 2 {
-			return window, show, nil
+			return window, nil
 		}
 		if time.Now().After(deadline) {
-			return standaloneRecoveryWindow{}, 0, fmt.Errorf("timed out waiting for exact source-bound Finished state after Stop: %w", err)
+			return standaloneRecoveryWindow{}, recoveryTimeoutError("timed out waiting for exact source-bound Finished state after Stop", err)
 		}
 		if err := waitForAutomation(ctx, 500*time.Millisecond); err != nil {
-			return standaloneRecoveryWindow{}, 0, err
+			return standaloneRecoveryWindow{}, err
 		}
 	}
 }
 
 func waitForFinalizedRecoveryPerformance(ctx context.Context, appAX uintptr, recovery standaloneExportRecovery, geometryKey string, deadline time.Time) (uintptr, error) {
 	stable := 0
-	var lastElement uintptr
+	var lastKey string
 	var lastErr error
 	for {
 		if err := checkAutomationCanceled(ctx); err != nil {
@@ -948,14 +955,15 @@ func waitForFinalizedRecoveryPerformance(ctx context.Context, appAX uintptr, rec
 			}
 		}
 		if err == nil {
-			if window.Element == lastElement {
+			key := standaloneRecoveryWindowKey(window)
+			if key == lastKey {
 				stable++
 			} else {
-				lastElement = window.Element
+				lastKey = key
 				stable = 1
 			}
 		} else {
-			lastElement = 0
+			lastKey = ""
 			stable = 0
 			lastErr = err
 		}
@@ -963,12 +971,19 @@ func waitForFinalizedRecoveryPerformance(ctx context.Context, appAX uintptr, rec
 			return window.Element, nil
 		}
 		if time.Now().After(deadline) {
-			return 0, fmt.Errorf("timed out waiting for export-ready Performance after Show Performance: %w", lastErr)
+			return 0, recoveryTimeoutError("timed out waiting for export-ready Performance after Show Performance", lastErr)
 		}
 		if err := waitForAutomation(ctx, 500*time.Millisecond); err != nil {
 			return 0, err
 		}
 	}
+}
+
+func recoveryTimeoutError(message string, lastErr error) error {
+	if lastErr == nil {
+		return errors.New(message)
+	}
+	return fmt.Errorf("%s: %w", message, lastErr)
 }
 
 func requireRecoveryIdentity(appAX uintptr, recovery standaloneExportRecovery) error {

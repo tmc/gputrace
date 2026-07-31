@@ -38,11 +38,25 @@ func (m summaryOCRMatch) center() (float64, float64) {
 }
 
 func clickSummaryPerformanceOCR(ctx context.Context, appAX uintptr, summary standaloneRecoveryWindow, recovery standaloneExportRecovery, geometryKey string) error {
+	return clickPerformanceOCR(ctx, appAX, summary, recovery, "Summary",
+		func() (standaloneRecoveryWindow, error) {
+			return summaryRecoveryTarget(recoveryWindows(appAX), recovery, geometryKey)
+		})
+}
+
+func clickFinishedPerformanceOCR(ctx context.Context, appAX uintptr, source standaloneRecoveryWindow, recovery standaloneExportRecovery, geometryKey string) error {
+	return clickPerformanceOCR(ctx, appAX, source, recovery, "Finished source",
+		func() (standaloneRecoveryWindow, error) {
+			return restoredRecoverySourceTarget(recoveryWindows(appAX), recovery, geometryKey)
+		})
+}
+
+func clickPerformanceOCR(ctx context.Context, appAX uintptr, selected standaloneRecoveryWindow, recovery standaloneExportRecovery, state string, selectWindow func() (standaloneRecoveryWindow, error)) error {
 	if err := activateProcessPID(int32(recovery.Identity.PID)); err != nil {
-		return fmt.Errorf("activate bound Xcode for Summary OCR: %w", err)
+		return fmt.Errorf("activate bound Xcode for %s OCR: %w", state, err)
 	}
-	if err := axAction(summary.Element, "AXRaise"); err != nil {
-		return fmt.Errorf("raise selected Summary window for OCR: %w", err)
+	if err := axAction(selected.Element, "AXRaise"); err != nil {
+		return fmt.Errorf("raise selected %s window for OCR: %w", state, err)
 	}
 	if err := waitForAutomation(ctx, 200*time.Millisecond); err != nil {
 		return err
@@ -55,12 +69,12 @@ func clickSummaryPerformanceOCR(ctx context.Context, appAX uintptr, summary stan
 		if err := requireRecoveryIdentity(appAX, recovery); err != nil {
 			return err
 		}
-		current, err := summaryRecoveryTarget(recoveryWindows(appAX), recovery, geometryKey)
+		current, err := selectWindow()
 		if err != nil {
-			return fmt.Errorf("revalidate Summary before OCR sample %d: %w", sample+1, err)
+			return fmt.Errorf("revalidate %s before OCR sample %d: %w", state, sample+1, err)
 		}
 		if shows := shallowShowPerformanceButtons(current.Element); len(shows) != 0 {
-			return fmt.Errorf("AX Show Performance controls changed while preparing OCR")
+			return fmt.Errorf("AX Show Performance controls changed while preparing %s OCR", state)
 		}
 		region, err := summaryRightPaneRegion(current.Element)
 		if err != nil {
@@ -68,13 +82,13 @@ func clickSummaryPerformanceOCR(ctx context.Context, appAX uintptr, summary stan
 		}
 		match, err := recognizeSummaryPerformance(current.Element, region)
 		if err != nil {
-			return fmt.Errorf("Summary OCR sample %d: %w", sample+1, err)
+			return fmt.Errorf("%s OCR sample %d: %w", state, sample+1, err)
 		}
 		if sample > 0 && !stableSummaryOCRMatch(previous, match, 4) {
-			return fmt.Errorf("Summary OCR target moved between stable samples")
+			return fmt.Errorf("%s OCR target moved between stable samples", state)
 		}
 		previous = match
-		summary = current
+		selected = current
 		if sample == 0 {
 			if err := waitForAutomation(ctx, 250*time.Millisecond); err != nil {
 				return err
@@ -84,12 +98,12 @@ func clickSummaryPerformanceOCR(ctx context.Context, appAX uintptr, summary stan
 
 	// The second sample is immediately followed by a final structural and
 	// hit-test check. No additional OCR or click retry is permitted.
-	current, err := summaryRecoveryTarget(recoveryWindows(appAX), recovery, geometryKey)
+	current, err := selectWindow()
 	if err != nil {
-		return fmt.Errorf("revalidate Summary before OCR click: %w", err)
+		return fmt.Errorf("revalidate %s before OCR click: %w", state, err)
 	}
-	if standaloneRecoveryWindowKey(current) != standaloneRecoveryWindowKey(summary) {
-		return fmt.Errorf("Summary window changed after OCR proof")
+	if standaloneRecoveryWindowKey(current) != standaloneRecoveryWindowKey(selected) {
+		return fmt.Errorf("%s window changed after OCR proof", state)
 	}
 	cx, cy := previous.center()
 	region, err := summaryRightPaneRegion(current.Element)
@@ -97,7 +111,7 @@ func clickSummaryPerformanceOCR(ctx context.Context, appAX uintptr, summary stan
 		return err
 	}
 	if !region.contains(cx, cy) {
-		return fmt.Errorf("OCR target center lies outside selected Summary right pane")
+		return fmt.Errorf("OCR target center lies outside selected %s right pane", state)
 	}
 	selectedWindowID, err := getWindowID(current.Element)
 	if err != nil {
