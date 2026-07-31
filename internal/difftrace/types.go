@@ -261,6 +261,7 @@ type Report struct {
 	Unmatched             []UnmatchedDispatch    `json:"unmatched"`
 	PipelinePairs         []PipelinePair         `json:"pipeline_pairs,omitempty"`
 	EncoderDivergence     *EncoderDivergence     `json:"encoder_divergence,omitempty"`
+	Comparability         ComparabilityCheck     `json:"comparability"`
 	Warnings              []string               `json:"warnings,omitempty"`
 }
 

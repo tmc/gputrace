@@ -308,5 +308,6 @@
       "confidence": 0.95
     }
   ],
-  "unmatched": []
+  "unmatched": [],
+  "comparability": {}
 }

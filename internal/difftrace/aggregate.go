@@ -89,6 +89,15 @@ func BuildReport(a, b *TraceData, aligned AlignmentResult, opts ReportOptions) R
 	report.MatchedPairs = nonNilMatches(report.MatchedPairs)
 	report.Unmatched = nonNilUnmatched(report.Unmatched)
 
+	// Check comparability against every function delta, before the limit
+	// below discards the tail. The rows that carry the signal are the
+	// smallest in the table, so a cost-ordered top-N is precisely what drops
+	// them.
+	report.Comparability = CheckComparability(report.TopFunctionDeltas)
+	if warning := report.Comparability.Warning(); warning != "" {
+		report.Warnings = append(report.Warnings, warning)
+	}
+
 	if len(report.TopFunctionDeltas) > opts.Limit {
 		report.TopFunctionDeltas = report.TopFunctionDeltas[:opts.Limit]
 	}
