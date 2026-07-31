@@ -596,8 +596,13 @@ type CommandBufferBinding struct {
 func sortBuffers(buffers []BufferInfo, sortBy string) {
 	switch sortBy {
 	case "size":
+		// Buffers of equal size break by ID, so the listing does not
+		// reshuffle between runs on the same trace.
 		sort.Slice(buffers, func(i, j int) bool {
-			return buffers[i].Size > buffers[j].Size // Descending
+			if buffers[i].Size != buffers[j].Size {
+				return buffers[i].Size > buffers[j].Size // Descending
+			}
+			return buffers[i].ID < buffers[j].ID
 		})
 	case "id":
 		sort.Slice(buffers, func(i, j int) bool {
