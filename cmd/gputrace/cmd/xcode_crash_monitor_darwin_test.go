@@ -236,6 +236,49 @@ func TestWaitForXcodeCrashReportGraceExpires(t *testing.T) {
 	}
 }
 
+func TestXcodeCrashMonitorCancelsAfterNoReportGrace(t *testing.T) {
+	dir := t.TempDir()
+	scope := crashScopeForTest("/Applications/Xcode.app", 987654)
+	scope.mu.Lock()
+	scope.exitObserved = true
+	scope.exitAt = time.Now().Add(-time.Second)
+	scope.exitedPID = 987654
+	scope.liveObserved = 0
+	scope.mu.Unlock()
+
+	ctx, stop := startXcodeCrashMonitorWithGrace(
+		context.Background(), dir, map[string]crashReportState{}, scope, 20*time.Millisecond,
+	)
+	defer stop()
+
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("monitor did not cancel after no-report grace")
+	}
+	var exitErr xcodeExitWithoutReportError
+	if !errors.As(context.Cause(ctx), &exitErr) {
+		t.Fatalf("cause = %T %v, want xcodeExitWithoutReportError",
+			context.Cause(ctx), context.Cause(ctx))
+	}
+	if exitErr.PID != 987654 || exitErr.AppPath != "/Applications/Xcode.app" {
+		t.Fatalf("exit error = %+v", exitErr)
+	}
+}
+
+func TestXcodeExitGraceRequiresAllObservedProcessesAbsent(t *testing.T) {
+	scope := crashScopeForTest("/Applications/Xcode.app", 111)
+	scope.mu.Lock()
+	scope.exitObserved = true
+	scope.exitAt = time.Now().Add(-10 * time.Minute)
+	scope.exitedPID = 111
+	scope.liveObserved = 1
+	scope.mu.Unlock()
+	if _, expired := scope.exitGraceExpired(time.Now(), 5*time.Minute); expired {
+		t.Fatal("exit grace expired while an adopted exact-app process remains live")
+	}
+}
+
 func TestSelectSingleXcodeProcessPreservesExactApp(t *testing.T) {
 	xcode := xcodeProcessIdentity{PID: 81051, AppPath: "/Applications/Xcode.app"}
 	got, err := selectSingleXcodeProcess([]xcodeProcessIdentity{xcode}, xcode.AppPath)

@@ -1405,12 +1405,17 @@ func waitForReplayComplete(ctx context.Context, appAX uintptr, traceFileName str
 		}
 		// 3. Re-fetch Xcode app and search all windows (handles stale appAX and title changes)
 		freshApp := uintptr(0)
+		crashScope := xcodeCrashScopeFromContext(ctx)
+		targetAppPath := ""
 		if targetPID != 0 {
+			targetAppPath = xcodeProcessPath(int(targetPID))
+		}
+		if targetAppPath != "" &&
+			(crashScope == nil || filepath.Clean(targetAppPath) == crashScope.appPath) {
 			freshApp = axCreateApplication(targetPID)
 		}
 		if freshApp == 0 {
 			verboseLog("waitForReplayComplete: failed to re-fetch target Xcode PID %d; checking exact-app replacements", targetPID)
-			crashScope := xcodeCrashScopeFromContext(ctx)
 			if crashScope != nil {
 				crashScope.refreshProcesses()
 				for _, identity := range xcodeProcessesForApp(crashScope.appPath) {

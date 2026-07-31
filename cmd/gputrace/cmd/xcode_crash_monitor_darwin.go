@@ -52,6 +52,9 @@ type xcodeCrashScope struct {
 	boundAt      time.Time
 	pids         map[int]struct{}
 	exitObserved bool
+	exitAt       time.Time
+	exitedPID    int
+	liveObserved int
 	allowRebind  bool
 }
 
@@ -113,9 +116,16 @@ func (scope *xcodeCrashScope) refreshProcesses() {
 
 	scope.mu.Lock()
 	defer scope.mu.Unlock()
+	scope.liveObserved = 0
 	for pid := range scope.pids {
-		if _, ok := currentPIDs[pid]; !ok {
+		if _, ok := currentPIDs[pid]; ok {
+			scope.liveObserved++
+		} else {
 			scope.exitObserved = true
+			if scope.exitAt.IsZero() {
+				scope.exitAt = time.Now()
+				scope.exitedPID = pid
+			}
 		}
 	}
 	if !scope.boundAt.IsZero() {
@@ -130,6 +140,9 @@ func (scope *xcodeCrashScope) refreshProcesses() {
 		}
 		if scope.allowRebind && allExited && len(current) == 1 {
 			scope.pids[current[0].PID] = struct{}{}
+			scope.liveObserved = 1
+			scope.exitAt = time.Time{}
+			scope.exitedPID = 0
 		}
 		return
 	}
@@ -138,6 +151,33 @@ func (scope *xcodeCrashScope) refreshProcesses() {
 	if len(current) == 1 {
 		scope.pids[current[0].PID] = struct{}{}
 	}
+}
+
+type xcodeExitWithoutReportError struct {
+	PID     int
+	AppPath string
+	Grace   time.Duration
+}
+
+func (err xcodeExitWithoutReportError) Error() string {
+	return fmt.Sprintf("bound Xcode PID %d from %s exited; no matching DiagnosticReport appeared within %s",
+		err.PID, err.AppPath, err.Grace)
+}
+
+func (scope *xcodeCrashScope) exitGraceExpired(now time.Time, grace time.Duration) (xcodeExitWithoutReportError, bool) {
+	if scope == nil {
+		return xcodeExitWithoutReportError{}, false
+	}
+	scope.mu.RLock()
+	defer scope.mu.RUnlock()
+	if scope.exitAt.IsZero() || scope.liveObserved != 0 || now.Before(scope.exitAt.Add(grace)) {
+		return xcodeExitWithoutReportError{}, false
+	}
+	return xcodeExitWithoutReportError{
+		PID:     scope.exitedPID,
+		AppPath: scope.appPath,
+		Grace:   grace,
+	}, true
 }
 
 func (scope *xcodeCrashScope) crashSuspected() bool {
@@ -446,6 +486,10 @@ func parseIPSTime(value string) time.Time {
 type xcodeCrashScopeContextKey struct{}
 
 func startXcodeCrashMonitor(parent context.Context, dir string, baseline map[string]crashReportState, scope *xcodeCrashScope) (context.Context, func()) {
+	return startXcodeCrashMonitorWithGrace(parent, dir, baseline, scope, xcodeCrashReportGrace)
+}
+
+func startXcodeCrashMonitorWithGrace(parent context.Context, dir string, baseline map[string]crashReportState, scope *xcodeCrashScope, grace time.Duration) (context.Context, func()) {
 	cancelContext, cancel := context.WithCancelCause(parent)
 	ctx := context.WithValue(cancelContext, xcodeCrashScopeContextKey{}, scope)
 	done := make(chan struct{})
@@ -463,6 +507,10 @@ func startXcodeCrashMonitor(parent context.Context, dir string, baseline map[str
 				}
 				if report != nil {
 					cancel(*report)
+					return
+				}
+				if exitErr, expired := scope.exitGraceExpired(time.Now(), grace); expired {
+					cancel(exitErr)
 					return
 				}
 			case <-done:
