@@ -166,6 +166,9 @@ func runKernels(cmd *cobra.Command, args []string, opts *kernelsOptions) error {
 		fmt.Fprint(out, " (unattributed dispatches are reported as unknown)")
 	}
 	fmt.Fprintln(out)
+	if unattributedInventory(attributedDispatches, totalDispatches) {
+		fmt.Fprint(out, unattributedInventoryNote)
+	}
 	if hasTiming {
 		fmt.Fprintln(out, "Timing: cumulative dispatch offsets; spans may include boundary or gap time")
 	}
@@ -224,7 +227,8 @@ func runKernels(cmd *cobra.Command, args []string, opts *kernelsOptions) error {
 		if k.PipelineAddr != 0 {
 			pipeline = fmt.Sprintf("0x%x", k.PipelineAddr)
 		}
-		fmt.Fprintf(out, nameFmt+"  %-18s  %-10d", displayName, pipeline, k.DispatchCount)
+		fmt.Fprintf(out, nameFmt+"  %-18s  %-10s", displayName, pipeline,
+			formatDispatchCount(k.DispatchCount, attributedDispatches, totalDispatches))
 
 		if hasTiming {
 			if tStat, ok := timingStats[name]; ok {
