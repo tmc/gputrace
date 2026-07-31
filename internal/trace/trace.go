@@ -1007,17 +1007,79 @@ func (t *Trace) BuildPipelineFunctionMap() PipelineFunctionMap {
 		}
 	}
 
-	// Parse Ctt records from both capture and device-resources
-	t.parseCttRecords(t.CaptureData, labelMap, result)
+	// A CS record's address field identifies the Metal object, not the shader
+	// function, so labelMap alone cannot answer the question Ctt asks. The
+	// function address is stored after the label; collect it separately.
+	funcNames := make(map[uint64]string)
+	scanFunctionNames(t.CaptureData, funcNames)
 	for _, data := range t.DeviceResources {
-		t.parseCttRecords(data, labelMap, result)
+		scanFunctionNames(data, funcNames)
+	}
+
+	// Parse Ctt records from both capture and device-resources
+	t.parseCttRecords(t.CaptureData, labelMap, funcNames, result)
+	for _, data := range t.DeviceResources {
+		t.parseCttRecords(data, labelMap, funcNames, result)
 	}
 
 	return result
 }
 
+// csTagFunction marks a CS record that describes a shader function. The other
+// tags seen in practice describe a command encoder (0x04) and a library UUID
+// (0x34); both store something other than a function address in the same
+// field, so reading them would map a pipeline to a name that is not a kernel.
+const csTagFunction = 0x74
+
+// scanFunctionNames records the function address of every CS record that
+// describes a shader function. The record is laid out as
+//
+//	"CS\0\0" | object address (8) | label (NUL-terminated) | pad to 4 |
+//	tag (4) | function address (8)
+//
+// The function address is what a Ctt record refers to, so this is the map that
+// turns a pipeline state into a kernel name.
+func scanFunctionNames(data []byte, into map[uint64]string) {
+	marker := []byte("CS\x00\x00")
+	offset := 0
+	for {
+		pos := bytes.Index(data[offset:], marker)
+		if pos == -1 {
+			return
+		}
+		start := offset + pos
+		offset = start + 4
+		if start+12 > len(data) {
+			return
+		}
+
+		labelStart := start + 12
+		labelEnd := labelStart
+		for labelEnd < len(data) && data[labelEnd] != 0 {
+			labelEnd++
+		}
+		if labelEnd >= len(data) || labelEnd == labelStart {
+			continue
+		}
+
+		tagPos := labelEnd + 1
+		if pad := (tagPos - start) % 4; pad != 0 {
+			tagPos += 4 - pad
+		}
+		if tagPos+12 > len(data) {
+			continue
+		}
+		if binary.LittleEndian.Uint32(data[tagPos:tagPos+4]) != csTagFunction {
+			continue
+		}
+		if funcAddr := binary.LittleEndian.Uint64(data[tagPos+4 : tagPos+12]); funcAddr != 0 {
+			into[funcAddr] = string(data[labelStart:labelEnd])
+		}
+	}
+}
+
 // parseCttRecords parses Ctt records from data and adds pipeline→function mappings to result.
-func (t *Trace) parseCttRecords(data []byte, labelMap map[uint64]string, result PipelineFunctionMap) {
+func (t *Trace) parseCttRecords(data []byte, labelMap, funcNames map[uint64]string, result PipelineFunctionMap) {
 	// Ctt record structure:
 	// +0x00: "Ctt\x00" (4 bytes)
 	// +0x04: device address (8 bytes)
@@ -1040,7 +1102,9 @@ func (t *Trace) parseCttRecords(data []byte, labelMap map[uint64]string, result 
 
 			if pipelineAddr != 0 {
 				// Look up function name
-				if funcName, exists := labelMap[funcAddr]; exists {
+				if funcName, exists := funcNames[funcAddr]; exists {
+					result[pipelineAddr] = funcName
+				} else if funcName, exists := labelMap[funcAddr]; exists {
 					result[pipelineAddr] = funcName
 				}
 			}
