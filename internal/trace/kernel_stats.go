@@ -196,6 +196,15 @@ func (t *Trace) AnalyzeKernels() (map[string]*KernelStat, error) {
 		var currentEncoder *EncoderSection
 		var currentPipelineAddr uint64
 
+		// Some captures record no encoder at all: a Metal capture written by
+		// the application, rather than exported from Xcode, can carry the
+		// dispatches and their pipeline state while the encoder objects are
+		// described only in device-resources. Pipeline state is still
+		// sequential in the command buffer, so track it on its own and
+		// attribute dispatches to it. Without this the encoder gate below
+		// drops every dispatch and the trace reports no attribution at all.
+		hasEncoders := len(actualEncoders) > 0
+
 		// Map encoder address to current pipeline for that encoder (though mostly we only care about the active one)
 		// Metal technically records commands into a specific encoder.
 		// `Ct` records specify which encoder they apply to.
@@ -219,65 +228,18 @@ func (t *Trace) AnalyzeKernels() (map[string]*KernelStat, error) {
 				// Update the state for the specific encoder
 				encoderPipelines[pse.EncoderAddr] = pse.PipelineAddr
 
-				// If this set call is for the current encoder, update currentPipelineAddr
-				if currentEncoder != nil && pse.EncoderAddr == currentEncoder.Address {
+				// If this set call is for the current encoder, update
+				// currentPipelineAddr. With no encoders to match against, the
+				// most recent pipeline state is the one in effect.
+				if !hasEncoders || (currentEncoder != nil && pse.EncoderAddr == currentEncoder.Address) {
 					currentPipelineAddr = pse.PipelineAddr
 				}
 
 			case 2: // Dispatch
-				// Attribute to current encoder and pipeline
-				if currentEncoder != nil {
-					// Use the currently tracked pipeline for this encoder
-					// (which should have been updated by Type 1 events)
-					pipelineAddr := currentPipelineAddr
-
-					// If no pipeline set yet, try falling back to what we found in simple parsing
-					// (Wait, simple parsing logic was flawed too)
-
-					kernelName := "unknown"
-					if pipelineAddr != 0 {
-						if name, ok := pipelineMap[pipelineAddr]; ok {
-							kernelName = name
-						}
-					}
-
-					// If still unknown, fallback to encoder label guess
-					// For ICB, we trust the encoder label if it looks plausible
-					if kernelName == "unknown" && currentEncoder.Label != "" {
-						// Relaxed check: Accept if it has underscores OR if it matches known MLX patterns
-						// Also accept Capitalized names (like "Multiply") if pipeline is missing,
-						// assuming the debug group label represents the operation.
-						if isActualFunctionName(currentEncoder.Label) {
-							kernelName = currentEncoder.Label
-						} else if len(currentEncoder.Label) > 0 {
-							// For missing pipelines, we accept any label as better than "unknown"
-							// This catches cases like "Multiply" where no Ct record exists.
-							kernelName = currentEncoder.Label
-						}
-					}
-
-					// Update stats
-					if _, ok := stats[kernelName]; !ok {
-						stats[kernelName] = &KernelStat{
-							Name:          kernelName,
-							PipelineAddr:  pipelineAddr,
-							DebugGroups:   make(map[string]int),
-							EncoderLabels: make(map[string]int),
-						}
-					}
-
-					s := stats[kernelName]
-					s.DispatchCount++
-					if currentEncoder.Label != "" {
-						s.EncoderLabels[currentEncoder.Label]++
-					}
-
-					if debugGroup := t.DebugGroupForLabel(currentEncoder.Label); debugGroup != "" {
-						s.DebugGroups[debugGroup]++
-					} else if debugGroup := t.DebugGroupForLabel(kernelName); debugGroup != "" {
-						s.DebugGroups[debugGroup]++
-					}
-				} else {
+				// A dispatch is attributable when it sits inside an encoder,
+				// or when the capture records no encoders and the pipeline
+				// state alone identifies the kernel.
+				if currentEncoder == nil && hasEncoders {
 					// Dispatch outside of known encoder?
 					// Add to "unknown"
 					if _, ok := stats["unknown"]; !ok {
@@ -288,6 +250,60 @@ func (t *Trace) AnalyzeKernels() (map[string]*KernelStat, error) {
 						}
 					}
 					stats["unknown"].DispatchCount++
+					continue
+				}
+
+				// Use the currently tracked pipeline for this encoder
+				// (which should have been updated by Type 1 events)
+				pipelineAddr := currentPipelineAddr
+
+				var encoderLabel string
+				if currentEncoder != nil {
+					encoderLabel = currentEncoder.Label
+				}
+
+				kernelName := "unknown"
+				if pipelineAddr != 0 {
+					if name, ok := pipelineMap[pipelineAddr]; ok {
+						kernelName = name
+					}
+				}
+
+				// If still unknown, fallback to encoder label guess
+				// For ICB, we trust the encoder label if it looks plausible
+				if kernelName == "unknown" && encoderLabel != "" {
+					// Relaxed check: Accept if it has underscores OR if it matches known MLX patterns
+					// Also accept Capitalized names (like "Multiply") if pipeline is missing,
+					// assuming the debug group label represents the operation.
+					if isActualFunctionName(encoderLabel) {
+						kernelName = encoderLabel
+					} else {
+						// For missing pipelines, we accept any label as better than "unknown"
+						// This catches cases like "Multiply" where no Ct record exists.
+						kernelName = encoderLabel
+					}
+				}
+
+				// Update stats
+				if _, ok := stats[kernelName]; !ok {
+					stats[kernelName] = &KernelStat{
+						Name:          kernelName,
+						PipelineAddr:  pipelineAddr,
+						DebugGroups:   make(map[string]int),
+						EncoderLabels: make(map[string]int),
+					}
+				}
+
+				s := stats[kernelName]
+				s.DispatchCount++
+				if encoderLabel != "" {
+					s.EncoderLabels[encoderLabel]++
+				}
+
+				if debugGroup := t.DebugGroupForLabel(encoderLabel); debugGroup != "" {
+					s.DebugGroups[debugGroup]++
+				} else if debugGroup := t.DebugGroupForLabel(kernelName); debugGroup != "" {
+					s.DebugGroups[debugGroup]++
 				}
 			}
 		}
