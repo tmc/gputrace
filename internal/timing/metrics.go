@@ -372,7 +372,11 @@ func WriteTimingMetrics(w io.Writer, metrics *TimingMetrics) error {
 		p50Us := float64(kt.P50Duration) / float64(time.Microsecond)
 		p95Us := float64(kt.P95Duration) / float64(time.Microsecond)
 
-		if _, err := fmt.Fprintf(w, "%-40s %8d %10.2f %10.1f %10.1f %10.1f %10.1f %10.1f %7.1f%%\n",
+		marker := ""
+		if kt.IsLowSample() {
+			marker = LowSampleMarker
+		}
+		if _, err := fmt.Fprintf(w, "%-40s %8d %10.2f %10.1f %10.1f %10.1f %10.1f %10.1f %7.1f%%%s\n",
 			name,
 			kt.InvocationCount,
 			totalMs,
@@ -381,7 +385,17 @@ func WriteTimingMetrics(w io.Writer, metrics *TimingMetrics) error {
 			maxUs,
 			p50Us,
 			p95Us,
-			kt.PercentOfTotal); err != nil {
+			kt.PercentOfTotal,
+			marker); err != nil {
+			return err
+		}
+	}
+
+	if low := CountLowSample(metrics.KernelTimings); low > 0 {
+		if _, err := fmt.Fprintf(w, "\n%s marks a row measured from a single dispatch (%d of %d). A lone span\n"+
+			"  carries the boundary and gap time before the next dispatch, so it ranks by\n"+
+			"  cost it may not have spent. Compare against a repeated row before citing it.\n",
+			LowSampleMarker, low, len(metrics.KernelTimings)); err != nil {
 			return err
 		}
 	}
