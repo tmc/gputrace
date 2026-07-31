@@ -1798,7 +1798,7 @@ func exportTrace(ctx context.Context, appAX, windowAX uintptr, outputPath string
 			fmt.Fprintf(status, "    Warning: Failed to click Export button: %v\n", err)
 		}
 	} else {
-		found, enabled, err := fileExportMenuState(appAX)
+		found, enabled, err := fileExportMenuState(appAX, windowAX)
 		if err != nil {
 			return fmt.Errorf("check File > Export readiness: %w", err)
 		}
@@ -1813,13 +1813,10 @@ func exportTrace(ctx context.Context, appAX, windowAX uintptr, outputPath string
 			filepath.Clean(bound.AppPath) != filepath.Clean(identity.AppPath) {
 			return fmt.Errorf("bound Xcode identity changed while checking File > Export")
 		}
-		// Fall back to menu
-		if collectProfileOpts.debug || collectProfileOpts.verbose {
-			if err := debugCheckExportMenu(appAX); err != nil {
-				fmt.Fprintf(os.Stderr, "    Debug: Export menu check failed: %v\n", err)
-			}
-		}
-		if err := ClickMenuItem(appAX, []string{"File", "Export..."}); err != nil {
+		// Fall back to the menu. The readiness probe above already logged
+		// everything the debug probe used to discover; reopening File here
+		// introduces a second, stateful menu transaction.
+		if err := clickMenuItemForWindow(appAX, windowAX, []string{"File", "Export..."}); err != nil {
 			return fmt.Errorf("failed to click Export menu: %w", err)
 		}
 	}

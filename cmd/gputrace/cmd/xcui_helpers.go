@@ -2,51 +2,42 @@
 
 package cmd
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+	"time"
+)
 
-func debugCheckExportMenu(app uintptr) error {
-	menuBar := findElement(app, func(el uintptr) bool {
-		return axString(el, "AXRole") == "AXMenuBar"
-	})
-	if menuBar == 0 {
-		return fmt.Errorf("menubar not found")
-	}
-
-	// Find File menu
-	fileMenu := findElement(menuBar, func(el uintptr) bool {
-		return axString(el, "AXTitle") == "File"
-	})
-	if fileMenu == 0 {
-		return fmt.Errorf("File menu not found")
-	}
-
-	// Click File to populate children (often needed for dynamic menus)
-	if err := axAction(fileMenu, "AXPress"); err != nil {
-		verboseLog("debugCheckExportMenu: failed to open File menu: %v", err)
-	}
-
-	// Find Export item
-	exportItem := findElement(fileMenu, func(el uintptr) bool {
-		t := axString(el, "AXTitle")
-		return t == "Export..." || t == "Export…"
-	})
-
-	if exportItem == 0 {
-		verboseLog("debugCheckExportMenu: Export item not found in File menu")
-		// Dump all items
-		children := axChildren(fileMenu)
-		for _, child := range children {
-			verboseLog("debugCheckExportMenu: menu item %q enabled=%v", axString(child, "AXTitle"), IsElementEnabled(child))
-			cfRelease(child)
-		}
-		return nil
-	}
-
-	verboseLog("debugCheckExportMenu: Export item found, enabled=%v", IsElementEnabled(exportItem))
-	return nil
+type fileExportProbeOps struct {
+	open  func() error
+	state func() (bool, bool, error)
+	close func() error
 }
 
-func fileExportMenuState(app uintptr) (found, enabled bool, err error) {
+func runFileExportProbe(ops fileExportProbeOps) (found, enabled bool, err error) {
+	defer func() {
+		if closeErr := ops.close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
+			found = false
+			enabled = false
+		}
+	}()
+	if err := ops.open(); err != nil {
+		return false, false, err
+	}
+	return ops.state()
+}
+
+func fileExportMenuState(app, window uintptr) (found, enabled bool, err error) {
+	var appPID, windowPID int32
+	if axUIElementGetPid(app, &appPID) != kAXErrorSuccess ||
+		axUIElementGetPid(window, &windowPID) != kAXErrorSuccess ||
+		appPID == 0 || appPID != windowPID {
+		return false, false, fmt.Errorf("File menu probe is not bound to the selected Xcode window")
+	}
+	if err := requireFocusedWindow(app, window); err != nil {
+		return false, false, err
+	}
 	menuBar := findElementAtDepth(
 		app,
 		2,
@@ -75,24 +66,141 @@ func fileExportMenuState(app uintptr) (found, enabled bool, err error) {
 	if fileMenu == 0 {
 		return false, false, fmt.Errorf("File menu not found")
 	}
-	if err := axAction(fileMenu, "AXPress"); err != nil {
-		return false, false, fmt.Errorf("open File menu: %w", err)
-	}
-	defer axAction(fileMenu, "AXCancel")
+	return runFileExportProbe(fileExportProbeOps{
+		open: func() error {
+			expanded, err := axBoolAttribute(fileMenu, "AXExpanded")
+			if err != nil {
+				return fmt.Errorf("verify File menu before open: %w", err)
+			}
+			if expanded {
+				if err := closeAXMenuForWindow(app, window, fileMenu); err != nil {
+					return fmt.Errorf("close pre-existing File menu: %w", err)
+				}
+			}
+			if err := axAction(fileMenu, "AXPress"); err != nil {
+				return fmt.Errorf("open File menu: %w", err)
+			}
+			return nil
+		},
+		state: func() (bool, bool, error) {
+			var matches []uintptr
+			for _, item := range findAllMenuItems(fileMenu) {
+				title := axString(item, "AXTitle")
+				if title == "Export..." || title == "Export…" {
+					matches = append(matches, item)
+				}
+			}
+			switch len(matches) {
+			case 0:
+				return false, false, nil
+			case 1:
+				return true, IsElementEnabled(matches[0]), nil
+			default:
+				return false, false, fmt.Errorf("multiple File > Export menu items found")
+			}
+		},
+		close: func() error {
+			return closeAXMenuForWindow(app, window, fileMenu)
+		},
+	})
+}
 
-	var matches []uintptr
-	for _, item := range findAllMenuItems(fileMenu) {
-		title := axString(item, "AXTitle")
-		if title == "Export..." || title == "Export…" {
-			matches = append(matches, item)
+func requireFocusedWindow(app, window uintptr) error {
+	wantID, err := getWindowID(window)
+	if err != nil {
+		return fmt.Errorf("read selected Xcode window identity: %w", err)
+	}
+	for _, attr := range []string{"AXFocusedWindow", "AXMainWindow"} {
+		var candidate uintptr
+		key := mkString(attr)
+		ret := axCopyAttributeValue(app, key, &candidate)
+		cfRelease(key)
+		if ret != kAXErrorSuccess || candidate == 0 {
+			continue
+		}
+		gotID, candidateErr := getWindowID(candidate)
+		cfRelease(candidate)
+		if candidateErr == nil && gotID == wantID {
+			return nil
 		}
 	}
-	switch len(matches) {
-	case 0:
-		return false, false, nil
-	case 1:
-		return true, IsElementEnabled(matches[0]), nil
-	default:
-		return false, false, fmt.Errorf("multiple File > Export menu items found")
+	return fmt.Errorf("File menu operation is not scoped to the selected Xcode window %d", wantID)
+}
+
+type menuCloseOps struct {
+	expanded func() (bool, error)
+	cancel   func() error
+	escape   func() error
+}
+
+func closeMenuWithOps(ops menuCloseOps) error {
+	expanded, err := ops.expanded()
+	if err == nil && !expanded {
+		return nil
 	}
+	cancelErr := ops.cancel()
+	for range 10 {
+		expanded, err = ops.expanded()
+		if err != nil {
+			time.Sleep(25 * time.Millisecond)
+			continue
+		}
+		if !expanded {
+			return nil
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if err != nil {
+		cancelErr = errors.Join(cancelErr,
+			fmt.Errorf("verify menu after AXCancel: %w (menu_open=unknown)", err))
+	}
+	if ops.escape == nil {
+		return errors.Join(cancelErr, fmt.Errorf("menu remained open after AXCancel (menu_open=true)"))
+	}
+	if err := ops.escape(); err != nil {
+		return errors.Join(cancelErr, fmt.Errorf("close menu with scoped Escape: %w (menu_open=true)", err))
+	}
+	for range 10 {
+		expanded, err = ops.expanded()
+		if err != nil {
+			return fmt.Errorf("verify menu after scoped Escape: %w (menu_open=unknown)", err)
+		}
+		if !expanded {
+			return nil
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	return errors.Join(cancelErr, fmt.Errorf("menu remained open after scoped Escape (menu_open=true)"))
+}
+
+func closeAXMenu(menu uintptr) error {
+	return closeMenuWithOps(menuCloseOps{
+		expanded: func() (bool, error) { return axBoolAttribute(menu, "AXExpanded") },
+		cancel:   func() error { return axAction(menu, "AXCancel") },
+	})
+}
+
+func closeAXMenuForWindow(app, window, menu uintptr) error {
+	return closeMenuWithOps(menuCloseOps{
+		expanded: func() (bool, error) { return axBoolAttribute(menu, "AXExpanded") },
+		cancel:   func() error { return axAction(menu, "AXCancel") },
+		escape: func() error {
+			if err := requireFocusedWindow(app, window); err != nil {
+				return err
+			}
+			var appPID, windowPID int32
+			if axUIElementGetPid(app, &appPID) != kAXErrorSuccess ||
+				axUIElementGetPid(window, &windowPID) != kAXErrorSuccess ||
+				appPID == 0 || appPID != windowPID {
+				return fmt.Errorf("scoped Escape is not bound to the selected Xcode window")
+			}
+			if err := axAction(window, "AXRaise"); err != nil {
+				return fmt.Errorf("raise selected Xcode window: %w", err)
+			}
+			if err := requireFocusedWindow(app, window); err != nil {
+				return err
+			}
+			return sendKeyToPid(appPID, kVK_Escape, 0)
+		},
+	})
 }

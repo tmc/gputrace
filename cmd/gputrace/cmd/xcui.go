@@ -3,6 +3,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -408,15 +409,21 @@ func IsElementEnabled(el uintptr) bool {
 
 // axBool retrieves a boolean attribute from an AX element.
 func axBool(el uintptr, attr string) bool {
+	value, _ := axBoolAttribute(el, attr)
+	return value
+}
+
+func axBoolAttribute(el uintptr, attr string) (bool, error) {
 	var val uintptr
 	key := mkString(attr)
 	defer cfRelease(key)
 
-	if axCopyAttributeValue(el, key, &val) == kAXErrorSuccess {
-		defer cfRelease(val)
-		return cfBooleanGetValue(val)
+	ret := axCopyAttributeValue(el, key, &val)
+	if ret != kAXErrorSuccess {
+		return false, fmt.Errorf("read %s: AXError %d", attr, ret)
 	}
-	return false
+	defer cfRelease(val)
+	return cfBooleanGetValue(val), nil
 }
 
 // IsCheckboxChecked returns true if a checkbox element is checked.
@@ -940,7 +947,11 @@ func FindXcodeApp() (uintptr, error) {
 
 // === Menu Interactions ===
 
-func ClickMenuItem(app uintptr, path []string) error {
+func ClickMenuItem(app uintptr, path []string) (err error) {
+	return clickMenuItem(app, path, closeAXMenu)
+}
+
+func clickMenuItem(app uintptr, path []string, closeMenu func(uintptr) error) (err error) {
 	// Find Menu Bar
 	menuBar := findElement(app, func(el uintptr) bool {
 		return axString(el, "AXRole") == "AXMenuBar"
@@ -950,6 +961,15 @@ func ClickMenuItem(app uintptr, path []string) error {
 	}
 
 	current := menuBar
+	var openedMenu uintptr
+	defer func() {
+		if openedMenu == 0 {
+			return
+		}
+		if closeErr := closeMenu(openedMenu); closeErr != nil {
+			err = errors.Join(err, closeErr)
+		}
+	}()
 	for _, name := range path {
 		// Find child with title == name
 		found := findElement(current, func(el uintptr) bool {
@@ -969,6 +989,12 @@ func ClickMenuItem(app uintptr, path []string) error {
 			return fmt.Errorf("menu item '%s' not found", name)
 		}
 
+		if current == menuBar {
+			// AXPress can change UI state even when it reports an error.
+			// Record the exact top-level menu before attempting the action
+			// so every exit runs the close postcondition.
+			openedMenu = found
+		}
 		if err := axAction(found, "AXPress"); err != nil {
 			return fmt.Errorf("failed to click '%s': %w", name, err)
 		}
@@ -976,6 +1002,21 @@ func ClickMenuItem(app uintptr, path []string) error {
 		current = found
 	}
 	return nil
+}
+
+func clickMenuItemForWindow(app, window uintptr, path []string) error {
+	var appPID, windowPID int32
+	if axUIElementGetPid(app, &appPID) != kAXErrorSuccess ||
+		axUIElementGetPid(window, &windowPID) != kAXErrorSuccess ||
+		appPID == 0 || appPID != windowPID {
+		return fmt.Errorf("menu action is not bound to the selected Xcode window")
+	}
+	if err := requireFocusedWindow(app, window); err != nil {
+		return err
+	}
+	return clickMenuItem(app, path, func(menu uintptr) error {
+		return closeAXMenuForWindow(app, window, menu)
+	})
 }
 
 func FindReplayButton(window uintptr) uintptr {

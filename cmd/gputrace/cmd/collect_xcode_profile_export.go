@@ -328,10 +328,10 @@ func normalizeStandaloneRecoveryFailureWithGrace(ctx context.Context, scope *xco
 		if errors.As(err, &report) {
 			return err
 		}
-		return fmt.Errorf("bound Xcode PID %d exited while waiting for a crash report: %w",
+		return fmt.Errorf("bound Xcode PID %d exited while waiting for a crash report (File menu state unavailable after process exit): %w",
 			recovery.Identity.PID, err)
 	}
-	return fmt.Errorf("bound Xcode PID %d exited; no matching DiagnosticReport appeared within %s: %w",
+	return fmt.Errorf("bound Xcode PID %d exited; File menu state unavailable after process exit; no matching DiagnosticReport appeared within %s: %w",
 		recovery.Identity.PID, grace, original)
 }
 
@@ -671,7 +671,7 @@ func readRecoveryFinalizeSnapshot(appAX uintptr, recovery standaloneExportRecove
 			return axString(element, "AXRole") == "AXSheet"
 		},
 	) != 0
-	snapshot.ExportFound, snapshot.ExportEnabled, err = fileExportMenuState(appAX)
+	snapshot.ExportFound, snapshot.ExportEnabled, err = fileExportMenuState(appAX, window.Element)
 	if err != nil {
 		return recoveryFinalizeSnapshot{}, err
 	}
@@ -937,7 +937,7 @@ func waitForFinalizedRecoveryPerformance(ctx context.Context, appAX uintptr, rec
 			}
 		}
 		if err == nil {
-			found, enabled, menuErr := fileExportMenuState(appAX)
+			found, enabled, menuErr := fileExportMenuState(appAX, window.Element)
 			switch {
 			case menuErr != nil:
 				err = menuErr
@@ -1324,7 +1324,7 @@ func runOpenExport(cmd *cobra.Command, args []string) error {
 		} else {
 			// Fall back to menu
 			fmt.Fprintln(status, "  Using File > Export menu...")
-			if err := ClickMenuItem(appAX, []string{"File", "Export..."}); err != nil {
+			if err := clickMenuItemForWindow(appAX, windowAX, []string{"File", "Export..."}); err != nil {
 				return fmt.Errorf("failed to click Export menu: %w", err)
 			}
 		}
