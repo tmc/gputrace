@@ -4,7 +4,14 @@ import (
 	"io"
 
 	"github.com/tmc/gputrace/internal/command"
+	"github.com/tmc/gputrace/internal/trace"
 )
+
+// IsLibraryUUID reports whether label identifies a Metal library rather than a
+// function.
+func IsLibraryUUID(label string) bool {
+	return trace.IsLibraryUUID(label)
+}
 
 // ParseDetailedCommandBuffer parses command buffer cbIndex from t.
 //

@@ -147,11 +147,14 @@ func runKernels(cmd *cobra.Command, args []string, opts *kernelsOptions) error {
 		}
 	}
 
-	namedKernels, unknownBucket := splitKernelRows(kernels)
+	rows := splitKernelRows(kernels)
+	namedKernels, unknownBucket := rows.Executed, rows.Unknown
 	uniqueKernels := len(namedKernels)
 
-	// Output header
-	rowSingular, rowPlural := "named inventory kernel label", "named inventory kernel labels"
+	// Output header. Count only the kernels that ran: a created-but-unrun
+	// pipeline and a library UUID are both in the inventory and neither is
+	// evidence of a dispatch.
+	rowSingular, rowPlural := "dispatched kernel", "dispatched kernels"
 	if hasTiming {
 		rowSingular, rowPlural = "timed function", "timed functions"
 	}
@@ -175,6 +178,7 @@ func runKernels(cmd *cobra.Command, args []string, opts *kernelsOptions) error {
 	fmt.Fprintln(out)
 
 	if uniqueKernels == 0 && unknownBucket == nil {
+		writeInactiveKernelRows(out, rows)
 		return nil
 	}
 
@@ -294,6 +298,8 @@ func runKernels(cmd *cobra.Command, args []string, opts *kernelsOptions) error {
 		fmt.Fprintf(out, "... %d more; use --all to show every row\n", len(namedKernels)-len(shown))
 	}
 
+	writeInactiveKernelRows(out, rows)
+
 	if unknownBucket != nil {
 		writeUnknownKernelBucket(out, unknownBucket)
 	}
@@ -301,15 +307,56 @@ func runKernels(cmd *cobra.Command, args []string, opts *kernelsOptions) error {
 	return nil
 }
 
-func splitKernelRows(kernels []*gputrace.KernelStat) (named []*gputrace.KernelStat, unknown *gputrace.KernelStat) {
+// An inventory row can mean three different things, and presenting them
+// identically invites the reader to count labels as if they were kernels that
+// ran. A pipeline is created before it is used, and MLX creates several it
+// then fuses away, so the inventory lists kernels that dispatch zero times.
+// The library records share the label field with function records, so it also
+// lists UUIDs. Reading four zero-dispatch rows as "a whole kernel family"
+// happened, and the header saying "named inventory kernel labels" over all
+// three kinds is what made it a reasonable reading.
+type kernelRows struct {
+	Executed  []*gputrace.KernelStat // dispatched at least once
+	Unrun     []*gputrace.KernelStat // pipeline created, never dispatched
+	Libraries []*gputrace.KernelStat // library UUIDs, never function names
+	Unknown   *gputrace.KernelStat   // the synthetic unattributed bucket
+}
+
+func splitKernelRows(kernels []*gputrace.KernelStat) kernelRows {
+	var rows kernelRows
 	for _, k := range kernels {
-		if k.Name == "unknown" {
-			unknown = k
-			continue
+		switch {
+		case k.Name == "unknown":
+			rows.Unknown = k
+		case gputrace.IsLibraryUUID(k.Name):
+			rows.Libraries = append(rows.Libraries, k)
+		case k.DispatchCount == 0:
+			rows.Unrun = append(rows.Unrun, k)
+		default:
+			rows.Executed = append(rows.Executed, k)
 		}
-		named = append(named, k)
 	}
-	return named, unknown
+	return rows
+}
+
+// writeInactiveKernelRows lists the rows that are not evidence a kernel ran,
+// under headers that say what they are.
+func writeInactiveKernelRows(w io.Writer, rows kernelRows) {
+	if len(rows.Unrun) > 0 {
+		fmt.Fprintf(w, "\n%d %s created but never dispatched (a pipeline is created before use, "+
+			"and fused-away kernels are created and then not used):\n",
+			len(rows.Unrun), Pluralize(len(rows.Unrun), "pipeline", "pipelines"))
+		for _, k := range rows.Unrun {
+			fmt.Fprintf(w, "  %s\n", k.Name)
+		}
+	}
+	if len(rows.Libraries) > 0 {
+		fmt.Fprintf(w, "\n%d library %s (not kernel names):\n",
+			len(rows.Libraries), Pluralize(len(rows.Libraries), "UUID", "UUIDs"))
+		for _, k := range rows.Libraries {
+			fmt.Fprintf(w, "  %s\n", k.Name)
+		}
+	}
 }
 
 func writeUnknownKernelBucket(w io.Writer, unknown *gputrace.KernelStat) {

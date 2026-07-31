@@ -145,6 +145,13 @@ func isPrintableASCII(s string) bool {
 	return len(s) > 0
 }
 
+// IsLibraryUUID reports whether label identifies a Metal library rather than
+// a function. Library records share the label field with function records, so
+// a caller listing kernel names has to exclude them explicitly.
+func IsLibraryUUID(label string) bool {
+	return isUUID(label)
+}
+
 // isUUID checks if a string looks like a UUID (XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX).
 func isUUID(s string) bool {
 	// UUIDs are 36 characters: 8-4-4-4-12 with hyphens
