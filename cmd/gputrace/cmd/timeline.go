@@ -69,7 +69,7 @@ Examples:
 		},
 	}
 
-	cmd.Flags().StringVarP(&opts.output, "output", "o", opts.output, "Output file path (default: stdout for text, timeline.json otherwise)")
+	cmd.Flags().StringVarP(&opts.output, "output", "o", opts.output, "Output file path (default: stdout for text, timeline.html for html, timeline.json otherwise)")
 	cmd.Flags().StringVar(&opts.format, "format", opts.format, "Output format: chrome, perfetto, html, json, text")
 	return cmd
 }
@@ -162,9 +162,15 @@ func validateTimelineFormat(format string) error {
 	}
 }
 
+// timelineOutputPath picks the default output file for a format. text goes to
+// stdout, so it has none. html gets an .html name: writing a whole HTML
+// document into timeline.json leaves a file no viewer will open.
 func timelineOutputPath(format, output string) string {
 	if output != "" || format == "text" {
 		return output
+	}
+	if format == "html" {
+		return "timeline.html"
 	}
 	return "timeline.json"
 }

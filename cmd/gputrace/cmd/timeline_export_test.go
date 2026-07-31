@@ -168,6 +168,9 @@ func TestTimelineOutputPath(t *testing.T) {
 		{name: "text default", format: "text", want: ""},
 		{name: "json default", format: "json", want: "timeline.json"},
 		{name: "chrome default", format: "chrome", want: "timeline.json"},
+		{name: "perfetto default", format: "perfetto", want: "timeline.json"},
+		{name: "html default", format: "html", want: "timeline.html"},
+		{name: "html explicit file", format: "html", output: "custom.htm", want: "custom.htm"},
 		{name: "text explicit file", format: "text", output: "timeline.txt", want: "timeline.txt"},
 		{name: "json stdout", format: "json", output: "/dev/stdout", want: "/dev/stdout"},
 	}
