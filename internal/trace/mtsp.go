@@ -897,53 +897,20 @@ type CtURecord struct {
 	Name       string
 }
 
-// ParseCtURecord parses a CtU record (CtU<b>ulul).
-// Format: Marker at ~0x24/0x2C, followed by Address, then Name.
+// ParseCtURecord parses a CtU record: a buffer's address and name. See ctu.go
+// for the layout.
 func (r *MTSPRecord) ParseCtURecord() (*CtURecord, error) {
 	if r.Type != RecordTypeCtU {
 		return nil, fmt.Errorf("not a CtU record (type=%s)", r.Type)
 	}
 
-	// Find marker "CtU<b>ulul"
-	marker := []byte("CtU<b>ulul")
-	idx := bytes.Index(r.Data, marker)
+	idx := bytes.Index(r.Data, ctuMarker)
 	if idx == -1 {
 		return nil, fmt.Errorf("CtU marker not found")
 	}
-
-	// Address usually follows marker + padding?
-	// In dependencies.go logic: base = idx, Address at base+8?
-	// Let's look at dependencies.go:
-	// base := absolutePos + 12 (where absolutePos was start of marker?)
-	// No, dependencies.go finds marker, then says "Label starts at +12" for CS.
-	// For Bind (CtU): ctBindMarker := "CtU<b>ulul\x00\x00" (12 bytes)
-	// bindPos := bytes.Index(..., marker)
-	// base := bindPos + 12
-	// bufferAddr := data[base+8 : base+16] -> This implies Address is at Marker + 12 + 8 = Marker + 20?
-	// string starts at base+16 -> Marker + 12 + 16 = Marker + 28?
-
-	// Let's implement based on dependencies.go offsets relative to Marker start.
-	// Marker len is 10 bytes "CtU<b>ulul". dependencies.go uses 12 bytes with nulls.
-
-	addrOffset := idx + 20
-	if addrOffset+8 > len(r.Data) {
-		return nil, fmt.Errorf("CtU record too small for address")
-	}
-	addr := binary.LittleEndian.Uint64(r.Data[addrOffset : addrOffset+8])
-
-	nameOffset := idx + 28
-	if nameOffset >= len(r.Data) {
-		return nil, fmt.Errorf("CtU record too small for name")
-	}
-
-	// Extract null-terminated string
-	nameData := r.Data[nameOffset:]
-	end := bytes.IndexByte(nameData, 0)
-	var name string
-	if end != -1 {
-		name = string(nameData[:end])
-	} else {
-		name = string(nameData)
+	addr, name, ok := ParseCtUAt(r.Data, idx)
+	if !ok {
+		return nil, fmt.Errorf("CtU record too small")
 	}
 
 	return &CtURecord{

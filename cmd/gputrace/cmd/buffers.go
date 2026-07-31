@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/tmc/gputrace"
 	"github.com/tmc/gputrace/internal/fmtutil"
+	tracepkg "github.com/tmc/gputrace/internal/trace"
 )
 
 var buffersCmd = newBuffersCommand(&buffersCommandOptions{
@@ -391,43 +392,11 @@ func extractBufferBindings(trace *gputrace.Trace, bufferMap map[string]*BufferIn
 		return fmt.Errorf("read capture: %w", err)
 	}
 
-	// Parse CtU<b>ulul records from capture
-	// Marker: CtU<b>ulul = 43 74 55 3c 62 3e 75 6c 75 6c
-	marker := []byte{0x43, 0x74, 0x55, 0x3c, 0x62, 0x3e, 0x75, 0x6c, 0x75, 0x6c}
-	offset := 0
-	matchCount := 0
-	for {
-		pos := bytes.Index(captureData[offset:], marker)
-		if pos == -1 {
-			break
+	// Only Metal's own resource names resolve to a file in the bundle.
+	for bufAddr, name := range tracepkg.ScanBufferNames(captureData) {
+		if strings.HasPrefix(name, "MTLBuffer-") || strings.HasPrefix(name, "MTLHeap-") {
+			addrToName[bufAddr] = name
 		}
-		matchCount++
-		absolutePos := offset + pos
-
-		// Structure based on hexdump analysis:
-		// +0x00: "CtU<b>ulul" (10 bytes)
-		// +0x0a: padding (2 bytes of 0x00)
-		// +0x0c: first address (8 bytes, little-endian)
-		// +0x14: buffer address (8 bytes, little-endian)
-		// +0x1c: buffer name "MTLBuffer-XX-Y" or "MTLHeap-X-Y"
-
-		// Read buffer address at +0x14 (corrected offset)
-		if absolutePos+0x24 <= len(captureData) {
-			bufAddr := binary.LittleEndian.Uint64(captureData[absolutePos+0x14 : absolutePos+0x1c])
-
-			// Read buffer name at +0x1c (corrected offset)
-			nameStart := absolutePos + 0x1c
-			if bytes.HasPrefix(captureData[nameStart:], []byte("MTLBuffer-")) ||
-				bytes.HasPrefix(captureData[nameStart:], []byte("MTLHeap-")) {
-				nameEnd := bytes.IndexByte(captureData[nameStart:], 0)
-				if nameEnd > 0 && nameEnd < 100 {
-					name := string(captureData[nameStart : nameStart+nameEnd])
-					addrToName[bufAddr] = name
-				}
-			}
-		}
-
-		offset += pos + 10
 	}
 
 	// Build map from buffer name to BufferInfo

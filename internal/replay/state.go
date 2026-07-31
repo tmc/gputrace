@@ -294,44 +294,10 @@ func (rs *ReplayState) CorrelateBufferAddresses(buffers []ReplayBufferInfo) ([]R
 		return buffers, nil
 	}
 
-	// Build name -> address mapping from capture file
-	// This uses the same binary marker pattern from buffer_timeline.go
-	addrToName := make(map[uint64]string)
-	marker := []byte{0x43, 0x74, 0x55, 0x3c, 0x62, 0x3e, 0x75, 0x6c, 0x75, 0x6c}
-	offset := 0
-
-	for {
-		pos := strings.Index(string(captureData[offset:]), string(marker))
-		if pos == -1 {
-			break
-		}
-
-		absolutePos := offset + pos
-		if absolutePos+0x24 <= len(captureData) {
-			bufAddr := uint64(captureData[absolutePos+0x14]) |
-				uint64(captureData[absolutePos+0x15])<<8 |
-				uint64(captureData[absolutePos+0x16])<<16 |
-				uint64(captureData[absolutePos+0x17])<<24 |
-				uint64(captureData[absolutePos+0x18])<<32 |
-				uint64(captureData[absolutePos+0x19])<<40 |
-				uint64(captureData[absolutePos+0x1a])<<48 |
-				uint64(captureData[absolutePos+0x1b])<<56
-
-			nameStart := absolutePos + 0x1c
-			if nameStart < len(captureData) {
-				nameEnd := strings.IndexByte(string(captureData[nameStart:]), 0)
-				if nameEnd > 0 && nameEnd < 100 {
-					name := string(captureData[nameStart : nameStart+nameEnd])
-					addrToName[bufAddr] = name
-				}
-			}
-		}
-		offset += pos + 10
-	}
-
-	// Create reverse mapping: name -> address
+	// Buffer files are named by ID; the capture's buffer definition records
+	// carry the name Metal gave each address.
 	nameToAddr := make(map[string]uint64)
-	for addr, name := range addrToName {
+	for addr, name := range tracepkg.ScanBufferNames(captureData) {
 		nameToAddr[name] = addr
 	}
 
