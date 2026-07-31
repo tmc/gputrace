@@ -104,11 +104,7 @@ type ShaderMetricsReport struct {
 
 // ExtractShaderMetrics extracts comprehensive performance metrics for all shaders in the trace.
 func ExtractShaderMetrics(t *trace.Trace) (*ShaderMetricsReport, error) {
-	// Use ParseComputeEncoders which actually works
-	encoders, err := t.ParseComputeEncoders()
-	if err != nil {
-		return nil, fmt.Errorf("parse compute encoders: %w", err)
-	}
+	encoders := t.ParseComputeEncoders()
 
 	report := &ShaderMetricsReport{
 		Shaders: make([]*ShaderMetrics, 0),
@@ -276,10 +272,7 @@ func populateThreadMetrics(t *trace.Trace, metricsMap map[string]*ShaderMetrics)
 		}
 
 		cbData := data[cb.Offset:cbEnd]
-		dispatches, err := t.ParseDispatchInRegion(cbData, cb.Offset)
-		if err != nil {
-			continue
-		}
+		dispatches := t.ParseDispatchInRegion(cbData, cb.Offset)
 
 		// Match encoders to dispatches
 		// Note: There may be more encoder labels than actual compute dispatches

@@ -42,7 +42,7 @@ func (t *Trace) AnalyzeKernels() (map[string]*KernelStat, error) {
 
 	// Also use ParseComputeEncoders as a fallback for kernel names
 	// This works better for ICB traces where encoder labels ARE the kernel names
-	computeEncoders, _ := t.ParseComputeEncoders()
+	computeEncoders := t.ParseComputeEncoders()
 	for _, enc := range computeEncoders {
 		if enc.Label != "" {
 			if _, exists := stats[enc.Label]; !exists {
@@ -163,7 +163,7 @@ func (t *Trace) AnalyzeKernels() (map[string]*KernelStat, error) {
 		}
 
 		// 3. Find Dispatches
-		dispatches, _ := t.ParseDispatchInRegion(cbData, 0)
+		dispatches := t.ParseDispatchInRegion(cbData, 0)
 
 		// 4. Correlate Dispatches with Pipeline State
 		// For each dispatch, we need to know:

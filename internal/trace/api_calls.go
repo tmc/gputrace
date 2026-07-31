@@ -772,10 +772,7 @@ func parseCommandBufferCalls(data []byte, cb *CommandBuffer, startCallNum int, i
 		return nil, 0, err
 	}
 
-	allDispatches, err := (&Trace{}).ParseDispatchInRegion(data, 0)
-	if err != nil {
-		return nil, 0, err
-	}
+	allDispatches := (&Trace{}).ParseDispatchInRegion(data, 0)
 
 	// Generate calls for each encoder
 	for _, encoder := range encoders {

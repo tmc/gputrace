@@ -383,11 +383,7 @@ func appendSourceMappedEncoderTimings(trace *gputrace.Trace, timings []*export.E
 	if maxEnd == 0 {
 		maxEnd = 1000000000000000
 	}
-	encoders, err := trace.ParseComputeEncoders()
-	if err != nil {
-		return timings
-	}
-	for _, enc := range encoders {
+	for _, enc := range trace.ParseComputeEncoders() {
 		if enc.Label == "" || seen[enc.Label] {
 			continue
 		}

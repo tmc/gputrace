@@ -53,10 +53,7 @@ func (g *MermaidGenerator) generateHierarchy(t *trace.Trace, config *Config) (st
 	}
 
 	// Parse encoders
-	encoders, err := t.ParseComputeEncoders()
-	if err != nil {
-		return "", fmt.Errorf("parse encoders: %w", err)
-	}
+	encoders := t.ParseComputeEncoders()
 
 	var shaderMetrics map[string]*ShaderInfo
 	if config.ShowTiming {
@@ -167,10 +164,7 @@ func (g *MermaidGenerator) generateFlow(t *trace.Trace, config *Config) (string,
 	sb.WriteString("graph TB\n")
 
 	// Parse observed CS labels.
-	encoders, err := t.ParseComputeEncoders()
-	if err != nil {
-		return "", fmt.Errorf("parse encoders: %w", err)
-	}
+	encoders := t.ParseComputeEncoders()
 
 	sb.WriteString("  note[\"Observed CS-label order only<br/>Command-buffer and dispatch edges unavailable\"]\n")
 

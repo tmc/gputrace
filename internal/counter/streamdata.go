@@ -763,8 +763,8 @@ func ExtractEncoderTimingsFromProfiler(t *trace.Trace) ([]EncoderTimingInfo, int
 	}
 
 	// Get encoder labels from trace to correlate
-	encoders, err := t.ParseComputeEncoders()
-	if err == nil && len(encoders) > 0 {
+	encoders := t.ParseComputeEncoders()
+	if len(encoders) > 0 {
 		// Correlate labels - encoders should match by index
 		for i := range stats.EncoderTimings {
 			if i < len(encoders) {

@@ -61,10 +61,7 @@ func (g *DOTGenerator) generateHierarchy(t *trace.Trace, config *Config) (string
 	}
 
 	// Parse encoders
-	encoders, err := t.ParseComputeEncoders()
-	if err != nil {
-		return "", fmt.Errorf("parse encoders: %w", err)
-	}
+	encoders := t.ParseComputeEncoders()
 
 	// Get shader metrics if timing is requested
 	var shaderMetrics map[string]*ShaderInfo
@@ -164,10 +161,7 @@ func (g *DOTGenerator) generateFlow(t *trace.Trace, config *Config) (string, err
 	sb.WriteString("  node [shape=box, style=rounded];\n\n")
 
 	// Parse observed CS labels.
-	encoders, err := t.ParseComputeEncoders()
-	if err != nil {
-		return "", fmt.Errorf("parse encoders: %w", err)
-	}
+	encoders := t.ParseComputeEncoders()
 
 	sb.WriteString("  note [label=\"Observed CS-label order only\\nCommand-buffer and dispatch edges unavailable\", shape=note, color=orange];\n\n")
 

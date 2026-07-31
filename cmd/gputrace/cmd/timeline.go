@@ -584,7 +584,7 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 	}
 
 	// Get real encoder labels from ParseComputeEncoders (primary source for labels)
-	computeEncoders, _ := trace.ParseComputeEncoders()
+	computeEncoders := trace.ParseComputeEncoders()
 
 	// Extract timing metrics. This records whether encoder timings came from
 	// measured profiler data or approximate extracted/synthetic fallback data.
@@ -1544,7 +1544,7 @@ func addStorePipelineArgs(args map[string]interface{}, p *counter.PipelineStats)
 }
 
 func addEncoderKernelEvents(timeline *Timeline, trace *gputrace.Trace, sourceMapper *gputrace.ShaderSourceMapper, storeStats *counter.StoreStats) {
-	computeEncoders, _ := traceComputeEncoders(trace)
+	computeEncoders := traceComputeEncoders(trace)
 
 	for i, encoder := range timeline.Encoders {
 		args := map[string]interface{}{
@@ -1605,9 +1605,9 @@ func addEncoderKernelEvents(timeline *Timeline, trace *gputrace.Trace, sourceMap
 	}
 }
 
-func traceComputeEncoders(trace *gputrace.Trace) ([]*tracepkg.ComputeEncoder, error) {
+func traceComputeEncoders(trace *gputrace.Trace) []*tracepkg.ComputeEncoder {
 	if trace == nil {
-		return nil, fmt.Errorf("nil trace")
+		return nil
 	}
 	return trace.ParseComputeEncoders()
 }
@@ -1625,7 +1625,7 @@ func parseEncoderDispatches(trace *gputrace.Trace, encoders []*tracepkg.ComputeE
 	if startOffset < 0 || startOffset >= captureLen || endOffset > captureLen || startOffset >= endOffset {
 		return nil
 	}
-	dispatches, _ := trace.ParseDispatchInRegion(trace.CaptureData[startOffset:endOffset], startOffset)
+	dispatches := trace.ParseDispatchInRegion(trace.CaptureData[startOffset:endOffset], startOffset)
 	return dispatches
 }
 
@@ -1810,8 +1810,8 @@ func timelineDispatchSIMDGroups(t *gputrace.Trace, stats *counter.StreamDataStat
 	if t == nil || stats == nil || len(stats.Dispatches) == 0 || len(t.CaptureData) == 0 {
 		return out
 	}
-	dispatches, err := t.ParseDispatchInRegion(t.CaptureData, 0)
-	if err != nil || len(dispatches) != len(stats.Dispatches) {
+	dispatches := t.ParseDispatchInRegion(t.CaptureData, 0)
+	if len(dispatches) != len(stats.Dispatches) {
 		return out
 	}
 	out.byIndex = make([]uint64, len(dispatches))

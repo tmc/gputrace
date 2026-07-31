@@ -256,10 +256,7 @@ func runShadersFromFullTrace(tracePath string, opts *shadersOptions) error {
 // by joining dispatch threadgroup data from capture file with function names from profiler.
 func extractSIMDBasedMetrics(trace *gputrace.Trace, profilerDir string) (*gputrace.ShaderMetricsReport, error) {
 	// Parse dispatch markers from capture data to get threadgroup dimensions
-	dispatches, err := trace.ParseDispatchInRegion(trace.CaptureData, 0)
-	if err != nil {
-		return nil, fmt.Errorf("parse dispatch markers: %w", err)
-	}
+	dispatches := trace.ParseDispatchInRegion(trace.CaptureData, 0)
 
 	// Parse profiler streamData to get function names per dispatch index
 	stats, err := counter.ParseStreamData(profilerDir, nil)

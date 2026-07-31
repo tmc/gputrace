@@ -44,20 +44,17 @@ func GenerateSyntheticTiming(t *trace.Trace) []*EncoderTiming {
 }
 
 func observedKernelLabels(t *trace.Trace) []string {
-	encoders, err := t.ParseComputeEncoders()
-	if err == nil {
-		seen := make(map[string]bool)
-		var names []string
-		for _, encoder := range encoders {
-			if encoder.Label == "" || seen[encoder.Label] {
-				continue
-			}
-			seen[encoder.Label] = true
-			names = append(names, encoder.Label)
+	seen := make(map[string]bool)
+	var names []string
+	for _, encoder := range t.ParseComputeEncoders() {
+		if encoder.Label == "" || seen[encoder.Label] {
+			continue
 		}
-		if len(names) > 0 {
-			return names
-		}
+		seen[encoder.Label] = true
+		names = append(names, encoder.Label)
+	}
+	if len(names) > 0 {
+		return names
 	}
 	return t.KernelNames
 }

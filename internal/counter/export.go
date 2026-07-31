@@ -70,10 +70,7 @@ func (e *CountersCSVExporter) ExportCountersCSVWithSummary(w io.Writer) (Counter
 	}
 
 	// Get encoder information
-	computeEncoders, err := e.trace.ParseComputeEncoders()
-	if err != nil {
-		return summary, fmt.Errorf("parse compute encoders: %w", err)
-	}
+	computeEncoders := e.trace.ParseComputeEncoders()
 
 	// Generate rows for each encoder
 	rowIndex := 1

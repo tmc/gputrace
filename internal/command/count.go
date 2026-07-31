@@ -163,10 +163,7 @@ func parseDetailedCommandBuffer(t *trace.Trace, data []byte, commandBuffers []*t
 		return nil, fmt.Errorf("parse encoders: %w", err)
 	}
 
-	dispatches, err := t.ParseDispatchInRegion(cbData, cbStart)
-	if err != nil {
-		return nil, fmt.Errorf("parse dispatches: %w", err)
-	}
+	dispatches := t.ParseDispatchInRegion(cbData, cbStart)
 
 	return &DetailedCommandBuffer{
 		CommandBuffer: cb,

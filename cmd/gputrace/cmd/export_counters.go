@@ -141,10 +141,7 @@ type exportCounterSourceSummary struct {
 }
 
 func summarizeExportCounterSources(trace *gputrace.Trace) (exportCounterSourceSummary, error) {
-	encoders, err := trace.ParseComputeEncoders()
-	if err != nil {
-		return exportCounterSourceSummary{}, err
-	}
+	encoders := trace.ParseComputeEncoders()
 
 	summary := exportCounterSourceSummary{
 		totalRows:             len(encoders),

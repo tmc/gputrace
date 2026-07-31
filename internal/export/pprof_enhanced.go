@@ -173,8 +173,8 @@ func dispatchSIMDGroupsByIndex(t *trace.Trace, stats *counter.StreamDataStats) [
 	if t == nil || stats == nil || len(stats.Dispatches) == 0 || len(t.CaptureData) == 0 {
 		return nil
 	}
-	dispatches, err := t.ParseDispatchInRegion(t.CaptureData, 0)
-	if err != nil || len(dispatches) != len(stats.Dispatches) {
+	dispatches := t.ParseDispatchInRegion(t.CaptureData, 0)
+	if len(dispatches) != len(stats.Dispatches) {
 		return nil
 	}
 	groups := make([]int64, len(dispatches))
@@ -582,7 +582,7 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 		return cbs[i].Offset < cbs[j].Offset
 	})
 
-	encoders, _ := t.ParseComputeEncoders()
+	encoders := t.ParseComputeEncoders()
 
 	// Map encoder timing by label (approximation as metrics are aggregated)
 	// We'll distribute the aggregated time across instances or just use average?
@@ -683,7 +683,7 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 		captureLen := int64(len(t.CaptureData))
 		if startOffset >= 0 && startOffset < captureLen && endOffset <= captureLen && startOffset < endOffset {
 			regionData := t.CaptureData[startOffset:endOffset]
-			dispatches, _ = t.ParseDispatchInRegion(regionData, startOffset)
+			dispatches = t.ParseDispatchInRegion(regionData, startOffset)
 		}
 
 		// Aggregate dispatch info

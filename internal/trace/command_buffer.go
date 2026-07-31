@@ -173,8 +173,10 @@ func (t *Trace) CountCommandBuffers() (int, error) {
 }
 
 // ParseComputeEncoders extracts all compute command encoders from the trace.
-// Scans the capture file and device-resources for CS (Command Submission) records.
-func (t *Trace) ParseComputeEncoders() ([]*ComputeEncoder, error) {
+// Scans the capture file and device-resources for CS (Command Submission)
+// records. A trace with no such records yields no encoders; scanning bytes
+// already in memory cannot fail.
+func (t *Trace) ParseComputeEncoders() []*ComputeEncoder {
 	var encoders []*ComputeEncoder
 
 	// Helper to scan a data slice for CS records
@@ -230,7 +232,7 @@ func (t *Trace) ParseComputeEncoders() ([]*ComputeEncoder, error) {
 		}
 	}
 
-	return encoders, nil
+	return encoders
 }
 
 // isActualFunctionName returns true if the name looks like an actual kernel function
@@ -411,10 +413,7 @@ func (t *Trace) ParseDispatchCalls() ([]*DispatchCall, error) {
 	}
 
 	// Use ParseDispatchInRegion on the entire capture file
-	dispatchThreads, err := t.ParseDispatchInRegion(data, 0)
-	if err != nil {
-		return nil, err
-	}
+	dispatchThreads := t.ParseDispatchInRegion(data, 0)
 
 	// Convert DispatchThreads to DispatchCall
 	var dispatches []*DispatchCall
@@ -502,7 +501,9 @@ func (d DispatchThreads) SIMDGroups() uint64 {
 }
 
 // ParseDispatchInRegion parses dispatch calls within a command buffer region.
-func (t *Trace) ParseDispatchInRegion(data []byte, baseOffset int64) ([]DispatchThreads, error) {
+// A region with no dispatch markers yields none; scanning bytes already in
+// memory cannot fail.
+func (t *Trace) ParseDispatchInRegion(data []byte, baseOffset int64) []DispatchThreads {
 	var dispatches []DispatchThreads
 	dispatchMarker := []byte("ul@3")
 
@@ -548,5 +549,5 @@ func (t *Trace) ParseDispatchInRegion(data []byte, baseOffset int64) ([]Dispatch
 		offset += pos + 4
 	}
 
-	return dispatches, nil
+	return dispatches
 }

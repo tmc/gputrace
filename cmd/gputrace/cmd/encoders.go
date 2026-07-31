@@ -68,10 +68,7 @@ func runEncoders(cmd *cobra.Command, args []string, opts *encodersOptions) error
 	}
 
 	// Parse compute encoders
-	encoders, err := trace.ParseComputeEncoders()
-	if err != nil {
-		return fmt.Errorf("failed to parse compute encoders: %w", err)
-	}
+	encoders := trace.ParseComputeEncoders()
 
 	if opts.json {
 		return writeEncodersJSON(cmd.OutOrStdout(), encoders)

@@ -484,7 +484,7 @@ func extractBufferBindings(trace *gputrace.Trace, bufferMap map[string]*BufferIn
 		}
 
 		// Count encoders in this command buffer (number of dispatch calls)
-		dispatches, _ := trace.ParseDispatchInRegion(cbData, cb.Offset)
+		dispatches := trace.ParseDispatchInRegion(cbData, cb.Offset)
 		numEncoders := len(dispatches)
 		if numEncoders == 0 {
 			numEncoders = 1
@@ -1092,7 +1092,7 @@ func extractBufferCommandUses(trace *gputrace.Trace, finalSizes map[string]uint6
 		if err != nil {
 			continue
 		}
-		dispatches, _ := trace.ParseDispatchInRegion(cbData, cb.Offset)
+		dispatches := trace.ParseDispatchInRegion(cbData, cb.Offset)
 		numEncoders := len(dispatches)
 		if numEncoders == 0 {
 			numEncoders = 1

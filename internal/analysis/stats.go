@@ -95,15 +95,13 @@ func ExtractStatistics(t *trace.Trace) (*TraceStatistics, error) {
 
 	// Kernel statistics
 	stats.DiscoveredFunctions = len(t.KernelNames)
-	if encoders, err := t.ParseComputeEncoders(); err == nil {
-		labels := make(map[string]bool)
-		for _, encoder := range encoders {
-			if encoder.Label != "" {
-				labels[encoder.Label] = true
-			}
+	labels := make(map[string]bool)
+	for _, encoder := range t.ParseComputeEncoders() {
+		if encoder.Label != "" {
+			labels[encoder.Label] = true
 		}
-		stats.ObservedKernelLabels = len(labels)
 	}
+	stats.ObservedKernelLabels = len(labels)
 	stats.UniqueKernels = stats.ObservedKernelLabels
 
 	// Command buffer count
