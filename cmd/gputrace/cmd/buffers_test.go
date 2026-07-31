@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"encoding/csv"
 	"encoding/json"
 	"path/filepath"
@@ -190,12 +191,11 @@ func TestFormatBuffersJSONEscapesFilenames(t *testing.T) {
 		},
 	}
 
-	out, err := captureStdout(t, func() error {
-		return formatBuffersJSON(buffers)
-	})
-	if err != nil {
+	var buf bytes.Buffer
+	if err := formatBuffersJSON(&buf, buffers); err != nil {
 		t.Fatalf("formatBuffersJSON: %v", err)
 	}
+	out := buf.String()
 
 	var got []bufferJSONInfo
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
@@ -219,13 +219,12 @@ func TestFormatBuffersCSVEscapesFilenames(t *testing.T) {
 		},
 	}
 
-	out, err := captureStdout(t, func() error {
-		return formatBuffersCSV(buffers)
-	})
-	if err != nil {
+	var buf bytes.Buffer
+	if err := formatBuffersCSV(&buf, buffers); err != nil {
 		t.Fatalf("formatBuffersCSV: %v", err)
 	}
 
+	out := buf.String()
 	records, err := csv.NewReader(strings.NewReader(out)).ReadAll()
 	if err != nil {
 		t.Fatalf("CSV output did not decode: %v\n%s", err, out)

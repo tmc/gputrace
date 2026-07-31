@@ -135,9 +135,9 @@ func runBuffers(cmd *cobra.Command, args []string, cmdOpts *buffersCommandOption
 	// Format and display
 	switch opts.format {
 	case "json":
-		return formatBuffersJSON(buffers)
+		return formatBuffersJSON(cmd.OutOrStdout(), buffers)
 	case "csv":
-		return formatBuffersCSV(buffers)
+		return formatBuffersCSV(cmd.OutOrStdout(), buffers)
 	default:
 		limit, err := resolveHumanLimit(cmdOpts.limit, cmdOpts.all)
 		if err != nil {
@@ -1188,7 +1188,7 @@ func resourceRecordSizeOffset(data []byte, nameEnd int, want uint64) int {
 }
 
 // formatBuffersJSON formats buffers as JSON.
-func formatBuffersJSON(buffers []BufferInfo) error {
+func formatBuffersJSON(w io.Writer, buffers []BufferInfo) error {
 	output := make([]bufferJSONInfo, 0, len(buffers))
 	for _, buf := range buffers {
 		output = append(output, bufferJSONInfo{
@@ -1198,7 +1198,7 @@ func formatBuffersJSON(buffers []BufferInfo) error {
 			Aliases:  len(buf.Aliases),
 		})
 	}
-	enc := json.NewEncoder(os.Stdout)
+	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(output)
 }
@@ -1211,8 +1211,8 @@ type bufferJSONInfo struct {
 }
 
 // formatBuffersCSV formats buffers as CSV.
-func formatBuffersCSV(buffers []BufferInfo) error {
-	w := csv.NewWriter(os.Stdout)
+func formatBuffersCSV(out io.Writer, buffers []BufferInfo) error {
+	w := csv.NewWriter(out)
 	if err := w.Write([]string{"ID", "Filename", "Size", "Aliases"}); err != nil {
 		return fmt.Errorf("write csv header: %w", err)
 	}
