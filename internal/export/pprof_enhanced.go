@@ -179,29 +179,9 @@ func dispatchSIMDGroupsByIndex(t *trace.Trace, stats *counter.StreamDataStats) [
 	}
 	groups := make([]int64, len(dispatches))
 	for i, d := range dispatches {
-		groups[i] = dispatchSIMDGroups(d)
+		groups[i] = int64(d.SIMDGroups())
 	}
 	return groups
-}
-
-func dispatchSIMDGroups(d trace.DispatchThreads) int64 {
-	const simdWidth uint64 = 32
-	tgX, tgY, tgZ := uint64(1), uint64(1), uint64(1)
-	if d.ThreadsPerGroupX > 0 {
-		tgX = (d.ThreadsX + d.ThreadsPerGroupX - 1) / d.ThreadsPerGroupX
-	}
-	if d.ThreadsPerGroupY > 0 {
-		tgY = (d.ThreadsY + d.ThreadsPerGroupY - 1) / d.ThreadsPerGroupY
-	}
-	if d.ThreadsPerGroupZ > 0 {
-		tgZ = (d.ThreadsZ + d.ThreadsPerGroupZ - 1) / d.ThreadsPerGroupZ
-	}
-	threadsPerGroup := d.ThreadsPerGroupX * d.ThreadsPerGroupY * d.ThreadsPerGroupZ
-	if threadsPerGroup == 0 {
-		return 0
-	}
-	totalThreads := tgX * tgY * tgZ * threadsPerGroup
-	return int64((totalThreads + simdWidth - 1) / simdWidth)
 }
 
 func findTraceProfilerDir(tracePath string) string {
@@ -933,7 +913,7 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 			// Dispatch sample values available directly from capture data.
 			dispValues := make([]int64, pprofValueCount)
 			dispValues[1] = 1 // count
-			simdGroups := dispatchSIMDGroups(d)
+			simdGroups := int64(d.SIMDGroups())
 			if simdGroups > 0 {
 				dispValues[3] = simdGroups
 			}

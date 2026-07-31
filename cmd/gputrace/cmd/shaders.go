@@ -288,27 +288,8 @@ func extractSIMDBasedMetrics(trace *gputrace.Trace, profilerDir string) (*gputra
 		}
 	}
 
-	const simdWidth uint64 = 32 // Apple Silicon SIMD width is 32 threads
-
 	for i, dispatch := range dispatches {
-		// Calculate threadgroups for this dispatch
-		var tgX, tgY, tgZ uint64 = 1, 1, 1
-		if dispatch.ThreadsPerGroupX > 0 {
-			tgX = (dispatch.ThreadsX + dispatch.ThreadsPerGroupX - 1) / dispatch.ThreadsPerGroupX
-		}
-		if dispatch.ThreadsPerGroupY > 0 {
-			tgY = (dispatch.ThreadsY + dispatch.ThreadsPerGroupY - 1) / dispatch.ThreadsPerGroupY
-		}
-		if dispatch.ThreadsPerGroupZ > 0 {
-			tgZ = (dispatch.ThreadsZ + dispatch.ThreadsPerGroupZ - 1) / dispatch.ThreadsPerGroupZ
-		}
-		threadgroups := tgX * tgY * tgZ
-
-		// Calculate SIMD groups (wavefronts)
-		// Xcode's "# SIMD Groups" = Total Threads / SIMD Width (32)
-		threadsPerGroup := dispatch.ThreadsPerGroupX * dispatch.ThreadsPerGroupY * dispatch.ThreadsPerGroupZ
-		totalThreads := threadgroups * threadsPerGroup
-		simdGroups := (totalThreads + simdWidth - 1) / simdWidth // Round up
+		simdGroups := dispatch.SIMDGroups()
 
 		// Get function name from profiler data
 		funcName := ""

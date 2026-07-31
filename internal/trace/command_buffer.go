@@ -464,6 +464,43 @@ type DispatchThreads struct {
 	Offset int64
 }
 
+// SIMDWidth is the number of threads in an Apple Silicon SIMD group.
+const SIMDWidth uint64 = 32
+
+// Threadgroups reports how many threadgroups the dispatch covers in each
+// dimension, rounding up: a dispatchThreads call gives a thread count, and a
+// partial threadgroup still runs. A dimension with no threadgroup size is
+// reported as 1 rather than 0, so the product stays usable.
+func (d DispatchThreads) Threadgroups() (x, y, z uint64) {
+	x, y, z = 1, 1, 1
+	if d.ThreadsPerGroupX > 0 {
+		x = (d.ThreadsX + d.ThreadsPerGroupX - 1) / d.ThreadsPerGroupX
+	}
+	if d.ThreadsPerGroupY > 0 {
+		y = (d.ThreadsY + d.ThreadsPerGroupY - 1) / d.ThreadsPerGroupY
+	}
+	if d.ThreadsPerGroupZ > 0 {
+		z = (d.ThreadsZ + d.ThreadsPerGroupZ - 1) / d.ThreadsPerGroupZ
+	}
+	return x, y, z
+}
+
+// SIMDGroups reports the number of SIMD groups the dispatch launches, which is
+// what Xcode shows as "# SIMD Groups". It is the total thread count rounded up
+// to a whole number of groups.
+//
+// A dispatch whose threadgroup size is zero in any dimension reports 0. Metal
+// records 1 for unused dimensions, so a zero means the dispatch was not read
+// from the capture, and the thread count is unknown rather than zero.
+func (d DispatchThreads) SIMDGroups() uint64 {
+	threadsPerGroup := d.ThreadsPerGroupX * d.ThreadsPerGroupY * d.ThreadsPerGroupZ
+	if threadsPerGroup == 0 {
+		return 0
+	}
+	x, y, z := d.Threadgroups()
+	return (x*y*z*threadsPerGroup + SIMDWidth - 1) / SIMDWidth
+}
+
 // ParseDispatchInRegion parses dispatch calls within a command buffer region.
 func (t *Trace) ParseDispatchInRegion(data []byte, baseOffset int64) ([]DispatchThreads, error) {
 	var dispatches []DispatchThreads

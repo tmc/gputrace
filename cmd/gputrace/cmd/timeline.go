@@ -1467,7 +1467,7 @@ func addEncoderKernelEvents(timeline *Timeline, trace *gputrace.Trace, sourceMap
 			if len(dispatches) > 0 {
 				var simdGroups uint64
 				for _, d := range dispatches {
-					simdGroups += timelineDispatchSIMDGroup(d)
+					simdGroups += d.SIMDGroups()
 				}
 				if simdGroups > 0 {
 					args["simd_groups"] = simdGroups
@@ -1726,7 +1726,7 @@ func timelineDispatchSIMDGroups(t *gputrace.Trace, stats *counter.StreamDataStat
 	}
 	out.byIndex = make([]uint64, len(dispatches))
 	for i, d := range dispatches {
-		groups := timelineDispatchSIMDGroup(d)
+		groups := d.SIMDGroups()
 		out.byIndex[i] = groups
 		out.total += groups
 		name := stats.Dispatches[i].FunctionName
@@ -1736,25 +1736,6 @@ func timelineDispatchSIMDGroups(t *gputrace.Trace, stats *counter.StreamDataStat
 		out.byName[name] += groups
 	}
 	return out
-}
-
-func timelineDispatchSIMDGroup(d tracepkg.DispatchThreads) uint64 {
-	const simdWidth uint64 = 32
-	tgX, tgY, tgZ := uint64(1), uint64(1), uint64(1)
-	if d.ThreadsPerGroupX > 0 {
-		tgX = (d.ThreadsX + d.ThreadsPerGroupX - 1) / d.ThreadsPerGroupX
-	}
-	if d.ThreadsPerGroupY > 0 {
-		tgY = (d.ThreadsY + d.ThreadsPerGroupY - 1) / d.ThreadsPerGroupY
-	}
-	if d.ThreadsPerGroupZ > 0 {
-		tgZ = (d.ThreadsZ + d.ThreadsPerGroupZ - 1) / d.ThreadsPerGroupZ
-	}
-	threadsPerGroup := d.ThreadsPerGroupX * d.ThreadsPerGroupY * d.ThreadsPerGroupZ
-	if threadsPerGroup == 0 {
-		return 0
-	}
-	return (tgX*tgY*tgZ*threadsPerGroup + simdWidth - 1) / simdWidth
 }
 
 func (s timelineDispatchSIMDStats) cost(name string, index int) (uint64, float64) {

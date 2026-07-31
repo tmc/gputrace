@@ -67,12 +67,12 @@ func TestDispatchSIMDGroups(t *testing.T) {
 		ThreadsPerGroupY: 1,
 		ThreadsPerGroupZ: 1,
 	}
-	if got, want := dispatchSIMDGroups(dispatch), int64(32); got != want {
+	if got, want := int64(dispatch.SIMDGroups()), int64(32); got != want {
 		t.Fatalf("dispatchSIMDGroups = %d, want %d", got, want)
 	}
 
 	dispatch.ThreadsPerGroupX = 0
-	if got := dispatchSIMDGroups(dispatch); got != 0 {
+	if got := int64(dispatch.SIMDGroups()); got != 0 {
 		t.Fatalf("dispatchSIMDGroups with missing group size = %d, want 0", got)
 	}
 }

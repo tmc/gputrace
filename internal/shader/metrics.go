@@ -327,18 +327,9 @@ func populateThreadMetrics(t *trace.Trace, metricsMap map[string]*ShaderMetrics)
 				targetMetrics.ThreadsPerGroupY = dispatch.ThreadsPerGroupY
 				targetMetrics.ThreadsPerGroupZ = dispatch.ThreadsPerGroupZ
 
-				// Calculate actual threadgroups from dispatchThreads / threadsPerThreadgroup
-				// This gives us the number of threadgroups dispatched
-				var threadgroupsX, threadgroupsY, threadgroupsZ uint64 = 1, 1, 1
-				if dispatch.ThreadsPerGroupX > 0 {
-					threadgroupsX = (dispatch.ThreadsX + dispatch.ThreadsPerGroupX - 1) / dispatch.ThreadsPerGroupX
-				}
-				if dispatch.ThreadsPerGroupY > 0 {
-					threadgroupsY = (dispatch.ThreadsY + dispatch.ThreadsPerGroupY - 1) / dispatch.ThreadsPerGroupY
-				}
-				if dispatch.ThreadsPerGroupZ > 0 {
-					threadgroupsZ = (dispatch.ThreadsZ + dispatch.ThreadsPerGroupZ - 1) / dispatch.ThreadsPerGroupZ
-				}
+				// Threadgroups dispatched, from dispatchThreads divided by
+				// threads per threadgroup.
+				threadgroupsX, threadgroupsY, threadgroupsZ := dispatch.Threadgroups()
 
 				targetMetrics.ThreadgroupsX = threadgroupsX
 				targetMetrics.ThreadgroupsY = threadgroupsY

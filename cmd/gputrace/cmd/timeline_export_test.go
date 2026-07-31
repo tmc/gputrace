@@ -707,7 +707,7 @@ func TestTimelineDispatchSIMDGroup(t *testing.T) {
 		ThreadsPerGroupY: 1,
 		ThreadsPerGroupZ: 1,
 	}
-	if got, want := timelineDispatchSIMDGroup(dispatch), uint64(32); got != want {
+	if got, want := dispatch.SIMDGroups(), uint64(32); got != want {
 		t.Fatalf("timelineDispatchSIMDGroup = %d, want %d", got, want)
 	}
 }
