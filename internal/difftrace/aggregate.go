@@ -62,6 +62,12 @@ func BuildReport(a, b *TraceData, aligned AlignmentResult, opts ReportOptions) R
 	}
 
 	report.TopFunctionDeltas = buildFunctionDeltas(aligned)
+	if !timingAvailable {
+		// Neither side has profiler dispatches to align, but the capture
+		// records still say which kernels ran and how often.
+		report.TopFunctionDeltas = StructuralFunctionDeltas(a.StructuralFunctions, b.StructuralFunctions)
+		report.Summary.StructuralFunctions = len(report.TopFunctionDeltas) > 0
+	}
 	report.EncoderDeltas = buildEncoderDeltas(aligned)
 	report.EncoderReports = buildEncoderReports(aligned, opts.Limit)
 	report.PipelineDeltas = buildPipelineDeltas(aligned)

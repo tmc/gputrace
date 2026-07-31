@@ -44,6 +44,9 @@ func RenderText(report Report, by string, showMatches, showUnmatched, showOccurr
 		}
 	}
 	if !report.Summary.TimingAvailable {
+		if (all || sections["function"]) && report.Summary.StructuralFunctions {
+			writeStructuralFunctions(&b, report.TopFunctionDeltas, limit)
+		}
 		return b.String()
 	}
 

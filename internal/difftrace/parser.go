@@ -32,6 +32,7 @@ func LoadTraceData(path string, onlyEncoder int, onlyFunction *regexp.Regexp) (*
 			return nil, fmt.Errorf("trace %s has no profiler data and its structural dispatch count is unavailable: %w", path, err)
 		}
 		out.StructuralDispatches = &count
+		out.StructuralFunctions = structuralFunctionCounts(path)
 		out.Warnings = append(out.Warnings, fmt.Sprintf("no profiler data found for %s", path))
 		return out, nil
 	}
@@ -46,6 +47,7 @@ func LoadTraceData(path string, onlyEncoder int, onlyFunction *regexp.Regexp) (*
 			return nil, fmt.Errorf("parse streamData for %s: %w; structural dispatch count unavailable: %v", path, err, countErr)
 		}
 		out.StructuralDispatches = &count
+		out.StructuralFunctions = structuralFunctionCounts(path)
 		out.Warnings = append(out.Warnings, fmt.Sprintf("parse streamData failed for %s: %v", path, err))
 		return out, nil
 	}
@@ -105,6 +107,32 @@ func structuralDispatchCount(path string) (int, error) {
 		return 0, err
 	}
 	return t.CountDispatchCalls()
+}
+
+// structuralFunctionCounts returns per-function dispatch counts read from the
+// capture records. It returns nil when the trace cannot be opened or names
+// nothing: a missing map means the structural view is unavailable, which the
+// caller reports rather than showing an empty comparison.
+func structuralFunctionCounts(path string) map[string]int {
+	t, err := trace.Open(path)
+	if err != nil {
+		return nil
+	}
+	stats, err := t.AnalyzeKernels()
+	if err != nil {
+		return nil
+	}
+	counts := make(map[string]int, len(stats))
+	for name, stat := range stats {
+		if name == "" || name == "unknown" || stat.DispatchCount == 0 {
+			continue
+		}
+		counts[name] = stat.DispatchCount
+	}
+	if len(counts) == 0 {
+		return nil
+	}
+	return counts
 }
 
 func payloadLimitationWarning(path string, payload tracebundle.Payload) string {

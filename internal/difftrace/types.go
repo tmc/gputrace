@@ -14,6 +14,7 @@ type TraceData struct {
 	TimingSource          string
 	TimingAvailable       bool
 	StructuralDispatches  *int
+	StructuralFunctions   map[string]int
 	AttributionLimited    bool
 	Warnings              []string
 }
@@ -211,6 +212,7 @@ type Summary struct {
 	CommandBufferActiveBUs int    `json:"command_buffer_active_b_us,omitempty"`
 	TimingMetric           string `json:"timing_metric,omitempty"`
 	AttributionLimited     bool   `json:"attribution_limited,omitempty"`
+	StructuralFunctions    bool   `json:"structural_functions,omitempty"`
 	TotalDeltaUs           int    `json:"total_delta_us"`
 	MatchedDeltaUs         int    `json:"matched_delta_us"`
 	UnmatchedDeltaUs       int    `json:"unmatched_delta_us"`
