@@ -39,9 +39,16 @@ type ComparabilityCheck struct {
 // only. deltas must be the full set, not a truncated top-N: the rows that
 // carry this signal are the smallest ones in the table and a cost-ordered
 // limit is exactly what drops them.
-func CheckComparability(deltas []FunctionDelta) ComparabilityCheck {
+//
+// renamed excludes functions that are one half of a rename pair. Such a kernel
+// ran on both sides under two names, so its one-sided row says nothing about
+// where either capture began.
+func CheckComparability(deltas []FunctionDelta, renamed map[string]string) ComparabilityCheck {
 	var check ComparabilityCheck
 	for _, d := range deltas {
+		if _, ok := renamed[d.FunctionName]; ok {
+			continue
+		}
 		switch {
 		case d.DispatchCountB == 0 && d.DispatchCountA > 0 && d.DispatchCountA <= ComparabilityMaxCount:
 			check.OnlyInA = append(check.OnlyInA, d.FunctionName)

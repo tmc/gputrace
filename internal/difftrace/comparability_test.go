@@ -20,7 +20,7 @@ func truncatedTailDeltas() []FunctionDelta {
 }
 
 func TestCheckComparabilityFindsOneSidedTail(t *testing.T) {
-	check := CheckComparability(truncatedTailDeltas())
+	check := CheckComparability(truncatedTailDeltas(), nil)
 	if check.Comparable() {
 		t.Fatal("a trace missing the sampling tail reported comparable")
 	}
@@ -51,7 +51,7 @@ func TestCheckComparabilityIgnoresPerLayerKernels(t *testing.T) {
 	check := CheckComparability([]FunctionDelta{
 		{FunctionName: "gg2_dynamic_copybfloat16bfloat16", DispatchCountA: 56, DispatchCountB: 0},
 		{FunctionName: "ss_Addint32", DispatchCountA: 29, DispatchCountB: 0},
-	})
+	}, nil)
 	if !check.Comparable() {
 		t.Errorf("per-layer one-sided kernels flagged as a window difference: %+v", check)
 	}
@@ -65,7 +65,7 @@ func TestCheckComparabilityIgnoresMatchedLowCounts(t *testing.T) {
 	check := CheckComparability([]FunctionDelta{
 		{FunctionName: "gather_axis", DispatchCountA: 1, DispatchCountB: 1},
 		{FunctionName: "arangeint32", DispatchCountA: 2, DispatchCountB: 1},
-	})
+	}, nil)
 	if !check.Comparable() {
 		t.Errorf("matched low-count rows flagged: %+v", check)
 	}
@@ -77,7 +77,7 @@ func TestCheckComparabilityHedgesWhenBothSidesDiffer(t *testing.T) {
 	check := CheckComparability([]FunctionDelta{
 		{FunctionName: "sample_topp", DispatchCountA: 1, DispatchCountB: 0},
 		{FunctionName: "sample_greedy", DispatchCountA: 0, DispatchCountB: 1},
-	})
+	}, nil)
 	warning := check.Warning()
 	if !strings.Contains(warning, "rather than a verdict") {
 		t.Errorf("warning = %q, want a hedged two-sided warning", warning)
@@ -92,7 +92,7 @@ func TestComparabilityWarningCapsTheListButNotTheCount(t *testing.T) {
 	for _, name := range []string{"k1", "k2", "k3", "k4", "k5", "k6", "k7"} {
 		deltas = append(deltas, FunctionDelta{FunctionName: name, DispatchCountB: 1})
 	}
-	warning := CheckComparability(deltas).Warning()
+	warning := CheckComparability(deltas, nil).Warning()
 	if !strings.Contains(warning, "7 once-per-forward kernels") {
 		t.Errorf("warning = %q, want the exact count", warning)
 	}

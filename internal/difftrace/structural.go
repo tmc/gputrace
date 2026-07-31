@@ -75,12 +75,16 @@ func writeStructuralFunctions(w io.Writer, deltas []FunctionDelta, limit int) {
 	if limit > 0 && len(shown) > limit {
 		shown = shown[:limit]
 	}
+	pairs := RenamePairs(deltas)
 	for _, d := range shown {
 		note := ""
 		if StructuralOnly(d) {
 			note = "only in A"
 			if d.DispatchCountA == 0 {
 				note = "only in B"
+			}
+			if partner, ok := pairs[d.FunctionName]; ok {
+				note += ", net 0 with " + partner
 			}
 		}
 		fmt.Fprintf(w, "%-52s %8d %8d %+10d  %s\n",

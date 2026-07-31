@@ -262,6 +262,7 @@ type Report struct {
 	PipelinePairs         []PipelinePair         `json:"pipeline_pairs,omitempty"`
 	EncoderDivergence     *EncoderDivergence     `json:"encoder_divergence,omitempty"`
 	Comparability         ComparabilityCheck     `json:"comparability"`
+	RenamePairs           map[string]string      `json:"rename_pairs,omitempty"`
 	Warnings              []string               `json:"warnings,omitempty"`
 }
 
