@@ -9,8 +9,11 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/tmc/gputrace"
 	"github.com/tmc/gputrace/internal/counter"
 )
 
@@ -29,6 +32,7 @@ type profilerOptions struct {
 	limiters    bool
 	kernels     bool
 	limit       int
+	minCalls    int
 	benchfmt    bool
 	benchConfig benchfmtConfigFlags
 }
@@ -64,6 +68,7 @@ Example:
 	cmd.Flags().BoolVar(&opts.limiters, "limiters", opts.limiters, "Show performance limiter data from Counter files")
 	cmd.Flags().BoolVar(&opts.kernels, "kernels", opts.kernels, "Show kernel/function names and per-dispatch details")
 	cmd.Flags().IntVar(&opts.limit, "limit", opts.limit, "Maximum non-zero limiter rows to show")
+	cmd.Flags().IntVar(&opts.minCalls, "min-calls", opts.minCalls, "Only table rows for functions dispatched at least N times (off by default; reports what it drops; JSON and benchfmt are never filtered)")
 	addBenchfmtFlags(cmd, &opts.benchfmt, &opts.benchConfig)
 	return cmd
 }
@@ -75,6 +80,9 @@ func init() {
 func runProfiler(cmd *cobra.Command, args []string, opts *profilerOptions) error {
 	if opts.limit <= 0 {
 		return fmt.Errorf("--limit must be > 0")
+	}
+	if opts.minCalls < 0 {
+		return fmt.Errorf("--min-calls must be >= 0")
 	}
 	if err := validateBenchfmtFlags(opts.benchfmt, opts.benchConfig); err != nil {
 		return err
@@ -124,28 +132,7 @@ func runProfiler(cmd *cobra.Command, args []string, opts *profilerOptions) error
 		totalDeviceStores += p.DeviceStoreCount
 	}
 
-	// Aggregate dispatches by function for counts
-	funcCounts := make(map[string]int)
-	funcTime := make(map[string]int)
-	for _, d := range stats.Dispatches {
-		name := d.DisplayName()
-		funcCounts[name]++
-		funcTime[name] += d.DurationUs
-	}
-
-	// Sort functions by time
-	type funcStat struct {
-		name  string
-		time  int
-		count int
-	}
-	var sortedFuncs []funcStat
-	for name, count := range funcCounts {
-		sortedFuncs = append(sortedFuncs, funcStat{name, funcTime[name], count})
-	}
-	sort.Slice(sortedFuncs, func(i, j int) bool {
-		return sortedFuncs[i].time > sortedFuncs[j].time
-	})
+	sortedFuncs := profilerFunctionRows(stats.Dispatches, totalDispatchTime)
 
 	// === MAIN SUMMARY OUTPUT ===
 	// One-line summary
@@ -188,20 +175,8 @@ func runProfiler(cmd *cobra.Command, args []string, opts *profilerOptions) error
 	// Show function call counts (always)
 	if len(sortedFuncs) > 0 {
 		fmt.Println()
-		fmt.Println(Colorize("Function Calls", ColorBold))
-		fmt.Println(TableSeparator(80))
-		fmt.Printf("%-50s %8s %10s %10s\n", "Function", "Calls", "Span(us)", "Span Share")
-		fmt.Println(TableSeparator(80))
-		for _, fs := range sortedFuncs {
-			pct := 0.0
-			if totalDispatchTime > 0 {
-				pct = float64(fs.time) / float64(totalDispatchTime) * 100
-			}
-			fmt.Printf("%-50s %8s %10s %7s\n", fs.name, FormatCount(fs.count), FormatCount(fs.time), FormatPercent(pct))
-		}
-		if strings.Contains(stats.TimingSource, "gpuCommandInfoData") {
-			fmt.Println("Attribution note: span values are cumulative-offset deltas and may include boundary or gap time.")
-		}
+		fmt.Print(formatProfilerFunctionCalls(sortedFuncs, opts.minCalls,
+			strings.Contains(stats.TimingSource, "gpuCommandInfoData")))
 	}
 
 	// Detailed kernel info only with --kernels flag
@@ -458,6 +433,69 @@ func runProfiler(cmd *cobra.Command, args []string, opts *profilerOptions) error
 	}
 
 	return nil
+}
+
+// profilerFunctionRows aggregates dispatches by function name and ranks them by
+// span, descending. The rows are KernelTiming values so that this table shares
+// the low-sample marker and the --min-calls filter with the timing command
+// instead of restating either.
+func profilerFunctionRows(dispatches []counter.DispatchInfo, totalSpanUs int) []*gputrace.KernelTiming {
+	byName := make(map[string]*gputrace.KernelTiming)
+	var rows []*gputrace.KernelTiming
+	for _, d := range dispatches {
+		name := d.DisplayName()
+		kt, ok := byName[name]
+		if !ok {
+			kt = &gputrace.KernelTiming{Name: name}
+			byName[name] = kt
+			rows = append(rows, kt)
+		}
+		kt.InvocationCount++
+		kt.TotalDuration += time.Duration(d.DurationUs) * time.Microsecond
+	}
+	for _, kt := range rows {
+		if totalSpanUs > 0 {
+			kt.PercentOfTotal = float64(kt.TotalDuration.Microseconds()) / float64(totalSpanUs) * 100
+		}
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		return rows[i].TotalDuration > rows[j].TotalDuration
+	})
+	return rows
+}
+
+// formatProfilerFunctionCalls renders the cost-ranked function table. minCalls
+// filters the table only; the JSON and benchfmt outputs are built from the
+// unfiltered dispatches, because a filtered export is a partial file that reads
+// as a complete one once the flag is forgotten. Filtering never reorders: the
+// surviving rows keep their ranking, and the note says the shares no longer sum
+// to the whole.
+func formatProfilerFunctionCalls(rows []*gputrace.KernelTiming, minCalls int, cumulativeOffsets bool) string {
+	shown, dropped := gputrace.FilterMinCalls(rows, minCalls)
+
+	var out strings.Builder
+	out.WriteString(Colorize("Function Calls", ColorBold) + "\n")
+	out.WriteString(TableSeparator(80) + "\n")
+	fmt.Fprintf(&out, "%-50s %8s %10s %10s\n", "Function", "Calls", "Span(us)", "Span Share")
+	out.WriteString(TableSeparator(80) + "\n")
+	for _, kt := range shown {
+		marker := ""
+		if kt.IsLowSample() {
+			marker = gputrace.LowSampleMarker
+		}
+		fmt.Fprintf(&out, "%-50s %8s %10s %7s%s\n",
+			kt.Name,
+			FormatCount(kt.InvocationCount),
+			FormatCount(int(kt.TotalDuration.Microseconds())),
+			FormatPercent(kt.PercentOfTotal),
+			marker)
+	}
+	out.WriteString(gputrace.LowSampleFootnote(shown))
+	out.WriteString(gputrace.MinCallsNote(minCalls, dropped, len(rows)))
+	if cumulativeOffsets {
+		out.WriteString("Attribution note: span values are cumulative-offset deltas and may include boundary or gap time.\n")
+	}
+	return out.String()
 }
 
 func selectLimiterRows(all []limiterMetrics, limit int) (rows []limiterMetrics, nonzero, zero int) {
