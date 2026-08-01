@@ -114,10 +114,44 @@ func inspectAGX2StreamData(t *testing.T, streamPath string) {
 		t.Log("timelineInfo: nil after processStreamData")
 		return
 	}
-	// The class name is reachable. -description is not: it answers bytes that
-	// are not a usable string, so reading it as one prints noise. The accessors
-	// past here hand back C++ result structs with no Objective-C selector to
-	// unpack them, and recovering those is the open work.
-	t.Logf("timelineInfo: %s (contents unreachable)",
-		objc.Send[string](info.GetID(), objc.Sel("className")))
+	// DYWorkloadGPUTimelineInfo answers ordinary Objective-C selectors: nm on
+	// the framework lists 36, and every one below is answered. The generated
+	// bindings not exposing the class is not the same thing as the contents
+	// being unreachable, so do not conclude the second from the first.
+	//
+	// They are all empty here, which is a different and more useful finding.
+	// timeBaseNumerator/Denominator come back 0/0, and a zero timebase is not
+	// a value the framework would compute -- the object was never filled.
+	//
+	// The reason is already recorded in timeline_durations_darwin_test.go: the
+	// raw sibling files resolve only when the framework is handed the archive
+	// *directory* and _setupDataPath has run. The framework agrees, since
+	// APSTraceDataHelper::LoadProfilingData takes an NSURL and
+	// APSTraceDataHelper::LoadGPUTimeline is what fills the timeline. Feeding
+	// streamData alone skips both. That is the next experiment, and it is why
+	// this test asserts nothing about these selectors.
+	for _, sel := range []string{
+		"perRingSampledDerivedCounters",
+		"derivedEncoderCounterInfo",
+		"counterGroups",
+		"coalescedEncoderInfo",
+		"coreCounts",
+		"mGPUTimelineInfos",
+	} {
+		if !objc.RespondsToSelector(info.GetID(), objc.Sel(sel)) {
+			t.Logf("%-32s not answered", sel)
+			continue
+		}
+		got := objc.Send[objc.ID](info.GetID(), objc.Sel(sel))
+		if got == 0 {
+			t.Logf("%-32s nil", sel)
+			continue
+		}
+		t.Logf("%-32s count=%d", sel, objc.Send[uint64](got, objc.Sel("count")))
+	}
+	// Read the timebase last: it is the cheapest proof of whether anything was
+	// populated at all.
+	t.Logf("timebase %d/%d",
+		objc.Send[uint32](info.GetID(), objc.Sel("timeBaseNumerator")),
+		objc.Send[uint32](info.GetID(), objc.Sel("timeBaseDenominator")))
 }
