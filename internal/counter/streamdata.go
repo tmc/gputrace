@@ -478,7 +478,12 @@ func extractDispatchInfoWithMap(objects []any, gpuCmdIdx, recordSize int, pipeli
 
 		pipelineIdx := int(binary.LittleEndian.Uint64(rec[8:16]) >> 32)
 		cumTime := int(binary.LittleEndian.Uint64(rec[16:24]))
-		encoderIdx := int(binary.LittleEndian.Uint32(rec[24:28]))
+		// The encoder index is at [4:8], not [24:28]. [24:28] holds the
+		// constant 2 in every record, so reading it there put every dispatch
+		// on encoder 2. Checked against encoderInfoData, whose first-command
+		// and command-count fields tile all commands exactly: [4:8] agrees
+		// with that ownership for every record.
+		encoderIdx := int(binary.LittleEndian.Uint32(rec[4:8]))
 
 		duration := cumTime
 		if i > 0 {
