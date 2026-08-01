@@ -21,6 +21,7 @@ Start with:
 
 Private-framework binding notes:
 
+- [agxps-signatures.yaml](./agxps-signatures.yaml) - the verified agxps C signatures, element widths, and return-register classes, each with how it was established. The tmc/apple agxps bindings are name-derived guesses and roughly three in six were wrong, so treat any export absent from this file as unsourced.
 - [GTMIO_CAPABILITY_MATRIX.md](./GTMIO_CAPABILITY_MATRIX.md) - what each binding can supply
 - [GTShaderProfiler_BINDING_GAPS.md](./GTShaderProfiler_BINDING_GAPS.md) - unbound selectors and known gaps
 - [PRIVATE_BINDING_ERGONOMICS.md](./PRIVATE_BINDING_ERGONOMICS.md) - calling conventions for private bindings

@@ -1,0 +1,269 @@
+# Hand-verified agxps C signatures, GTShaderProfiler.framework.
+#
+# Provenance: established by disassembly of the framework binary and confirmed
+# at runtime by dlopening it directly and driving a real parse to completion
+# (2510 kicks / 14968 ESL cliques / err=0 off a 58 MB Profiling_f_*.raw).
+# Working probers: gputrace internal/agxps/rawprobe_manual_test.go @ ab1ddbf
+# (parse pipeline) and internal/agxps/counterprobe_manual_test.go (counter and
+# kick accessors), which carries the disassembly citations inline.
+#
+# Device under test: Apple M4 Max, AGXMetalG16X. macOS 25.6.0 (Darwin).
+#
+# `verified:` on each entry says how that specific claim was established:
+#   disasm   - read off the instruction stream
+#   runtime  - exercised through a working call with a checkable result
+#   both     - disassembled, then confirmed by a call that would fail otherwise
+# Anything not listed here is NOT verified by us. Treat every agxps export
+# absent from this file as unsourced: the tmc/apple C signatures are
+# name-derived guesses and roughly three in six were wrong.
+
+framework: GTShaderProfiler
+symbols:
+
+  - name: agxps_initialize
+    verified: both
+    returns: bool          # NOT an errno
+    params: []
+    note: >
+      Returns 1 on SUCCESS. Seeded to 1 at function entry and cleared only if
+      the table load fails. A caller treating non-zero as an error inverts it.
+
+  - name: agxps_aps_descriptor_create
+    verified: both
+    returns: agxps_aps_descriptor   # BY VALUE, 104 bytes / 0x68
+    returns_by_value: true
+    params: []
+    purego_callable: false
+    note: >
+      Returns a 104-byte struct by value through x8, the AArch64 indirect
+      result register. Takes no arguments. purego cannot set x8, so this is
+      uncallable from purego bindings under any declaration -- declaring a
+      pointer param puts it in x0 and leaves x8=0, and the first store
+      (stur q0, [x8, #0x28]) faults at address 0x28. Needs a cgo shim or an
+      sret trampoline. Avoidable in practice: it only installs defaults
+      (GPU=0, ChunkSize=0x1000, MaxTimestamp=~0, MaxParseErrorCount=50), so
+      callers can build the struct themselves.
+
+  - name: agxps_aps_parser_create
+    verified: both
+    returns: agxps_aps_parser
+    params:
+      - {name: descriptor, type: "const agxps_aps_descriptor *"}
+    note: >
+      Existing binding is correct in practice. Returns NULL for a descriptor
+      with zero pulse/era/count periods -- which is exactly what
+      descriptor_create leaves -- so the "create defaults, then use them" path
+      cannot work. Valid periods come from agxps_aps_get_valid_*_period.
+
+  - name: agxps_aps_gpu_is_supported
+    verified: both
+    returns: bool
+    params:
+      - {name: generation, type: uint32_t}
+      - {name: variant,    type: uint32_t}
+      - {name: revision,   type: uint32_t}
+    note: >
+      Takes three scalars, NOT a gpu handle. Comparator at 0x4eeee0 compares
+      exactly the three uint32s. A brute-force scan over the space found 53
+      supported triples, matching the length of the static initializer array.
+
+  - name: agxps_gpu_create
+    verified: both
+    returns: agxps_gpu
+    params:
+      - {name: generation, type: uint32_t}
+      - {name: variant,    type: uint32_t}
+      - {name: revision,   type: uint32_t}
+      - {name: exact,      type: bool}
+    note: >
+      Fourth parameter is missing from the generated binding, so x3 carries
+      garbage. When bit0 is set it skips the find_supported_revision fallback.
+      Caution for consumers: an unsupported triple still returns a handle that
+      reports valid=true while is_supported=false -- a handle with no backing
+      GPU description. Every parser_create against such a handle returns NULL.
+
+  - name: agxps_aps_parser_parse
+    verified: both
+    returns: agxps_aps_profile_data     # the RETURN VALUE, not an out-param
+    params:
+      - {name: parser,    type: agxps_aps_parser}
+      - {name: data,      type: "const void *"}
+      - {name: size,      type: size_t}
+      - {name: flags,     type: uint32_t}     # observed: 1, and 0x21 internally
+      - {name: error_out, type: "uint32_t *"}
+    note: >
+      Established from the null-parser stub (str w8,[x4]) and two internal call
+      sites. The generated binding declares (p, data, size, out*) -> int, which
+      puts the out-pointer in x3 where flags belong and treats the returned
+      profile_data pointer as a status code.
+
+# All non-_num accessors on profile_data share one shape. This is the most
+# dangerous correction in the set because the wrong shape does NOT crash: the
+# first two args land where `out` and `first` belong, so it writes through a
+# garbage pointer or copies nothing and reports success, and the caller reads
+# plausible values. Observed symptom before the fix was start=0 end=0 /
+# start=1 end=1 sequences that read as real timestamps.
+  - name_pattern: "agxps_aps_profile_data_get_*"
+    excludes: ["*_num"]
+    verified: both          # the SHAPE only -- see element_width below
+    returns: bool
+    params:
+      - {name: profile_data, type: agxps_aps_profile_data}
+      - {name: out,          type: "<element> *"}   # width is PER ACCESSOR
+      - {name: first,        type: size_t}
+      - {name: count,        type: size_t}
+    note: >
+      Bulk range copies, not indexed scalar getters. Paired *_num accessors
+      (get_kicks_num, get_esl_cliques_num) do take (pd) and return a count.
+
+      DO NOT emit a single element type for this class. The bulk-copy SHAPE is
+      class-wide, but the ELEMENT WIDTH is not, and getting it wrong is silent:
+      a 32-bit array read as 64-bit fuses adjacent entries into
+      (out[2k+1]<<32)|out[2k], which yields plausible values, a plausible
+      count, and a halved distinct count. That is exactly how we briefly
+      concluded "kicks arrive twice each" from what is really an identity
+      mapping. Measured by sentinel-filling the buffer and counting bytes
+      written; note that a zero high word does NOT settle it, since 64-bit
+      timestamps here fill theirs.
+    element_width:
+      # measured on a real parse, 2510 kicks / 14968 cliques
+      agxps_aps_profile_data_get_kick_id:      {bytes: 4, verified: runtime}
+      agxps_aps_profile_data_get_kick_start:   {bytes: 8, verified: runtime}
+      agxps_aps_profile_data_get_kick_end:     {bytes: 8, verified: runtime}
+      agxps_aps_profile_data_get_esl_clique_start: {bytes: 8, verified: runtime}
+      agxps_aps_profile_data_get_esl_clique_end:   {bytes: 8, verified: runtime}
+      agxps_aps_profile_data_get_esl_clique_instruction_trace: {bytes: 8, verified: runtime}
+      agxps_aps_profile_data_get_system_timestamps: {bytes: 8, verified: runtime}
+      # Kick accessors. Two widths in ONE accessor family, which is the whole
+      # reason this table exists per-symbol rather than per-class.
+      agxps_aps_profile_data_get_kick_software_id: {bytes: 8, verified: disasm}
+      agxps_aps_profile_data_get_kick_kick_slot:   {bytes: 2, verified: disasm}
+      # Counter accessors. The counter vector at pd+0x371b8 is a vector of
+      # 8-byte entries: get_counter_num @ 0x4ed7b4 returns (end-begin)>>3.
+      agxps_aps_profile_data_get_counter_names:  {bytes: 8, verified: disasm}
+      agxps_aps_profile_data_get_counter_values: {bytes: 8, verified: disasm}
+      agxps_aps_profile_data_get_counter_values_num: {bytes: 8, verified: disasm}
+      agxps_aps_profile_data_get_counter_group_metadata: {bytes: 8, verified: disasm}
+      agxps_aps_profile_data_get_counter_group_id: {bytes: 1, verified: disasm}
+      # The remaining non-_num accessors are UNMEASURED. Do not assume 8.
+      # Widths found so far are 1, 2, 4 and 8, so a majority argument is
+      # worthless -- measure each.
+    disasm_sites:
+      # Where each width above was read off the instruction stream.
+      agxps_aps_profile_data_get_kick_software_id: >
+        @ 0x4ebbac. Copies with ldr/str x and bounds-checks with `asr #3`,
+        so 8-byte elements.
+      agxps_aps_profile_data_get_kick_kick_slot: >
+        @ 0x4ebd0c. Uses ldrh/strh and `asr #1`, so 2-byte (uint16). Sits in
+        the same accessor family as software_id at four times the width.
+      agxps_aps_profile_data_get_counter_group_id: >
+        @ 0x4ede00. Ends in `strb w0, [x19], #0x1` -- a single BYTE per
+        element, not the 8 its neighbours use. Read as uint64 it fuses EIGHT
+        group ids into one enormous number that still looks like an id.
+      agxps_aps_profile_data_get_counter_names: >
+        Bulk-copy shape (pd, out*, first, count) -> bool, bounds-checked
+        against the counter vector; copies the vector entry verbatim. [D] The
+        entries are `const char *`, not idents: at runtime the returned values
+        are 8-byte pointers in the dyld image range, spaced by the length of
+        an obfuscated counter name, and agxps_counter_is_valid rejects them.
+      agxps_aps_profile_data_get_counter_values: >
+        Same bulk-copy shape. Copies a std::vector begin pointer out of a
+        0x18-byte record at pd+0x30f48, so each element is a pointer to that
+        counter's value array -- not a value.
+      agxps_aps_profile_data_get_counter_values_num: >
+        Same bulk-copy shape, copying (end-begin)>>3 of that same 0x18-byte
+        record. NOTE the exception below: despite the _num suffix this is a
+        RANGE accessor, not a (pd) -> count scalar.
+
+  # Exception to the `excludes: ["*_num"]` above. The _num suffix is not a
+  # reliable indicator of the scalar-count shape.
+  - name: agxps_aps_profile_data_get_counter_values_num
+    verified: disasm
+    returns: bool
+    params:
+      - {name: profile_data, type: agxps_aps_profile_data}
+      - {name: out,          type: "uint64_t *"}
+      - {name: first,        type: size_t}
+      - {name: count,        type: size_t}
+    note: >
+      Takes the four-argument bulk-copy shape, NOT (pd) -> count. It fills out[]
+      with the per-counter value-array lengths for counters first..first+count.
+      Declared as (pd) -> uint64 it reads the out pointer as a count and returns
+      whatever is in x0.
+
+  - name: agxps_aps_system_timestamp_to_nanoseconds
+    verified: disasm
+    returns: double          # in d0, NOT x0
+    returns_in_fp_register: true
+    params:
+      - {name: system_timestamp, type: uint64_t}
+    note: >
+      @ 0x4ee29c. Computes ts*1000/24 and returns it through `ucvtf d0, x8` --
+      a DOUBLE in d0. A binding that declares uint64 reads x0 instead and gets
+      an unrelated value that still scales into a plausible millisecond span,
+      so the error survives a sanity check on the magnitude. Same silent-
+      plausibility failure mode as the width and shape errors above, in a
+      third dimension: the RETURN REGISTER CLASS.
+    semantics:
+      agxps_aps_profile_data_get_kick_start: &packed >
+        NOT a tick value. An 8-byte PACKED INDEX PAIR:
+        (usc_timestamp_index << 32) | system_timestamp_index. Resolve through
+        agxps_aps_profile_data_get_system_timestamps (mach absolute) and the
+        usc timestamp table. Confirmed: sync[i] & 0xffffffff == i for all
+        753826 entries, zero mismatches, and both halves of every kick and
+        clique value land inside the two table index ranges -- which a
+        wrong-shape read cannot produce. Decoded, the capture wall span is
+        2942.5 ms against streamData's 2.98 s CB wall, a 1.3% agreement.
+        Treating these as ticks yields large plausible monotone numbers, which
+        is why the misread survived.
+      agxps_aps_profile_data_get_kick_end: *packed
+      agxps_aps_profile_data_get_esl_clique_start: *packed
+      agxps_aps_profile_data_get_esl_clique_end: *packed
+      agxps_aps_profile_data_get_kick_id: >
+        Returns each kick's CHRONOLOGICAL position, 0..n-1. It is a meaningful
+        permutation, not a broken identity: reindexing kick_start by kick_id
+        leaves zero descents across all 2510 kicks, while the array in its own
+        order has 32. So the array is in some emission order and consumers
+        wanting time order MUST go through kick_id.
+
+        Hazard: identity holds at positions 0 and 1 and first breaks at 2, so a
+        spot check of the first entries concludes identity and stops. 87 of
+        2510 are non-identity, in local clusters of 2 and 3. The disordered
+        sites are NOT timestamp ties -- the first straddles a gap of 283
+        billion ticks.
+
+# RESOLVED by disassembly (superseding the note that followed here):
+# agxps_aps_clique_instruction_trace_get_execution_events_num @ 0x4ee8ac does
+#   and x8, x1, #0xff ; ldr x9, [x0,#0x158] ; bounds check ; umaddl ; lsr x1,x1,#8
+# It INDEXES A TABLE and never dereferences. x0 is the profile_data, x1 is the
+# id. There is no trace object in the library at all -- AGXPSCliqueInstructionTraceRef
+# is generator invention. The &0xff / >>8 split confirms the composite id.
+# The low byte is a GPU CLIQUE ID, not a tag or an arbitrary base:
+# agxps_aps_get_num_clique_ids(gpu) = 152, split type 0 = 0..95,
+# type 1 = 96..103 (0x60..0x67), type 2 = 104..151. ESL cliques are type 1, so
+# 0x60 is simply where type 1 begins on a 40-USC G16.
+#
+# Superseded speculation kept only to mark it dead:
+# shape is also wrong. UNRESOLVED -- do not encode a guess for it.
+
+# Standing hazard for this framework, five kinds so far.
+# Every wrong reading here produced plausible values rather than an error:
+#   1. wrong ARGUMENT SHAPE  -- indexed getters returned plausible garbage
+#   2. wrong ELEMENT WIDTH   -- a uint32 array read as uint64 fused pairs into
+#                               plausible values with a plausible halved count
+#   3. wrong SEMANTICS       -- kick_id looks like identity for its first two
+#                               entries, which is exactly how far a spot check
+#                               usually goes
+#   4. wrong RETURN REGISTER -- system_timestamp_to_nanoseconds returns a
+#                               double in d0; read from x0 the number still
+#                               scales into a plausible millisecond span
+#   5. misleading NAME       -- get_counter_values_num is a four-argument range
+#                               accessor, not a (pd) -> count scalar, and
+#                               get_counter_names yields char pointers rather
+#                               than the idents the counter_* API accepts
+# Nothing about this API fails loudly. Assume a plausible result is unverified
+# until measured, and record HOW each claim was established, not just what it
+# says. Two negative observations that look like measurements but are not:
+# absence of a pairing seam only means values are small, not that elements are
+# 64-bit; and a zero high word does not indicate a 32-bit element, since
+# genuine 64-bit timestamps here fill theirs.
