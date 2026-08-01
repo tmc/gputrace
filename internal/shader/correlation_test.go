@@ -161,12 +161,12 @@ func TestCalculateCorrelationSummaryCountsMetricsIndependently(t *testing.T) {
 
 func TestFormatCorrelationReportDisplaysTimingSource(t *testing.T) {
 	report := &ShaderCorrelationReport{
-		TraceSource:        "trace.gputrace",
-		ProfilerSource:     "(not available)",
-		TotalShaders:       1,
-		CorrelatedShaders:  0,
-		CorrelationRate:    0,
-		AvgALUUtilization:  50,
+		TraceSource:       "trace.gputrace",
+		ProfilerSource:    "(not available)",
+		TotalShaders:      1,
+		CorrelatedShaders: 0,
+		CorrelationRate:   0,
+		AvgALUUtilization: 50,
 		Shaders: []*CorrelatedShaderMetrics{
 			{
 				ShaderName:            "kernel_a",

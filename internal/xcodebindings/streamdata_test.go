@@ -7,15 +7,17 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/tmc/gputrace/internal/testtrace"
 )
 
 // TestProbeStreamDataPerfFixture exercises the Objective-C extraction path on
 // a real profiler capture. The fixture is intentionally opt-in because it is
 // several gigabytes and is not part of this repository.
 func TestProbeStreamDataPerfFixture(t *testing.T) {
-	fixture := os.Getenv("GPUTRACE_PERF_FIXTURE")
+	fixture := testtrace.Path("GPUTRACE_PERF_FIXTURE", testtrace.Bundle)
 	if fixture == "" {
-		t.Skip("set GPUTRACE_PERF_FIXTURE to a real .gputrace bundle")
+		t.Skip("set GPUTRACE_TEST_TRACE or GPUTRACE_PERF_FIXTURE to a .gputrace bundle")
 	}
 	fixture, err := filepath.Abs(fixture)
 	if err != nil {

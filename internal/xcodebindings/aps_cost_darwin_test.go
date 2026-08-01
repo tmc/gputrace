@@ -3,9 +3,10 @@
 package xcodebindings
 
 import (
-	"os"
 	"runtime"
 	"testing"
+
+	"github.com/tmc/gputrace/internal/testtrace"
 
 	"github.com/tmc/apple/objc"
 )
@@ -31,9 +32,9 @@ import (
 // the answer: kickDurationForEncoder: and totalCostForScope: were measured zero
 // for every encoder and every scope/dataMaster pair before these passes.
 func TestAPSCostProcessing(t *testing.T) {
-	streamPath := os.Getenv("GPUTRACE_PROCESS_STREAMDATA")
+	streamPath := testtrace.Path("GPUTRACE_PROCESS_STREAMDATA", testtrace.StreamData)
 	if streamPath == "" {
-		t.Skip("set GPUTRACE_PROCESS_STREAMDATA to a profiler streamData archive")
+		t.Skip("set GPUTRACE_TEST_TRACE to a .gputrace bundle, or GPUTRACE_PROCESS_STREAMDATA to a streamData archive")
 	}
 
 	runtime.LockOSThread()

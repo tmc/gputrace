@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tmc/gputrace/internal/testtrace"
+
 	"github.com/tmc/apple/foundation"
 	"github.com/tmc/apple/objc"
 	"github.com/tmc/apple/objectivec"
@@ -19,9 +21,9 @@ import (
 // TestApplyPipelineShaderMetricsFromPerfFixture is opt-in because the real
 // fixture is several gigabytes and is not part of the repository.
 func TestApplyPipelineShaderMetricsFromPerfFixture(t *testing.T) {
-	fixture := os.Getenv("GPUTRACE_PERF_FIXTURE")
+	fixture := testtrace.Path("GPUTRACE_PERF_FIXTURE", testtrace.Bundle)
 	if fixture == "" {
-		t.Skip("set GPUTRACE_PERF_FIXTURE to a real .gputrace bundle")
+		t.Skip("set GPUTRACE_TEST_TRACE or GPUTRACE_PERF_FIXTURE to a .gputrace bundle")
 	}
 	profilerDir := fixture
 	entries, err := os.ReadDir(fixture)
@@ -59,9 +61,9 @@ func TestApplyPipelineShaderMetricsFromPerfFixture(t *testing.T) {
 }
 
 func TestProbeGTMioTraceDataChildFromPipelineInfo(t *testing.T) {
-	fixture := os.Getenv("GPUTRACE_PERF_FIXTURE")
+	fixture := testtrace.Path("GPUTRACE_PERF_FIXTURE", testtrace.Bundle)
 	if fixture == "" {
-		t.Skip("set GPUTRACE_PERF_FIXTURE to a real .gputrace bundle")
+		t.Skip("set GPUTRACE_TEST_TRACE or GPUTRACE_PERF_FIXTURE to a .gputrace bundle")
 	}
 	profilerDir := fixture
 	entries, err := os.ReadDir(fixture)

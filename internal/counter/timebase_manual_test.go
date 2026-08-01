@@ -16,16 +16,17 @@ package counter
 
 import (
 	"fmt"
-	"os"
 	"testing"
+
+	"github.com/tmc/gputrace/internal/testtrace"
 
 	"github.com/tmc/apple/x/plist"
 )
 
 func TestStreamDataTimebaseProbe(t *testing.T) {
-	dir := os.Getenv("GPUTRACE_PROBE_STREAMDATA")
+	dir := testtrace.Path("GPUTRACE_PROBE_STREAMDATA", testtrace.ProfilerDir)
 	if dir == "" {
-		t.Skip("set GPUTRACE_PROBE_STREAMDATA to a .gpuprofiler_raw directory")
+		t.Skip("set GPUTRACE_TEST_TRACE to a .gputrace bundle, or GPUTRACE_PROBE_STREAMDATA to a .gpuprofiler_raw directory")
 	}
 	stats, err := ParseStreamData(dir, nil)
 	if err != nil {
@@ -148,9 +149,9 @@ func logValue(t *testing.T, objects []any, key string, val any, indent string, d
 // are not among the ones it reads. They are the candidate sync point for
 // reconciling APS system timestamps with command buffer ticks.
 func TestAPSTimelineKeysProbe(t *testing.T) {
-	dir := os.Getenv("GPUTRACE_PROBE_STREAMDATA")
+	dir := testtrace.Path("GPUTRACE_PROBE_STREAMDATA", testtrace.ProfilerDir)
 	if dir == "" {
-		t.Skip("set GPUTRACE_PROBE_STREAMDATA to a .gpuprofiler_raw directory")
+		t.Skip("set GPUTRACE_TEST_TRACE to a .gputrace bundle, or GPUTRACE_PROBE_STREAMDATA to a .gpuprofiler_raw directory")
 	}
 	stats, err := ParseStreamData(dir, nil)
 	if err != nil {

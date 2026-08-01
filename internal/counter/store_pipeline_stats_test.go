@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tmc/gputrace/internal/testtrace"
+
 	"github.com/tmc/apple/x/plist"
 	"github.com/tmc/gputrace/internal/trace"
 )
@@ -27,9 +29,9 @@ func openFixture(t *testing.T, name string) *trace.Trace {
 // in a real profiler capture. The fixture is intentionally opt-in because the
 // capture is several gigabytes and is not part of this repository.
 func TestPerfFixtureStreamDataStoreAgreement(t *testing.T) {
-	fixture := os.Getenv("GPUTRACE_PERF_FIXTURE")
+	fixture := testtrace.Path("GPUTRACE_PERF_FIXTURE", testtrace.Bundle)
 	if fixture == "" {
-		t.Skip("set GPUTRACE_PERF_FIXTURE to a real .gputrace bundle")
+		t.Skip("set GPUTRACE_TEST_TRACE or GPUTRACE_PERF_FIXTURE to a .gputrace bundle")
 	}
 	fixture, err := filepath.Abs(fixture)
 	if err != nil {

@@ -24,6 +24,8 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/tmc/gputrace/internal/testtrace"
+
 	"github.com/ebitengine/purego"
 )
 
@@ -502,9 +504,9 @@ func dumpCounters(t *testing.T, a *counterAPI, pd uintptr, nc uint64) {
 // single-file result cannot distinguish "decoder broken" from "this file is
 // empty". This reports the pattern for the counter files.
 func TestCounterFileFanout(t *testing.T) {
-	dir := os.Getenv("GPUTRACE_PROBE_COUNTERS_DIR")
+	dir := testtrace.Path("GPUTRACE_PROBE_COUNTERS_DIR", testtrace.ProfilerDir)
 	if dir == "" {
-		t.Skip("set GPUTRACE_PROBE_COUNTERS_DIR to a .gpuprofiler_raw directory")
+		t.Skip("set GPUTRACE_TEST_TRACE to a .gputrace bundle, or GPUTRACE_PROBE_COUNTERS_DIR to a .gpuprofiler_raw directory")
 	}
 	a := loadCounterAPI(t)
 	a.initialize()
@@ -564,9 +566,9 @@ func TestCounterFileFanout(t *testing.T) {
 // events" -- the Profiling_f_* files overlap heavily, and if the counter files
 // did too, summing them would double count.
 func TestCounterAggregate(t *testing.T) {
-	dir := os.Getenv("GPUTRACE_PROBE_COUNTERS_DIR")
+	dir := testtrace.Path("GPUTRACE_PROBE_COUNTERS_DIR", testtrace.ProfilerDir)
 	if dir == "" {
-		t.Skip("set GPUTRACE_PROBE_COUNTERS_DIR to a .gpuprofiler_raw directory")
+		t.Skip("set GPUTRACE_TEST_TRACE to a .gputrace bundle, or GPUTRACE_PROBE_COUNTERS_DIR to a .gpuprofiler_raw directory")
 	}
 	a := loadCounterAPI(t)
 	a.initialize()

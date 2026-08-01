@@ -30,6 +30,31 @@ captures. It does not include `.gpuprofiler_raw` profiler exports or Xcode
 `Counters.csv` files; tests that need those assets skip by default unless a
 local fixture is supplied through the variables below.
 
+## One variable for the capture-backed tests
+
+Most of the opt-in tests want the same thing: a local `.gputrace` bundle. Point
+`GPUTRACE_TEST_TRACE` at one and the capture-shaped variables below derive from
+it:
+
+```bash
+GPUTRACE_TEST_TRACE=/path/to/capture.gputrace go test ./...
+```
+
+On a profiler-enabled capture that takes the suite from 77 skips to 62 and
+exercises the streamData, counter-archive, execution-cost, and private-binding
+paths that otherwise never run. Add `GPUTRACE_MIO_SETUP_DATA_PATH=1` to also
+populate the timeline counter dictionary, which is empty without it.
+
+`GPUTRACE_TEST_TRACE` is only a default. Any specific variable still wins when
+set, so a test can be aimed at a different capture than the rest.
+
+Derived from `GPUTRACE_TEST_TRACE` when unset: `GPUTRACE_AGX2_STREAMDATA`,
+`GPUTRACE_PERF_FIXTURE`, `GPUTRACE_PROBE_COUNTERS_DIR`,
+`GPUTRACE_PROBE_STREAMDATA`, `GPUTRACE_PROCESS_STREAMDATA`, and
+`GPUTRACE_TEST_GPUPROFILER_DIR`. See `internal/testtrace`.
+
+## Everything else
+
 Some integration tests need local traces or host capabilities that are not
 checked in. They are opt-in through environment variables:
 

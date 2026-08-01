@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/tmc/gputrace/internal/testtrace"
 )
 
 // TestCounterArchiveFromTrace checks the decode against a real archive. Set
@@ -15,9 +17,9 @@ import (
 // encoder of the capture, and machine-wide samples are counted separately
 // rather than folded into per-encoder figures.
 func TestCounterArchiveFromTrace(t *testing.T) {
-	dir := os.Getenv("GPUTRACE_TEST_GPUPROFILER_DIR")
+	dir := testtrace.Path("GPUTRACE_TEST_GPUPROFILER_DIR", testtrace.ProfilerDir)
 	if dir == "" {
-		t.Skip("set GPUTRACE_TEST_GPUPROFILER_DIR to a .gpuprofiler_raw directory")
+		t.Skip("set GPUTRACE_TEST_TRACE to a .gputrace bundle, or GPUTRACE_TEST_GPUPROFILER_DIR to a .gpuprofiler_raw directory")
 	}
 	if _, err := os.Stat(filepath.Join(dir, "streamData")); err != nil {
 		t.Skipf("no streamData in %s", dir)
@@ -89,9 +91,9 @@ func TestCounterArchiveFromTrace(t *testing.T) {
 // encoder group uses, and the sample indices ascend with the ordinal, which is
 // the encoder execution order.
 func TestTraceIDTableFromTrace(t *testing.T) {
-	dir := os.Getenv("GPUTRACE_TEST_GPUPROFILER_DIR")
+	dir := testtrace.Path("GPUTRACE_TEST_GPUPROFILER_DIR", testtrace.ProfilerDir)
 	if dir == "" {
-		t.Skip("set GPUTRACE_TEST_GPUPROFILER_DIR to a .gpuprofiler_raw directory")
+		t.Skip("set GPUTRACE_TEST_TRACE to a .gputrace bundle, or GPUTRACE_TEST_GPUPROFILER_DIR to a .gpuprofiler_raw directory")
 	}
 	stats, err := ParseStreamData(dir, nil)
 	if err != nil {

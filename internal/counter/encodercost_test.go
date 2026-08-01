@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/tmc/gputrace/internal/testtrace"
 )
 
 // oracleExecutionCosts reads the Execution Cost column of an Xcode
@@ -56,9 +58,9 @@ func oracleExecutionCosts(t *testing.T, path string) []float64 {
 // Set GPUTRACE_TEST_GPUPROFILER_DIR to the .gpuprofiler_raw directory of the
 // capture described in testdata/xcode-oracle/PROVENANCE.md.
 func TestEncoderCostsAgainstXcode(t *testing.T) {
-	dir := os.Getenv("GPUTRACE_TEST_GPUPROFILER_DIR")
+	dir := testtrace.Path("GPUTRACE_TEST_GPUPROFILER_DIR", testtrace.ProfilerDir)
 	if dir == "" {
-		t.Skip("set GPUTRACE_TEST_GPUPROFILER_DIR to a .gpuprofiler_raw directory")
+		t.Skip("set GPUTRACE_TEST_TRACE to a .gputrace bundle, or GPUTRACE_TEST_GPUPROFILER_DIR to a .gpuprofiler_raw directory")
 	}
 	stats, err := ParseStreamData(dir, nil)
 	if err != nil {

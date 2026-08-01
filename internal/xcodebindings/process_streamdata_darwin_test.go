@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/tmc/gputrace/internal/testtrace"
 )
 
 // TestProcessStreamData builds Xcode's shader trace model from a real profiler
@@ -16,9 +18,9 @@ import (
 // shader in the capture, which takes far longer than an ordinary unit test, and
 // no repository fixture carries streamData.
 func TestProcessStreamData(t *testing.T) {
-	streamPath := os.Getenv("GPUTRACE_PROCESS_STREAMDATA")
+	streamPath := testtrace.Path("GPUTRACE_PROCESS_STREAMDATA", testtrace.StreamData)
 	if streamPath == "" {
-		t.Skip("set GPUTRACE_PROCESS_STREAMDATA to a profiler streamData archive")
+		t.Skip("set GPUTRACE_TEST_TRACE to a .gputrace bundle, or GPUTRACE_PROCESS_STREAMDATA to a streamData archive")
 	}
 	streamPath, err := filepath.Abs(streamPath)
 	if err != nil {

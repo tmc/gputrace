@@ -14,6 +14,8 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/tmc/gputrace/internal/testtrace"
+
 	puregoobjc "github.com/ebitengine/purego/objc"
 	"github.com/tmc/apple/foundation"
 	"github.com/tmc/apple/objc"
@@ -34,9 +36,9 @@ import (
 // the same reason: dataMaster 2 was chosen from a working example, not from a
 // documented enumeration.
 func TestTimelineDrawDurations(t *testing.T) {
-	streamPath := os.Getenv("GPUTRACE_PROCESS_STREAMDATA")
+	streamPath := testtrace.Path("GPUTRACE_PROCESS_STREAMDATA", testtrace.StreamData)
 	if streamPath == "" {
-		t.Skip("set GPUTRACE_PROCESS_STREAMDATA to a profiler streamData archive")
+		t.Skip("set GPUTRACE_TEST_TRACE to a .gputrace bundle, or GPUTRACE_PROCESS_STREAMDATA to a streamData archive")
 	}
 	streamPath, err := filepath.Abs(streamPath)
 	if err != nil {
@@ -180,7 +182,15 @@ func checkTimelineCounters(t *testing.T, timeline objc.ID) {
 	}
 	check(dictionary.GetID(), "count", reflect.TypeOf(uint(0)))
 	if got := dictionary.Count(); got == 0 {
-		t.Fatal("timeline counter dictionary is empty")
+		// An empty dictionary is the documented state without
+		// _setupDataPath, not a broken binding: the counters are populated
+		// by the directory-backed load. Failing here would report "you did
+		// not opt in" as "the runtime join regressed", which is the more
+		// alarming of the two and the wrong one.
+		if os.Getenv("GPUTRACE_MIO_SETUP_DATA_PATH") != "1" {
+			t.Skip("timeline counter dictionary is empty; set GPUTRACE_MIO_SETUP_DATA_PATH=1 to populate it")
+		}
+		t.Fatal("timeline counter dictionary is empty despite _setupDataPath")
 	} else {
 		t.Logf("timeline counter dictionary entries=%d", got)
 		check(dictionary.GetID(), "allKeys", reflect.TypeOf(objc.ID(0)))
@@ -497,9 +507,9 @@ type drawMetadata struct {
 // field that merely looks plausible will not match that multiset, which is the
 // check the earlier binary-index and MCA-key routes could not offer.
 func TestDrawPipelineEdge(t *testing.T) {
-	streamPath := os.Getenv("GPUTRACE_PROCESS_STREAMDATA")
+	streamPath := testtrace.Path("GPUTRACE_PROCESS_STREAMDATA", testtrace.StreamData)
 	if streamPath == "" {
-		t.Skip("set GPUTRACE_PROCESS_STREAMDATA to a profiler streamData archive")
+		t.Skip("set GPUTRACE_TEST_TRACE to a .gputrace bundle, or GPUTRACE_PROCESS_STREAMDATA to a streamData archive")
 	}
 	if os.Getenv("GPUTRACE_MIO_SETUP_DATA_PATH") != "1" {
 		t.Skip("set GPUTRACE_MIO_SETUP_DATA_PATH=1: draw durations are zero without it")

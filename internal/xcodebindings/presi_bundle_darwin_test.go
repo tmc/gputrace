@@ -3,10 +3,11 @@
 package xcodebindings
 
 import (
-	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/tmc/gputrace/internal/testtrace"
 
 	"github.com/tmc/apple/foundation"
 	"github.com/tmc/apple/objc"
@@ -29,9 +30,9 @@ import (
 // The signal to watch is derivedCountersData, which is an empty dictionary on
 // the archived-URL path, and costCount's records becoming non-zero.
 func TestPreSiBundleStreamData(t *testing.T) {
-	streamPath := os.Getenv("GPUTRACE_PROCESS_STREAMDATA")
+	streamPath := testtrace.Path("GPUTRACE_PROCESS_STREAMDATA", testtrace.StreamData)
 	if streamPath == "" {
-		t.Skip("set GPUTRACE_PROCESS_STREAMDATA to a profiler streamData archive")
+		t.Skip("set GPUTRACE_TEST_TRACE to a .gputrace bundle, or GPUTRACE_PROCESS_STREAMDATA to a streamData archive")
 	}
 	streamPath, err := filepath.Abs(streamPath)
 	if err != nil {

@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/tmc/gputrace/internal/testtrace"
+
 	"github.com/tmc/apple/foundation"
 	"github.com/tmc/apple/objc"
 	"github.com/tmc/apple/private/xcode/gtshaderprofiler"
@@ -37,9 +39,9 @@ import (
 // Manual: set GPUTRACE_AGX2_STREAMDATA to a profiler streamData archive. The
 // capture this was established on has 24 command buffers and 23 encoders.
 func TestAGX2StreamDataConstruction(t *testing.T) {
-	streamPath := os.Getenv("GPUTRACE_AGX2_STREAMDATA")
+	streamPath := testtrace.Path("GPUTRACE_AGX2_STREAMDATA", testtrace.StreamData)
 	if streamPath == "" {
-		t.Skip("set GPUTRACE_AGX2_STREAMDATA to a profiler streamData archive")
+		t.Skip("set GPUTRACE_TEST_TRACE to a .gputrace bundle, or GPUTRACE_AGX2_STREAMDATA to a streamData archive")
 	}
 	streamPath, err := filepath.Abs(streamPath)
 	if err != nil {

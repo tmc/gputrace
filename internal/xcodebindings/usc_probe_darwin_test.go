@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/tmc/gputrace/internal/testtrace"
+
 	"github.com/tmc/apple/objc"
 )
 
@@ -35,7 +37,7 @@ import (
 // The probe is gated separately from GPUTRACE_PROCESS_STREAMDATA precisely
 // because it crashes the test binary rather than failing it.
 func TestUSCTraceDataProbe(t *testing.T) {
-	streamPath := os.Getenv("GPUTRACE_PROCESS_STREAMDATA")
+	streamPath := testtrace.Path("GPUTRACE_PROCESS_STREAMDATA", testtrace.StreamData)
 	if streamPath == "" || os.Getenv("GPUTRACE_MIO_USC_PROBE") == "" {
 		t.Skip("set GPUTRACE_MIO_USC_PROBE and GPUTRACE_PROCESS_STREAMDATA; this probe is expected to crash")
 	}
