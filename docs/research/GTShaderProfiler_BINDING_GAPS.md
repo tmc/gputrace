@@ -42,12 +42,21 @@ through `GTShaderProfilerStreamData.dataFromArchivedDataURL:` and reports:
   443520, 230208, 192192, 193600, 80640, 41856, 34944, 35200, and 80896
   bytes across the sampled children.
 
-The dispatch occupancy gap is closed for this trace through the encoder counter
-fallback. The dispatch ALU utilization gap is also closed for this trace:
+The dispatch ALU utilization gap is closed for this trace:
 `Counters_f_12.raw` is source-backed, exports zero for all encoder rows, and
 gputrace now carries that zero into all kernel events and pprof samples with
 counter-source provenance. The remaining exporter gaps are:
 
+- `occupancy_pct`: not archived anywhere in the trace bundle. Xcode's
+  Occupancy is a GPU performance counter sampled at capture time; the string
+  does not appear anywhere in `.gpuprofiler_raw`. Xcode's separate *max
+  theoretical occupancy* is computed by the Metal compiler and is likewise not
+  archived - only its inputs (register counts, threadgroup memory) are. A
+  static residency model cannot fill the gap either: there is no published
+  max-resident-threads-per-core denominator for any Apple family, and on
+  Apple9 (M3/M4) registers and threadgroup memory are allocated dynamically
+  from L1, so a per-family table is the wrong model rather than merely an
+  unmeasured one. Closing this requires counter sampling at capture time.
 - `high_register`: binary blobs are present in stream data, but gputrace does
   not yet have a safe adapter from those blobs to per-kernel live register
   values.
