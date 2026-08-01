@@ -115,9 +115,9 @@ func inspectAGX2StreamData(t *testing.T, streamPath string) {
 		return
 	}
 	// DYWorkloadGPUTimelineInfo answers ordinary Objective-C selectors: nm on
-	// the framework lists 36, and every one below is answered. The generated
-	// bindings not exposing the class is not the same thing as the contents
-	// being unreachable, so do not conclude the second from the first.
+	// the framework lists 36 and the generated bindings expose 38, including
+	// PerRingSampledDerivedCounters and TimeBaseNumerator. Nothing about this
+	// class is out of reach.
 	//
 	// They are all empty here, which is a different and more useful finding.
 	// timeBaseNumerator/Denominator come back 0/0, and a zero timebase is not

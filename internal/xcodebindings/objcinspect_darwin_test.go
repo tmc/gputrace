@@ -27,8 +27,12 @@ import (
 //
 // It also separates the two failures that are easy to confuse and that we did
 // confuse: a selector the class does not implement, and one it implements with
-// a different return type. Concluding "unreachable" from the first when the
-// truth is the second is how f06478e came to correct fcc72a1.
+// a different return type. Reading garbage out of the second and calling the
+// data unreachable is how f06478e came to correct fcc72a1.
+//
+// The class was reachable the whole time. The bindings generate all 38 of its
+// methods; the object is simply empty, for the reason recorded in
+// agx2_streamdata_darwin_test.go.
 //
 // Manual: set GPUTRACE_AGX2_STREAMDATA to a profiler streamData archive.
 func TestTimelineInfoSelectorTypes(t *testing.T) {
