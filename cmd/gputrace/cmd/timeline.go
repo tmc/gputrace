@@ -2337,26 +2337,44 @@ func exportChromeTracingForClock(timeline *Timeline, outputPath string, clock ti
 		)
 	}
 
-	// Add counter track metadata and events.
-	//
-	// A track whose every sample is zero is not a measurement of zero, it is a
-	// counter we could not decode. Emitting it draws a flat line at the bottom
-	// of the UI that reads as "this capture used no bandwidth" rather than "we
-	// do not know". On the 21-encoder capture that was all nine tracks and 252
-	// samples, none of them nonzero. internal/parity refuses all-zero columns
-	// for the same reason; do the same here.
+	// Add counter track metadata and events, grouped by Xcode category group when available.
 	threadID := 16 // Start after GPRWCNTR lanes (7-14) and provenance lane (15).
 	counterEvents := make([]TimelineEvent, 0)
+	groupPIDs := make(map[string]int)
+	nextGroupPID := 10
+
 	for _, track := range timeline.CounterTracks {
 		if !counterTrackHasSignal(track) {
 			continue
 		}
+		pid := 1
+		if len(track.XcodeGroups) > 0 && track.XcodeGroups[0] != "" {
+			groupName := track.XcodeGroups[0]
+			if existingPID, exists := groupPIDs[groupName]; exists {
+				pid = existingPID
+			} else {
+				pid = nextGroupPID
+				groupPIDs[groupName] = pid
+				nextGroupPID++
+				metadataEvents = append(metadataEvents, TimelineEvent{
+					Name:      "process_name",
+					Category:  "__metadata",
+					Phase:     "M",
+					ProcessID: pid,
+					ThreadID:  0,
+					Args: map[string]interface{}{
+						"name": fmt.Sprintf("Counters: %s", groupName),
+					},
+				})
+			}
+		}
+
 		// Add thread name for this counter track
 		metadataEvents = append(metadataEvents, TimelineEvent{
 			Name:      "thread_name",
 			Category:  "__metadata",
 			Phase:     "M",
-			ProcessID: 1,
+			ProcessID: pid,
 			ThreadID:  threadID,
 			Args:      counterTrackMetadataArgs(track),
 		})
@@ -2369,7 +2387,7 @@ func exportChromeTracingForClock(timeline *Timeline, outputPath string, clock ti
 				Category:  "counter",
 				Phase:     "C",                     // Counter event
 				Timestamp: sample.Timestamp / 1000, // Convert to microseconds
-				ProcessID: 1,
+				ProcessID: pid,
 				ThreadID:  threadID,
 				Args: map[string]interface{}{
 					track.Name: sample.Value,
