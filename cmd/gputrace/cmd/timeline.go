@@ -814,6 +814,7 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 
 		// Add encoder profile events from GPRWCNTR ShaderProfilerData
 		if len(ti.EncoderProfiles) > 0 {
+			epLanes := newLanePacker(7, 8) // GPRWCNTR Lane 0..7
 			for _, ep := range ti.EncoderProfiles {
 				if ep.SampleCount == 0 || ep.StartTicks == 0 {
 					continue
@@ -828,7 +829,7 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 					Timestamp: startNs / 1000, // Convert to microseconds
 					Duration:  ep.DurationNs / 1000,
 					ProcessID: 1,
-					ThreadID:  7 + (ep.Index % 8), // 8 Lanes for encoder profiles (7-14)
+					ThreadID:  epLanes.assign(startNs/1000, ep.DurationNs/1000),
 					Args: map[string]interface{}{
 						"index":           ep.Index,
 						"source":          ep.Source,
@@ -1498,6 +1499,7 @@ func addStorePipelineArgs(args map[string]interface{}, p *counter.PipelineStats)
 
 func addEncoderKernelEvents(timeline *Timeline, trace *gputrace.Trace, sourceMapper *gputrace.ShaderSourceMapper, storeStats *counter.StoreStats) {
 	computeEncoders := traceComputeEncoders(trace)
+	lanes := newLanePacker(3, 4) // Kernels Lane 0..3
 
 	for i, encoder := range timeline.Encoders {
 		args := map[string]interface{}{
@@ -1552,7 +1554,7 @@ func addEncoderKernelEvents(timeline *Timeline, trace *gputrace.Trace, sourceMap
 			Timestamp: encoder.StartTime / 1000,
 			Duration:  encoder.Duration / 1000,
 			ProcessID: 1,
-			ThreadID:  3 + (encoder.Index % 4),
+			ThreadID:  lanes.assign(encoder.StartTime/1000, encoder.Duration/1000),
 			Args:      args,
 		})
 	}
@@ -1594,6 +1596,7 @@ func addDispatchKernelEvents(timeline *Timeline, stats *counter.StreamDataStats,
 	for i := range stats.Pipelines {
 		pipelineByID[stats.Pipelines[i].PipelineID] = &stats.Pipelines[i]
 	}
+	lanes := newLanePacker(3, 4) // Kernels Lane 0..3
 	metrics := shaderMetricLookup(perfStats)
 	shaderMetrics := timelineShaderReportLookup(shaderReport)
 	encoderMetricByIndex := make(map[int]*counter.EncoderCounterMetrics)
@@ -1647,7 +1650,7 @@ func addDispatchKernelEvents(timeline *Timeline, stats *counter.StreamDataStats,
 			Timestamp: startNs / 1000,
 			Duration:  durationNs / 1000,
 			ProcessID: 1,
-			ThreadID:  3 + (d.Index % 4),
+			ThreadID:  lanes.assign(startNs/1000, durationNs/1000),
 			Args:      args,
 		})
 	}
@@ -3572,4 +3575,52 @@ func generateInteractiveHTML(timelineJSON string) string {
 </body>
 </html>
 `
+}
+
+// lanePacker assigns overlapping slices to distinct horizontal lanes, the way
+// Xcode's TrackLane does.
+//
+// The obvious alternative, spreading slices across lanes by index modulo the
+// lane count, is what this replaces. It is worse than untidy: GPU dispatches
+// run back to back, so scattering consecutive non-overlapping slices across
+// four lanes renders four-way concurrency that never happened. A reader cannot
+// tell that apart from real parallelism, which makes the picture wrong rather
+// than merely ugly.
+//
+// Slices must be offered in nondecreasing start order; callers walk the
+// dispatch and encoder lists, which are already ordered by cumulative time.
+type lanePacker struct {
+	base int     // ThreadID of lane 0
+	ends []uint64 // end timestamp of the last slice placed in each lane
+}
+
+// newLanePacker returns a packer over n lanes numbered base..base+n-1.
+func newLanePacker(base, n int) *lanePacker {
+	return &lanePacker{base: base, ends: make([]uint64, n)}
+}
+
+// assign places a slice and returns its ThreadID. It picks the first lane free
+// at start. When every lane is busy the slice goes to the lane that frees
+// soonest: the legend names a fixed set of lanes, so growing past it would emit
+// slices onto unnamed threads. Overlap beyond the lane count is therefore drawn
+// stacked rather than dropped or hidden.
+func (p *lanePacker) assign(start, duration uint64) int {
+	if len(p.ends) == 0 {
+		return p.base
+	}
+	end := start + duration
+	best := 0
+	for i, e := range p.ends {
+		if e <= start {
+			p.ends[i] = end
+			return p.base + i
+		}
+		if e < p.ends[best] {
+			best = i
+		}
+	}
+	if end > p.ends[best] {
+		p.ends[best] = end
+	}
+	return p.base + best
 }
