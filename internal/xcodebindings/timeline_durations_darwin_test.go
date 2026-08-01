@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"sort"
 	"testing"
 	"unsafe"
@@ -18,6 +19,7 @@ import (
 	"github.com/tmc/apple/objc"
 	"github.com/tmc/apple/objc/objcinspect"
 	"github.com/tmc/apple/private/xcode/gtshaderprofiler"
+	"github.com/tmc/gputrace/internal/parity"
 )
 
 // TestTimelineDrawDurations reads every per-draw duration from Xcode's
@@ -175,13 +177,54 @@ func checkTimelineCounters(t *testing.T, timeline objc.ID) {
 		}
 		sort.Strings(names)
 		t.Logf("timeline counter names=%q", names)
+
+		catalog, err := parity.LoadCatalog(parity.CounterGraphPaths())
+		if err != nil {
+			t.Fatalf("load Xcode counter catalog: %v", err)
+		}
+		if catalog == nil {
+			t.Fatal("Xcode counter catalog is unavailable")
+		}
+		var catalogNames []string
+		for _, name := range names {
+			if _, ok := catalog.Lookup(name); ok {
+				catalogNames = append(catalogNames, name)
+			}
+		}
+		t.Logf("timeline counter names in catalog=%q (catalog=%s)", catalogNames, catalog.Path)
+		_, totalInCatalog := catalog.Lookup("ALU Total Instructions")
+		kernelName := foundation.NewStringWithString("Kernel ALU Instructions")
+		check(counters.GetID(), "counterForName:", reflect.TypeOf(objc.ID(0)), kernelName)
+		kernel := counters.CounterForName(kernelName)
+		t.Logf("ALU Total Instructions in catalog=%t; Kernel ALU Instructions runtime counter=%t",
+			totalInCatalog, kernel.GetID() != 0)
+		reportTimelineCounterMetadata(t, check, counters, names)
 	}
 
-	name := foundation.NewStringWithString("ALU Total Instructions")
-	check(counters.GetID(), "counterForName:", reflect.TypeOf(objc.ID(0)), name)
-	counterID := counters.CounterForName(name).GetID()
+	total := readTimelineCounter(t, check, counters, "ALU Total Instructions")
+	alu := readTimelineCounter(t, check, counters, "ALUInstructions")
+	if !slices.Equal(total.timestamps, alu.timestamps) || !slices.Equal(total.values, alu.values) {
+		t.Fatal("ALU Total Instructions and ALUInstructions differ")
+	}
+	t.Log("ALU Total Instructions and ALUInstructions are identical")
+	reportTimestampShape(t, alu.timestamps)
+}
+
+type timelineCounterSeries struct {
+	timestamps []uint64
+	values     []float64
+}
+
+// readTimelineCounter copies one named counter's samples before the enclosing
+// Objective-C autorelease pool drains. The runtime name is deliberately not
+// translated to an Xcode display name here.
+func readTimelineCounter(t *testing.T, check func(objc.ID, string, reflect.Type, ...any), counters gtshaderprofiler.IGTMioTimelineCounters, name string) timelineCounterSeries {
+	t.Helper()
+	key := foundation.NewStringWithString(name)
+	check(counters.GetID(), "counterForName:", reflect.TypeOf(objc.ID(0)), key)
+	counterID := counters.CounterForName(key).GetID()
 	if counterID == 0 {
-		t.Fatal("counterForName(ALU Total Instructions) returned nil")
+		t.Fatalf("counterForName(%q) returned nil", name)
 	}
 	counter := gtshaderprofiler.GTMioCounterDataFromID(counterID)
 	check(counterID, "name", reflect.TypeOf(objc.ID(0)))
@@ -190,45 +233,153 @@ func checkTimelineCounters(t *testing.T, timeline objc.ID) {
 	// independently checked bound, and the copy keeps the series valid after
 	// this Objective-C autorelease pool drains.
 	check(counterID, "values", reflect.TypeOf(unsafe.Pointer(nil)))
-	if got, want := counter.Name(), "ALU Total Instructions"; got != want {
-		t.Fatalf("counter name = %q, want %q", got, want)
+	if got := counter.Name(); got != name {
+		t.Fatalf("counter name = %q, want %q", got, name)
 	}
-	if got := counter.SampleCount(); got == 0 {
-		t.Fatal("ALU Total Instructions sample count is zero")
-	} else {
-		t.Logf("ALU Total Instructions samples=%d", got)
-		check(counterID, "timestamps", reflect.TypeOf(unsafe.Pointer(nil)))
-		stamps := unsafe.Slice((*uint64)(counter.Timestamps()), int(got))
-		if stamps[0] == 0 || stamps[len(stamps)-1] == 0 {
-			t.Fatalf("counter timestamps have zero endpoint: first=%d last=%d", stamps[0], stamps[len(stamps)-1])
+	count := counter.SampleCount()
+	if count == 0 {
+		t.Fatalf("%s sample count is zero", name)
+	}
+	t.Logf("%s samples=%d", name, count)
+	check(counterID, "timestamps", reflect.TypeOf(unsafe.Pointer(nil)))
+	stampsPointer := counter.Timestamps()
+	if stampsPointer == nil {
+		t.Fatalf("%s timestamps returned nil", name)
+	}
+	stamps := append([]uint64(nil), unsafe.Slice((*uint64)(stampsPointer), int(count))...)
+	if stamps[0] == 0 || stamps[len(stamps)-1] == 0 {
+		t.Fatalf("%s timestamps have zero endpoint: first=%d last=%d", name, stamps[0], stamps[len(stamps)-1])
+	}
+	for i := 1; i < len(stamps) && i < 1024; i++ {
+		if stamps[i] < stamps[i-1] {
+			t.Fatalf("%s timestamps descend at %d: %d < %d", name, i, stamps[i], stamps[i-1])
 		}
-		for i := 1; i < len(stamps) && i < 1024; i++ {
-			if stamps[i] < stamps[i-1] {
-				t.Fatalf("counter timestamps descend at %d: %d < %d", i, stamps[i], stamps[i-1])
-			}
-		}
-		t.Logf("ALU Total Instructions timestamp range=%d..%d", stamps[0], stamps[len(stamps)-1])
+	}
+	t.Logf("%s timestamp range=%d..%d", name, stamps[0], stamps[len(stamps)-1])
 
-		valuesPointer := counter.Values()
-		if valuesPointer == nil {
-			t.Fatal("ALU Total Instructions values returned nil")
+	valuesPointer := counter.Values()
+	if valuesPointer == nil {
+		t.Fatalf("%s values returned nil", name)
+	}
+	values := append([]float64(nil), unsafe.Slice((*float64)(valuesPointer), int(count))...)
+	low, high, sum := math.Inf(1), math.Inf(-1), 0.0
+	for i, value := range values {
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			t.Fatalf("%s value[%d] is not finite: %g", name, i, value)
 		}
-		values := append([]float64(nil), unsafe.Slice((*float64)(valuesPointer), int(got))...)
-		low, high, sum := math.Inf(1), math.Inf(-1), 0.0
-		for i, value := range values {
-			if math.IsNaN(value) || math.IsInf(value, 0) {
-				t.Fatalf("ALU Total Instructions value[%d] is not finite: %g", i, value)
+		low = math.Min(low, value)
+		high = math.Max(high, value)
+		sum += value
+	}
+	if sum == 0 {
+		t.Fatalf("%s values sum to zero", name)
+	}
+	edge := min(len(values), 10)
+	t.Logf("%s value range=%g..%g sum=%g mean=%g first=%v last=%v",
+		name, low, high, sum, sum/float64(len(values)), values[:edge], values[len(values)-edge:])
+	return timelineCounterSeries{timestamps: stamps, values: values}
+}
+
+func reportTimestampShape(t *testing.T, timestamps []uint64) {
+	t.Helper()
+	const ceiling = uint64(1) << 31
+	const nearCeiling = uint64(1_000_000)
+	var drops, equal, near, longestPlateau int
+	plateau := 1
+	for i, timestamp := range timestamps {
+		if ceiling-timestamp <= nearCeiling {
+			near++
+		}
+		if i == 0 {
+			continue
+		}
+		if timestamp < timestamps[i-1] {
+			drops++
+		}
+		if timestamp == timestamps[i-1] {
+			equal++
+			plateau++
+		} else {
+			if plateau > longestPlateau {
+				longestPlateau = plateau
 			}
-			low = math.Min(low, value)
-			high = math.Max(high, value)
-			sum += value
+			plateau = 1
 		}
-		if sum == 0 {
-			t.Fatal("ALU Total Instructions values sum to zero")
+	}
+	if plateau > longestPlateau {
+		longestPlateau = plateau
+	}
+	t.Logf("counter timestamps full scan: samples=%d span=%d ceiling_delta=%d drops=%d equal_pairs=%d longest_plateau=%d within_%d_of_2^31=%d",
+		len(timestamps), timestamps[len(timestamps)-1]-timestamps[0], ceiling-timestamps[len(timestamps)-1], drops, equal, longestPlateau, nearCeiling, near)
+	reportTimestampDeltas(t, timestamps)
+}
+
+type deltaCount struct {
+	delta uint64
+	count int
+}
+
+func reportTimestampDeltas(t *testing.T, timestamps []uint64) {
+	t.Helper()
+	deltas := make([]uint64, 0, len(timestamps)-1)
+	counts := make(map[uint64]int)
+	var belowThousand int
+	for i := 1; i < len(timestamps); i++ {
+		delta := timestamps[i] - timestamps[i-1]
+		deltas = append(deltas, delta)
+		counts[delta]++
+		if delta < 1000 {
+			belowThousand++
 		}
-		edge := min(len(values), 10)
-		t.Logf("ALU Total Instructions value range=%g..%g sum=%g mean=%g first=%v last=%v",
-			low, high, sum, sum/float64(len(values)), values[:edge], values[len(values)-edge:])
+	}
+	sort.Slice(deltas, func(i, j int) bool { return deltas[i] < deltas[j] })
+	common := make([]deltaCount, 0, len(counts))
+	for delta, count := range counts {
+		common = append(common, deltaCount{delta: delta, count: count})
+	}
+	sort.Slice(common, func(i, j int) bool {
+		if common[i].count != common[j].count {
+			return common[i].count > common[j].count
+		}
+		return common[i].delta < common[j].delta
+	})
+	top := min(len(common), 10)
+	t.Logf("counter timestamp deltas: min=%d median=%d max=%d below_1000=%d top=%v",
+		deltas[0], deltas[len(deltas)/2], deltas[len(deltas)-1], belowThousand, common[:top])
+}
+
+func reportTimelineCounterMetadata(t *testing.T, check func(objc.ID, string, reflect.Type, ...any), counters gtshaderprofiler.IGTMioTimelineCounters, names []string) {
+	t.Helper()
+	scopes := make(map[uint16]int)
+	for _, name := range names {
+		key := foundation.NewStringWithString(name)
+		check(counters.GetID(), "counterForName:", reflect.TypeOf(objc.ID(0)), key)
+		counterID := counters.CounterForName(key).GetID()
+		if counterID == 0 {
+			t.Fatalf("counterForName(%q) returned nil", name)
+		}
+		counter := gtshaderprofiler.GTMioCounterDataFromID(counterID)
+		check(counterID, "counterIndex", reflect.TypeOf(uint64(0)))
+		check(counterID, "dataType", reflect.TypeOf(uint32(0)))
+		check(counterID, "maxValue", reflect.TypeOf(float64(0)))
+		check(counterID, "minValue", reflect.TypeOf(float64(0)))
+		check(counterID, "sampleInterval", reflect.TypeOf(uint64(0)))
+		check(counterID, "scope", reflect.TypeOf(uint16(0)))
+		check(counterID, "scopeIndex", reflect.TypeOf(uint64(0)))
+		check(counterID, "valueType", reflect.TypeOf(uint16(0)))
+		scope := counter.Scope()
+		scopes[scope]++
+		t.Logf("counter metadata name=%q index=%d interval=%d scope=%d scope_index=%d data_type=%d value_type=%d min=%g max=%g",
+			name, counter.CounterIndex(), counter.SampleInterval(), scope, counter.ScopeIndex(),
+			counter.DataType(), counter.ValueType(), counter.MinValue(), counter.MaxValue())
+	}
+	var scopeValues []uint16
+	for scope := range scopes {
+		scopeValues = append(scopeValues, scope)
+	}
+	sort.Slice(scopeValues, func(i, j int) bool { return scopeValues[i] < scopeValues[j] })
+	for _, scope := range scopeValues {
+		t.Logf("counter metadata scope=%d count=%d", scope, scopes[scope])
 	}
 }
 
