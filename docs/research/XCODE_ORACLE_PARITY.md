@@ -43,3 +43,44 @@ replay with them, and this is the second parity question blocked by that same
 loss. A slim timing-only export would both survive and be cheap enough to keep
 many runs of, which would additionally give every single-capture timing claim in
 this workstream a measurable variance instead of an n of 1.
+
+## The counter stream does not sit in either published timebase [V]
+
+Attributing the 137 counter series per encoder requires joining the
+`Counters_f_*.raw` sample clock to `encoderInfoData` offsets. It does not
+currently join, and the reason is a measured disagreement rather than a missing
+field.
+
+For `qwen25-05b-python-producer-tokens1-3-perfdata.gputrace`, the archive
+publishes its own timebase record:
+
+    absoluteTime    5044475728398
+    continuousTime  5181167935604
+    offset          136692207206     (continuous - absolute)
+
+    sysTS[0]        5180152293797    span 62161289 ticks = 2590.054 ms
+    cb[0].start     5044483113510    span 71500426 ticks = 2979.184 ms
+
+Applying the archive's own offset to the first counter sample:
+
+    sysTS[0] - offset  = 5043460086591
+    cb[0].start - that = 1023026919 ticks = 42.626 s   (@24 MHz)
+
+The clock rate is not the error: the mean sample period is 909.2 ticks =
+37.883 us at 24 MHz, self-consistent with the observed sample count over the
+span.
+
+The two windows have comparable spans (2590 ms vs 2979 ms), so they describe the
+same ~3 s of activity. Two such windows cannot be 42.6 s apart, so the transform
+is wrong rather than the data: `sysTS` is not anchored to `continuousTime` by
+subtracting `continuousTime - absoluteTime`.
+
+**Do not close this as "no shared anchor exists."** That conclusion was reached
+once by comparing `cb[0].start` to the profiler ring start (they agree to
+49.8 us) — but both of those come from `APSTimelineData` and were already known
+to share a clock, so the comparison says nothing about the counter stream. The
+open question is which of {domain, sign, epoch field} is misidentified.
+
+Reproduce both sides with `TestStreamDataTimebaseProbe`
+(`GPUTRACE_PROBE_STREAMDATA`) and `TestCounterFileParse`
+(`GPUTRACE_PROBE_COUNTERS`).
