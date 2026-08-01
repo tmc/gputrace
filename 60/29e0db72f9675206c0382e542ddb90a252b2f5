@@ -1,0 +1,7 @@
+landed: 6029e0d on 2026-08-01T05:14:10Z
+claude-code: 2.1.220 (Claude Code)
+model: claude-opus-5[1m]
+tty: not a tty
+pid: 65524
+ITERM_SESSION_ID: w0t1p3:BE93B99A-FA9B-469D-9C12-0B1009E84F85
+Verified before landing: suite green; gated integration tests pass on BOTH the reference archive and qwen25-05b-python-producer (genuinely independent; perfdata2/perfdata3 are byte-identical and are NOT two observations). For 6029e0d I independently re-checked the MTLB tag census: LINE=0 and SORC=0 in both archives, consistent with a stripped library.
