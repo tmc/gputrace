@@ -514,10 +514,14 @@ func TestRawProbeParserCreate(t *testing.T) {
 		width("esl_trace", a.pdESLTrace, ne)
 
 		// kick_id is not identity everywhere, and the disorder sits in short
-		// local clusters rather than scattered. That is the shape of a
-		// nearly-sorted permutation: if the records are sorted by start
-		// timestamp, kick_id maps sorted position to submission order, and
-		// the disordered sites should be exactly where timestamps tie.
+		// local clusters rather than scattered.
+		//
+		// Note what "start" means below: kick_start is NOT a tick value. It
+		// is a packed index pair, (usc_timestamp_index<<32) |
+		// system_timestamp_index, resolved through the timestamp tables. Both
+		// halves rise with time, so ordering by the packed value still orders
+		// by time, but the magnitudes and the deltas printed here are index
+		// arithmetic and mean nothing as durations.
 		ids32 := make([]uint32, nk+8)
 		starts := make([]uint64, nk)
 		if nk > 0 && a.pdKickID(pd, (*uint64)(unsafe.Pointer(&ids32[0])), 0, nk) &&
