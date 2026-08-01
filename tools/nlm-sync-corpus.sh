@@ -85,6 +85,7 @@ done
 cp -r "$REPO"/docs/*.md "$REPO"/docs/research "$STAGE/docs/" 2>/dev/null || true
 cp "$HOME"/tmp/agent-collab/gputrace/*.md "$STAGE/collab/" 2>/dev/null || true
 cp "$HOME"/tmp/gputrace-xcode-oracle-*/*.txt "$STAGE/oracle/" 2>/dev/null || true
+cp "$HOME"/tmp/gputrace-xcode-oracle-*/*.png "$STAGE/oracle/" 2>/dev/null || true
 
 # The transcript is the largest and most useful single source: it carries the
 # reasoning behind each conclusion AND each retraction. nlm chunks it at 5 MB.
