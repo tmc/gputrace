@@ -71,6 +71,19 @@ The plist uses Apple's NSKeyedArchiver format with a `$objects` array containing
 
 ## Binary Data Structures
 
+Every field below carries a confidence marker, because these layouts are read
+out of an undocumented format and not all of them are known equally well:
+
+- **[V]** Verified against the Objective-C type encodings on the
+  `GTShaderProfilerStreamData` struct accessors. These are compiled into the
+  framework and state the layout outright.
+- **[D]** Derived from the data by a check a wrong answer would have failed.
+- **[?]** Inferred from value patterns in a single archive. May be coincidence.
+
+Last checked against one archive: `version=5`, M4 Max / AGXMetalG16X. Record
+sizes and offsets come from the framework and should hold generally; the **[?]**
+*meanings* do not have that backing. Treat an unmarked claim as [?].
+
 ### pipelineStateInfoData (40 bytes/record)
 
 Maps pipeline states to function names and addresses.
@@ -78,15 +91,31 @@ Maps pipeline states to function names and addresses.
 ```text
 Offset  Size  Type    Field                     Notes
 ------  ----  ------  ----------------------    -------------------------
-0x00    4     uint32  Pipeline ID               Internal ID (27, 28, 29...)
+0x00    4     uint32  Pipeline ID           [V] Internal ID (27, 28, 29...)
 0x04    4     -       Reserved
-0x08    8     uint64  Pipeline Address          Metal PSO pointer (0x8c7464f00)
-0x10    4     uint32  Function Info Index        Index into functionInfoData
-0x14    8     -       Reserved
-0x1C    12    -       Reserved/Flags
+0x08    8     uint64  Pipeline Address      [V] Metal PSO pointer (0x8c7464f00)
+0x10    8     uint64  Object/Serial ID      [?] NOT the function info index
+0x18    4     uint32  Pipeline Ordinal      [?] 0..n-1, matches array position
+0x1C    4     uint32  Dispatch Count        [D] Times this pipeline was dispatched
+0x20    4     uint32  Function Info Index   [?] Unconfirmed; see below
+0x24    4     -       Reserved
 ```
 
 **Critical Finding:** The function string index is NOT at offset 0x18 of pipelineStateInfoData (that field often points to empty strings). Instead, use `functionInfoData[i]` at offset 28-32 (bytes `[28:32]`) as the string index into the `strings` array for correct function name resolution.
+
+**Dispatch Count (0x1C):** reads `98,144,96,96,48,96,96,98,48,2,2,2,1,37` for the
+fourteen pipelines in the test archive, matching a per-pipeline tally of
+`gpuCommandInfoData` exactly. Previously documented as reserved.
+
+**Function Info Index (0x20):** the code pairs functionInfo to pipelineState *by
+array position*. `0x20` is the likelier real link, but in this archive it and the
+ordinal at `0x18` are both `0..13`, so the data cannot distinguish them. Do not
+rely on either until an archive is found where they diverge.
+
+**Naming pipelines whose string index is empty:** prefer
+`pipelinePerformanceStatistics[<id>]["Compile Performance"]["Function Name"]`,
+keyed by the uint64 at offset 0x00. It names all fourteen pipelines in the test
+archive, including the two that resolve to an empty string via the normal path.
 
 ### functionInfoData (48 bytes/record)
 
@@ -96,8 +125,9 @@ Maps function info indices to function name strings.
 Offset  Size  Type    Field                     Notes
 ------  ----  ------  ----------------------    -------------------------
 0x00    28    -       Various metadata
-0x1C    4     uint32  String Index              Index into strings array ← KEY FIELD
-0x20    16    -       Reserved
+0x1C    4     uint32  Name String Index     [V] Index into strings array ← KEY FIELD
+0x20    4     uint32  Source File Index     [?] Index into strings array
+0x24    12    -       Reserved
 ```
 
 **Note:** The correct pipeline-to-function-name mapping uses `functionInfoData[i][28:32]` as the string index, where `i` is the Function Info Index from `pipelineStateInfoData`.
@@ -109,12 +139,23 @@ Per-dispatch timing information.
 ```text
 Offset  Size  Type    Field                     Notes
 ------  ----  ------  ----------------------    -------------------------
-0x00    4     uint32  Command Index             Dispatch sequence (0, 1, 2...)
-0x04    4     -       Unknown
-0x08    8     uint64  Pipeline Info             Upper 32 bits = pipeline index
-0x10    8     uint64  Cumulative Time (µs)      Running total, subtract previous for duration
-0x18    8     uint64  Encoder/Flags             Lower 32 bits = encoder index
+0x00    4     uint32  Command Index         [V] Dispatch sequence (0, 1, 2...)
+0x04    4     uint32  Encoder Index         [D] Owning encoder ← see below
+0x08    8     uint64  Pipeline Info         [V] Upper 32 bits = pipeline index
+0x10    8     uint64  Cumulative Time (µs)  [V] Running total, subtract previous
+0x18    4     uint32  Constant Tag          [D] Always 2 — NOT the encoder index
+0x1C    4     int32   Constant             [?] Always -1
 ```
+
+**Encoder Index (0x04):** this was previously documented at 0x18, which holds the
+constant 2 in every record — so every dispatch was attributed to encoder 2, and
+the timeline export stacked all of them onto one track with start times derived
+from the wrong encoder's base. Fixed in `internal/counter/streamdata.go`.
+
+The correct offset was established using `encoderInfoData`'s first-command index
+and command count, which tile the command stream exactly with no gaps or
+overlaps. Taking that as ground truth for which encoder owns each command, over
+864 records: `0x04` agrees for all 864, `0x08` for 465, `0x18` for none.
 
 **Duration Calculation:**
 ```go
@@ -129,12 +170,19 @@ Per-encoder timing for command encoders.
 ```text
 Offset  Size  Type    Field                     Notes
 ------  ----  ------  ----------------------    -------------------------
-0x00    8     uint64  Sequence ID               Encoder sequence identifier
-0x08    8     uint64  Start Timestamp           Raw timestamp value
-0x10    8     uint64  Cumulative Offset (µs)    End time, cumulative
-0x18    8     -       Unknown                   Possibly dependency info
-0x20    8     -       Unknown
+0x00    8     uint64  Sequence ID           [V] Encoder sequence identifier
+0x08    8     uint64  Start Timestamp       [V] Raw timestamp value
+0x10    8     uint64  Cumulative Offset(µs) [V] End time, cumulative
+0x18    4     uint32  Encoder Index         [?] 0..n-1, matches array position
+0x1C    4     uint32  First Command Index   [D] Into gpuCommandInfoData
+0x20    4     uint32  Command Buffer Index  [?] Non-contiguous across encoders
+0x24    4     uint32  Command Count         [D] Commands owned by this encoder
 ```
+
+**First Command Index / Command Count (0x1C, 0x24):** these two define the half
+open command range `[first, first+count)` each encoder owns. Across the test
+archive the twenty-one ranges tile all 864 commands with no gap and no overlap,
+which is what makes them usable as ground truth for validating other fields.
 
 ### pipelinePerformanceStatistics
 
