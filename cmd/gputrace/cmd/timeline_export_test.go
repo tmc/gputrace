@@ -43,19 +43,21 @@ func TestExportChromeTracingIncludesTimingMetadata(t *testing.T) {
 
 	var doc struct {
 		TraceEvents          []TimelineEvent        `json:"traceEvents"`
-		GputraceTiming       map[string]interface{} `json:"gputrace_timing"`
-		GputraceXcodeMetrics map[string]interface{} `json:"gputrace_xcode_metrics"`
+		OtherData struct {
+			GputraceTiming       map[string]interface{} `json:"gputrace_timing"`
+			GputraceXcodeMetrics map[string]interface{} `json:"gputrace_xcode_metrics"`
+		} `json:"otherData"`
 	}
 	if err := json.Unmarshal(data, &doc); err != nil {
 		t.Fatalf("unmarshal output: %v", err)
 	}
-	if got := uint64(doc.GputraceTiming["display_duration_ns"].(float64)); got != effective {
+	if got := uint64(doc.OtherData.GputraceTiming["display_duration_ns"].(float64)); got != effective {
 		t.Fatalf("gputrace_timing display_duration_ns = %d, want %d", got, effective)
 	}
-	if got := doc.GputraceXcodeMetrics["has_effective_gpu_time"]; got != true {
+	if got := doc.OtherData.GputraceXcodeMetrics["has_effective_gpu_time"]; got != true {
 		t.Fatalf("has_effective_gpu_time = %v, want true", got)
 	}
-	bindings := doc.GputraceXcodeMetrics["binding_candidates"].(map[string]interface{})
+	bindings := doc.OtherData.GputraceXcodeMetrics["binding_candidates"].(map[string]interface{})
 	if got, want := bindings["high_register"], "GTMioShaderBinaryData.LiveRegisterForInstructionAtIndex"; got != want {
 		t.Fatalf("binding candidate high_register = %v, want %q", got, want)
 	}

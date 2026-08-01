@@ -2208,10 +2208,22 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 	tracing := map[string]interface{}{
 		"traceEvents": allEvents,
 	}
+
+	// Provenance goes under otherData, the Trace Event Format's sanctioned slot
+	// for producer-specific metadata. It used to sit in gputrace_timing and
+	// gputrace_xcode_metrics keys at the root, which strict readers are free to
+	// reject: the format defines the top level, and those names are not in it.
+	//
+	// The content is worth keeping rather than dropping. display_duration_source
+	// says which clock a duration came from, and absent_kernel_arg_fields names
+	// the metrics we deliberately do not emit, so a reader can tell an absent
+	// field from one we forgot.
+	other := map[string]interface{}{}
 	if timeline.Timing != nil {
-		tracing["gputrace_timing"] = timelineTimingArgs(timeline.Timing)
+		other["gputrace_timing"] = timelineTimingArgs(timeline.Timing)
 	}
-	tracing["gputrace_xcode_metrics"] = timelineXcodeMetricsArgs(timeline)
+	other["gputrace_xcode_metrics"] = timelineXcodeMetricsArgs(timeline)
+	tracing["otherData"] = other
 
 	encoder := json.NewEncoder(f)
 	encoder.SetIndent("", "  ")
