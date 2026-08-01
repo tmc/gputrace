@@ -1,0 +1,12 @@
+task #18 capture attribution; authored by subagent, verified in main checkout
+date: 2026-08-01T03:50:02Z
+model: claude-opus-5[1m]  pid: 17527
+ITERM_SESSION_ID: w0t1p3:BE93B99A-FA9B-469D-9C12-0B1009E84F85
+root cause: scanFunctionNames scanned only the CS\0\0 marker; functions taken
+from a compiled shader archive are written as CUt\0 records, so their addresses
+never entered funcNames and every Ctt referencing them resolved to nothing.
+key: function address -> archive id (NOT pipeline address, which is not unique).
+verified independently: qwen3-go-layer0 17/20 -> 20/20; profiler path unchanged
+at 958/958; CUt records confirmed present in 3 local captures.
+CEILING, stated honestly: rows are correct COUNTS under an opaque archive id,
+not real names. The name is not in the capture at all.
