@@ -5,6 +5,7 @@ package agxps
 import (
 	"os"
 	"runtime"
+	"sort"
 	"testing"
 	"unsafe"
 
@@ -325,8 +326,63 @@ func TestRawProbeParserCreate(t *testing.T) {
 	t.Logf("  esl starts=%v", es)
 	t.Logf("  esl ends=%v", ee)
 	t.Logf("  esl traces=%#x", tr)
-	// NOTE: the values returned by get_esl_clique_instruction_trace are small
-	// (0x60-0x67), not pointers, so agxps_aps_clique_instruction_trace_get_*
-	// cannot be called on them directly - doing so faults. The real
-	// agxps_aps_clique_instruction_trace ref must come from somewhere else.
+	// The trace ids came back 0x61,0x60,0x63,0x62,0x65,0x64,0x67,0x66, which
+	// is exactly 0x60+(i^1): a contiguous run, reordered within adjacent
+	// pairs. Whether the swap lives in the data or in our call is the
+	// question -- a single-element read cannot be pair-swapped by anything,
+	// so it separates the two.
+	one := make([]uint64, 1)
+	for _, first := range []uint64{0, 1, 2, 3} {
+		if !a.pdESLTrace(pd, &one[0], first, 1) {
+			t.Logf("  trace[first=%d count=1] returned false", first)
+			continue
+		}
+		t.Logf("  trace[first=%d count=1] = %#x", first, one[0])
+	}
+	// Past the first 8, to see whether 8 was a boundary or just where the
+	// dump above stopped.
+	wide := make([]uint64, 16)
+	if a.pdESLTrace(pd, &wide[0], 0, 16) {
+		t.Logf("  trace[first=0 count=16] = %#x", wide)
+	}
+	// A window that does not start on an even index: if the pairing is
+	// structural in the data, the values follow the id; if it is an artifact
+	// of the copy loop, the swap re-anchors to the start of the window.
+	off := make([]uint64, 4)
+	if a.pdESLTrace(pd, &off[0], 1, 4) {
+		t.Logf("  trace[first=1 count=4] = %#x", off)
+	}
+	// The ids are not a contiguous run: they break at 8 into a second group
+	// with a high byte set. Read all of them and describe the space, rather
+	// than extrapolating a pattern from the first handful.
+	all := make([]uint64, ne)
+	if ne > 0 && a.pdESLTrace(pd, &all[0], 0, ne) {
+		seen := map[uint64]int{}
+		hi := map[uint64]int{}
+		lo := map[uint64]int{}
+		var max uint64
+		for _, v := range all {
+			seen[v]++
+			hi[v>>8]++
+			lo[v&0xff]++
+			if v > max {
+				max = v
+			}
+		}
+		t.Logf("  traces: n=%d distinct=%d max=%#x distinctHigh=%d distinctLow=%d",
+			len(all), len(seen), max, len(hi), len(lo))
+		var los []uint64
+		for v := range lo {
+			los = append(los, v)
+		}
+		sort.Slice(los, func(i, j int) bool { return los[i] < los[j] })
+		t.Logf("  low bytes present: %#x", los)
+		dup := 0
+		for _, c := range seen {
+			if c > 1 {
+				dup++
+			}
+		}
+		t.Logf("  ids appearing more than once: %d", dup)
+	}
 }
