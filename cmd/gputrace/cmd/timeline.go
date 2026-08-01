@@ -519,12 +519,14 @@ type APICall struct {
 
 // CounterTrack represents a performance counter track over time.
 type CounterTrack struct {
-	Name     string          `json:"name"`
-	Unit     string          `json:"unit"` // %, GB/s, count, etc.
-	Samples  []CounterSample `json:"samples"`
-	MinValue float64         `json:"min_value"`
-	MaxValue float64         `json:"max_value"`
-	AvgValue float64         `json:"avg_value"`
+	Name             string          `json:"name"`
+	Unit             string          `json:"unit"` // %, GB/s, count, etc.
+	XcodeGroups      []string        `json:"xcode_groups,omitempty"`
+	XcodeCatalogPath string          `json:"xcode_catalog_path,omitempty"`
+	Samples          []CounterSample `json:"samples"`
+	MinValue         float64         `json:"min_value"`
+	MaxValue         float64         `json:"max_value"`
+	AvgValue         float64         `json:"avg_value"`
 }
 
 // CounterSample represents a single counter measurement at a point in time.
@@ -995,7 +997,7 @@ func generateCounterTracks(trace *gputrace.Trace, timeline *Timeline) []CounterT
 		encoderMetrics, _ := counter.PopulateEncoderMetricsFromPerfCounterStats(perfStats)
 		tracks = append(tracks, generateCounterTracksFromPerfData(perfStats, streamStats, encoderMetrics, timeline)...)
 	}
-	return tracks
+	return applyXcodeCounterMetadata(tracks)
 }
 
 // generateCounterTracksFromCounterArchive records measured per-encoder GPU
@@ -1123,17 +1125,6 @@ func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, str
 				bandwidth = float64(metrics.MemoryBandwidth) / 1e9 / durationSec
 			}
 
-			// Shader Launch Limiter: Percentage of time shader launches are limited by resources
-			// High values indicate resource contention (registers, threadgroup memory, etc.)
-			// Estimate from register pressure
-			if metrics.AllocatedRegs > 0 {
-				// More registers = more likely to hit launch limits
-				regPressure := float64(metrics.AllocatedRegs) / 256.0 // 256 max registers typical
-				if regPressure > 1.0 {
-					regPressure = 1.0
-				}
-				shaderLaunchLimiter = regPressure * 100.0
-			}
 		}
 		if encoderMetric != nil {
 			if aluUtil == 0 {
@@ -2242,9 +2233,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 			Phase:     "M",
 			ProcessID: 1,
 			ThreadID:  threadID,
-			Args: map[string]interface{}{
-				"name": fmt.Sprintf("%s (%s)", track.Name, track.Unit),
-			},
+			Args:      counterTrackMetadataArgs(track),
 		})
 
 		// Add counter samples as events
@@ -2297,6 +2286,19 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 	encoder := json.NewEncoder(f)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(tracing)
+}
+
+func counterTrackMetadataArgs(track CounterTrack) map[string]interface{} {
+	args := map[string]interface{}{
+		"name": fmt.Sprintf("%s (%s)", track.Name, track.Unit),
+	}
+	if len(track.XcodeGroups) > 0 {
+		args["xcode_groups"] = track.XcodeGroups
+	}
+	if track.XcodeCatalogPath != "" {
+		args["xcode_catalog_path"] = track.XcodeCatalogPath
+	}
+	return args
 }
 
 // zeroIsNotAReading names the kernel-event fields that a fallback may stamp
@@ -2945,6 +2947,14 @@ func generateInteractiveHTML(timelineJSON string) string {
             color: #858585;
         }
 
+        .counter-group {
+            margin: 10px 0 4px;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #8c8c8c;
+        }
+
         .counter-track {
             padding: 6px 10px;
             margin-bottom: 4px;
@@ -3172,7 +3182,16 @@ func generateInteractiveHTML(timelineJSON string) string {
             // Populate counter list
             counterList.innerHTML = '';
             if (state.timeline.counter_tracks) {
+                let previousGroup = '';
                 state.timeline.counter_tracks.forEach(track => {
+                    const group = (track.xcode_groups || []).join(' / ');
+                    if (group && group !== previousGroup) {
+                        const heading = document.createElement('div');
+                        heading.className = 'counter-group';
+                        heading.textContent = group;
+                        counterList.appendChild(heading);
+                        previousGroup = group;
+                    }
                     const item = document.createElement('div');
                     item.className = 'counter-track';
                     item.innerHTML = ` + "`" + `
@@ -3402,7 +3421,8 @@ func generateInteractiveHTML(timelineJSON string) string {
             // Draw track label
             ctx.fillStyle = COLORS.textDim;
             ctx.font = '11px -apple-system, sans-serif';
-            ctx.fillText(track.name, 5, y + 12);
+            const group = (track.xcode_groups || []).join(' / ');
+            ctx.fillText(group ? group + ': ' + track.name : track.name, 5, y + 12);
 
             if (!track.samples || track.samples.length === 0) return;
 

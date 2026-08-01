@@ -129,6 +129,45 @@ func TestExportChromeTracingDoesNotMutateTimelineEvents(t *testing.T) {
 	}
 }
 
+func TestExportChromeTracingCounterTrackMetadataIncludesXcodeProvenance(t *testing.T) {
+	timeline := &Timeline{CounterTracks: []CounterTrack{{
+		Name:             "ALU Utilization",
+		Unit:             "Percentage of Peak ALU Performance",
+		XcodeGroups:      []string{"ALU"},
+		XcodeCatalogPath: "/Applications/Xcode-rc.app/GPUCounterGraph.plist",
+		Samples:          []CounterSample{{Timestamp: 20, Value: 42}},
+	}}}
+
+	out := filepath.Join(t.TempDir(), "timeline.json")
+	if err := exportChromeTracing(timeline, out); err != nil {
+		t.Fatalf("exportChromeTracing: %v", err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	var doc struct {
+		TraceEvents []TimelineEvent `json:"traceEvents"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	for _, event := range doc.TraceEvents {
+		if event.Name != "thread_name" || event.Args["xcode_catalog_path"] == nil {
+			continue
+		}
+		if got, want := event.Args["xcode_catalog_path"], timeline.CounterTracks[0].XcodeCatalogPath; got != want {
+			t.Fatalf("catalog path = %q, want %q", got, want)
+		}
+		groups, ok := event.Args["xcode_groups"].([]interface{})
+		if !ok || len(groups) != 1 || groups[0] != "ALU" {
+			t.Fatalf("groups = %#v, want [ALU]", event.Args["xcode_groups"])
+		}
+		return
+	}
+	t.Fatal("missing counter metadata with Xcode provenance")
+}
+
 func TestExportChromeTracingStdoutWritesCleanJSON(t *testing.T) {
 	timeline := &Timeline{
 		Events: []TimelineEvent{{
@@ -878,6 +917,26 @@ func TestGenerateCounterTracksFromCounterArchive(t *testing.T) {
 	}
 	if got, want := tracks[1].Samples[0].Value, 25.0; got != want {
 		t.Fatalf("first cost = %v, want %v", got, want)
+	}
+}
+
+func TestGenerateCounterTracksDoesNotEstimateShaderLaunchLimiter(t *testing.T) {
+	timeline := &Timeline{Encoders: []EncoderInfo{{
+		Index:     0,
+		Label:     "kernel0",
+		StartTime: 100,
+		EndTime:   200,
+		Duration:  100,
+	}}}
+	perfStats := &gputrace.PerfCounterStats{ShaderMetrics: []gputrace.ShaderHardwareMetrics{{
+		ShaderName:    "kernel0",
+		AllocatedRegs: 128,
+	}}}
+
+	tracks := generateCounterTracksFromPerfData(perfStats, nil, nil, timeline)
+	limiter := findCounterTrackForTest(t, tracks, "Shader Launch Limiter")
+	if counterTrackHasSignal(limiter) {
+		t.Fatalf("shader launch limiter = %+v, want no signal without a measured limiter", limiter.Samples)
 	}
 }
 
