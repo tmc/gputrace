@@ -42,10 +42,31 @@ through `GTShaderProfilerStreamData.dataFromArchivedDataURL:` and reports:
   443520, 230208, 192192, 193600, 80640, 41856, 34944, 35200, and 80896
   bytes across the sampled children.
 
-The dispatch ALU utilization gap is closed for this trace:
-`Counters_f_12.raw` is source-backed, exports zero for all encoder rows, and
-gputrace now carries that zero into all kernel events and pprof samples with
-counter-source provenance. The remaining exporter gaps are:
+Neither the dispatch occupancy gap nor the dispatch ALU utilization gap is
+closed. [V] This section previously claimed both were, on the grounds that the
+encoder counter fallback carried a value into every kernel event and pprof
+sample "with counter-source provenance". The value it carried was zero, and the
+zero came from an `EncoderCounterMetrics` that nothing had written to -- not
+from `Counters_f_12.raw`, which gputrace does not decode.
+
+[V] Xcode reports ALU Utilization of 1.59, 1.87, 1.58, 2.12, 1.47, 1.39, 2.10,
+1.50, 2.03, 2.70, 0.08, 0.02, 1.91, 2.47, 1.91, 2.00, 1.50, 1.78, 1.58, 1.97,
+1.69, 3.35 and 0.48 percent for the 23 encoders of
+`qwen25-05b-staticmask-warm-tokens2-4-rep1`, in both its CSV export and its live
+Counters inspector. gputrace emitted 0.00 for all 23.
+
+A field carrying a value is not parity, and a value nobody compared against
+Xcode is not evidence. Treat a gap as closed only when a nonzero value has been
+checked against Xcode's for the same encoder.
+
+The exporter gaps are:
+
+- `alu_utilization_pct`: `Derived Counter Sample Data` is present in stream
+  data but is not decoded. `Counters_f_12.raw` is named by
+  `GPUCounterGraph.plist` as the ALU Utilization file but its record layout is
+  not established, so no offset can be read from it.
+- `occupancy_pct`: Kernel Occupancy is a sampled hardware counter and is not
+  archived. See the occupancy notes in the parity documentation.
 
 - `occupancy_pct`: not archived anywhere in the trace bundle. Xcode's
   Occupancy is a GPU performance counter sampled at capture time; the string
