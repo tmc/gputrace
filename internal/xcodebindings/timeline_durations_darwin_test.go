@@ -163,6 +163,18 @@ func checkTimelineCounters(t *testing.T, timeline objc.ID) {
 		t.Fatal("timeline counter dictionary is empty")
 	} else {
 		t.Logf("timeline counter dictionary entries=%d", got)
+		check(dictionary.GetID(), "allKeys", reflect.TypeOf(objc.ID(0)))
+		keys := dictionary.AllKeys()
+		if len(keys) != int(got) {
+			t.Fatalf("timeline counter keys = %d, want %d", len(keys), got)
+		}
+		names := make([]string, 0, len(keys))
+		for _, key := range keys {
+			check(key.GetID(), "UTF8String", reflect.TypeOf((*byte)(nil)))
+			names = append(names, foundation.NSStringFromID(key.GetID()).UTF8String())
+		}
+		sort.Strings(names)
+		t.Logf("timeline counter names=%q", names)
 	}
 
 	name := foundation.NewStringWithString("ALU Total Instructions")
