@@ -4,6 +4,7 @@ package xcodebindings
 
 import (
 	"encoding/binary"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -173,10 +174,9 @@ func checkTimelineCounters(t *testing.T, timeline objc.ID) {
 	counter := gtshaderprofiler.GTMioCounterDataFromID(counterID)
 	check(counterID, "name", reflect.TypeOf(objc.ID(0)))
 	check(counterID, "sampleCount", reflect.TypeOf(uint64(0)))
-	// The current generated Values wrapper is not called: objcinspect verifies
-	// that the runtime returns ^d, while the generated API incorrectly declares
-	// []float64. The generator gap is filed separately; sampleCount supplies the
-	// eventual bound, but this probe never guesses a slice from the pointer.
+	// The generated binding returns the runtime's ^d pointer. SampleCount is the
+	// independently checked bound, and the copy keeps the series valid after
+	// this Objective-C autorelease pool drains.
 	check(counterID, "values", reflect.TypeOf(unsafe.Pointer(nil)))
 	if got, want := counter.Name(), "ALU Total Instructions"; got != want {
 		t.Fatalf("counter name = %q, want %q", got, want)
@@ -196,6 +196,27 @@ func checkTimelineCounters(t *testing.T, timeline objc.ID) {
 			}
 		}
 		t.Logf("ALU Total Instructions timestamp range=%d..%d", stamps[0], stamps[len(stamps)-1])
+
+		valuesPointer := counter.Values()
+		if valuesPointer == nil {
+			t.Fatal("ALU Total Instructions values returned nil")
+		}
+		values := append([]float64(nil), unsafe.Slice((*float64)(valuesPointer), int(got))...)
+		low, high, sum := math.Inf(1), math.Inf(-1), 0.0
+		for i, value := range values {
+			if math.IsNaN(value) || math.IsInf(value, 0) {
+				t.Fatalf("ALU Total Instructions value[%d] is not finite: %g", i, value)
+			}
+			low = math.Min(low, value)
+			high = math.Max(high, value)
+			sum += value
+		}
+		if sum == 0 {
+			t.Fatal("ALU Total Instructions values sum to zero")
+		}
+		edge := min(len(values), 10)
+		t.Logf("ALU Total Instructions value range=%g..%g sum=%g mean=%g first=%v last=%v",
+			low, high, sum, sum/float64(len(values)), values[:edge], values[len(values)-edge:])
 	}
 }
 
