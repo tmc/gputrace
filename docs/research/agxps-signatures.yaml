@@ -246,7 +246,25 @@ symbols:
 # Superseded speculation kept only to mark it dead:
 # shape is also wrong. UNRESOLVED -- do not encode a guess for it.
 
-# Standing hazard for this framework, five kinds so far.
+  - name: agxps_counter_is_valid
+    verified: runtime
+    returns: bool
+    params: [uint64 ident]
+    note: >
+      Accepts 0..196914, which is NOT the counter table. The counter accessors
+      stop returning distinct hash-shaped names at ident 1926, stop returning
+      hash-shaped names at all around 52867, and ident 196914 reads
+      "AGenInstructions" -- unrelated memory. 578 raw counter hashes are
+      attested by direct byte scan of the framework, so none of those three
+      numbers is the table size either.
+
+      Do NOT use this as a bound. It is a bound on some other vector, and
+      walking it enumerated 196915 idents that were logged in the same format
+      as real entries, of which only 11581 names were even distinct. Bound the
+      table by the shape of what the accessors return instead; see
+      internal/agxps/counterprobe_manual_test.go.
+
+# Standing hazard for this framework, six kinds so far.
 # Every wrong reading here produced plausible values rather than an error:
 #   1. wrong ARGUMENT SHAPE  -- indexed getters returned plausible garbage
 #   2. wrong ELEMENT WIDTH   -- a uint32 array read as uint64 fused pairs into
@@ -261,6 +279,10 @@ symbols:
 #                               accessor, not a (pd) -> count scalar, and
 #                               get_counter_names yields char pointers rather
 #                               than the idents the counter_* API accepts
+#   6. wrong BOUND           -- counter_is_valid returns false eventually, at
+#                               196915, which reads as a table size and is not
+#                               one. A validator that rejects SOMETHING looks
+#                               like it rejects the right thing
 # Nothing about this API fails loudly. Assume a plausible result is unverified
 # until measured, and record HOW each claim was established, not just what it
 # says. Two negative observations that look like measurements but are not:
