@@ -42,8 +42,8 @@ func TestExportChromeTracingIncludesTimingMetadata(t *testing.T) {
 	}
 
 	var doc struct {
-		TraceEvents          []TimelineEvent        `json:"traceEvents"`
-		OtherData struct {
+		TraceEvents []TimelineEvent `json:"traceEvents"`
+		OtherData   struct {
 			GputraceTiming       map[string]interface{} `json:"gputrace_timing"`
 			GputraceXcodeMetrics map[string]interface{} `json:"gputrace_xcode_metrics"`
 		} `json:"otherData"`
@@ -181,6 +181,24 @@ func TestTimelineOutputPath(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := timelineOutputPath(tt.format, tt.output); got != tt.want {
 				t.Fatalf("timelineOutputPath(%q, %q) = %q, want %q", tt.format, tt.output, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTimelineDurationPhase(t *testing.T) {
+	tests := []struct {
+		name string
+		dur  uint64
+		want string
+	}{
+		{name: "zero", dur: 0, want: "i"},
+		{name: "one microsecond", dur: 1, want: "X"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := timelineDurationPhase(test.dur); got != test.want {
+				t.Fatalf("timelineDurationPhase(%d) = %q, want %q", test.dur, got, test.want)
 			}
 		})
 	}
@@ -400,6 +418,14 @@ func TestTimelineTimingSourceHelpersMarkProfilerMeasured(t *testing.T) {
 
 func TestAddDispatchKernelEventsIncludesXcodeShaderArgs(t *testing.T) {
 	timeline := &Timeline{
+		Events: []TimelineEvent{{
+			Name:      "encoder0",
+			Category:  "encoder",
+			Phase:     "X",
+			ProcessID: 1,
+			ThreadID:  2,
+			Args:      map[string]interface{}{"index": 0},
+		}},
 		Encoders: []EncoderInfo{{
 			Index:     0,
 			Label:     "encoder0",
@@ -466,12 +492,15 @@ func TestAddDispatchKernelEventsIncludesXcodeShaderArgs(t *testing.T) {
 	if got := len(timeline.Kernels); got != 1 {
 		t.Fatalf("kernels = %d, want 1", got)
 	}
-	if got := len(timeline.Events); got != 1 {
-		t.Fatalf("events = %d, want 1", got)
+	if got := len(timeline.Events); got != 2 {
+		t.Fatalf("events = %d, want 2", got)
 	}
-	ev := timeline.Events[0]
+	ev := timeline.Events[1]
 	if ev.Name != "kernel0" || ev.Category != "kernel" {
 		t.Fatalf("event = %s/%s, want kernel0/kernel", ev.Name, ev.Category)
+	}
+	if got, want := ev.ThreadID, 2; got != want {
+		t.Fatalf("dispatch tid = %d, want encoder tid %d", got, want)
 	}
 	if got, want := ev.Timestamp, uint64(1); got != want {
 		t.Fatalf("timestamp = %d, want %d", got, want)

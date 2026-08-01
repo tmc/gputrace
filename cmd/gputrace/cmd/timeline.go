@@ -789,6 +789,7 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 		// whole time.
 		for _, cb := range ti.CommandBufferTimestamps {
 			durationNs := cb.DurationNs(ti.TimebaseNumer, ti.TimebaseDenom)
+			durationUs := durationNs / 1000
 			var rawStartOffsetNs uint64
 			if cb.StartTicks > ti.AbsoluteTime {
 				rawStartOffsetNs = (cb.StartTicks - ti.AbsoluteTime) * ti.TimebaseNumer / ti.TimebaseDenom
@@ -797,9 +798,9 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 			event := TimelineEvent{
 				Name:      fmt.Sprintf("CB#%d", cb.Index),
 				Category:  "command_buffer",
-				Phase:     "X",                   // Duration event
+				Phase:     timelineDurationPhase(durationUs),
 				Timestamp: rawStartOffsetNs / 1000, // Convert to microseconds for Chrome format
-				Duration:  durationNs / 1000,
+				Duration:  durationUs,
 				ProcessID: 1,
 				ThreadID:  0,
 				Args: map[string]interface{}{
@@ -1554,6 +1555,10 @@ func addEncoderKernelEvents(timeline *Timeline, trace *gputrace.Trace, sourceMap
 		}
 		timeline.Kernels = append(timeline.Kernels, kernelInfo)
 
+		threadID := lanes.assign(encoder.StartTime/1000, encoder.Duration/1000)
+		if id, ok := timelineEncoderThreadID(timeline, encoder.Index); ok {
+			threadID = id
+		}
 		timeline.Events = append(timeline.Events, TimelineEvent{
 			Name:      encoder.Label,
 			Category:  "kernel",
@@ -1561,7 +1566,7 @@ func addEncoderKernelEvents(timeline *Timeline, trace *gputrace.Trace, sourceMap
 			Timestamp: encoder.StartTime / 1000,
 			Duration:  encoder.Duration / 1000,
 			ProcessID: 1,
-			ThreadID:  lanes.assign(encoder.StartTime/1000, encoder.Duration/1000),
+			ThreadID:  threadID,
 			Args:      args,
 		})
 	}
@@ -1650,6 +1655,15 @@ func addDispatchKernelEvents(timeline *Timeline, stats *counter.StreamDataStats,
 			timeline.EndTime = info.EndTime
 		}
 
+		threadID := lanes.assign(startNs/1000, durationNs/1000)
+		if d.EncoderIndex >= 0 && d.EncoderIndex < len(timeline.Encoders) {
+			encoder := timeline.Encoders[d.EncoderIndex]
+			if startNs >= encoder.StartTime && info.EndTime <= encoder.EndTime {
+				if id, ok := timelineEncoderThreadID(timeline, d.EncoderIndex); ok {
+					threadID = id
+				}
+			}
+		}
 		timeline.Events = append(timeline.Events, TimelineEvent{
 			Name:      name,
 			Category:  "kernel",
@@ -1657,11 +1671,27 @@ func addDispatchKernelEvents(timeline *Timeline, stats *counter.StreamDataStats,
 			Timestamp: startNs / 1000,
 			Duration:  durationNs / 1000,
 			ProcessID: 1,
-			ThreadID:  lanes.assign(startNs/1000, durationNs/1000),
+			ThreadID:  threadID,
 			Args:      args,
 		})
 	}
 	return true
+}
+
+// timelineEncoderThreadID returns the lane used by an encoder event. Dispatches
+// in that encoder use the same lane so Perfetto shows them inside its span.
+func timelineEncoderThreadID(timeline *Timeline, index int) (int, bool) {
+	if timeline == nil {
+		return 0, false
+	}
+	for _, event := range timeline.Events {
+		eventIndex, ok := timelineEventArgInt(event.Args, "index")
+		if event.Category != "encoder" || !ok || eventIndex != index {
+			continue
+		}
+		return event.ThreadID, true
+	}
+	return 0, false
 }
 
 func dispatchKernelArgs(d counter.DispatchInfo, p *counter.PipelineStats, simdGroups uint64, simdCostPct float64, shader *gputrace.ShaderMetrics, hardware *counter.ShaderHardwareMetrics, encoderMetric *counter.EncoderCounterMetrics, sourceMapper *gputrace.ShaderSourceMapper) map[string]interface{} {
@@ -1932,6 +1962,16 @@ func timelineMetricsSource(metrics *gputrace.TimingMetrics) string {
 	return fmt.Sprint(metrics.TimingSource)
 }
 
+// timelineDurationPhase returns the Chrome trace phase for a duration expressed
+// in microseconds. A zero duration has no dur field in JSON, so it is an
+// instant marker rather than a malformed complete event.
+func timelineDurationPhase(durationUs uint64) string {
+	if durationUs == 0 {
+		return "i"
+	}
+	return "X"
+}
+
 // exportChromeTracing exports timeline in Chrome tracing format.
 func exportChromeTracing(timeline *Timeline, outputPath string) error {
 	f, closeOutput, err := createCommandOutput(outputPath)
@@ -1971,7 +2011,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 			ProcessID: 1,
 			ThreadID:  1,
 			Args: map[string]interface{}{
-				"name": "Encoders Lane 0 (cumulative busy)",
+				"name": "Encoders and Dispatches Lane 0 (cumulative busy)",
 			},
 		},
 		{
@@ -1981,7 +2021,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 			ProcessID: 1,
 			ThreadID:  2,
 			Args: map[string]interface{}{
-				"name": "Encoders Lane 1 (cumulative busy)",
+				"name": "Encoders and Dispatches Lane 1 (cumulative busy)",
 			},
 		},
 		{
@@ -1991,7 +2031,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 			ProcessID: 1,
 			ThreadID:  3,
 			Args: map[string]interface{}{
-				"name": "Kernels Lane 0 (cumulative busy)",
+				"name": "Unattributed Dispatches Lane 0 (cumulative busy)",
 			},
 		},
 		{
@@ -2001,7 +2041,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 			ProcessID: 1,
 			ThreadID:  4,
 			Args: map[string]interface{}{
-				"name": "Kernels Lane 1 (cumulative busy)",
+				"name": "Unattributed Dispatches Lane 1 (cumulative busy)",
 			},
 		},
 		{
@@ -2011,7 +2051,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 			ProcessID: 1,
 			ThreadID:  5,
 			Args: map[string]interface{}{
-				"name": "Kernels Lane 2 (cumulative busy)",
+				"name": "Unattributed Dispatches Lane 2 (cumulative busy)",
 			},
 		},
 		{
@@ -2021,7 +2061,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 			ProcessID: 1,
 			ThreadID:  6,
 			Args: map[string]interface{}{
-				"name": "Kernels Lane 3 (cumulative busy)",
+				"name": "Unattributed Dispatches Lane 3 (cumulative busy)",
 			},
 		},
 		{
@@ -2529,6 +2569,7 @@ func buildTimelineFromProfilerData(tracePath string, stats *counter.StreamDataSt
 		// other command-buffer emitter: packing erased all idle time.
 		for _, cb := range stats.Timeline.CommandBufferTimestamps {
 			durationNs := cb.DurationNs(timebaseNumer, timebaseDenom)
+			durationUs := durationNs / 1000
 			var rawStartOffsetNs uint64
 			if cb.StartTicks > absoluteTime {
 				rawStartOffsetNs = (cb.StartTicks - absoluteTime) * timebaseNumer / timebaseDenom
@@ -2537,9 +2578,9 @@ func buildTimelineFromProfilerData(tracePath string, stats *counter.StreamDataSt
 			event := TimelineEvent{
 				Name:      fmt.Sprintf("CB#%d", cb.Index),
 				Category:  "command_buffer",
-				Phase:     "X",
+				Phase:     timelineDurationPhase(durationUs),
 				Timestamp: rawStartOffsetNs / 1000, // Convert to µs for Chrome format
-				Duration:  durationNs / 1000,
+				Duration:  durationUs,
 				ProcessID: 1,
 				ThreadID:  0,
 				Args: map[string]interface{}{
@@ -3619,7 +3660,7 @@ func generateInteractiveHTML(timelineJSON string) string {
 // Slices must be offered in nondecreasing start order; callers walk the
 // dispatch and encoder lists, which are already ordered by cumulative time.
 type lanePacker struct {
-	base int     // ThreadID of lane 0
+	base int      // ThreadID of lane 0
 	ends []uint64 // end timestamp of the last slice placed in each lane
 }
 
