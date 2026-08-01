@@ -259,6 +259,7 @@ func generateSourceLinesPprof(tracePath string, opts *pprofOptions) error {
 
 	timingSelection := selectSourceLineTimings(trace)
 	fmt.Fprint(status, formatSourceLineTimingNotice(timingSelection.source, len(timingSelection.timings)))
+	fmt.Fprint(status, sourceLineGranularityNotice)
 	timings := timingSelection.timings
 	timings = appendSourceMappedEncoderTimings(trace, timings, mapper)
 
@@ -284,7 +285,7 @@ func generateSourceLinesPprof(tracePath string, opts *pprofOptions) error {
 	}
 
 	fmt.Fprintf(status, "Source-lines pprof written: %s\n", outputPath)
-	fmt.Fprintf(status, "\nView per-line costs with:\n")
+	fmt.Fprintf(status, "\nLocate a kernel in its source with:\n")
 	fmt.Fprintf(status, "  go tool pprof -list <kernel_name> %s\n", outputPath)
 	fmt.Fprintf(status, "\nOr interactive mode:\n")
 	fmt.Fprintf(status, "  go tool pprof %s\n", outputPath)
@@ -345,6 +346,19 @@ func sourceLineProfilerTimings(profilerTimings []gputrace.EncoderTimingInfo) []*
 	}
 	return timings
 }
+
+// sourceLineGranularityNotice states the granularity of --source-lines output.
+//
+// A kernel's whole duration lands on the one line where the kernel is
+// declared, because that is the only line the mapper can identify. Nothing in
+// the trace says how the cost is spread across the kernel body: the archived
+// MTLLibrary carries no debug-info section, and no counter record carries a
+// program counter or a source line. Without this notice a `pprof -list`
+// listing reads as a per-line measurement, which it is not.
+//
+// See docs/research/SOURCE_LEVEL_COST.md for the evidence.
+const sourceLineGranularityNotice = "Granularity: per kernel, not per line. Each kernel's cost is reported at its\n" +
+	"declaration line; the trace carries no cost breakdown within a kernel body.\n"
 
 func formatSourceLineTimingNotice(source sourceLineTimingSource, count int) string {
 	switch source {
