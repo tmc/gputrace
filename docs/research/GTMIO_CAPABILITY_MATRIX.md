@@ -385,8 +385,25 @@ wrapped in an opt-in path.
   `nonOverlappingTimeline` (`@16@0:8`) each returned a real
   `GTMioTraceTimelineData`, but all had count 0. This is a successful lazy
   load with no additional samples, not a usable timeline export.
+- [V] There are two populated counter dictionaries, not one, and they share no
+  names. `nonOverlappingTimeline.timelineCounters` carries 19 counters, all
+  plaintext, all memory-side: `AF Bandwidth`, `L2 Cache Limiter`,
+  `MMU Utilization`, `Texture Cache Utilization`, and so on, each with 112972
+  samples on the 11-encoder `qwen25-05b-static_tokens_2_to_3-wperfdata`
+  archive. The `costTimeline` child reached through the archive seam carries a
+  different 30, 17 plaintext and 13 opaque 64-hex, and those are the
+  shader-side ALU counters. Intersecting the two name sets yields nothing.
+  Which timeline object you ask decides which family you get, and the opaque
+  identifiers are confined to `costTimeline`.
+
+  Reading the 19 needs care: `Texture Read Limiter` reports a peak of
+  8.99e10 where every sibling limiter is a percentage bounded near 101. Treat
+  that column as unread until the encoding is established, not as a large
+  measurement.
 - On the setup-path model, `timelineCounters` (`@16@0:8`) returned a real
-  `GTMioTimelineCounters` whose counter dictionary was empty. `nonOverlappingCounters`
+  `GTMioTimelineCounters` whose counter dictionary was empty. That result stands
+  only for the top-level model; see the entry above for the two timeline
+  children, which are populated. `nonOverlappingCounters`
   (`@16@0:8`) returned a real object with 832 encoder, 72 draw, and 72 pipeline
   slots; its name arrays included `ALU Total Instructions`, `ALU F16
   Instructions`, and `ALU F32 Instructions`. The first derived objects were
