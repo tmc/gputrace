@@ -35,7 +35,6 @@ type ShaderHardwareMetrics struct {
 	DeviceStoreCount               int     // Device memory store instructions
 	HasPipelineStats               bool    // Compiler statistics were found for this shader
 	ALUUtilization                 float64 // ALU utilization percentage (0-100)
-	KernelOccupancy                float64 // Kernel occupancy percentage (0-100)
 	MemoryBandwidth                uint64  // Memory bandwidth used (bytes)
 	ExecutionCount                 int     // Number of times this shader executed
 	TotalCycles                    uint64  // Total GPU cycles spent
@@ -114,7 +113,7 @@ type CounterRecord struct {
 // This function extracts detailed GPU execution metrics including:
 // - Shader execution counts and timing
 // - Register allocation and spill data
-// - ALU utilization and kernel occupancy
+// - ALU utilization
 // - Memory bandwidth usage
 //
 // Returns PerfCounterStats with hardware metrics, or error if parsing fails.

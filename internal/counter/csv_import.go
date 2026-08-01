@@ -18,12 +18,17 @@ type CSVCounterData struct {
 
 // CSVEncoderMetrics represents metrics for a single encoder from CSV.
 type CSVEncoderMetrics struct {
-	Index                          int
-	EncoderFunctionIndex           int
-	CommandBufferLabel             string
-	EncoderLabel                   string
-	ALUUtilization                 float64
-	KernelInvocations              int
+	Index                int
+	EncoderFunctionIndex int
+	CommandBufferLabel   string
+	EncoderLabel         string
+	ALUUtilization       float64
+	KernelInvocations    int
+	// KernelOccupancy is Xcode's own measured occupancy column. It is recorded
+	// here because it is in the file, but it is deliberately not propagated into
+	// gputrace's metrics: gputrace cannot produce this number from a trace
+	// bundle, and a field that is populated only when a user happens to supply a
+	// CSV reads as a measurement gputrace made.
 	KernelOccupancy                float64
 	KernelALUPerformance           float64 // ALU performance percentage (higher = more efficient)
 	BytesReadFromDeviceMemory      uint64
@@ -259,7 +264,6 @@ func EnhanceMetricsFromCSV(stats *PerfCounterStats, csvData *CSVCounterData) err
 // applyCSVEnhancement applies CSV data to a shader metric
 func applyCSVEnhancement(metric *ShaderHardwareMetrics, csvEnc *CSVEncoderMetrics) {
 	metric.ALUUtilization = csvEnc.ALUUtilization
-	metric.KernelOccupancy = csvEnc.KernelOccupancy
 	metric.BytesReadFromDeviceMemory = csvEnc.BytesReadFromDeviceMemory
 	metric.BytesWrittenToDeviceMemory = csvEnc.BytesWrittenToDeviceMemory
 	metric.BufferDeviceMemoryBytesRead = csvEnc.BufferDeviceMemoryBytesRead

@@ -162,7 +162,6 @@ func (e *CountersCSVExporter) generateCounterRowFromBinaryData(index, functionIn
 	// Core metrics from binary parsing (validated 100% accurate)
 	values["Kernel Invocations"] = float64(metrics.DispatchCount) // 100% accurate from gputrace-44
 	values["ALU Utilization"] = metrics.ALUUtilization            // From CSV enhancement (gputrace-63)
-	values["Kernel Occupancy"] = metrics.KernelOccupancy          // From CSV enhancement (gputrace-63)
 
 	// Utilization metrics
 	values["Compute Shader Utilization"] = metrics.ComputeUtilization
@@ -263,6 +262,12 @@ func (e *CountersCSVExporter) generateCounterRowFromBinaryData(index, functionIn
 	// Map values to CSV columns (6-246)
 	for i := 6; i < 247; i++ {
 		metricName := getMetricNameForColumn(i)
+		if unmeasurableCounters[metricName] {
+			// Leave blank rather than 0.00: a zero here would read as a
+			// measurement gputrace made.
+			row[i] = ""
+			continue
+		}
 		if val, exists := values[metricName]; exists {
 			// Format based on metric type
 			if metricName == "Kernel Invocations" ||
@@ -283,6 +288,15 @@ func (e *CountersCSVExporter) generateCounterRowFromBinaryData(index, functionIn
 	return row
 }
 
+// unmeasurableCounters names Xcode counter columns that gputrace has no way to
+// produce from a trace bundle. Occupancy is a GPU counter sampled at capture
+// time; it is not archived in streamData, and on Apple9 registers and
+// threadgroup memory are allocated dynamically from L1, so no static residency
+// model can supply one either.
+var unmeasurableCounters = map[string]bool{
+	"Kernel Occupancy": true,
+}
+
 // generateSyntheticCountersSimple creates synthetic counter values.
 // Uses the same estimation approach as the timeline command.
 func (e *CountersCSVExporter) generateSyntheticCountersSimple() map[string]float64 {
@@ -290,7 +304,6 @@ func (e *CountersCSVExporter) generateSyntheticCountersSimple() map[string]float
 
 	// Core metrics (matching timeline estimates)
 	values["ALU Utilization"] = 65.0                  // 65% ALU utilization
-	values["Kernel Occupancy"] = 75.0                 // 75% occupancy
 	values["Buffer Device Memory Bytes Read"] = 25.15 // MB/s estimate
 	values["Buffer Device Memory Bytes Written"] = 19.95
 	values["Buffer L1 Miss Rate"] = 10.57 // 10.57% miss rate
@@ -323,7 +336,6 @@ func (e *CountersCSVExporter) generateSyntheticCountersSimple() map[string]float
 
 	// Assume compute encoder (most common in ML workloads)
 	values["Compute Shader Utilization"] = 70.0
-	values["Kernel Occupancy"] = 75.0
 
 	// Fragment/Vertex shader metrics (set to 0 for compute, would be populated for render)
 	values["FS ALU Utilization"] = 0.0

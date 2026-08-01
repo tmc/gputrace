@@ -184,7 +184,6 @@ type EncoderCounterMetrics struct {
 
 	// Hardware metrics (if available from Apple GPU counters)
 	ALUUtilization  float64 // 0-100%
-	KernelOccupancy float64 // 0-100% (kernel occupancy percentage)
 	CacheHitRate    float64 // 0-100%
 	MemoryBandwidth uint64  // Bytes (total)
 
@@ -637,31 +636,14 @@ func PopulateEncoderMetricsFromBinaryParsing(t *trace.Trace) ([]EncoderCounterMe
 		return nil, err
 	}
 
-	return PopulateEncoderMetricsFromPerfCounterStats(t, stats)
+	return PopulateEncoderMetricsFromPerfCounterStats(stats)
 }
 
 // PopulateEncoderMetricsFromPerfCounterStats converts parsed performance counter
 // data into encoder-level counter metrics.
-func PopulateEncoderMetricsFromPerfCounterStats(t *trace.Trace, stats *PerfCounterStats) ([]EncoderCounterMetrics, error) {
+func PopulateEncoderMetricsFromPerfCounterStats(stats *PerfCounterStats) ([]EncoderCounterMetrics, error) {
 	if stats == nil {
 		return nil, fmt.Errorf("nil performance counter stats")
-	}
-
-	var profilingMetrics []*ProfilingMetrics
-	if t != nil {
-		// Also parse Kernel Occupancy from Profiling_f_*.raw files (gputrace-78)
-		var err error
-		profilingMetrics, err = ParseProfilingFiles(t)
-		if err != nil {
-			// Profiling data is optional - if not available, continue without it
-			profilingMetrics = nil
-		}
-	}
-
-	// Create a map of encoder index to profiling metrics for easy lookup
-	profilingByEncoder := make(map[int]*ProfilingMetrics)
-	for _, pm := range profilingMetrics {
-		profilingByEncoder[pm.EncoderIndex] = pm
 	}
 
 	metrics := make([]EncoderCounterMetrics, 0, len(stats.ShaderMetrics))
@@ -736,15 +718,6 @@ func PopulateEncoderMetricsFromPerfCounterStats(t *trace.Trace, stats *PerfCount
 			// Timing (estimate from cycles if available)
 			DurationCycles: shaderMetric.TotalCycles,
 			Duration:       estimateDurationNs(shaderMetric.TotalCycles),
-		}
-
-		// Override Kernel Occupancy with real data from Profiling files if available (gputrace-78)
-		// Profiling_f_*.raw files contain accurate Kernel Occupancy using frequency-based extraction
-		if profilingData, found := profilingByEncoder[i]; found {
-			metric.KernelOccupancy = profilingData.KernelOccupancy // Already in 0-100 percentage format
-		} else {
-			// Fallback to heuristic from Counters files (less reliable)
-			metric.KernelOccupancy = shaderMetric.KernelOccupancy
 		}
 
 		metrics = append(metrics, metric)

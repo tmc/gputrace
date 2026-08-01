@@ -259,7 +259,6 @@ func TestPopulateEncoderMetricsFromPerfCounterStats(t *testing.T) {
 		ShaderMetrics: []ShaderHardwareMetrics{{
 			ShaderName:                     "kernel0",
 			ALUUtilization:                 3.25,
-			KernelOccupancy:                0.81,
 			MemoryBandwidth:                4096,
 			ExecutionCount:                 7,
 			DeviceMemoryBandwidthGBps:      12.5,
@@ -271,7 +270,7 @@ func TestPopulateEncoderMetricsFromPerfCounterStats(t *testing.T) {
 		}},
 	}
 
-	got, err := PopulateEncoderMetricsFromPerfCounterStats(nil, stats)
+	got, err := PopulateEncoderMetricsFromPerfCounterStats(stats)
 	if err != nil {
 		t.Fatalf("PopulateEncoderMetricsFromPerfCounterStats: %v", err)
 	}
@@ -284,9 +283,6 @@ func TestPopulateEncoderMetricsFromPerfCounterStats(t *testing.T) {
 	}
 	if m.ALUUtilization != 3.25 {
 		t.Fatalf("ALUUtilization = %v, want 3.25", m.ALUUtilization)
-	}
-	if m.KernelOccupancy != 0.81 {
-		t.Fatalf("KernelOccupancy = %v, want 0.81", m.KernelOccupancy)
 	}
 	if m.ComputeUtilization != 3.25 {
 		t.Fatalf("ComputeUtilization = %v, want 3.25", m.ComputeUtilization)
@@ -306,7 +302,7 @@ func TestPopulateEncoderMetricsFromPerfCounterStats(t *testing.T) {
 }
 
 func TestPopulateEncoderMetricsFromPerfCounterStatsNilStats(t *testing.T) {
-	if _, err := PopulateEncoderMetricsFromPerfCounterStats(nil, nil); err == nil {
-		t.Fatal("PopulateEncoderMetricsFromPerfCounterStats(nil, nil) succeeded, want error")
+	if _, err := PopulateEncoderMetricsFromPerfCounterStats(nil); err == nil {
+		t.Fatal("PopulateEncoderMetricsFromPerfCounterStats(nil) succeeded, want error")
 	}
 }

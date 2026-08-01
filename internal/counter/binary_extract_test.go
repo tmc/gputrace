@@ -28,7 +28,6 @@ func TestExtractFromBinary(t *testing.T) {
 		t.Logf("Metric %d: %s", i, metric.ShaderName)
 		t.Logf("  Execution Count: %d", metric.ExecutionCount)
 		t.Logf("  ALU Utilization: %.2f%%", metric.ALUUtilization)
-		t.Logf("  Kernel Occupancy: %.2f%%", metric.KernelOccupancy)
 		t.Logf("  Bytes Read: %d", metric.BytesReadFromDeviceMemory)
 		t.Logf("  Bytes Written: %d", metric.BytesWrittenToDeviceMemory)
 		t.Logf("  Total Bandwidth: %d bytes", metric.MemoryBandwidth)
