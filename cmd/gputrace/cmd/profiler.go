@@ -196,7 +196,10 @@ func runProfiler(cmd *cobra.Command, args []string, opts *profilerOptions) error
 			fmt.Printf("%-10d %9s %14s %10d%s\n",
 				c.Ordinal, FormatPercent(c.CostPercent), FormatCount(int(c.GPUCycles)), c.EndRecords, mark)
 		}
-		fmt.Println("Differs from Xcode's Execution Cost column by up to ~0.9 pp; see internal/counter/encodercost.go.")
+		fmt.Println("Differs from Xcode's Execution Cost column by 0.9 to 2.9 pp depending on the")
+		fmt.Println("capture, worst on whichever encoder dominates the trace, and these are shares")
+		fmt.Println("that sum to 100%, so understating one encoder overstates the rest. Rank by this")
+		fmt.Println("column; do not quote it. See internal/counter/encodercost.go.")
 	}
 
 	// Detailed kernel info only with --kernels flag

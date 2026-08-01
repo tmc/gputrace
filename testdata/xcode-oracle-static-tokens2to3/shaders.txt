@@ -1,0 +1,17 @@
+Cost	Name	Type	Pipeline State	# SIMD Groups	# Allocated Registers	High Register	Spilled Bytes	
+56.52%	gemv_bfloat16_bm8_bn1_sm1_sn32_tm4_tn4_nc0_axpby0	Compute	Compute Pipeline 0xa432f8a80	98312	60	60	0 bytes	
+25.48%	gemv_bfloat16_bm4_bn1_sm1_sn32_tm4_tn4_nc0_axpby0	Compute	Compute Pipeline 0xa432f8380	12576	60	60	0 bytes	
+5.73%	gemv_bfloat16_bm4_bn1_sm1_sn32_tm4_tn4_nc0_axpby1	Compute	Compute Pipeline 0xa43222300	8047	60	60	0 bytes	
+5.46%	sdpa_vector_bfloat16_t_64_64	Compute	Compute Pipeline 0xa432f8000	11088	46	46	0 bytes	
+2.72%	rmsbfloat16	Compute	Compute Pipeline 0xa43220380	392	28	28	0 bytes	
+1.19%	argmax_bfloat16	Compute	Compute Pipeline 0xa432f9c00	33	76	76	0 bytes	
+0.76%	vv_Addbfloat16	Compute	Compute Pipeline 0xa432f8700	1392	4	4	0 bytes	
+0.75%	rope_single_bfloat16	Compute	Compute Pipeline 0xa43223480	456	27	27	0 bytes	
+0.58%	CV2ISigmoidADV2IMultiplyACEV2OMultiplyDB_VV_V2V2_11160318154034397263_contiguous	Compute	Compute Pipeline 0xa432fb800	3768	10	10	0 bytes	
+0.40%	gg2_dynamic_copybfloat16bfloat16	Compute	Compute Pipeline 0xa43223b80	240	16	16	0 bytes	
+0.40%	compute_dynamic_offset_int32	Compute	Compute Pipeline 0xa43223800	96	24	24	0 bytes	
+0.01%	DV2IAsTypeBEV2IBroadcastDFV2IAsTypeCGV2IBroadcastFHV2OSelectAEG_VSS_b1f4f4_11160318154034397263_contiguous	Compute	Compute Pipeline 0xa432fb100	9	8	8	0 bytes	
+0.00%	s_copyfloat32float32	Compute	Compute Pipeline 0xa43222680	4	4	4	0 bytes	
+0.00%	Ei4IBroadcastAFb1IGreaterEqualEBGi4IAddCDHi4IBroadcastGIb1ILessBHJb1OLogicalAndFI_VVVC_i4i4i4_11413460447292444913_strided_1	Compute	Compute Pipeline 0xa432faa00	9	16	16	0 bytes	
+0.00%	ss_Addint32	Compute	Compute Pipeline 0xa43220700	2	8	8	0 bytes	
+0.00%	arangeint32	Compute	Compute Pipeline 0xa43221180	11	4	4	0 bytes	

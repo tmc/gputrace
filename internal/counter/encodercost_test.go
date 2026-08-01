@@ -40,9 +40,18 @@ func oracleExecutionCosts(t *testing.T, path string) []float64 {
 
 // TestEncoderCostsAgainstXcode measures EncoderCosts against Xcode's own
 // export of the same capture. The bounds are the measured residuals with room
-// to move, not a claim of exactness: the method is known to differ from
-// Xcode's column by up to ~0.9 pp. A regression that broke the ordinal
-// placement or the cycle column would blow past them by an order of magnitude.
+// to move, not a claim of exactness. How far off the method runs depends on the
+// capture: 0.911 pp worst-case on the 23-encoder export, 2.941 pp on the
+// 11-encoder one. A regression that broke the ordinal placement or the cycle
+// column would blow past either by an order of magnitude.
+//
+// The 11-encoder capture is where the method's shape shows. Its error is
+// concentrated almost entirely on encoder 9 (-2.941 pp), the encoder Xcode puts
+// at 20.582%, three times its nearest rival, off four dispatches at 53%
+// occupancy where every other encoder sits near 14%. Because the costs are
+// shares constrained to sum to 100%, understating that one encoder is what
+// pushes the other ten uniformly positive. Treat the residual as one error with
+// a redistributed remainder, not eleven independent ones.
 //
 // Set GPUTRACE_TEST_GPUPROFILER_DIR to the .gpuprofiler_raw directory of the
 // capture described in testdata/xcode-oracle/PROVENANCE.md.
@@ -77,10 +86,33 @@ func TestEncoderCostsAgainstXcode(t *testing.T) {
 		}
 	}
 
-	oracle := oracleExecutionCosts(t, "../../testdata/xcode-oracle/compute-kernel-encoders.txt")
-	if len(costs) != len(oracle) {
-		t.Skipf("capture has %d encoders, oracle has %d: not the oracle's capture", len(costs), len(oracle))
+	// Two captures have Xcode exports, and the method is three times worse on
+	// the second than on the first, so the bounds are per capture. A single
+	// global bound would either pass the worse capture vacuously or fail the
+	// better one; neither would notice a regression. Match on encoder count,
+	// which is distinct across the two.
+	oracles := []struct {
+		path   string
+		maxRes float64 // measured max |residual|, in percentage points
+		rms    float64 // measured rms residual
+	}{
+		{"../../testdata/xcode-oracle/compute-kernel-encoders.txt", 0.911, 0.278},
+		{"../../testdata/xcode-oracle-static-tokens2to3/compute-kernel.txt", 2.941, 1.034},
 	}
+	var oracle []float64
+	var wantMaxRes, wantRMS float64
+	var oraclePath string
+	for _, o := range oracles {
+		if candidate := oracleExecutionCosts(t, o.path); len(candidate) == len(costs) {
+			oracle, oraclePath = candidate, o.path
+			wantMaxRes, wantRMS = o.maxRes, o.rms
+			break
+		}
+	}
+	if oracle == nil {
+		t.Skipf("capture has %d encoders; no oracle export matches", len(costs))
+	}
+	t.Logf("oracle %s", oraclePath)
 
 	var maxRes, sumSq float64
 	for i, c := range costs {
@@ -94,10 +126,10 @@ func TestEncoderCostsAgainstXcode(t *testing.T) {
 	}
 	rms := math.Sqrt(sumSq / float64(len(costs)))
 	t.Logf("max |residual| %.3f pp, rms %.3f pp", maxRes, rms)
-	if maxRes > 1.5 {
-		t.Errorf("max residual %.3f pp exceeds 1.5 pp; measured 0.911 pp", maxRes)
+	if maxRes > wantMaxRes*1.65 {
+		t.Errorf("max residual %.3f pp; measured %.3f pp on this capture", maxRes, wantMaxRes)
 	}
-	if rms > 0.5 {
-		t.Errorf("rms residual %.3f pp exceeds 0.5 pp; measured 0.278 pp", rms)
+	if rms > wantRMS*1.8 {
+		t.Errorf("rms residual %.3f pp; measured %.3f pp on this capture", rms, wantRMS)
 	}
 }

@@ -1,0 +1,12 @@
+Thumbnails	Name	Execution Cost	Kernel Invocations	Kernel Texture Cache Miss Rate	Kernel Occupancy	Kernel ALU Instructions	Kernel ALU Float Instructions	Kernel ALU Half Instructions	Kernel ALU Integer and Conditional Instructions	Kernel ALU Integer and Complex Instructions	Kernel ALU Performance	
+-	545 Compute Encoder 0 0xa43040fa0	6.858%	257,577 	0.00%	13.56%	72,710,976 	50.28%	0.00%	39.60%	10.12%	72,710,976 	
+-	1501 Compute Encoder 0 0xa43041540	9.253%	361,349 	0.00%	15.31%	102,699,760 	50.35%	0.00%	39.50%	10.15%	102,699,760 	
+-	2455 Compute Encoder 0 0xa43041680	7.572%	279,782 	0.00%	15.46%	79,033,120 	48.73%	0.00%	40.06%	11.21%	79,033,120 	
+-	3435 Compute Encoder 0 0xa43041720	10.206%	347,686 	0.00%	13.79%	100,251,104 	51.63%	0.00%	39.13%	9.24%	100,251,104 	
+-	4600 Compute Encoder 0 0xa430417c0	9.329%	363,268 	0.00%	13.68%	104,143,440 	50.38%	0.00%	39.50%	10.12%	104,143,440 	
+-	5833 Compute Encoder 0 0xa430419a0	8.536%	355,558 	0.00%	13.10%	106,746,896 	47.87%	0.00%	40.48%	11.65%	106,746,896 	
+-	7043 Compute Encoder 0 0xa43041d60	7.910%	270,310 	0.00%	11.41%	80,129,104 	51.63%	0.00%	38.90%	9.47%	80,129,104 	
+-	8276 Compute Encoder 0 0xa43042080	10.078%	369,988 	0.00%	15.02%	106,532,368 	50.30%	0.00%	39.48%	10.21%	106,532,368 	
+-	9516 Compute Encoder 0 0xa43042440	8.491%	353,254 	0.00%	19.68%	95,676,720 	49.24%	0.00%	40.06%	10.70%	95,676,720 	
+-	10478 Compute Encoder 0 0xa43042800	20.582%	1,223,776 	0.00%	53.00%	316,086,544 	52.17%	0.00%	39.52%	8.31%	316,086,544 	
+-	10837 Compute Encoder 0 0xa43042bc0	1.186%	1,024 	0.00%	0.23%	2,913,232 	5.37%	0.00%	58.05%	36.58%	2,913,232 	
