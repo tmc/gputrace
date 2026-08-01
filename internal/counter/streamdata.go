@@ -127,32 +127,29 @@ type TimelineInfo struct {
 	RestoreWallNs           uint64                   `json:"restore_wall_time_ns,omitempty"`
 }
 
-// EncoderProfile contains GPRWCNTR profiler data for a single encoder.
-// Extracted from APSTimelineData blobs 1-11 (Encoder ShaderProfilerData).
+// EncoderProfile contains GPRWCNTR profiler data for one ShaderProfilerData
+// blob of APSTimelineData.
+//
+// Despite the name, these samples are not per-encoder: every record in the
+// reference archives carries GRC_ENCODER_ID 0xFFFFFFFF, meaning the GPU counter
+// stream sampled the whole machine rather than the capture's own encoders. See
+// MachineWideSamples, and CounterArchive for the samples that do attribute.
 type EncoderProfile struct {
-	Index           int                 `json:"index"`                 // Encoder index (0-based)
-	Source          string              `json:"source,omitempty"`      // Source type (RDE_0, BMPR_RDE_0, Firmware)
-	RingBufferIndex int                 `json:"ring_buffer_index"`     // Ring buffer index
-	SampleCount     int                 `json:"sample_count"`          // Number of profiler samples
-	Timestamps      []GPRWCNTRTimestamp `json:"timestamps,omitempty"`  // Individual timestamp records
-	StartTicks      uint64              `json:"start_ticks,omitempty"` // First sample timestamp
-	EndTicks        uint64              `json:"end_ticks,omitempty"`   // Last sample timestamp
-	DurationNs      uint64              `json:"duration_ns,omitempty"` // Total duration in nanoseconds
+	Index              int              `json:"index"`                   // Blob index (0-based)
+	Source             string           `json:"source,omitempty"`        // Source type (RDE_0, BMPR_RDE_0, Firmware)
+	RingBufferIndex    int              `json:"ring_buffer_index"`       // Ring buffer index
+	SampleCount        int              `json:"sample_count"`            // Number of profiler samples
+	MachineWideSamples int              `json:"machine_wide_samples"`    // Samples belonging to no encoder in this capture
+	RecordStride       int              `json:"record_stride,omitempty"` // Bytes per record, derived from the blob
+	Samples            []GPRWCNTRSample `json:"samples,omitempty"`       // Individual records
+	StartTicks         uint64           `json:"start_ticks,omitempty"`   // First sample timestamp
+	EndTicks           uint64           `json:"end_ticks,omitempty"`     // Last sample timestamp
+	DurationNs         uint64           `json:"duration_ns,omitempty"`   // Total duration in nanoseconds
 }
 
-// GPRWCNTRTimestamp represents a single timestamp record from GPRWCNTR data.
-// Format: 168 bytes per record with GPU timestamp, size, count, and flags.
-type GPRWCNTRTimestamp struct {
-	Timestamp uint64 `json:"timestamp"`       // GPU timestamp (500B-700B range typical)
-	Size      uint64 `json:"size"`            // Size field (~10K typical)
-	Count     uint64 `json:"count"`           // Count field (e.g., 6)
-	Flags     uint32 `json:"flags,omitempty"` // Flags (often 0xFFFFFFFF)
-}
-
-const (
-	GPRWCNTRMagic      = "GPRWCNTR" // 8-byte magic for encoder profiler data
-	GPRWCNTRRecordSize = 168        // Bytes per GPRWCNTR record
-)
+// GPRWCNTRMagic is the 8-byte magic that starts every GPRWCNTR record. It is
+// per-record, not a one-time blob header; see gprwcntr.go for the layout.
+const GPRWCNTRMagic = "GPRWCNTR"
 
 // StreamDataStats contains all parsed statistics from streamData.
 type StreamDataStats struct {
@@ -160,8 +157,9 @@ type StreamDataStats struct {
 	Dispatches            []DispatchInfo      `json:"dispatches"`     // Per-dispatch timing and metadata
 	FunctionNames         []string            `json:"function_names"` // Unique function names from strings array
 	EncoderTimings        []EncoderTimingInfo `json:"encoder_timings"`
-	Timeline              *TimelineInfo       `json:"timeline,omitempty"` // CB timestamps from APSTimelineData
-	APSTimelineData       [][]byte            `json:"-"`                  // Raw APSTimelineData blobs (nested plists)
+	Timeline              *TimelineInfo       `json:"timeline,omitempty"`        // CB timestamps from APSTimelineData
+	CounterArchive        *CounterArchive     `json:"counter_archive,omitempty"` // Per-encoder counter attribution from APSCounterData
+	APSTimelineData       [][]byte            `json:"-"`                         // Raw APSTimelineData blobs (nested plists)
 	NumEncoders           int                 `json:"num_encoders"`
 	NumGPUCommands        int                 `json:"num_gpu_commands"`
 	NumPipelines          int                 `json:"num_pipelines"`
@@ -254,6 +252,16 @@ func ParseStreamData(gpuprofilerDir string, addressToName map[uint64]string) (*S
 			if len(stats.APSTimelineData) > 0 {
 				stats.Timeline = parseAPSTimelineData(stats.APSTimelineData)
 				stats.applyTimelineTiming()
+			}
+
+			// Counter samples that name an encoder live in APSCounterData, not
+			// in the ShaderProfilerData blobs above.
+			if counterBlobs := extractDataArray(objects, obj1, "APSCounterData"); len(counterBlobs) > 0 {
+				numer, denom := uint64(1), uint64(1)
+				if stats.Timeline != nil {
+					numer, denom = stats.Timeline.TimebaseNumer, stats.Timeline.TimebaseDenom
+				}
+				stats.CounterArchive = ParseCounterArchive(counterBlobs, numer, denom)
 			}
 		}
 	}
@@ -1199,63 +1207,40 @@ func plistUint64(v any) uint64 {
 	return 0
 }
 
-// parseGPRWCNTRBlob parses an encoder profiler blob with GPRWCNTR format.
-// These are blobs 1-11 in APSTimelineData (Encoder ShaderProfilerData).
+// parseGPRWCNTRBlob parses a ShaderProfilerData blob in GPRWCNTR format.
 //
-// Format:
-//   - [0:8] Magic "GPRWCNTR"
-//   - [8:...] 168-byte records with:
-//   - [0:8] timestamp (GPU ticks)
-//   - [8:16] size
-//   - [16:24] count
-//   - [24:28] flags
+// The record stride comes from the blob itself rather than a constant: the
+// magic starts every record, so the distance to the second magic is the
+// stride. See gprwcntr.go. A blob whose stride does not divide its length is
+// rejected outright — the earlier fixed-size parse accepted such blobs and
+// produced plausible garbage.
 func parseGPRWCNTRBlob(data []byte, encoderIndex int, timebaseNumer, timebaseDenom uint64) *EncoderProfile {
-	if len(data) < 8 {
-		return nil
-	}
-
-	// Check magic
-	if string(data[0:8]) != GPRWCNTRMagic {
+	samples, stride, err := ParseGPRWCNTR(data)
+	if err != nil {
 		return nil
 	}
 
 	profile := &EncoderProfile{
-		Index: encoderIndex,
+		Index:        encoderIndex,
+		RecordStride: stride,
+		SampleCount:  len(samples),
+		Samples:      samples,
 	}
-
-	// Parse records after the magic
-	recordData := data[8:]
-	numRecords := len(recordData) / GPRWCNTRRecordSize
-	profile.SampleCount = numRecords
-
-	if numRecords == 0 {
+	if len(samples) == 0 {
 		return profile
 	}
 
 	var minTS, maxTS uint64 = ^uint64(0), 0
-	for i := 0; i < numRecords; i++ {
-		offset := i * GPRWCNTRRecordSize
-		if offset+32 > len(recordData) {
-			break
+	for _, s := range samples {
+		if s.MachineWide() {
+			profile.MachineWideSamples++
 		}
-
-		rec := recordData[offset:]
-		ts := GPRWCNTRTimestamp{
-			Timestamp: binary.LittleEndian.Uint64(rec[0:8]),
-			Size:      binary.LittleEndian.Uint64(rec[8:16]),
-			Count:     binary.LittleEndian.Uint64(rec[16:24]),
-			Flags:     binary.LittleEndian.Uint32(rec[24:28]),
+		if s.Timestamp > 0 && s.Timestamp < minTS {
+			minTS = s.Timestamp
 		}
-
-		// Track timestamp range
-		if ts.Timestamp > 0 && ts.Timestamp < minTS {
-			minTS = ts.Timestamp
+		if s.Timestamp > maxTS {
+			maxTS = s.Timestamp
 		}
-		if ts.Timestamp > maxTS {
-			maxTS = ts.Timestamp
-		}
-
-		profile.Timestamps = append(profile.Timestamps, ts)
 	}
 
 	// Set start/end ticks and compute duration
@@ -1413,8 +1398,8 @@ func CorrelateDispatchSamples(stats *StreamDataStats) {
 	// Collect all unique GPRWCNTR sample timestamps
 	tsMap := make(map[uint64]bool)
 	for _, ep := range ti.EncoderProfiles {
-		for _, ts := range ep.Timestamps {
-			tsMap[ts.Timestamp] = true
+		for _, s := range ep.Samples {
+			tsMap[s.Timestamp] = true
 		}
 	}
 
