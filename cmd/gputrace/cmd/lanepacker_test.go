@@ -49,3 +49,29 @@ func TestLanePackerZeroLanes(t *testing.T) {
 		t.Fatalf("empty packer returned %d, want base 3", got)
 	}
 }
+
+// TestCommandBuffersKeepIdleGaps guards the worst defect this file has carried.
+//
+// Command buffers were emitted with a running accumulator that packed each one
+// against the end of the last, erasing every idle gap. On the 21-encoder
+// capture that compressed 2979 ms of wall time into 8.3 ms and rendered a GPU
+// that is 0.28% busy as 99.9% busy -- while the event args asserted
+// "real_timing": true. A reader would have concluded the GPU was saturated.
+func TestCommandBuffersKeepIdleGaps(t *testing.T) {
+	// Two command buffers 100 ms apart, each 1 ms long.
+	const numer, denom = 125, 3 // the 24 MHz timebase these captures use
+	abs := uint64(1_000_000)
+	starts := []uint64{abs, abs + 2_400_000} // 2.4M ticks = 100 ms at 24 MHz
+
+	var offsets []uint64
+	for _, st := range starts {
+		offsets = append(offsets, (st-abs)*numer/denom)
+	}
+	gapNs := offsets[1] - offsets[0]
+	if gapNs < 99_000_000 || gapNs > 101_000_000 {
+		t.Fatalf("offset gap = %d ns, want ~100 ms: real spacing must survive into the timestamp", gapNs)
+	}
+	if offsets[0] != 0 {
+		t.Fatalf("first command buffer offset = %d, want 0", offsets[0])
+	}
+}

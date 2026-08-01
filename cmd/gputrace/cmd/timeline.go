@@ -781,7 +781,12 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 		timeline.TimebaseNumer = ti.TimebaseNumer
 		timeline.TimebaseDenom = ti.TimebaseDenom
 
-		var displayStartNs uint64
+		// Command buffers are placed at their real offset from AbsoluteTime.
+		// They used to be packed back to back with a running displayStartNs
+		// accumulator, which erased every idle gap: on the 21-encoder capture
+		// that compressed 2979 ms of wall time into 8.3 ms and drew a GPU that
+		// is 0.28% busy as 99.9% busy. The args said "real_timing": true the
+		// whole time.
 		for _, cb := range ti.CommandBufferTimestamps {
 			durationNs := cb.DurationNs(ti.TimebaseNumer, ti.TimebaseDenom)
 			var rawStartOffsetNs uint64
@@ -793,7 +798,7 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 				Name:      fmt.Sprintf("CB#%d", cb.Index),
 				Category:  "command_buffer",
 				Phase:     "X",                   // Duration event
-				Timestamp: displayStartNs / 1000, // Convert to microseconds for Chrome format
+				Timestamp: rawStartOffsetNs / 1000, // Convert to microseconds for Chrome format
 				Duration:  durationNs / 1000,
 				ProcessID: 1,
 				ThreadID:  0,
@@ -809,7 +814,9 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 				},
 			}
 			timeline.Events = append(timeline.Events, event)
-			displayStartNs += durationNs
+			if endNs := rawStartOffsetNs + durationNs; endNs > timeline.EndTime {
+				timeline.EndTime = endNs
+			}
 		}
 
 		// Add encoder profile events from GPRWCNTR ShaderProfilerData
@@ -1954,7 +1961,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 			ProcessID: 1,
 			ThreadID:  0,
 			Args: map[string]interface{}{
-				"name": "Command Buffers",
+				"name": "Command Buffers (wall clock)",
 			},
 		},
 		{
@@ -1964,7 +1971,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 			ProcessID: 1,
 			ThreadID:  1,
 			Args: map[string]interface{}{
-				"name": "Encoders Lane 0",
+				"name": "Encoders Lane 0 (cumulative busy)",
 			},
 		},
 		{
@@ -1974,7 +1981,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 			ProcessID: 1,
 			ThreadID:  2,
 			Args: map[string]interface{}{
-				"name": "Encoders Lane 1",
+				"name": "Encoders Lane 1 (cumulative busy)",
 			},
 		},
 		{
@@ -1984,7 +1991,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 			ProcessID: 1,
 			ThreadID:  3,
 			Args: map[string]interface{}{
-				"name": "Kernels Lane 0",
+				"name": "Kernels Lane 0 (cumulative busy)",
 			},
 		},
 		{
@@ -1994,7 +2001,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 			ProcessID: 1,
 			ThreadID:  4,
 			Args: map[string]interface{}{
-				"name": "Kernels Lane 1",
+				"name": "Kernels Lane 1 (cumulative busy)",
 			},
 		},
 		{
@@ -2004,7 +2011,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 			ProcessID: 1,
 			ThreadID:  5,
 			Args: map[string]interface{}{
-				"name": "Kernels Lane 2",
+				"name": "Kernels Lane 2 (cumulative busy)",
 			},
 		},
 		{
@@ -2014,7 +2021,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 			ProcessID: 1,
 			ThreadID:  6,
 			Args: map[string]interface{}{
-				"name": "Kernels Lane 3",
+				"name": "Kernels Lane 3 (cumulative busy)",
 			},
 		},
 		{
@@ -2496,7 +2503,8 @@ func buildTimelineFromProfilerData(tracePath string, stats *counter.StreamDataSt
 
 	// Add command buffer events with real timing from APSTimelineData
 	if stats.Timeline != nil && len(stats.Timeline.CommandBufferTimestamps) > 0 {
-		var displayStartNs uint64
+		// Real offsets, not a back-to-back accumulator. See the note on the
+		// other command-buffer emitter: packing erased all idle time.
 		for _, cb := range stats.Timeline.CommandBufferTimestamps {
 			durationNs := cb.DurationNs(timebaseNumer, timebaseDenom)
 			var rawStartOffsetNs uint64
@@ -2508,7 +2516,7 @@ func buildTimelineFromProfilerData(tracePath string, stats *counter.StreamDataSt
 				Name:      fmt.Sprintf("CB#%d", cb.Index),
 				Category:  "command_buffer",
 				Phase:     "X",
-				Timestamp: displayStartNs / 1000, // Convert to µs for Chrome format
+				Timestamp: rawStartOffsetNs / 1000, // Convert to µs for Chrome format
 				Duration:  durationNs / 1000,
 				ProcessID: 1,
 				ThreadID:  0,
@@ -2524,10 +2532,9 @@ func buildTimelineFromProfilerData(tracePath string, stats *counter.StreamDataSt
 				},
 			}
 			timeline.Events = append(timeline.Events, event)
-			if endNs := displayStartNs + durationNs; endNs > timeline.EndTime {
+			if endNs := rawStartOffsetNs + durationNs; endNs > timeline.EndTime {
 				timeline.EndTime = endNs
 			}
-			displayStartNs += durationNs
 		}
 	}
 
