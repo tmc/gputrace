@@ -85,10 +85,12 @@ func TestGPUCreation(t *testing.T) {
 		}
 		defer gpu.Destroy()
 
-		name := gpu.Name()
-		supported := gpu.IsSupported()
-		t.Logf("  %s (gen=%d): created! name=%q valid=%v supported=%v",
-			g.name, g.gen, name, gpu.IsValid(), supported)
+		// A handle here is not a working GPU. gpu_create returns one that
+		// reports valid=true for an unsupported triple, with no backing GPU
+		// description, and every parser_create against it returns NULL. Say
+		// "handle" rather than "created!", which read as a success.
+		t.Logf("  %s (gen=%d): handle name=%q valid=%v (validity does not imply usable)",
+			g.name, g.gen, gpu.Name(), gpu.IsValid())
 	}
 }
 
@@ -99,10 +101,11 @@ func TestParserWithGPU(t *testing.T) {
 	}
 	defer Close()
 
-	// Try agxps_initialize (returns error 1 outside Xcode/Metal context)
+	// agxps_initialize returns 1 for SUCCESS. This used to read the 1 as an
+	// errno and explain it away as "expected outside Xcode", which is how a
+	// working call spent months looking like a broken one.
 	if err := Initialize(); err != nil {
-		t.Logf("Initialize returned error (expected outside Xcode): %v", err)
-		t.Log("Note: agxps library requires Metal device context or Xcode runtime")
+		t.Fatalf("Initialize: %v", err)
 	}
 
 	// Create GPU for M2 (gen=14) which we know works
@@ -113,17 +116,24 @@ func TestParserWithGPU(t *testing.T) {
 	defer gpu.Destroy()
 	t.Logf("Created GPU: gen=%d name=%q", gpu.Gen(), gpu.Name())
 
-	// Note: Parser creation crashes outside Xcode/Metal context
-	// The agxps_aps_descriptor_create function requires proper initialization
-	// which depends on Metal device context or Xcode-specific runtime.
+	// Parser creation is skipped here, but not for the reason this test used to
+	// give. The old comment blamed a missing Metal device context for three
+	// symptoms that all have concrete causes, recorded in
+	// docs/research/agxps-signatures.yaml:
 	//
-	// Known limitations (from CE95 testing):
-	// - agxps_initialize returns error 1 outside Xcode
-	// - agxps_aps_descriptor_create crashes (SIGSEGV at 0x28) without init
-	// - Period queries return 0 without proper context
+	//   - "agxps_initialize returns error 1 outside Xcode" -- 1 is success.
+	//   - "descriptor_create crashes (SIGSEGV at 0x28)" -- it returns a
+	//     104-byte struct by value through x8, which purego cannot set, so the
+	//     first store (stur q0, [x8, #0x28]) faults at 0x28. It also takes no
+	//     arguments, and this package passes it one. A caller can skip it
+	//     entirely: it only installs defaults.
+	//   - "period queries return 0" -- parser_create returns NULL for a
+	//     descriptor with zero pulse/era/count periods, which is exactly what
+	//     descriptor_create leaves. Real periods come from
+	//     agxps_aps_get_valid_*_period.
 	//
-	// Recommendation: Use ObjC GTShaderProfilerStreamDataProcessor to parse
-	// streamData, then use C API query functions on the resulting profile data.
-	t.Log("Skipping parser creation - requires Metal/Xcode context")
-	t.Log("Use GTShaderProfilerStreamDataProcessor (ObjC) for parsing streamData")
+	// A working parse of a 58 MB Profiling_f_*.raw runs in
+	// rawprobe_manual_test.go with no Xcode process involved, which is what
+	// disproves the Metal-context story.
+	t.Log("parser creation exercised in rawprobe_manual_test.go, not here")
 }

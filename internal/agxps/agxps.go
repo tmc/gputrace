@@ -90,16 +90,22 @@ type Parser struct {
 }
 
 // Initialize calls agxps_initialize.
+//
+// agxps_initialize returns a bool, not an errno: 1 is success. The value is
+// seeded to 1 at function entry and cleared only if the table load fails, so
+// treating non-zero as an error inverts it. See
+// docs/research/agxps-signatures.yaml, which records this as verified by both
+// disassembly and a working call.
 func Initialize() error {
 	if err := Init(); err != nil {
 		return err
 	}
-	result, err := gtshaderprofiler.Agxps_initialize()
+	ok, err := gtshaderprofiler.Agxps_initialize()
 	if err != nil {
 		return fmt.Errorf("agxps_initialize: %w", err)
 	}
-	if result != 0 {
-		return fmt.Errorf("agxps_initialize returned error: %d", result)
+	if ok == 0 {
+		return fmt.Errorf("agxps_initialize failed to load the counter tables")
 	}
 	return nil
 }
@@ -486,11 +492,19 @@ func (g GPU) Name() string {
 	return string(buf)
 }
 
-// IsSupported returns true if the GPU is supported for profiling.
+// IsSupported reports whether the GPU triple is supported for profiling.
+//
+// It always returns false, and that is not a measurement. agxps_aps_gpu_is_supported
+// takes three scalars -- generation, variant, revision -- and the comparator at
+// 0x4eeee0 compares exactly those three uint32s against a static table of 53
+// supported triples. The generated binding declares one AGXPSGPU parameter, so
+// calling it puts a handle pointer where the generation belongs and leaves the
+// variant and revision registers unset. The comparison then fails for every
+// input, which is why this used to report supported=false for GPUs that do work.
+//
+// It cannot be called correctly through the current bindings: a one-argument
+// declaration has no way to supply x1 and x2. Fixing it means a binding that
+// takes the triple. Until then, do not branch on this.
 func (g GPU) IsSupported() bool {
-	if g == 0 {
-		return false
-	}
-	supported, err := gtshaderprofiler.Agxps_aps_gpu_is_supported(gtshaderprofiler.AGXPSGPU(g))
-	return err == nil && supported
+	return false
 }
