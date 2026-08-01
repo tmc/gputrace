@@ -1,0 +1,11 @@
+task #8 device load/store + temp registers; subagent, verified in main checkout
+date: 2026-08-01T04:17:37Z
+model: claude-opus-5[1m]  pid: 34052
+verified: gemv_bm8 Temp Regs 30 / Dev Load 30 / Dev Store 1, agreeing with the
+independent profiler --kernels path. Also fixes a real-zero-vs-unknown bug: the
+register and spill columns keyed off AllocatedRegisters>0, so a genuine 0
+printed '?'. Now keyed off HasPipelineStats.
+task #7 NOT IMPLEMENTED - established as absent from the trace: streamData has
+0 occurrences of Permute/Predication/Data Movement/Instruction Type, and
+shaderProfilerData is present but empty. Xcode likely derives the split by
+classifying GPRWCNTR PC samples against an AGX disassembly that is not stored.
