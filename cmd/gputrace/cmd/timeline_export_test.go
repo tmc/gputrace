@@ -609,13 +609,15 @@ func TestBuildXcodeParityReport(t *testing.T) {
 	if len(report.RemainingGaps) == 0 {
 		t.Fatal("missing remaining gaps")
 	}
-	for _, gap := range report.RemainingGaps {
-		if gap.Metric == "alu_utilization_pct" {
-			t.Fatalf("alu_utilization_pct should be closed: %+v", report.RemainingGaps)
-		}
+	// The fixture's alu_utilization_pct is 0.0, which is what the fallback
+	// stamped when nothing had been read. It must land in the gap list.
+	if !stringSliceContains(report.AbsentFields, "alu_utilization_pct") {
+		t.Fatalf("alu_utilization_pct = 0 must not count as present: %+v", report.AbsentFields)
 	}
-	if !stringSliceContains(report.ClosedExamples, "alu_utilization_pct present on kernel events") {
-		t.Fatalf("missing closed alu example: %+v", report.ClosedExamples)
+	for _, example := range report.ClosedExamples {
+		if strings.Contains(example, "alu_utilization_pct") {
+			t.Fatalf("alu_utilization_pct reported closed on a zero value: %q", example)
+		}
 	}
 }
 
@@ -850,13 +852,17 @@ func TestGenerateCounterTracksFromPerfDataKeepsSourceBackedZeroValues(t *testing
 	}
 }
 
-func TestDispatchKernelArgsKeepsSourceBackedZeroEncoderCounters(t *testing.T) {
+// TestDispatchKernelArgsOmitsUnreadEncoderCounters guards against reporting an
+// unread counter as a measured zero. An empty EncoderCounterMetrics means the
+// counters were not read; Xcode reports ALU Utilization of 1.59% to 3.35% for
+// the encoders of qwen25-05b-staticmask-warm-tokens2-4-rep1 where gputrace used
+// to emit 0.00 with the label "encoder counter fallback".
+func TestDispatchKernelArgsOmitsUnreadEncoderCounters(t *testing.T) {
 	args := dispatchKernelArgs(counter.DispatchInfo{}, nil, 0, 0, nil, nil, &counter.EncoderCounterMetrics{}, nil)
-	if got, ok := args["alu_utilization_pct"]; !ok || got != float64(0) {
-		t.Fatalf("alu_utilization_pct = %#v, %v, want source-backed zero", got, ok)
-	}
-	if got, want := args["alu_utilization_source"], "encoder counter fallback"; got != want {
-		t.Fatalf("alu_utilization_source = %#v, want %#v", got, want)
+	for _, key := range []string{"alu_utilization_pct", "alu_utilization_source"} {
+		if got, ok := args[key]; ok {
+			t.Fatalf("%s = %#v, want absent: nothing was read into it", key, got)
+		}
 	}
 }
 

@@ -1741,7 +1741,11 @@ func dispatchKernelArgs(d counter.DispatchInfo, p *counter.PipelineStats, simdGr
 		}
 	}
 	if encoderMetric != nil {
-		if args["alu_utilization_pct"] == nil {
+		// Only fall back to a value that was actually read. A zero here is not
+		// a measurement of zero, it is the absence of one: Xcode reports ALU
+		// utilization of 1.59 to 3.35 percent for encoders where this stamped
+		// 0.00 on every dispatch.
+		if args["alu_utilization_pct"] == nil && encoderMetric.ALUUtilization != 0 {
 			args["alu_utilization_pct"] = encoderMetric.ALUUtilization
 			args["alu_utilization_source"] = "encoder counter fallback"
 		}
@@ -2194,6 +2198,15 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 	return encoder.Encode(tracing)
 }
 
+// zeroIsNotAReading names the kernel-event fields that a fallback may stamp
+// with zero when nothing was read. For these, only a nonzero value counts as
+// evidence that gputrace can produce the field. Every other field in the
+// parity list comes from pipeline statistics, which are attached only when
+// they were joined, so a zero there is a genuine measurement.
+var zeroIsNotAReading = map[string]bool{
+	"alu_utilization_pct": true,
+}
+
 func timelineXcodeMetricsArgs(timeline *Timeline) map[string]interface{} {
 	args := map[string]interface{}{
 		"kernel_events": 0,
@@ -2222,9 +2235,23 @@ func timelineXcodeMetricsArgs(timeline *Timeline) map[string]interface{} {
 			"pipeline_id",
 			"pipeline_state",
 		} {
-			if _, ok := ev.Args[field]; ok {
-				presentFields[field] = true
+			// The counter-derived fields are present only if they carry a
+			// nonzero value: a zero written by a fallback is not evidence
+			// that gputrace read the counter, and counting it as presence
+			// is how alu_utilization_pct came to be reported as a closed
+			// gap while Xcode reported 1.59% for the same encoder.
+			//
+			// The compiler statistics are different. They are set only when
+			// the pipeline stats were joined, and zero is a real reading
+			// there: a kernel that spills nothing has spilled_bytes 0.
+			v, ok := ev.Args[field]
+			if !ok {
+				continue
 			}
+			if zeroIsNotAReading[field] && isZeroMetricValue(v) {
+				continue
+			}
+			presentFields[field] = true
 		}
 	}
 
@@ -2253,7 +2280,9 @@ func timelineXcodeMetricsArgs(timeline *Timeline) map[string]interface{} {
 	var tracks, emptyTracks []string
 	for _, track := range timeline.CounterTracks {
 		name := fmt.Sprintf("%s (%s)", track.Name, track.Unit)
-		if len(track.Samples) == 0 {
+		if len(track.Samples) == 0 || track.MaxValue == 0 {
+			// An all-zero track carries no information about whether the
+			// counter was read. Report it alongside the empty ones.
 			emptyTracks = append(emptyTracks, name)
 		} else {
 			tracks = append(tracks, name)
@@ -2279,6 +2308,26 @@ func timelineXcodeMetricsArgs(timeline *Timeline) map[string]interface{} {
 		args["has_effective_gpu_time"] = false
 	}
 	return args
+}
+
+// isZeroMetricValue reports whether v is a numeric zero. Parity accounting uses
+// it to tell "gputrace read this counter and it was zero" apart from "gputrace
+// wrote a zero because it had nothing to write".
+func isZeroMetricValue(v interface{}) bool {
+	switch n := v.(type) {
+	case float64:
+		return n == 0
+	case float32:
+		return n == 0
+	case int:
+		return n == 0
+	case int64:
+		return n == 0
+	case uint64:
+		return n == 0
+	default:
+		return false
+	}
 }
 
 func xcodeMetricBindingCandidates(fields []string) map[string]string {

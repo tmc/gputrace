@@ -202,10 +202,10 @@ func buildXcodeParityReport(tracePath string, timeline *Timeline, bindings xcode
 		present[field] = true
 	}
 	if present["alu_utilization_pct"] {
-		report.ClosedExamples = append(report.ClosedExamples, "alu_utilization_pct present on kernel events")
+		report.ClosedExamples = append(report.ClosedExamples, "alu_utilization_pct carries nonzero values on kernel events (value not compared against Xcode)")
 	}
 	if containsTrack(report.CounterTracks, "ALU Utilization") {
-		report.ClosedExamples = append(report.ClosedExamples, "ALU Utilization counter track is source-backed")
+		report.ClosedExamples = append(report.ClosedExamples, "ALU Utilization counter track carries nonzero samples")
 	}
 	if !boolFromMetrics(metrics, "has_effective_gpu_time") {
 		report.RemainingGaps = append(report.RemainingGaps, xcodeParityGap{
