@@ -6,12 +6,17 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sort"
 	"testing"
 	"unsafe"
 
+	puregoobjc "github.com/ebitengine/purego/objc"
+	"github.com/tmc/apple/foundation"
 	"github.com/tmc/apple/objc"
+	"github.com/tmc/apple/objc/objcinspect"
+	"github.com/tmc/apple/private/xcode/gtshaderprofiler"
 )
 
 // TestTimelineDrawDurations reads every per-draw duration from Xcode's
@@ -90,6 +95,7 @@ func measureDrawDurations(t *testing.T, streamPath string) {
 
 	timeline := openCostTimeline(t, mio, stream)
 	defer objc.Send[objc.ID](timeline, objc.Sel("release"))
+	checkTimelineCounters(t, timeline)
 
 	if !responds(timeline, "durationForDraw:dataMaster:") {
 		t.Fatal("timeline does not respond to durationForDraw:dataMaster:")
@@ -125,6 +131,71 @@ func measureDrawDurations(t *testing.T, streamPath string) {
 			}
 			t.Logf("pipeline %#x draws=%d %s", pipeline.ObjectID, draws, pipeline.FunctionName)
 		}
+	}
+}
+
+// checkTimelineCounters records the runtime counter-name join carried by the
+// populated cost timeline. The reference archive exposes thirty named counters
+// here, unlike the empty non-overlapping-counter model. This is the boundary
+// where a caller can stop guessing how opaque archive hashes map to names.
+func checkTimelineCounters(t *testing.T, timeline objc.ID) {
+	t.Helper()
+	check := func(id objc.ID, selector string, want reflect.Type, args ...any) {
+		t.Helper()
+		if err := objcinspect.Check(puregoobjc.ID(uintptr(id)), puregoobjc.RegisterName(selector), want, args...); err != nil {
+			t.Fatalf("%s type check: %v", selector, err)
+		}
+	}
+
+	check(timeline, "timelineCounters", reflect.TypeOf(objc.ID(0)))
+	counters := gtshaderprofiler.GTMioTraceTimelineDataFromID(timeline).TimelineCounters()
+	if counters.GetID() == 0 {
+		t.Fatal("timelineCounters returned nil")
+	}
+	check(counters.GetID(), "counters", reflect.TypeOf(objc.ID(0)))
+	dictionary := counters.Counters()
+	if dictionary.GetID() == 0 {
+		t.Fatal("GTMioTimelineCounters counters returned nil")
+	}
+	check(dictionary.GetID(), "count", reflect.TypeOf(uint(0)))
+	if got := dictionary.Count(); got == 0 {
+		t.Fatal("timeline counter dictionary is empty")
+	} else {
+		t.Logf("timeline counter dictionary entries=%d", got)
+	}
+
+	name := foundation.NewStringWithString("ALU Total Instructions")
+	check(counters.GetID(), "counterForName:", reflect.TypeOf(objc.ID(0)), name)
+	counterID := counters.CounterForName(name).GetID()
+	if counterID == 0 {
+		t.Fatal("counterForName(ALU Total Instructions) returned nil")
+	}
+	counter := gtshaderprofiler.GTMioCounterDataFromID(counterID)
+	check(counterID, "name", reflect.TypeOf(objc.ID(0)))
+	check(counterID, "sampleCount", reflect.TypeOf(uint64(0)))
+	// The current generated Values wrapper is not called: objcinspect verifies
+	// that the runtime returns ^d, while the generated API incorrectly declares
+	// []float64. The generator gap is filed separately; sampleCount supplies the
+	// eventual bound, but this probe never guesses a slice from the pointer.
+	check(counterID, "values", reflect.TypeOf(unsafe.Pointer(nil)))
+	if got, want := counter.Name(), "ALU Total Instructions"; got != want {
+		t.Fatalf("counter name = %q, want %q", got, want)
+	}
+	if got := counter.SampleCount(); got == 0 {
+		t.Fatal("ALU Total Instructions sample count is zero")
+	} else {
+		t.Logf("ALU Total Instructions samples=%d", got)
+		check(counterID, "timestamps", reflect.TypeOf(unsafe.Pointer(nil)))
+		stamps := unsafe.Slice((*uint64)(counter.Timestamps()), int(got))
+		if stamps[0] == 0 || stamps[len(stamps)-1] == 0 {
+			t.Fatalf("counter timestamps have zero endpoint: first=%d last=%d", stamps[0], stamps[len(stamps)-1])
+		}
+		for i := 1; i < len(stamps) && i < 1024; i++ {
+			if stamps[i] < stamps[i-1] {
+				t.Fatalf("counter timestamps descend at %d: %d < %d", i, stamps[i], stamps[i-1])
+			}
+		}
+		t.Logf("ALU Total Instructions timestamp range=%d..%d", stamps[0], stamps[len(stamps)-1])
 	}
 }
 
