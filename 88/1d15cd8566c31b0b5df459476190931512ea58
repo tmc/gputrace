@@ -1,0 +1,7 @@
+landed: 881d15c on 2026-08-01T04:29:19Z
+claude-code: 2.1.220 (Claude Code)
+model: claude-opus-5[1m]
+tty: not a tty
+pid: 39293
+ITERM_SESSION_ID: w0t1p3:BE93B99A-FA9B-469D-9C12-0B1009E84F85
+verified: go build ./... && go test ./... green; behavior checked on perfdata3 profiler-only bundle
