@@ -140,12 +140,17 @@ func main() {
 					cntObj := dictObj.ObjectForKey(key)
 					cnt := gtshaderprofiler.GTMioCounterDataFromID(cntObj.GetID())
 
+					// Seed the extremes from the data, not from zero: a series
+					// that never rises above zero would otherwise report a max
+					// of zero regardless of what it holds.
 					vals := cnt.ValuesSlice()
-					var maxV, sumV float64
-					for _, v := range vals {
-						if v > maxV {
-							maxV = v
+					var minV, maxV, sumV float64
+					for i, v := range vals {
+						if i == 0 {
+							minV, maxV = v, v
 						}
+						minV = min(minV, v)
+						maxV = max(maxV, v)
 						sumV += v
 					}
 					avgV := 0.0
@@ -158,14 +163,21 @@ func main() {
 						isHex = true
 					}
 
+					// Two different reasons to withhold a column, and only one of
+					// them is a property of the name. Whether a series is all
+					// zero is a property of the data, so measure it rather than
+					// listing the three counters that happened to be empty here;
+					// a hardcoded list keeps suppressing them once they carry
+					// values, and stays quiet when a fourth goes empty.
 					isUnread := false
 					unreadNote := ""
-					if kStr == "Texture Read Limiter" {
+					switch {
+					case kStr == "Texture Read Limiter":
 						isUnread = true
 						unreadNote = " (Unread: unestablished encoding, max 8.99e10 vs Xcode oracle 0.00%)"
-					} else if kStr == "AF Peak Bandwidth" || kStr == "AF Peak Read Bandwidth" || kStr == "AF Peak Write Bandwidth" {
+					case len(vals) > 0 && maxV == 0 && minV == 0:
 						isUnread = true
-						unreadNote = " (Unread: unpopulated / all zero)"
+						unreadNote = " (Unread: every sample zero)"
 					}
 
 					summaries = append(summaries, CounterStreamSummary{
