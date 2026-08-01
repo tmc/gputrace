@@ -312,6 +312,8 @@ func reportTimestampShape(t *testing.T, timestamps []uint64) {
 	t.Logf("counter timestamps full scan: samples=%d span=%d ceiling_delta=%d drops=%d equal_pairs=%d longest_plateau=%d within_%d_of_2^31=%d",
 		len(timestamps), timestamps[len(timestamps)-1]-timestamps[0], ceiling-timestamps[len(timestamps)-1], drops, equal, longestPlateau, nearCeiling, near)
 	reportTimestampDeltas(t, timestamps)
+	reportTimestampBurstCount(t, timestamps, 100_000)
+	reportLargestTimestampGaps(t, timestamps)
 }
 
 type deltaCount struct {
@@ -346,6 +348,44 @@ func reportTimestampDeltas(t *testing.T, timestamps []uint64) {
 	top := min(len(common), 10)
 	t.Logf("counter timestamp deltas: min=%d median=%d max=%d below_1000=%d top=%v",
 		deltas[0], deltas[len(deltas)/2], deltas[len(deltas)-1], belowThousand, common[:top])
+}
+
+type timestampGap struct {
+	position int
+	delta    uint64
+}
+
+func reportTimestampBurstCount(t *testing.T, timestamps []uint64, threshold uint64) {
+	t.Helper()
+	runs := 1
+	for i := 1; i < len(timestamps); i++ {
+		if timestamps[i]-timestamps[i-1] > threshold {
+			runs++
+		}
+	}
+	t.Logf("counter timestamp bursts=%d gap_threshold=%d", runs, threshold)
+}
+
+func reportLargestTimestampGaps(t *testing.T, timestamps []uint64) {
+	t.Helper()
+	gaps := make([]timestampGap, 0, len(timestamps)-1)
+	for i := 1; i < len(timestamps); i++ {
+		gaps = append(gaps, timestampGap{position: i, delta: timestamps[i] - timestamps[i-1]})
+	}
+	sort.Slice(gaps, func(i, j int) bool {
+		if gaps[i].delta != gaps[j].delta {
+			return gaps[i].delta > gaps[j].delta
+		}
+		return gaps[i].position < gaps[j].position
+	})
+	for i, gap := range gaps[:min(len(gaps), 40)] {
+		ratio := 0.0
+		if i+1 < len(gaps) {
+			ratio = float64(gap.delta) / float64(gaps[i+1].delta)
+		}
+		t.Logf("counter timestamp gap rank=%d position=%d range=%d..%d delta=%d next_ratio=%g",
+			i+1, gap.position, timestamps[gap.position-1], timestamps[gap.position], gap.delta, ratio)
+	}
 }
 
 func reportTimelineCounterMetadata(t *testing.T, check func(objc.ID, string, reflect.Type, ...any), counters gtshaderprofiler.IGTMioTimelineCounters, names []string) {
