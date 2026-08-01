@@ -52,12 +52,21 @@ func RenderText(report Report, by string, showMatches, showUnmatched, showOccurr
 
 	if all || sections["function"] {
 		fmt.Fprintf(&b, "\nBy Function\n")
-		fmt.Fprintf(&b, "%-52s %8s %8s %10s %10s %10s\n", "Function", "CountA", "CountB", "A(us)", "B(us)", "Delta")
+		fmt.Fprintf(&b, "%-52s %8s %8s %10s %10s %10s  %s\n", "Function", "CountA", "CountB", "A(us)", "B(us)", "Delta", "")
+		// Pairing came from the full table, before the limit dropped the tail;
+		// a partner below the cut still names the row above it.
+		pairs, ambiguous := report.RenamePairs, report.AmbiguousRenames
 		for i, f := range report.TopFunctionDeltas {
 			if i >= limit {
 				break
 			}
-			fmt.Fprintf(&b, "%-52s %8d %8d %10d %10d %+10d\n", fmtutil.TruncateString(f.FunctionName, 52), f.DispatchCountA, f.DispatchCountB, f.TotalAUs, f.TotalBUs, f.TotalDeltaUs)
+			note := ""
+			if partner, ok := pairs[f.FunctionName]; ok {
+				note = "same count as " + partner + ", likely renamed"
+			} else if n := ambiguous[f.FunctionName]; n > 0 {
+				note = AmbiguousNote(n)
+			}
+			fmt.Fprintf(&b, "%-52s %8d %8d %10d %10d %+10d  %s\n", fmtutil.TruncateString(f.FunctionName, 52), f.DispatchCountA, f.DispatchCountB, f.TotalAUs, f.TotalBUs, f.TotalDeltaUs, note)
 		}
 	}
 

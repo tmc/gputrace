@@ -93,7 +93,7 @@ func BuildReport(a, b *TraceData, aligned AlignmentResult, opts ReportOptions) R
 	// below discards the tail. The rows that carry the signal are the
 	// smallest in the table, so a cost-ordered top-N is precisely what drops
 	// them.
-	report.RenamePairs = RenamePairs(report.TopFunctionDeltas)
+	report.RenamePairs, report.AmbiguousRenames = renamePairing(report.TopFunctionDeltas)
 	report.Comparability = CheckComparability(report.TopFunctionDeltas, report.RenamePairs)
 	if warning := report.Comparability.Warning(); warning != "" {
 		report.Warnings = append(report.Warnings, warning)

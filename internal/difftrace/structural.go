@@ -75,7 +75,7 @@ func writeStructuralFunctions(w io.Writer, deltas []FunctionDelta, limit int) {
 	if limit > 0 && len(shown) > limit {
 		shown = shown[:limit]
 	}
-	pairs := RenamePairs(deltas)
+	pairs, ambiguous := renamePairing(deltas)
 	for _, d := range shown {
 		note := ""
 		if StructuralOnly(d) {
@@ -85,6 +85,8 @@ func writeStructuralFunctions(w io.Writer, deltas []FunctionDelta, limit int) {
 			}
 			if partner, ok := pairs[d.FunctionName]; ok {
 				note += ", net 0 with " + partner
+			} else if n := ambiguous[d.FunctionName]; n > 0 {
+				note += ", " + AmbiguousNote(n)
 			}
 		}
 		fmt.Fprintf(w, "%-52s %8d %8d %+10d  %s\n",

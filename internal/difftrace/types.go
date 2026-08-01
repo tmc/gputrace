@@ -263,6 +263,7 @@ type Report struct {
 	EncoderDivergence     *EncoderDivergence     `json:"encoder_divergence,omitempty"`
 	Comparability         ComparabilityCheck     `json:"comparability"`
 	RenamePairs           map[string]string      `json:"rename_pairs,omitempty"`
+	AmbiguousRenames      map[string]int         `json:"ambiguous_renames,omitempty"`
 	Warnings              []string               `json:"warnings,omitempty"`
 }
 
