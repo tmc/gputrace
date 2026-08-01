@@ -383,8 +383,16 @@ func dictionaryKeys(id objc.ID, limit uint64) []string {
 	out := make([]string, 0, limit)
 	for i := uint64(0); i < limit; i++ {
 		key := objc.Send[objc.ID](keys, objc.Sel("objectAtIndex:"), uint(i))
-		if key != 0 {
+		if key == 0 {
+			continue
+		}
+		// Dictionary keys need not be strings: pipelinePerformanceStatistics is
+		// keyed by NSNumber, and sending UTF8String to one is fatal.
+		switch {
+		case objc.RespondsToSelector(key, objc.Sel("UTF8String")):
 			out = append(out, objc.IDToString(key))
+		case objc.RespondsToSelector(key, objc.Sel("stringValue")):
+			out = append(out, objc.IDToString(objc.Send[objc.ID](key, objc.Sel("stringValue"))))
 		}
 	}
 	return out
