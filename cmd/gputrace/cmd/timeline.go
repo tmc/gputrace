@@ -633,6 +633,7 @@ type APICall struct {
 type CounterTrack struct {
 	Name             string          `json:"name"`
 	Unit             string          `json:"unit"` // %, GB/s, count, etc.
+	Description      string          `json:"description,omitempty"`
 	XcodeGroups      []string        `json:"xcode_groups,omitempty"`
 	XcodeCatalogPath string          `json:"xcode_catalog_path,omitempty"`
 	Samples          []CounterSample `json:"samples"`
@@ -2438,6 +2439,10 @@ func timelineMetadataForActiveTracks(events []TimelineEvent) []TimelineEvent {
 func counterTrackMetadataArgs(track CounterTrack) map[string]interface{} {
 	args := map[string]interface{}{
 		"name": fmt.Sprintf("%s (%s)", track.Name, track.Unit),
+	}
+	if track.Description != "" {
+		args["description"] = track.Description
+		args["xcode_tooltip"] = track.Description
 	}
 	if len(track.XcodeGroups) > 0 {
 		args["xcode_groups"] = track.XcodeGroups

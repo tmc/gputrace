@@ -42,6 +42,9 @@ func applyXcodeCounterMetadataFromGraph(tracks []CounterTrack, graph *counter.GP
 		if metadata.Unit != "" {
 			track.Unit = metadata.Unit
 		}
+		if metadata.Description != "" {
+			track.Description = metadata.Description
+		}
 		track.XcodeGroups = append([]string(nil), groups[track.Name]...)
 		track.XcodeCatalogPath = graph.Path
 	}
