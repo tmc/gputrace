@@ -1,0 +1,1 @@
+no importers of internal/agxps at time of change (grep -rl 'internal/agxps' over *.go excluding the package itself: empty), so no shipped output was affected. Shapes per docs/research/agxps-signatures.yaml, verified: both. 2026-08-01T06:29:56Z claude-code opus-5[1m] pid=4717 iterm=w0t1p3:BE93B99A-FA9B-469D-9C12-0B1009E84F85
