@@ -48,6 +48,14 @@ populate the timeline counter dictionary, which is empty without it.
 `GPUTRACE_TEST_TRACE` is only a default. Any specific variable still wins when
 set, so a test can be aimed at a different capture than the rest.
 
+Captures on the development machine live in `~/tmp/gputrace-captures/`, with
+symlinks left in `/private/tmp` so older hardcoded paths keep resolving. They
+are not in `/tmp` itself: macOS sweeps that nightly and clears it on reboot,
+and a profiled capture is 8-14 GB and cannot be regenerated from the repository.
+The two with committed Xcode oracles under `testdata/` are
+`qwen25-05b-static_tokens_2_to_3-wperfdata` (11 encoders) and
+`...rep1-perfdata3` (23 encoders).
+
 Derived from `GPUTRACE_TEST_TRACE` when unset: `GPUTRACE_AGX2_STREAMDATA`,
 `GPUTRACE_PERF_FIXTURE`, `GPUTRACE_PROBE_COUNTERS_DIR`,
 `GPUTRACE_PROBE_STREAMDATA`, `GPUTRACE_PROCESS_STREAMDATA`, and
