@@ -939,6 +939,20 @@ func TestGenerateInteractiveHTMLIncludesShaderTooltipFields(t *testing.T) {
 	}
 }
 
+func TestGenerateInteractiveHTMLIncludesEstimatedTimingWarning(t *testing.T) {
+	html := generateInteractiveHTML(`{"events":[]}`)
+	for _, want := range []string{
+		"warning-banner",
+		"Precise hardware timing data is unavailable",
+		"Estimated Timing",
+		"Timing Mode",
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("generated HTML missing estimated timing element %q", want)
+		}
+	}
+}
+
 func TestGenerateCounterTracksFromPerfDataUsesEncoderCounters(t *testing.T) {
 	timeline := &Timeline{
 		Encoders: []EncoderInfo{{

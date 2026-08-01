@@ -150,6 +150,11 @@ func runTimeline(cmd *cobra.Command, args []string, opts *timelineOptions) error
 		}
 	}
 
+	// Warn if trace timing data is missing or approximate
+	if timeline.Timing == nil || timeline.Timing.EncoderTimingApproximate || timeline.Timing.TimingSource == "" || timeline.Timing.TimingSource == "unavailable" {
+		fmt.Fprintf(cmd.ErrOrStderr(), "Warning: trace lacks precise hardware timing data; encoder/dispatch durations are estimated.\n")
+	}
+
 	timeline = timelineForClock(timeline, opts.clock)
 	outputPath := timelineOutputPath(opts.format, opts.output)
 
@@ -3082,6 +3087,9 @@ func runTimelineFromProfiler(tracePath string, opts *timelineOptions) error {
 
 	// Build timeline from profiler data
 	timeline := buildTimelineFromProfilerData(tracePath, stats)
+	if timeline.Timing == nil || timeline.Timing.EncoderTimingApproximate || timeline.Timing.TimingSource == "" || timeline.Timing.TimingSource == "unavailable" {
+		fmt.Fprintln(os.Stderr, "Warning: trace lacks precise hardware timing data; encoder/dispatch durations are estimated.")
+	}
 	timeline = timelineForClock(timeline, opts.clock)
 
 	outputPath := timelineOutputPath(opts.format, opts.output)
@@ -3619,12 +3627,37 @@ func generateInteractiveHTML(timelineJSON string, perfettoJSON ...string) string
             pointer-events: none;
             white-space: nowrap;
         }
+
+        #warning-banner {
+            background: #6a4f00;
+            color: #fff8dc;
+            padding: 6px 20px;
+            font-size: 12px;
+            display: none;
+            align-items: center;
+            gap: 8px;
+            border-bottom: 1px solid #8b6b00;
+        }
+
+        #warning-banner.visible {
+            display: flex;
+        }
+
+        .badge-estimated {
+            background: #d7ba7d;
+            color: #1e1e1e;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 2px 6px;
+            border-radius: 3px;
+            margin-left: 8px;
+        }
     </style>
 </head>
 <body>
     <div id="container">
         <div id="header">
-            <h1>GPU Timeline Viewer</h1>
+            <h1>GPU Timeline Viewer<span id="estimated-badge" class="badge-estimated" style="display:none;">Estimated Timing</span></h1>
             <div id="controls">
                 <div class="control-group">
                     <button id="zoom-in">Zoom In (+)</button>
@@ -3633,6 +3666,9 @@ func generateInteractiveHTML(timelineJSON string, perfettoJSON ...string) string
                 </div>
                 <div id="stats"></div>
             </div>
+        </div>
+        <div id="warning-banner">
+            <strong>Warning:</strong> Precise hardware timing data is unavailable for this trace. Durations and execution spans are estimated.
         </div>
 
         <div id="main">
@@ -3761,6 +3797,16 @@ func generateInteractiveHTML(timelineJSON string, perfettoJSON ...string) string
 
             updateStats();
             updateDetails();
+
+            // Check if timing data is estimated or unavailable
+            const timing = state.timeline.timing || {};
+            const isEstimated = timing.encoder_timing_approximate || !timing.timing_source || timing.timing_source === 'unavailable';
+            if (isEstimated) {
+                const banner = document.getElementById('warning-banner');
+                if (banner) banner.classList.add('visible');
+                const badge = document.getElementById('estimated-badge');
+                if (badge) badge.style.display = 'inline-block';
+            }
         }
 
         function updateStats() {
@@ -3809,8 +3855,12 @@ func generateInteractiveHTML(timelineJSON string, perfettoJSON ...string) string
                 ` + "`" + `;
                 return;
             }
+            const timingStatus = (timing.encoder_timing_approximate || !timing.timing_source || timing.timing_source === 'unavailable')
+                ? 'Estimated (approximate)'
+                : 'Precise (hardware)';
             detailPanel.innerHTML = ` + "`" + `
-                <div class="detail-row"><span class="detail-label">Timing</span><span class="detail-value">${timing.timing_source || 'not available'}</span></div>
+                <div class="detail-row"><span class="detail-label">Timing Mode</span><span class="detail-value">${timingStatus}</span></div>
+                <div class="detail-row"><span class="detail-label">Timing Source</span><span class="detail-value">${timing.timing_source || 'not available'}</span></div>
                 <div class="detail-row"><span class="detail-label">CB active</span><span class="detail-value">${formatNs(timing.command_buffer_active_time_ns || 0)}</span></div>
                 <div class="detail-row"><span class="detail-label">CB wall</span><span class="detail-value">${formatNs(timing.command_buffer_wall_time_ns || 0)}</span></div>
                 <div class="detail-row"><span class="detail-label">Dispatch span</span><span class="detail-value">${formatNs(timing.dispatch_span_ns || 0)}</span></div>
@@ -4151,12 +4201,14 @@ func generateInteractiveHTML(timelineJSON string, perfettoJSON ...string) string
             const startTime = isEvent ? (data.ts / 1000).toFixed(3) : (data.start_time / 1000000).toFixed(3);
             const args = data.args || {};
 
+            const timingMode = (args.timing_approximate || args.real_timing === false) ? 'Estimated' : (args.real_timing ? 'Precise (hardware)' : undefined);
             let html = '<div class="tooltip-title">' + escapeHTML(title) + '</div>' +
                 tooltipRow('Duration', duration + ' ms') +
                 tooltipRow('Start', startTime + ' ms') +
                 tooltipRow('Type', args.xcode_type || data.type || data.cat || 'compute');
 
             const fields = [
+                ['Timing Mode', timingMode],
                 ['Cost', args.xcode_cost_pct !== undefined ? args.xcode_cost_pct.toFixed(2) + '%' : undefined],
                 ['Profiling Cost', args.profiling_cost_pct !== undefined ? args.profiling_cost_pct.toFixed(2) + '%' : undefined],
                 ['Pipeline', args.pipeline_state],
