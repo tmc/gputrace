@@ -52,3 +52,4 @@ gputrace_bin
 # Local watch/debug artifacts
 watch_*
 beads.svg
+brain/
