@@ -4,15 +4,34 @@
 
 package counter
 
-// CounterFileToName maps Counters_f_*.raw file indices to their corresponding
-// performance counter metric names from the Xcode CSV export.
+// CounterFileToName claims to map Counters_f_*.raw file indices to a single
+// performance counter metric name from the Xcode CSV export.
 //
-// Mapping discovered by analyzing CSV column order:
-// - Counters_f_N.raw → CSV counter column (N - 4)
-// - Counters_f_N.raw → Absolute CSV column (N + 1)
+// [D] FALSIFIED. Do not use it to name a counter series.
 //
-// Files 0-3 do not map to counter columns (may contain metadata).
-// Verified with known example: Counters_f_12.raw → 'ALU Utilization'
+// The mapping assumes one file holds one counter, so that Counters_f_12.raw is
+// "ALU Utilization". Parsing the files through the APS parser disproves it:
+// every file carries a full multi-counter capture pass, not a column.
+//
+//	Counters_f_4.raw   137 counters   3744 kicks
+//	Counters_f_12.raw  137 counters   3641 kicks
+//	Counters_f_39.raw  137 counters   2769 kicks
+//
+// The counter idents inside a file are the 64-hex raw hashes, and the differing
+// kick counts say the files are separate capture passes over different windows.
+// Whatever distinguishes file N from file N+1, it is not "column N-4": there is
+// no single series in file 12 to call ALU Utilization.
+//
+// The original derivation only ever compared this table's length to the CSV
+// column count. That check passes for any 36-entry table, which is why an
+// ordering with no measurement behind it read as verified for months.
+//
+// Reproduce with GPUTRACE_PROBE_COUNTERS=<file> go test ./internal/agxps
+// -run TestCounterFileParse -v.
+//
+// Kept only because the CSV column order it records is itself correct and worth
+// having. Naming a parsed series still needs the raw-hash deobfuscation route
+// in docs/research/COUNTER_NAME_MAPPING.md.
 var CounterFileToName = map[int]string{
 	4:  "1D Texture Array Sampler Calls",
 	5:  "1D Texture Sampler Calls",

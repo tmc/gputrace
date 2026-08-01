@@ -1,13 +1,48 @@
 # Counter File to Metric Name Mapping
 
 **Date:** 2025-11-06
-**Status:** Complete
+**Status:** [D] FALSIFIED 2026-08-01. The mapping formula below is wrong. The
+CSV column order it records is still correct and is why the file is kept.
 
-## Summary
+## Falsification
 
-Successfully reverse-engineered the mapping from Counters_f_*.raw files to performance counter metric names by analyzing the Xcode CSV export column order.
+The formula assumes one `Counters_f_N.raw` holds one counter series, so that
+file 12 *is* "ALU Utilization". Parsing the files through the APS parser
+(`agxps_aps_parser_parse`, via `GTShaderProfiler.framework`) shows each file
+carries a full multi-counter capture pass:
 
-## Mapping Formula
+| File | Counters in file | Kicks |
+|------|------------------|-------|
+| `Counters_f_4.raw`  | 137 | 3744 |
+| `Counters_f_12.raw` | 137 | 3641 |
+| `Counters_f_39.raw` | 137 | 2769 |
+
+Reproduce:
+
+```sh
+GPUTRACE_PROBE_COUNTERS=<path>/Counters_f_12.raw \
+  go test ./internal/agxps -run TestCounterFileParse -v
+```
+
+There is no single series in file 12 to call ALU Utilization. The counter
+idents inside each file are the 64-hex raw hashes, and the differing kick
+counts indicate the files are separate capture passes over different windows,
+not columns of one table.
+
+**How this held for months.** The "Verified Example" was never a measurement.
+The derivation only checked that a 36-entry table lined up with 36 CSV columns,
+which any 36-entry ordering satisfies. No counter value was ever read out of
+file 12 and compared to the CSV's ALU Utilization figure. A check that cannot
+fail is not a check — see `gputrace_silent_wrongness`.
+
+`counter.CounterFileToName` carries the same falsification note. Nothing outside
+tests consumes it, so no published number was wrong; it was a loaded gun rather
+than a live defect.
+
+Naming a parsed series still requires the raw-hash deobfuscation route in
+`COUNTER_NAME_MAPPING.md`, which remains blocked on `RawCountersMapping.csv`.
+
+## Mapping Formula (FALSIFIED — retained for the column order only)
 
 ```text
 Counters_f_N.raw → CSV counter column (N - 4)
