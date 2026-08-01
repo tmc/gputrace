@@ -384,5 +384,58 @@ func TestRawProbeParserCreate(t *testing.T) {
 			}
 		}
 		t.Logf("  ids appearing more than once: %d", dup)
+
+		// distinct high == 2 * kicks exactly (5020 == 2*2510), which suggests
+		// the high field decomposes again into a kick and a one-bit
+		// subgroup. If so the highs for a kick are {2k, 2k+1} and halving
+		// them collapses to the kick count.
+		half := map[uint64]int{}
+		pairs := map[uint64]map[uint64]bool{}
+		for _, v := range all {
+			h := v >> 8
+			half[h>>1]++
+			if pairs[h>>1] == nil {
+				pairs[h>>1] = map[uint64]bool{}
+			}
+			pairs[h>>1][h&1] = true
+		}
+		both := 0
+		for _, s := range pairs {
+			if len(s) == 2 {
+				both++
+			}
+		}
+		t.Logf("  high>>1 distinct=%d (kicks=%d) groups holding both parities=%d", len(half), nk, both)
+
+		// The low byte may be a kind tag plus a 3-bit slot rather than a
+		// base: every value is 0b01100sss. Kick ids are a different object
+		// class, so if they carry their own fixed prefix the tag is real.
+		kids := make([]uint64, nk)
+		if nk > 0 && a.pdKickID(pd, &kids[0], 0, nk) {
+			klo := map[uint64]int{}
+			khi := map[uint64]int{}
+			kdistinct := map[uint64]bool{}
+			var kmax uint64
+			for _, v := range kids {
+				klo[v&0xff]++
+				khi[v>>32]++
+				kdistinct[v] = true
+				if v > kmax {
+					kmax = v
+				}
+			}
+			var los []uint64
+			for v := range klo {
+				los = append(los, v)
+			}
+			sort.Slice(los, func(i, j int) bool { return los[i] < los[j] })
+			if len(los) > 16 {
+				los = los[:16]
+			}
+			t.Logf("  kick ids: n=%d distinct=%d max=%#x distinctLow=%d distinctHigh32=%d",
+				len(kids), len(kdistinct), kmax, len(klo), len(khi))
+			t.Logf("  kick id low bytes (first 16): %#x", los)
+			t.Logf("  kick ids[0:8] = %#x", kids[:min(8, len(kids))])
+		}
 	}
 }
