@@ -210,6 +210,7 @@ func ParseStreamData(gpuprofilerDir string, addressToName map[uint64]string) (*S
 			pipelineInfos := extractPipelineInfo(objects, obj1)
 
 			if ppsUID, ok := obj1["pipelinePerformanceStatistics"].(plist.UID); ok {
+				applyCompilerNames(pipelineInfos, compilerFunctionNames(objects, int(ppsUID)))
 				stats.Pipelines = extractPipelineStats(objects, int(ppsUID))
 				stats.NumPipelines = len(stats.Pipelines)
 				attachPipelineMetadata(stats.Pipelines, pipelineInfos, addressToName)
@@ -325,8 +326,7 @@ type pipelineInfo struct {
 //
 // pipelineStateInfoData struct layout (40 bytes per record):
 //
-//	[0:4]   pipeline ID (internal, e.g., 27, 28, 29...)
-//	[4:8]   padding/reserved
+//	[0:8]   pipeline ID (one uint64, e.g., 446, 447, 448...)
 //	[8:16]  pipeline address (Metal pipeline pointer)
 //	[16:20] function info index
 //	[20:28] reserved
@@ -388,8 +388,7 @@ func extractPipelineInfo(objects []any, obj1 map[string]any) []pipelineInfo {
 		off := i * pipeSize
 		rec := nsData[off : off+pipeSize]
 
-		infos[i].ID = int(binary.LittleEndian.Uint32(rec[0:4]))
-		// [8:16] is pipeline address
+		infos[i].ID = int(binary.LittleEndian.Uint64(rec[0:8]))
 		infos[i].Address = binary.LittleEndian.Uint64(rec[8:16])
 
 		// Use functionInfoData[i][@28:32] for string index (correct mapping)
@@ -410,6 +409,85 @@ func extractPipelineInfo(objects []any, obj1 map[string]any) []pipelineInfo {
 	}
 
 	return infos
+}
+
+// compilerFunctionNames returns pipeline ID to shader compiler function name, read
+// from pipelinePerformanceStatistics[id]["Compile Performance"]["Function Name"].
+//
+// Some archives leave a function's name-string index pointing at the empty entry of
+// the strings array, so the strings table alone cannot name every pipeline. The
+// compiler statistics carry the name independently, keyed by pipeline ID.
+func compilerFunctionNames(objects []any, ppsIdx int) map[int]string {
+	if ppsIdx <= 0 || ppsIdx >= len(objects) {
+		return nil
+	}
+	ppsObj, ok := objects[ppsIdx].(map[string]any)
+	if !ok {
+		return nil
+	}
+	keys, keysOK := ppsObj["NS.keys"].([]any)
+	values, valsOK := ppsObj["NS.objects"].([]any)
+	if !keysOK || !valsOK || len(keys) != len(values) {
+		return nil
+	}
+
+	names := make(map[int]string)
+	for i, key := range keys {
+		keyUID, ok := key.(plist.UID)
+		if !ok || int(keyUID) >= len(objects) {
+			continue
+		}
+		id := int(plistUint64(objects[int(keyUID)]))
+		compile, ok := nsDictionary(objects, nsDictionary(objects, values[i])["Compile Performance"])["Function Name"].(string)
+		if ok && compile != "" {
+			names[id] = compile
+		}
+	}
+	return names
+}
+
+// applyCompilerNames fills in names the strings array could not supply.
+func applyCompilerNames(infos []pipelineInfo, names map[int]string) {
+	for i := range infos {
+		if infos[i].FunctionName == "" {
+			infos[i].FunctionName = names[infos[i].ID]
+		}
+	}
+}
+
+// nsDictionary resolves an archived NSDictionary reference to a map of its
+// string-keyed entries, with UID values dereferenced. Non-string keys are skipped.
+func nsDictionary(objects []any, ref any) map[string]any {
+	dict, ok := deref(objects, ref).(map[string]any)
+	if !ok {
+		return nil
+	}
+	keys, _ := dict["NS.keys"].([]any)
+	values, _ := dict["NS.objects"].([]any)
+	if len(keys) != len(values) {
+		return nil
+	}
+
+	out := make(map[string]any, len(keys))
+	for i, key := range keys {
+		keyUID, ok := key.(plist.UID)
+		if !ok || int(keyUID) >= len(objects) {
+			continue
+		}
+		name, ok := objects[int(keyUID)].(string)
+		if !ok {
+			continue
+		}
+		out[name] = deref(objects, values[i])
+	}
+	return out
+}
+
+func deref(objects []any, v any) any {
+	if uid, ok := v.(plist.UID); ok && int(uid) < len(objects) {
+		return objects[int(uid)]
+	}
+	return v
 }
 
 func attachPipelineMetadata(pipelines []PipelineStats, infos []pipelineInfo, addressToName map[uint64]string) {
