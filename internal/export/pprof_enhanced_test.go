@@ -143,17 +143,16 @@ func TestPprofValueIndexes(t *testing.T) {
 	if pprofValueCount <= pprofUniformRegsIdx {
 		t.Fatalf("pprofValueCount = %d, uniform index = %d", pprofValueCount, pprofUniformRegsIdx)
 	}
-	if pprofExecutionCostIdx != 34 || pprofProfilerCountIdx != 35 || pprofUniformRegsIdx != 36 {
+	if pprofExecutionCostIdx != 33 || pprofProfilerCountIdx != 34 || pprofUniformRegsIdx != 35 {
 		t.Fatalf("pprof indexes changed: execution=%d profiler=%d uniform=%d", pprofExecutionCostIdx, pprofProfilerCountIdx, pprofUniformRegsIdx)
 	}
 }
 
 func TestApplyEncoderCounterMetricsIncludesBytesAndBandwidth(t *testing.T) {
 	values := make([]int64, pprofValueCount)
-	values[19] = 7
+	values[18] = 7
 	applyEncoderCounterMetrics(values, &counter.EncoderCounterMetrics{
 		ALUUtilization:                 1.25,
-		KernelOccupancy:                0.81,
 		BytesReadFromDeviceMemory:      100,
 		BytesWrittenToDeviceMemory:     200,
 		BufferDeviceMemoryBytesRead:    300,
@@ -165,28 +164,25 @@ func TestApplyEncoderCounterMetricsIncludesBytesAndBandwidth(t *testing.T) {
 	if got := values[7]; got != 125 {
 		t.Fatalf("alu_util = %d, want 125", got)
 	}
-	if got := values[8]; got != 81 {
-		t.Fatalf("occupancy = %d, want 81", got)
-	}
-	if got := values[19]; got != 7 {
+	if got := values[18]; got != 7 {
 		t.Fatalf("read_bytes overwritten with %d, want 7", got)
 	}
-	if got := values[20]; got != 200 {
+	if got := values[19]; got != 200 {
 		t.Fatalf("write_bytes = %d, want 200", got)
 	}
-	if got := values[21]; got != 300 {
+	if got := values[20]; got != 300 {
 		t.Fatalf("buffer_read_bytes = %d, want 300", got)
 	}
-	if got := values[22]; got != 400 {
+	if got := values[21]; got != 400 {
 		t.Fatalf("buffer_write_bytes = %d, want 400", got)
 	}
-	if got := values[23]; got != 1500 {
+	if got := values[22]; got != 1500 {
 		t.Fatalf("device_bandwidth = %d, want 1500", got)
 	}
-	if got := values[24]; got != 2500 {
+	if got := values[23]; got != 2500 {
 		t.Fatalf("buffer_l1_read_bw = %d, want 2500", got)
 	}
-	if got := values[25]; got != 3500 {
+	if got := values[24]; got != 3500 {
 		t.Fatalf("buffer_l1_write_bw = %d, want 3500", got)
 	}
 }

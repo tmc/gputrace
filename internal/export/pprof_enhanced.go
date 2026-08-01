@@ -96,10 +96,10 @@ func profileBasisPoints(v float64) int64 {
 }
 
 const (
-	pprofValueCount       = 37
-	pprofExecutionCostIdx = 34
-	pprofProfilerCountIdx = 35
-	pprofUniformRegsIdx   = 36
+	pprofValueCount       = 36
+	pprofExecutionCostIdx = 33
+	pprofProfilerCountIdx = 34
+	pprofUniformRegsIdx   = 35
 )
 
 func applyEncoderCounterMetrics(values []int64, m *counter.EncoderCounterMetrics) {
@@ -110,62 +110,59 @@ func applyEncoderCounterMetrics(values []int64, m *counter.EncoderCounterMetrics
 		values[7] = profileBasisPoints(m.ALUUtilization)
 	}
 	if values[8] == 0 {
-		values[8] = profileBasisPoints(m.KernelOccupancy)
-	}
-	if values[9] == 0 {
 		if m.ComputeShaderUtilization > 0 {
-			values[9] = profileBasisPoints(m.ComputeShaderUtilization)
+			values[8] = profileBasisPoints(m.ComputeShaderUtilization)
 		} else {
-			values[9] = profileBasisPoints(m.ComputeUtilization)
+			values[8] = profileBasisPoints(m.ComputeUtilization)
 		}
 	}
+	if values[9] == 0 {
+		values[9] = profileBasisPoints(m.FragmentShaderUtilization)
+	}
 	if values[10] == 0 {
-		values[10] = profileBasisPoints(m.FragmentShaderUtilization)
+		values[10] = profileBasisPoints(m.VertexShaderUtilization)
 	}
 	if values[11] == 0 {
-		values[11] = profileBasisPoints(m.VertexShaderUtilization)
+		values[11] = profileBasisPoints(m.F32Utilization)
 	}
 	if values[12] == 0 {
-		values[12] = profileBasisPoints(m.F32Utilization)
+		values[12] = profileBasisPoints(m.F32Limiter)
 	}
 	if values[13] == 0 {
-		values[13] = profileBasisPoints(m.F32Limiter)
+		values[13] = profileBasisPoints(m.L1CacheLimiter)
 	}
 	if values[14] == 0 {
-		values[14] = profileBasisPoints(m.L1CacheLimiter)
+		values[14] = profileBasisPoints(m.LastLevelCacheLimiter)
 	}
 	if values[15] == 0 {
-		values[15] = profileBasisPoints(m.LastLevelCacheLimiter)
+		values[15] = profileBasisPoints(m.ControlFlowLimiter)
 	}
 	if values[16] == 0 {
-		values[16] = profileBasisPoints(m.ControlFlowLimiter)
+		values[16] = profileBasisPoints(m.BufferL1MissRate)
 	}
 	if values[17] == 0 {
-		values[17] = profileBasisPoints(m.BufferL1MissRate)
+		values[17] = profileBasisPoints(m.InstructionThroughputLimiter)
 	}
 	if values[18] == 0 {
-		values[18] = profileBasisPoints(m.InstructionThroughputLimiter)
+		values[18] = int64(m.BytesReadFromDeviceMemory)
 	}
 	if values[19] == 0 {
-		values[19] = int64(m.BytesReadFromDeviceMemory)
+		values[19] = int64(m.BytesWrittenToDeviceMemory)
 	}
 	if values[20] == 0 {
-		values[20] = int64(m.BytesWrittenToDeviceMemory)
+		values[20] = int64(m.BufferDeviceMemoryBytesRead)
 	}
 	if values[21] == 0 {
-		values[21] = int64(m.BufferDeviceMemoryBytesRead)
+		values[21] = int64(m.BufferDeviceMemoryBytesWritten)
 	}
 	if values[22] == 0 {
-		values[22] = int64(m.BufferDeviceMemoryBytesWritten)
+		values[22] = int64(m.DeviceMemoryBandwidthGBps * 1000)
 	}
 	if values[23] == 0 {
-		values[23] = int64(m.DeviceMemoryBandwidthGBps * 1000)
+		values[23] = int64(m.BufferL1ReadBandwidth * 1000)
 	}
 	if values[24] == 0 {
-		values[24] = int64(m.BufferL1ReadBandwidth * 1000)
-	}
-	if values[25] == 0 {
-		values[25] = int64(m.BufferL1WriteBandwidth * 1000)
+		values[24] = int64(m.BufferL1WriteBandwidth * 1000)
 	}
 }
 
@@ -298,7 +295,6 @@ func appendXcodeMetricCoverageComments(prof *profile.Profile) {
 	for _, name := range []string{
 		"simd_groups",
 		"execution_cost",
-		"occupancy",
 		"alu_util",
 		"alloc_regs",
 		"uniform_regs",
@@ -316,17 +312,15 @@ func appendXcodeMetricCoverageComments(prof *profile.Profile) {
 	}
 	if counterSource {
 		prof.Comments = append(prof.Comments, "gputrace xcode_metric_source alu_util: Counters_f_*.raw/Profiling_f_*.raw")
-		prof.Comments = append(prof.Comments, "gputrace xcode_metric_source occupancy: Counters_f_*.raw/Profiling_f_*.raw")
 	}
 	for _, gap := range []struct {
 		name    string
 		binding string
 	}{
 		{"high_reg", "GTMioShaderBinaryData.LiveRegisterForInstructionAtIndex"},
-		{"occupancy", "XRGPUAPSDataProcessor derived counters"},
 		{"alu_util", "XRGPUAPSDataProcessor derived counters"},
 	} {
-		if counterSource && (gap.name == "alu_util" || gap.name == "occupancy") {
+		if counterSource && gap.name == "alu_util" {
 			continue
 		}
 		if totals[gap.name] == 0 {
@@ -411,9 +405,8 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 			{Type: "high_reg", Unit: "count"},      // High Register
 			{Type: "spilled_bytes", Unit: "bytes"}, // Spilled Bytes
 
-			// Percentage metrics - utilization (indices 7-12).
+			// Percentage metrics - utilization (indices 7-11).
 			{Type: "alu_util", Unit: "basis_points"},
-			{Type: "occupancy", Unit: "basis_points"},
 			{Type: "compute_util", Unit: "basis_points"},
 			{Type: "fragment_util", Unit: "basis_points"},
 			{Type: "vertex_util", Unit: "basis_points"},
@@ -489,7 +482,7 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 		)
 	}
 	dispatchExecutionCosts := dispatchExecutionCostValues(streamStats, executionCosts)
-	encoderCounters, _ := counter.PopulateEncoderMetricsFromPerfCounterStats(t, stats)
+	encoderCounters, _ := counter.PopulateEncoderMetricsFromPerfCounterStats(stats)
 	encoderCounterByIndex := make(map[int]*counter.EncoderCounterMetrics)
 	for i := range encoderCounters {
 		encoderCounterByIndex[encoderCounters[i].EncoderIndex] = &encoderCounters[i]
@@ -809,41 +802,40 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 				values[6] = int64(m.SpilledBytes)  // spilled_bytes
 
 				// Utilization percentages (scale by 100 for 2 decimal precision)
-				values[7] = profileBasisPoints(m.ALUUtilization)             // alu_util
-				values[8] = profileBasisPoints(m.KernelOccupancy)            // occupancy
-				values[9] = profileBasisPoints(m.ComputeShaderUtilization)   // compute_util
-				values[10] = profileBasisPoints(m.FragmentShaderUtilization) // fragment_util
-				values[11] = profileBasisPoints(m.VertexShaderUtilization)   // vertex_util
-				values[12] = profileBasisPoints(m.F32Utilization)            // f32_util
+				values[7] = profileBasisPoints(m.ALUUtilization)            // alu_util
+				values[8] = profileBasisPoints(m.ComputeShaderUtilization)  // compute_util
+				values[9] = profileBasisPoints(m.FragmentShaderUtilization) // fragment_util
+				values[10] = profileBasisPoints(m.VertexShaderUtilization)  // vertex_util
+				values[11] = profileBasisPoints(m.F32Utilization)           // f32_util
 
 				// Limiter percentages (scale by 100)
-				values[13] = profileBasisPoints(m.F32Limiter)                   // f32_limiter
-				values[14] = profileBasisPoints(m.L1CacheLimiter)               // l1_limiter
-				values[15] = profileBasisPoints(m.LastLevelCacheLimiter)        // llc_limiter
-				values[16] = profileBasisPoints(m.ControlFlowLimiter)           // control_flow_limiter
-				values[17] = profileBasisPoints(m.BufferL1MissRate)             // buffer_l1_miss
-				values[18] = profileBasisPoints(m.InstructionThroughputLimiter) // instruction_throughput
+				values[12] = profileBasisPoints(m.F32Limiter)                   // f32_limiter
+				values[13] = profileBasisPoints(m.L1CacheLimiter)               // l1_limiter
+				values[14] = profileBasisPoints(m.LastLevelCacheLimiter)        // llc_limiter
+				values[15] = profileBasisPoints(m.ControlFlowLimiter)           // control_flow_limiter
+				values[16] = profileBasisPoints(m.BufferL1MissRate)             // buffer_l1_miss
+				values[17] = profileBasisPoints(m.InstructionThroughputLimiter) // instruction_throughput
 
 				// Byte metrics
-				values[19] = int64(m.BytesReadFromDeviceMemory)      // read_bytes
-				values[20] = int64(m.BytesWrittenToDeviceMemory)     // write_bytes
-				values[21] = int64(m.BufferDeviceMemoryBytesRead)    // buffer_read_bytes
-				values[22] = int64(m.BufferDeviceMemoryBytesWritten) // buffer_write_bytes
+				values[18] = int64(m.BytesReadFromDeviceMemory)      // read_bytes
+				values[19] = int64(m.BytesWrittenToDeviceMemory)     // write_bytes
+				values[20] = int64(m.BufferDeviceMemoryBytesRead)    // buffer_read_bytes
+				values[21] = int64(m.BufferDeviceMemoryBytesWritten) // buffer_write_bytes
 
 				// Bandwidth metrics (scale by 1000 to preserve 3 decimal places, GB/s -> MB/s * 1000)
-				values[23] = int64(m.DeviceMemoryBandwidthGBps * 1000) // device_bandwidth
-				values[24] = int64(m.BufferL1ReadBandwidth * 1000)     // buffer_l1_read_bw
-				values[25] = int64(m.BufferL1WriteBandwidth * 1000)    // buffer_l1_write_bw
+				values[22] = int64(m.DeviceMemoryBandwidthGBps * 1000) // device_bandwidth
+				values[23] = int64(m.BufferL1ReadBandwidth * 1000)     // buffer_l1_read_bw
+				values[24] = int64(m.BufferL1WriteBandwidth * 1000)    // buffer_l1_write_bw
 
 				// Instruction counts from PipelineStats/streamData (indices 26-33)
-				values[26] = int64(m.InstructionCount)       // instructions
-				values[27] = int64(m.ALUInstructionCount)    // alu_instructions
-				values[28] = int64(m.FP32InstructionCount)   // fp32_instructions
-				values[29] = int64(m.FP16InstructionCount)   // fp16_instructions
-				values[30] = int64(m.INT32InstructionCount)  // int32_instructions
-				values[31] = int64(m.INT16InstructionCount)  // int16_instructions
-				values[32] = int64(m.BranchInstructionCount) // branch_instructions
-				values[33] = int64(m.ThreadgroupMemory)      // threadgroup_mem
+				values[25] = int64(m.InstructionCount)       // instructions
+				values[26] = int64(m.ALUInstructionCount)    // alu_instructions
+				values[27] = int64(m.FP32InstructionCount)   // fp32_instructions
+				values[28] = int64(m.FP16InstructionCount)   // fp16_instructions
+				values[29] = int64(m.INT32InstructionCount)  // int32_instructions
+				values[30] = int64(m.INT16InstructionCount)  // int16_instructions
+				values[31] = int64(m.BranchInstructionCount) // branch_instructions
+				values[32] = int64(m.ThreadgroupMemory)      // threadgroup_mem
 			}
 
 			matches++
@@ -1016,14 +1008,14 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 				dispValues[4] = int64(p.TemporaryRegisterCount)
 				dispValues[6] = int64(p.SpilledBytes)
 				dispValues[pprofUniformRegsIdx] = int64(p.UniformRegisterCount)
-				dispValues[26] = int64(p.InstructionCount)
-				dispValues[27] = int64(p.ALUInstructionCount)
-				dispValues[28] = int64(p.FP32InstructionCount)
-				dispValues[29] = int64(p.FP16InstructionCount)
-				dispValues[30] = int64(p.INT32InstructionCount)
-				dispValues[31] = int64(p.INT16InstructionCount)
-				dispValues[32] = int64(p.BranchInstructionCount)
-				dispValues[33] = int64(p.ThreadgroupMemory)
+				dispValues[25] = int64(p.InstructionCount)
+				dispValues[26] = int64(p.ALUInstructionCount)
+				dispValues[27] = int64(p.FP32InstructionCount)
+				dispValues[28] = int64(p.FP16InstructionCount)
+				dispValues[29] = int64(p.INT32InstructionCount)
+				dispValues[30] = int64(p.INT16InstructionCount)
+				dispValues[31] = int64(p.BranchInstructionCount)
+				dispValues[32] = int64(p.ThreadgroupMemory)
 			}
 
 			costPct := 0.0
