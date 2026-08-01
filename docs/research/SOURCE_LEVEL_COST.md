@@ -98,9 +98,10 @@ sections counted as zero above, so the census result is the documented default
 rather than evidence about what Metal can archive. A producer rebuilt with
 `-DMLX_METAL_DEBUG=ON` should carry them, which would reopen falsifier 1.
 
-Falsifiers 2 and 3 below do not depend on the build and are unaffected: no
-rebuild adds a program counter to `GRC_SOURCE_ID`, and none gives a compute
-pipeline the render target the Heat Map shades.
+Falsifier 2 below does not depend on the build and is unaffected: no rebuild
+adds a program counter to `GRC_SOURCE_ID`. So a debug-info build would supply
+the line table and still leave per-line cost without a cost source to join it
+against.
 
 ## Falsifier 2: does any counter record carry a program counter or source line?
 
