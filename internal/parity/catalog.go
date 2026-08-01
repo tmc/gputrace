@@ -6,16 +6,18 @@ import (
 	"sort"
 
 	"github.com/tmc/apple/x/plist"
+
+	"github.com/tmc/gputrace/internal/xcodepath"
 )
 
-// CounterGraphPaths are the copies of GPUCounterGraph.plist shipped with Xcode.
-// The file maps each counter's UI name to its unit and to the vendor counter
-// names it is computed from, and it is the same file in every location.
-var CounterGraphPaths = []string{
-	"/Applications/Xcode.app/Contents/PlugIns/GPUDebugger.ideplugin/Contents/Frameworks/GTShaderProfiler.framework/Versions/A/Resources/GPUCounterGraph.plist",
-	"/Applications/Xcode.app/Contents/PlugIns/GPUDebugger.ideplugin/Contents/Resources/GPUCounterGraph.plist",
-	"/Applications/Xcode.app/Contents/Applications/Instruments.app/Contents/PlugIns/GPUPlugin.xrplugin/Contents/Resources/GPUCounterGraph.plist",
-}
+// CounterGraphPaths returns the copies of GPUCounterGraph.plist to try, in
+// preference order. The file maps each counter's UI name to its unit and to the
+// vendor counter names it is computed from.
+//
+// Within one Xcode the three locations are copies of each other. Across Xcodes
+// they are not, so which bundle is searched is part of the answer; see
+// [github.com/tmc/gputrace/internal/xcodepath].
+func CounterGraphPaths() []string { return xcodepath.CounterGraphPaths() }
 
 // Catalog is Xcode's own counter dictionary, read from GPUCounterGraph.plist.
 //

@@ -201,7 +201,7 @@ func TestParity(t *testing.T) {
 		}
 	}
 
-	cat, err := parity.LoadCatalog(parity.CounterGraphPaths)
+	cat, err := parity.LoadCatalog(parity.CounterGraphPaths())
 	if err != nil {
 		t.Fatalf("LoadCatalog: %v", err)
 	}

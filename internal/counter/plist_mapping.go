@@ -13,6 +13,8 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+
+	"github.com/tmc/gputrace/internal/xcodepath"
 )
 
 // CounterDataType indicates the data type for a counter value.
@@ -45,6 +47,11 @@ type CounterMetadata struct {
 type GPUCounterGraph struct {
 	Counters       map[string]CounterMetadata `json:"counters"`
 	TimelineGroups []TimelineGroup            `json:"timelineGroups"`
+
+	// Path is the file this was read from. Report it alongside any counter
+	// name taken from here: the dictionary differs between installed Xcodes,
+	// so the name alone does not say which release defined it.
+	Path string `json:"path,omitempty"`
 }
 
 // TimelineGroup represents a group of counters in the timeline view.
@@ -66,17 +73,29 @@ var (
 	userToVendorNames map[string][]string
 )
 
-// DefaultPlistPath returns the default path to GPUCounterGraph.plist in Xcode.
+// DefaultPlistPath returns the path to the GPUCounterGraph.plist that will be
+// read, or "" when no Xcode installs one.
+//
+// Which Xcode this finds matters: the bundles do not ship the same dictionary.
+// Set GPUTRACE_XCODE_APP to pin one. See
+// [github.com/tmc/gputrace/internal/xcodepath].
 func DefaultPlistPath() string {
-	return "/Applications/Xcode.app/Contents/PlugIns/GPUDebugger.ideplugin/Contents/Resources/GPUCounterGraph.plist"
+	return xcodepath.CounterGraphPath()
 }
 
 // LoadGPUCounterGraph loads and parses GPUCounterGraph.plist from Xcode.
 // Results are cached after first successful load.
 func LoadGPUCounterGraph() (*GPUCounterGraph, error) {
 	plistLoadOnce.Do(func() {
-		plistData, plistLoadErr = loadGPUCounterGraphFromPath(DefaultPlistPath())
+		path := DefaultPlistPath()
+		if path == "" {
+			plistLoadErr = fmt.Errorf("no GPUCounterGraph.plist in any of %v (set %s to pin one)",
+				xcodepath.Apps(), xcodepath.AppEnv)
+			return
+		}
+		plistData, plistLoadErr = loadGPUCounterGraphFromPath(path)
 		if plistLoadErr == nil {
+			plistData.Path = path
 			buildVendorMappings()
 		}
 	})
