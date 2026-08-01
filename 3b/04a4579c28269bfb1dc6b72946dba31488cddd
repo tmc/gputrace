@@ -1,2 +1,19 @@
 recorded 2026-07-31 by claude-code 2.1.220 (Claude Code) model=claude-opus-5 tty=not a tty
 n/a pid=24489 iterm=w0t1p3:BE93B99A-FA9B-469D-9C12-0B1009E84F85
+
+CORRECTION to this commit message (added 2026-08-01):
+
+The body claims this marked the profiler-derived table -- "the profiler-derived
+table, which is the one a profiled export lands on, did not [mark]". It did not.
+The diff touches only cmd/gputrace/cmd/timing.go, api_timing.go and
+internal/timing/, all of which back the TIMING table. cmd/gputrace/cmd/profiler.go
+was left unmarked and stayed that way for 39 commits, until 1cdd621, and only
+after peer session 86CEEAB2 re-reported the same gap independently.
+
+The message claiming coverage it had not delivered is how the gap survived: a
+reader auditing for it would have found the commit, read the body, and stopped.
+
+Recorded as a note rather than by amending. Correcting the message in place is a
+43-commit rebase, and 11 live worktrees descend from this commit; invalidating
+all of their bases to reword one message is out of proportion to the fix. The
+note travels with the commit and shows in git log --notes.
