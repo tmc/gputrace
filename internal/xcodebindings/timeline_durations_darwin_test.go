@@ -53,7 +53,23 @@ func TestTimelineDrawDurations(t *testing.T) {
 	})
 }
 
+// checkSelector fails the test unless the runtime reports that selector on id
+// returns want. objc.Send is unchecked and reinterprets whatever comes back as
+// the requested Go type, so reading a selector at the wrong type yields bytes
+// that print as plausible data; this is what stands between a probe and that.
+func checkSelector(t *testing.T, id objc.ID, selector string, want reflect.Type, args ...any) {
+	t.Helper()
+	if err := objcinspect.Check(puregoobjc.ID(uintptr(id)), puregoobjc.RegisterName(selector), want, args...); err != nil {
+		t.Fatalf("%s type check: %v", selector, err)
+	}
+}
+
 func measureDrawDurations(t *testing.T, streamPath string) {
+	check := func(id objc.ID, selector string, want reflect.Type, args ...any) {
+		t.Helper()
+		checkSelector(t, id, selector, want, args...)
+	}
+
 	// The raw sibling files are resolved only when the archive directory is the
 	// URL handed to the framework, and only after _setupDataPath runs. This
 	// mirrors processStreamData so the two configurations can be compared.
@@ -92,9 +108,13 @@ func measureDrawDurations(t *testing.T, streamPath string) {
 	if mio == 0 {
 		t.Fatal("mioData returned nil")
 	}
-	gpuTime := uint64Property(shaderProfilerResult(processor), "gpuTime")
+	check(mio, "gpuTime", reflect.TypeOf(uint64(0)))
+	mioGPUTime := gtshaderprofiler.GTMioTraceDataFromID(mio).GpuTime()
+	result := shaderProfilerResult(processor)
+	check(result, "gpuTime", reflect.TypeOf(uint64(0)))
+	gpuTime := gtshaderprofiler.GTMioShaderProfilerResultFromID(result).GpuTime()
 	drawCount := uint64Property(mio, "drawCount")
-	t.Logf("model draws=%d gpuTime=%d", drawCount, gpuTime)
+	t.Logf("model draws=%d mioGPUTime=%d shaderGPUTime=%d", drawCount, mioGPUTime, gpuTime)
 
 	timeline := openCostTimeline(t, mio, stream)
 	defer objc.Send[objc.ID](timeline, objc.Sel("release"))
@@ -145,9 +165,7 @@ func checkTimelineCounters(t *testing.T, timeline objc.ID) {
 	t.Helper()
 	check := func(id objc.ID, selector string, want reflect.Type, args ...any) {
 		t.Helper()
-		if err := objcinspect.Check(puregoobjc.ID(uintptr(id)), puregoobjc.RegisterName(selector), want, args...); err != nil {
-			t.Fatalf("%s type check: %v", selector, err)
-		}
+		checkSelector(t, id, selector, want, args...)
 	}
 
 	check(timeline, "timelineCounters", reflect.TypeOf(objc.ID(0)))
