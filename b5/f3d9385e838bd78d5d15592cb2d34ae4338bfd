@@ -1,0 +1,1 @@
+verified: internal/parity.Observe on qwen25-05b-python-producer-tokens1-3-perfdata.gputrace now yields 3 columns [Execution Cost, gputrace Dispatches, gputrace Encoder Duration us], was 2. 2026-08-01T07:53:27Z claude-code opus-5[1m] pid=53413 iterm=w0t1p3:BE93B99A-FA9B-469D-9C12-0B1009E84F85
