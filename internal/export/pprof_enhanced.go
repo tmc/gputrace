@@ -941,6 +941,14 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 		// Create function locations for each unique kernel from streamData dispatches
 		dispatchFuncLocs := make(map[string]*profile.Location)
 
+		// streamStats.Pipelines comes from pipelinePerformanceStatistics, an
+		// NSDictionary, so its slice order is unrelated to the pipeline index
+		// carried by gpuCommandInfoData records. Join on the pipeline ID.
+		streamPipelinesByID := make(map[int]counter.PipelineStats, len(streamStats.Pipelines))
+		for _, p := range streamStats.Pipelines {
+			streamPipelinesByID[p.PipelineID] = p
+		}
+
 		// Calculate total dispatch time for percentage calculation
 		var totalDispatchTimeUs int
 		for _, d := range streamStats.Dispatches {
@@ -1003,8 +1011,7 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 			}
 
 			// Add instruction count from pipeline if available
-			if d.PipelineIndex >= 0 && d.PipelineIndex < len(streamStats.Pipelines) {
-				p := streamStats.Pipelines[d.PipelineIndex]
+			if p, ok := streamPipelinesByID[d.PipelineID]; ok {
 				dispValues[4] = int64(p.TemporaryRegisterCount)
 				dispValues[6] = int64(p.SpilledBytes)
 				dispValues[pprofUniformRegsIdx] = int64(p.UniformRegisterCount)

@@ -1599,9 +1599,13 @@ func addDispatchKernelEvents(timeline *Timeline, stats *counter.StreamDataStats,
 	if timeline == nil || stats == nil || len(stats.Dispatches) == 0 {
 		return false
 	}
-	pipelineByIndex := make(map[int]*counter.PipelineStats)
+	// stats.Pipelines comes from pipelinePerformanceStatistics, an NSDictionary,
+	// so its slice order is unrelated to the pipeline index that
+	// gpuCommandInfoData records carry. Join on the pipeline ID instead; both
+	// sides carry it.
+	pipelineByID := make(map[int]*counter.PipelineStats, len(stats.Pipelines))
 	for i := range stats.Pipelines {
-		pipelineByIndex[i] = &stats.Pipelines[i]
+		pipelineByID[stats.Pipelines[i].PipelineID] = &stats.Pipelines[i]
 	}
 	metrics := shaderMetricLookup(perfStats)
 	shaderMetrics := timelineShaderReportLookup(shaderReport)
@@ -1629,7 +1633,7 @@ func addDispatchKernelEvents(timeline *Timeline, stats *counter.StreamDataStats,
 			fallbackStartNs += durationNs
 		}
 
-		pipeline := pipelineByIndex[d.PipelineIndex]
+		pipeline := pipelineByID[d.PipelineID]
 		metric := metrics.find(name, pipeline)
 		shaderMetric := shaderMetrics.find(name, pipeline)
 		encoderMetric := encoderMetricByIndex[d.EncoderIndex]

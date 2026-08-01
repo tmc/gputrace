@@ -386,10 +386,13 @@ func applyStreamDataDispatchTiming(stats *counter.StreamDataStats, metricsMap ma
 	}
 
 	pipelinesByName := make(map[string]*counter.PipelineStats)
-	pipelinesByIndex := make(map[int]*counter.PipelineStats)
+	// stats.Pipelines comes from pipelinePerformanceStatistics, an NSDictionary,
+	// so its slice order is unrelated to the pipeline index carried by
+	// gpuCommandInfoData records. Join on the pipeline ID.
+	pipelinesByID := make(map[int]*counter.PipelineStats)
 	for i := range stats.Pipelines {
 		p := &stats.Pipelines[i]
-		pipelinesByIndex[i] = p
+		pipelinesByID[p.PipelineID] = p
 		if p.FunctionName != "" {
 			pipelinesByName[p.FunctionName] = p
 		}
@@ -412,7 +415,7 @@ func applyStreamDataDispatchTiming(stats *counter.StreamDataStats, metricsMap ma
 				pipeline: pipelinesByName[name],
 			}
 			if agg.pipeline == nil {
-				agg.pipeline = pipelinesByIndex[dispatch.PipelineIndex]
+				agg.pipeline = pipelinesByID[dispatch.PipelineID]
 			}
 			aggregates[name] = agg
 		}

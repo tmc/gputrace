@@ -916,3 +916,39 @@ func stringSliceContains(values []string, want string) bool {
 	}
 	return false
 }
+
+// TestAddDispatchKernelEventsJoinsPipelinesByID guards the join between
+// gpuCommandInfoData dispatches and pipelinePerformanceStatistics. The latter
+// is an NSDictionary, so its slice order does not follow the pipeline index
+// carried by the dispatch records; joining positionally attributes one
+// kernel's register and instruction counts to another.
+func TestAddDispatchKernelEventsJoinsPipelinesByID(t *testing.T) {
+	timeline := &Timeline{
+		Encoders: []EncoderInfo{{Index: 0, Label: "encoder0", Type: "compute", StartTime: 1000, EndTime: 21000, Duration: 20000}},
+	}
+	stats := &counter.StreamDataStats{
+		// Dictionary order is the reverse of the pipeline index order.
+		Pipelines: []counter.PipelineStats{
+			{PipelineID: 458, FunctionName: "other_kernel", InstructionCount: 999},
+			{PipelineID: 446, FunctionName: "kernel0", InstructionCount: 12},
+		},
+		Dispatches: []counter.DispatchInfo{{
+			Index:         0,
+			PipelineIndex: 0,
+			PipelineID:    446,
+			FunctionName:  "kernel0",
+			EncoderIndex:  0,
+			DurationUs:    7,
+		}},
+	}
+	if !addDispatchKernelEvents(timeline, stats, timelineDispatchSIMDStats{}, nil, nil, nil, nil) {
+		t.Fatal("addDispatchKernelEvents returned false")
+	}
+	args := timeline.Kernels[0].Args
+	if got, want := args["function_name"], "kernel0"; got != want {
+		t.Fatalf("function_name = %#v, want %#v", got, want)
+	}
+	if got, want := args["instruction_count"], 12; got != want {
+		t.Fatalf("instruction_count = %#v, want %#v", got, want)
+	}
+}
