@@ -1,0 +1,7 @@
+landed: 786fbe4771110123474a6b11437e6183a54a96f0 on 2026-08-01T04:45:27Z
+claude-code: 2.1.220 (Claude Code)
+model: claude-opus-5[1m]
+tty: not a tty
+pid: 47860
+ITERM_SESSION_ID: w0t1p3:BE93B99A-FA9B-469D-9C12-0B1009E84F85
+branch C rebased onto api-forwarders. Conflicts resolved against #11, #15 and the occupancy removal. Two deviations from the branch as written: pprof now emits a profile without timing rather than refusing (its non-duration value types do not depend on timing), and the nonzero-presence rule is scoped to alu_utilization_pct rather than applied to every field (zero spilled_bytes is a real reading). Verified on perfdata3: alu_utilization_pct absent, spilled_bytes/threadgroup_memory present. go build ./... && go test ./... green
