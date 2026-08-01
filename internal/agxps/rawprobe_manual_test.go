@@ -437,5 +437,80 @@ func TestRawProbeParserCreate(t *testing.T) {
 			t.Logf("  kick id low bytes (first 16): %#x", los)
 			t.Logf("  kick ids[0:8] = %#x", kids[:min(8, len(kids))])
 		}
+
+		// The pairing might be a seam rather than a structure: if out is
+		// uint32_t* for this accessor, reading it as uint64 fuses adjacent
+		// entries into (out32[2k+1]<<32)|out32[2k]. Read into a uint32 buffer
+		// and see whether the values are simply the index.
+		probeWidth := func(name string, g rangeGet, n uint64) {
+			buf32 := make([]uint32, n+8)
+			if !g(pd, (*uint64)(unsafe.Pointer(&buf32[0])), 0, n) {
+				t.Logf("  %s as uint32: returned false", name)
+				return
+			}
+			identity, mismatch := 0, []int{}
+			for i := uint64(0); i < n; i++ {
+				if uint64(buf32[i]) == i {
+					identity++
+				} else if len(mismatch) < 8 {
+					mismatch = append(mismatch, int(i))
+				}
+			}
+			t.Logf("  %s as uint32[%d]: head=%v identity=%d/%d firstMismatches=%v",
+				name, n, buf32[:min(uint64(12), n)], identity, n, mismatch)
+			lo := uint64(0)
+			if n > 4 {
+				lo = n - 4
+			}
+			t.Logf("    tail=%v", buf32[lo:n])
+		}
+		probeWidth("kick ids", a.pdKickID, nk)
+		probeWidth("esl traces", a.pdESLTrace, ne)
+
+		// Element width is not a property of the accessor class: read into a
+		// uint32 buffer and a 64-bit array shows a zero in every odd slot,
+		// while a 32-bit array does not. Sentinel the buffer first so an
+		// untouched tail is distinguishable from a written zero.
+		width := func(name string, g rangeGet, n uint64) {
+			if n == 0 {
+				return
+			}
+			if n > 4096 {
+				n = 4096
+			}
+			buf := make([]uint32, 2*n+8)
+			for i := range buf {
+				buf[i] = 0xDEADBEEF
+			}
+			if !g(pd, (*uint64)(unsafe.Pointer(&buf[0])), 0, n) {
+				t.Logf("  width[%s]: returned false", name)
+				return
+			}
+			oddZero, written := 0, 0
+			for i := uint64(0); i < 2*n; i++ {
+				if buf[i] != 0xDEADBEEF {
+					written = int(i) + 1
+				}
+				if i%2 == 1 && buf[i] == 0 {
+					oddZero++
+				}
+			}
+			// Bytes written is the sound discriminator. An all-zero odd slot
+			// is not: kick_start and kick_end are 64-bit timestamps large
+			// enough to occupy their high word, so they look 32-bit by that
+			// test while writing 8 bytes an element.
+			guess := "uint32"
+			if written >= 2*int(n) {
+				guess = "uint64"
+			}
+			t.Logf("  width[%-11s] n=%-6d wordsWritten=%-6d bytesPerElem=%d oddSlotsZero=%d/%d => %s",
+				name, n, written, written*4/int(n), oddZero, n, guess)
+		}
+		width("kick_id", a.pdKickID, nk)
+		width("kick_start", a.pdKickStart, nk)
+		width("kick_end", a.pdKickEnd, nk)
+		width("esl_start", a.pdESLStart, ne)
+		width("esl_end", a.pdESLEnd, ne)
+		width("esl_trace", a.pdESLTrace, ne)
 	}
 }
