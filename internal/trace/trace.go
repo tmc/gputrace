@@ -987,8 +987,10 @@ func (t *Trace) BuildPipelineFunctionMap() PipelineFunctionMap {
 	// The function address is stored after the label.
 	funcNames := make(map[uint64]string)
 	scanFunctionNames(t.CaptureData, funcNames)
+	scanArchiveFunctions(t.CaptureData, funcNames)
 	for _, data := range t.DeviceResources {
 		scanFunctionNames(data, funcNames)
+		scanArchiveFunctions(data, funcNames)
 	}
 
 	// Parse Ctt records from both capture and device-resources
@@ -1052,6 +1054,84 @@ func scanFunctionNames(data []byte, into map[uint64]string) {
 		}
 	}
 }
+
+// ArchiveFunctionPrefix marks a name that is a shader-archive content id
+// rather than a kernel function name. See scanArchiveFunctions.
+const ArchiveFunctionPrefix = "archive:"
+
+// scanArchiveFunctions records the function address of every CUt record.
+//
+// A function the process took from a compiled shader archive, rather than from
+// a MTLLibrary the capture describes, is written as a "CUt\0" record instead of
+// a "CS\0\0" one. The trailing pair is the same -- tag 0x74 followed by the
+// function address a Ctt record refers to -- but two things differ:
+//
+//   - the label holds the archive's 16-hex content id, not the function name;
+//   - the tag sits 8 bytes further on than a CS record's, after two fields
+//     this decoder does not read. [?] measured on two archives, in which every
+//     CUt label was 16 characters, so the offset is confirmed only for that
+//     label length; the tag check below fails the record closed otherwise.
+//
+// The function name is not recoverable from the capture for these records. For
+// a trace where the profiler names the pipeline rope_single_bfloat16_, that
+// string appears nowhere in the decompressed capture or device-resources; only
+// streamData has it. The archive id is therefore the most specific identity a
+// capture-only trace can give such a function.
+//
+// Recording it is still worth doing. Without it every Ctt naming an archive
+// function resolves to nothing and every one of its dispatches lands in the
+// single "unknown" row, merging kernels that ran different code different
+// numbers of times. With it each archive function keeps its own row and its
+// own count.
+func scanArchiveFunctions(data []byte, into map[uint64]string) {
+	marker := []byte("CUt\x00")
+	offset := 0
+	for {
+		pos := bytes.Index(data[offset:], marker)
+		if pos == -1 {
+			return
+		}
+		start := offset + pos
+		offset = start + 4
+		if start+12 > len(data) {
+			return
+		}
+
+		labelStart := start + 12
+		labelEnd := labelStart
+		for labelEnd < len(data) && data[labelEnd] != 0 {
+			labelEnd++
+		}
+		if labelEnd >= len(data) || labelEnd == labelStart {
+			continue
+		}
+
+		tagPos := labelEnd + 1
+		if pad := (tagPos - start) % 4; pad != 0 {
+			tagPos += 4 - pad
+		}
+		tagPos += archiveFunctionTagSkip
+		if tagPos+12 > len(data) {
+			continue
+		}
+		if binary.LittleEndian.Uint32(data[tagPos:tagPos+4]) != csTagFunction {
+			continue
+		}
+		funcAddr := binary.LittleEndian.Uint64(data[tagPos+4 : tagPos+12])
+		if funcAddr == 0 {
+			continue
+		}
+		// A name from a CS record is a real function name and always wins.
+		if _, ok := into[funcAddr]; ok {
+			continue
+		}
+		into[funcAddr] = ArchiveFunctionPrefix + string(data[labelStart:labelEnd])
+	}
+}
+
+// archiveFunctionTagSkip is the extra distance from the padded end of a CUt
+// record's label to its tag, relative to where a CS record puts it.
+const archiveFunctionTagSkip = 8
 
 // parseCttRecords parses Ctt records from data and adds pipeline→function mappings to result.
 func (t *Trace) parseCttRecords(data []byte, funcNames map[uint64]string, result PipelineFunctionMap) {

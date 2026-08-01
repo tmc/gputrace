@@ -172,6 +172,12 @@ func runKernels(cmd *cobra.Command, args []string, opts *kernelsOptions) error {
 	if unattributedInventory(attributedDispatches, totalDispatches) {
 		fmt.Fprint(out, unattributedInventoryNote)
 	}
+	if n := countArchiveNamedKernels(namedKernels); n > 0 {
+		fmt.Fprintf(out, "%d %s named only by shader archive id (archive:...): the capture records\n"+
+			"which archive the function came from, not its name. Capture this trace with\n"+
+			"--profile to get the names.\n",
+			n, Pluralize(n, "kernel", "kernels"))
+	}
 	if hasTiming {
 		fmt.Fprintln(out, "Timing: cumulative dispatch offsets; spans may include boundary or gap time")
 	}

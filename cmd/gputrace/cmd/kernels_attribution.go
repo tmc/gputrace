@@ -1,6 +1,10 @@
 package cmd
 
-import "strconv"
+import (
+	"strconv"
+
+	"github.com/tmc/gputrace"
+)
 
 // A kernel row's dispatch count is a join: the inventory supplies the function
 // names, the command stream supplies the dispatches, and a Ctt record keyed by
@@ -26,6 +30,20 @@ const unattributedInventoryNote = "No dispatch could be joined to a named functi
 // rather than zero.
 func unattributedInventory(attributed, total int) bool {
 	return total > 0 && attributed == 0
+}
+
+// countArchiveNamedKernels counts the rows whose name is a shader archive id
+// rather than a function name. Their dispatch counts are real -- each archive
+// id is one pipeline -- but the name is not one a reader can look up, so the
+// table says where the name went.
+func countArchiveNamedKernels(kernels []*gputrace.KernelStat) int {
+	n := 0
+	for _, k := range kernels {
+		if gputrace.IsArchiveFunctionName(k.Name) {
+			n++
+		}
+	}
+	return n
 }
 
 // formatDispatchCount renders a row's dispatch count, substituting the

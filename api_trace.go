@@ -13,6 +13,15 @@ func IsLibraryUUID(label string) bool {
 	return trace.IsLibraryUUID(label)
 }
 
+// IsArchiveFunctionName reports whether name identifies a function only by the
+// shader archive it came from. A capture records an archive's content id where
+// it records a function name for a library the capture describes, so such a
+// kernel has a distinct, stable identity but no readable name. Only the
+// profiler's streamData carries the name.
+func IsArchiveFunctionName(name string) bool {
+	return trace.IsArchiveFunctionName(name)
+}
+
 // ParseDetailedCommandBuffer parses command buffer cbIndex from t.
 //
 // It reads and rescans the whole capture file on every call. Use OpenCapture
