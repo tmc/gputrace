@@ -190,7 +190,7 @@ func TestExportComparison(t *testing.T) {
 	}
 }
 
-func TestExportCountersCSVWithSummaryCountsMixedRowSources(t *testing.T) {
+func TestExportCountersCSVWithSummaryCountsRowSources(t *testing.T) {
 	tracePath, perfDir := makeTraceWithPerfDir(t)
 	if err := os.WriteFile(filepath.Join(perfDir, "Counters_f_0.raw"), syntheticCounterRaw(), 0o666); err != nil {
 		t.Fatal(err)
@@ -216,11 +216,10 @@ func TestExportCountersCSVWithSummaryCountsMixedRowSources(t *testing.T) {
 	if summary.ParsedCounterRows != 0 {
 		t.Fatalf("ParsedCounterRows = %d, want 0", summary.ParsedCounterRows)
 	}
-	if summary.SyntheticFallbackRows != 3 {
-		t.Fatalf("SyntheticFallbackRows = %d, want 3", summary.SyntheticFallbackRows)
-	}
-	if !summary.HasSyntheticFallback() {
-		t.Fatal("HasSyntheticFallback() = false, want true")
+	// All three, for the same reason: with no parsed counter row and no
+	// invented fallback, there is nothing to publish for any encoder.
+	if summary.SkippedRows != 3 {
+		t.Fatalf("SkippedRows = %d, want 3", summary.SkippedRows)
 	}
 
 	reader := csv.NewReader(strings.NewReader(buf.String()))
@@ -284,8 +283,10 @@ func TestPopulateEncoderMetricsFromPerfCounterStats(t *testing.T) {
 	if m.ALUUtilization != 3.25 {
 		t.Fatalf("ALUUtilization = %v, want 3.25", m.ALUUtilization)
 	}
-	if m.ComputeUtilization != 3.25 {
-		t.Fatalf("ComputeUtilization = %v, want 3.25", m.ComputeUtilization)
+	// ComputeUtilization is a distinct Xcode counter; it used to be aliased to
+	// ALU utilization, which made an unread counter look measured.
+	if m.ComputeUtilization != 0 {
+		t.Fatalf("ComputeUtilization = %v, want 0 (not aliased to ALU utilization)", m.ComputeUtilization)
 	}
 	if m.MemoryBandwidth != 4096 || m.DeviceMemoryBandwidthGBps != 12.5 {
 		t.Fatalf("bandwidth = (%d, %v), want (4096, 12.5)", m.MemoryBandwidth, m.DeviceMemoryBandwidthGBps)

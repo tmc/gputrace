@@ -21,14 +21,9 @@ type CountersCSVExporter struct {
 
 // CountersCSVExportSummary reports the source of data rows written to Counters.csv.
 type CountersCSVExportSummary struct {
-	Rows                  int // Data rows written, excluding the header.
-	ParsedCounterRows     int // Rows populated from parsed Counters_f_*.raw metrics.
-	SyntheticFallbackRows int // Rows populated from synthetic fallback estimates.
-}
-
-// HasSyntheticFallback reports whether any exported rows used synthetic estimates.
-func (s CountersCSVExportSummary) HasSyntheticFallback() bool {
-	return s.SyntheticFallbackRows > 0
+	Rows              int // Data rows written, excluding the header.
+	ParsedCounterRows int // Rows populated from parsed Counters_f_*.raw metrics.
+	SkippedRows       int // Encoders with no parsed counter data, written as metadata only.
 }
 
 // NewCountersCSVExporter creates a new CSV exporter for the given trace.
@@ -87,13 +82,14 @@ func (e *CountersCSVExporter) ExportCountersCSVWithSummary(w io.Writer) (Counter
 		// Generate counter values for this encoder
 		var row []string
 		if useBinaryData && encIndex < len(encoderMetrics) {
-			// Use REAL binary-parsed counter data
 			row = e.generateCounterRowFromBinaryData(rowIndex, encIndex, commandBufferLabel, encoderLabel, &encoderMetrics[encIndex])
 			summary.ParsedCounterRows++
 		} else {
-			// Fallback to synthetic estimates
-			row = e.generateCounterRowSimple(rowIndex, encIndex, commandBufferLabel, encoderLabel, encoder)
-			summary.SyntheticFallbackRows++
+			// No counter data for this encoder. Write the identifying columns
+			// and leave every metric blank: a number here would be read as a
+			// measurement, and a zero is indistinguishable from a measured zero.
+			row = e.generateCounterRowMetadataOnly(rowIndex, encIndex, commandBufferLabel, encoderLabel)
+			summary.SkippedRows++
 		}
 
 		if err := writer.Write(row); err != nil {
@@ -106,35 +102,15 @@ func (e *CountersCSVExporter) ExportCountersCSVWithSummary(w io.Writer) (Counter
 	return summary, nil
 }
 
-// generateCounterRowSimple creates a single CSV row with all 247 columns.
-func (e *CountersCSVExporter) generateCounterRowSimple(index, functionIndex int, cbLabel, encoderLabel string, encoder *ComputeEncoder) []string {
+// generateCounterRowMetadataOnly creates a CSV row identifying an encoder for
+// which no counter data was parsed. Every metric column is left blank.
+func (e *CountersCSVExporter) generateCounterRowMetadataOnly(index, functionIndex int, cbLabel, encoderLabel string) []string {
 	row := make([]string, 247)
-
-	// Get debug group for this encoder based on its label (sequence-based mapping)
-	debugGroup := e.trace.DebugGroupForLabel(encoderLabel)
-
-	// Columns 1-6: Metadata
-	row[0] = fmt.Sprintf("%d", index)         // Index
-	row[1] = fmt.Sprintf("%d", functionIndex) // Encoder FunctionIndex
-	row[2] = cbLabel                          // CommandBuffer Label
-	row[3] = debugGroup                       // Debug Group (hierarchical label)
-	row[4] = encoderLabel                     // Encoder Label
-	row[5] = ""                               // Empty column
-
-	// Generate synthetic counter values (matching timeline's approach)
-	values := e.generateSyntheticCountersSimple()
-
-	// Columns 7-247: Performance metrics (241 metrics)
-	// Map synthetic values to appropriate columns
-	for i := 6; i < 247; i++ {
-		metricName := getMetricNameForColumn(i)
-		if val, exists := values[metricName]; exists {
-			row[i] = fmt.Sprintf("%.2f", val)
-		} else {
-			row[i] = "0.00"
-		}
-	}
-
+	row[0] = fmt.Sprintf("%d", index)
+	row[1] = fmt.Sprintf("%d", functionIndex)
+	row[2] = cbLabel
+	row[3] = e.trace.DebugGroupForLabel(encoderLabel)
+	row[4] = encoderLabel
 	return row
 }
 
@@ -185,14 +161,6 @@ func (e *CountersCSVExporter) generateCounterRowFromBinaryData(index, functionIn
 	}
 	if metrics.GPUWriteBandwidthGBps > 0 {
 		values["GPU Write Bandwidth"] = metrics.GPUWriteBandwidthGBps
-	}
-
-	// Cache metrics
-	if metrics.CacheHitRate > 0 {
-		missRate := 100.0 - metrics.CacheHitRate
-		values["Buffer L1 Miss Rate"] = missRate
-		values["Texture Cache Miss Rate"] = missRate
-		values["Kernel Texture Cache Miss Rate"] = missRate
 	}
 
 	// Buffer L1 Cache Metrics (gputrace-66)
@@ -259,29 +227,26 @@ func (e *CountersCSVExporter) generateCounterRowFromBinaryData(index, functionIn
 		values["VS Occupancy"] = 0.0
 	}
 
-	// Map values to CSV columns (6-246)
+	// Map values to CSV columns (6-246). Columns gputrace does not know how to
+	// derive are left blank rather than zeroed: roughly 240 of the 241 metric
+	// columns fall in that bucket, and "0.00" in all of them is
+	// indistinguishable from a measured zero.
 	for i := 6; i < 247; i++ {
 		metricName := getMetricNameForColumn(i)
 		if unmeasurableCounters[metricName] {
 			// Leave blank rather than 0.00: a zero here would read as a
 			// measurement gputrace made.
-			row[i] = ""
 			continue
 		}
-		if val, exists := values[metricName]; exists {
-			// Format based on metric type
-			if metricName == "Kernel Invocations" ||
-				metricName == "Primitives" ||
-				metricName == "Threadgroups" ||
-				metricName == "Threads" {
-				// Integer values
-				row[i] = fmt.Sprintf("%.0f", val)
-			} else {
-				// Float values (percentages, bandwidth, etc.)
-				row[i] = fmt.Sprintf("%.2f", val)
-			}
-		} else {
-			row[i] = "0.00"
+		val, exists := values[metricName]
+		if !exists {
+			continue
+		}
+		switch metricName {
+		case "Kernel Invocations", "Primitives", "Threadgroups", "Threads":
+			row[i] = fmt.Sprintf("%.0f", val)
+		default:
+			row[i] = fmt.Sprintf("%.2f", val)
 		}
 	}
 
@@ -295,59 +260,6 @@ func (e *CountersCSVExporter) generateCounterRowFromBinaryData(index, functionIn
 // model can supply one either.
 var unmeasurableCounters = map[string]bool{
 	"Kernel Occupancy": true,
-}
-
-// generateSyntheticCountersSimple creates synthetic counter values.
-// Uses the same estimation approach as the timeline command.
-func (e *CountersCSVExporter) generateSyntheticCountersSimple() map[string]float64 {
-	values := make(map[string]float64)
-
-	// Core metrics (matching timeline estimates)
-	values["ALU Utilization"] = 65.0                  // 65% ALU utilization
-	values["Buffer Device Memory Bytes Read"] = 25.15 // MB/s estimate
-	values["Buffer Device Memory Bytes Written"] = 19.95
-	values["Buffer L1 Miss Rate"] = 10.57 // 10.57% miss rate
-
-	// Memory metrics
-	values["Bytes Read From Device Memory"] = 45.10
-	values["Bytes Written To Device Memory"] = 39.90
-	values["Last Level Cache Bytes Read"] = 15.5
-	values["Last Level Cache Bytes Written"] = 12.3
-
-	// Kernel-specific metrics
-	values["Kernel Invocations"] = 1.0
-	values["Kernel ALU Instructions"] = 15000.0
-	values["Kernel ALU Float Instructions"] = 8000.0
-	values["Kernel ALU Half Instructions"] = 4000.0
-	values["Kernel ALU Integer and Complex Instructions"] = 3000.0
-
-	// Texture metrics
-	values["Texture Cache Miss Rate"] = 5.23
-	values["Texture Device Memory Bytes Read"] = 8.45
-	values["Kernel Texture Cache Miss Rate"] = 5.23
-
-	// Pipeline utilization metrics
-	values["Fragment Shader Launch Limiter"] = 15.0
-	values["Vertex Shader Launch Limiter"] = 12.0
-	values["Compute Shader Launch Limiter"] = 25.0
-	values["Texture Filtering Limiter"] = 8.0
-	values["L1 Cache Limiter"] = 18.0
-	values["Last Level Cache Limiter"] = 10.0
-
-	// Assume compute encoder (most common in ML workloads)
-	values["Compute Shader Utilization"] = 70.0
-
-	// Fragment/Vertex shader metrics (set to 0 for compute, would be populated for render)
-	values["FS ALU Utilization"] = 0.0
-	values["FS Occupancy"] = 0.0
-	values["FS Buffer Device Memory Bytes Read"] = 0.0
-	values["FS Buffer Device Memory Bytes Written"] = 0.0
-	values["VS ALU Utilization"] = 0.0
-	values["VS Occupancy"] = 0.0
-
-	// All other metrics default to 0.0 (already handled by the row generation)
-
-	return values
 }
 
 // getCountersCSVHeader returns the header row for Counters.csv (247 columns).

@@ -369,16 +369,19 @@ func parseCounterRecord(data []byte, offset int64) *CounterRecord {
 
 // findAllFloatsInRange scans record data for all float32 values in the specified range.
 // Returns up to maxCount matching values, sorted by offset order.
+//
+// [?] This is a scan, not a field read. It is only sound because its callers
+// have already narrowed the search to a single Counters_f_N.raw file that
+// GPUCounterGraph.plist names as holding one counter, so the range filter is
+// picking among values of a known quantity rather than guessing which quantity
+// a word represents. Do not reuse it on a file whose counter is unknown.
 func findAllFloatsInRange(data []byte, minVal, maxVal float64, maxCount int) []float64 {
 	results := make([]float64, 0, maxCount)
-	seen := make(map[float64]bool) // Avoid duplicates
+	seen := make(map[float64]bool)
 
 	for i := 0; i < len(data)-4 && len(results) < maxCount; i += 4 {
-		// Try reading as float32
 		bits := binary.LittleEndian.Uint32(data[i : i+4])
 		val := float64(intBitsToFloat32(bits))
-
-		// Check for valid float (not NaN or Inf) and not already seen
 		if val >= minVal && val <= maxVal && !isNaNOrInf(val) && !seen[val] {
 			results = append(results, val)
 			seen[val] = true
