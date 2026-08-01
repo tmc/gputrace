@@ -512,5 +512,71 @@ func TestRawProbeParserCreate(t *testing.T) {
 		width("esl_start", a.pdESLStart, ne)
 		width("esl_end", a.pdESLEnd, ne)
 		width("esl_trace", a.pdESLTrace, ne)
+
+		// kick_id is not identity everywhere, and the disorder sits in short
+		// local clusters rather than scattered. That is the shape of a
+		// nearly-sorted permutation: if the records are sorted by start
+		// timestamp, kick_id maps sorted position to submission order, and
+		// the disordered sites should be exactly where timestamps tie.
+		ids32 := make([]uint32, nk+8)
+		starts := make([]uint64, nk)
+		if nk > 0 && a.pdKickID(pd, (*uint64)(unsafe.Pointer(&ids32[0])), 0, nk) &&
+			a.pdKickStart(pd, &starts[0], 0, nk) {
+			desc := 0
+			for j := uint64(1); j < nk; j++ {
+				if starts[j] < starts[j-1] {
+					desc++
+				}
+			}
+			t.Logf("  kick_start descents=%d of %d (0 => sorted by start)", desc, nk-1)
+
+			var sites, tied, adjacent int
+			for j := uint64(0); j < nk; j++ {
+				if uint64(ids32[j]) == j {
+					continue
+				}
+				sites++
+				if j > 0 && starts[j] == starts[j-1] {
+					tied++
+				} else if j > 0 && starts[j]-starts[j-1] < 64 {
+					adjacent++
+				}
+			}
+			t.Logf("  disordered positions=%d tiedWithPrev=%d withinp64Ticks=%d", sites, tied, adjacent)
+
+			// Show the first few sites with their timestamps, so a tie is
+			// visible rather than asserted.
+			shown := 0
+			for j := uint64(1); j < nk && shown < 6; j++ {
+				if uint64(ids32[j]) == j {
+					continue
+				}
+				t.Logf("    j=%-5d id=%-5d start=%d delta_from_prev=%d",
+					j, ids32[j], starts[j], starts[j]-starts[j-1])
+				shown++
+			}
+
+			// Array order is not sorted by start. But at j=2,3 the ids swap
+			// exactly where the starts descend, so the reverse may hold:
+			// reordering by id may be what sorts them.
+			byID := make([]uint64, nk)
+			ok := true
+			for j := uint64(0); j < nk; j++ {
+				if uint64(ids32[j]) >= nk {
+					ok = false
+					break
+				}
+				byID[ids32[j]] = starts[j]
+			}
+			if ok {
+				d := 0
+				for j := uint64(1); j < nk; j++ {
+					if byID[j] < byID[j-1] {
+						d++
+					}
+				}
+				t.Logf("  after permuting by kick_id: descents=%d of %d", d, nk-1)
+			}
+		}
 	}
 }
