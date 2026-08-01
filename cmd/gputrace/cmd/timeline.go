@@ -2679,6 +2679,298 @@ func exportTimelineJSON(timeline *Timeline, outputPath string) error {
 	return encoder.Encode(timeline)
 }
 
+// buildPerfettoTraceForHTML constructs the full trace object (traceEvents + otherData) for embedding in HTML viewer.
+func buildPerfettoTraceForHTML(timeline *Timeline) map[string]interface{} {
+	clock := timelineClockBusy
+	if timeline != nil && timeline.ClockDomain != "" {
+		clock = timelineClock(timeline.ClockDomain)
+	}
+
+	processName := "Compute GPU execution (cumulative busy; no wall-clock anchor)"
+	if clock == timelineClockWall {
+		processName = "Command buffers (wall clock; APSTimelineData)"
+	}
+
+	metadataEvents := []TimelineEvent{
+		{
+			Name:      "process_name",
+			Category:  "__metadata",
+			Phase:     "M",
+			ProcessID: 1,
+			ThreadID:  0,
+			Args: map[string]interface{}{
+				"name":                  processName,
+				"gputrace_clock_domain": string(clock),
+			},
+		},
+		{
+			Name:      "thread_name",
+			Category:  "__metadata",
+			Phase:     "M",
+			ProcessID: 1,
+			ThreadID:  0,
+			Args: map[string]interface{}{
+				"name": "Command Buffers (wall clock)",
+			},
+		},
+		{
+			Name:      "thread_name",
+			Category:  "__metadata",
+			Phase:     "M",
+			ProcessID: 1,
+			ThreadID:  1,
+			Args: map[string]interface{}{
+				"name": "Compute encoders and dispatches (cumulative busy)",
+			},
+		},
+		{
+			Name:      "thread_name",
+			Category:  "__metadata",
+			Phase:     "M",
+			ProcessID: 1,
+			ThreadID:  2,
+			Args: map[string]interface{}{
+				"name": "Compute encoders and dispatches lane 1 (cumulative busy)",
+			},
+		},
+		{
+			Name:      "thread_name",
+			Category:  "__metadata",
+			Phase:     "M",
+			ProcessID: 1,
+			ThreadID:  3,
+			Args: map[string]interface{}{
+				"name": "Unattributed compute dispatches (cumulative busy)",
+			},
+		},
+		{
+			Name:      "thread_name",
+			Category:  "__metadata",
+			Phase:     "M",
+			ProcessID: 1,
+			ThreadID:  4,
+			Args: map[string]interface{}{
+				"name": "Unattributed compute dispatches lane 1 (cumulative busy)",
+			},
+		},
+		{
+			Name:      "thread_name",
+			Category:  "__metadata",
+			Phase:     "M",
+			ProcessID: 1,
+			ThreadID:  5,
+			Args: map[string]interface{}{
+				"name": "Unattributed compute dispatches lane 2 (cumulative busy)",
+			},
+		},
+		{
+			Name:      "thread_name",
+			Category:  "__metadata",
+			Phase:     "M",
+			ProcessID: 1,
+			ThreadID:  6,
+			Args: map[string]interface{}{
+				"name": "Unattributed compute dispatches lane 3 (cumulative busy)",
+			},
+		},
+		{
+			Name:      "thread_name",
+			Category:  "__metadata",
+			Phase:     "M",
+			ProcessID: 1,
+			ThreadID:  7,
+			Args: map[string]interface{}{
+				"name": "GPRWCNTR Lane 0 (wall clock)",
+			},
+		},
+		{
+			Name:      "thread_name",
+			Category:  "__metadata",
+			Phase:     "M",
+			ProcessID: 1,
+			ThreadID:  8,
+			Args: map[string]interface{}{
+				"name": "GPRWCNTR Lane 1 (wall clock)",
+			},
+		},
+		{
+			Name:      "thread_name",
+			Category:  "__metadata",
+			Phase:     "M",
+			ProcessID: 1,
+			ThreadID:  9,
+			Args: map[string]interface{}{
+				"name": "GPRWCNTR Lane 2 (wall clock)",
+			},
+		},
+		{
+			Name:      "thread_name",
+			Category:  "__metadata",
+			Phase:     "M",
+			ProcessID: 1,
+			ThreadID:  10,
+			Args: map[string]interface{}{
+				"name": "GPRWCNTR Lane 3 (wall clock)",
+			},
+		},
+		{
+			Name:      "thread_name",
+			Category:  "__metadata",
+			Phase:     "M",
+			ProcessID: 1,
+			ThreadID:  11,
+			Args: map[string]interface{}{
+				"name": "GPRWCNTR Lane 4 (wall clock)",
+			},
+		},
+		{
+			Name:      "thread_name",
+			Category:  "__metadata",
+			Phase:     "M",
+			ProcessID: 1,
+			ThreadID:  12,
+			Args: map[string]interface{}{
+				"name": "GPRWCNTR Lane 5 (wall clock)",
+			},
+		},
+		{
+			Name:      "thread_name",
+			Category:  "__metadata",
+			Phase:     "M",
+			ProcessID: 1,
+			ThreadID:  13,
+			Args: map[string]interface{}{
+				"name": "GPRWCNTR Lane 6 (wall clock)",
+			},
+		},
+		{
+			Name:      "thread_name",
+			Category:  "__metadata",
+			Phase:     "M",
+			ProcessID: 1,
+			ThreadID:  14,
+			Args: map[string]interface{}{
+				"name": "GPRWCNTR Lane 7 (wall clock)",
+			},
+		},
+	}
+
+	metadataEvents = append(metadataEvents,
+		TimelineEvent{
+			Name:      "thread_name",
+			Category:  "__metadata",
+			Phase:     "M",
+			ProcessID: 1,
+			ThreadID:  15,
+			Args: map[string]interface{}{
+				"name": "Xcode Parity / Provenance",
+			},
+		},
+		TimelineEvent{
+			Name:      "Xcode Metrics Coverage",
+			Category:  "xcode_metrics",
+			Phase:     "i",
+			ProcessID: 1,
+			ThreadID:  15,
+			Args:      timelineCoverageArgs(timeline, clock),
+		},
+	)
+
+	if timeline != nil && timeline.Timing != nil {
+		metadataEvents = append(metadataEvents,
+			TimelineEvent{
+				Name:      "Xcode Timing Summary",
+				Category:  "xcode_timing",
+				Phase:     "i",
+				ProcessID: 1,
+				ThreadID:  15,
+				Args:      timelineTimingArgs(timeline.Timing),
+			},
+		)
+	}
+
+	threadID := 16
+	counterEvents := make([]TimelineEvent, 0)
+	groupPIDs := make(map[string]int)
+	nextGroupPID := 10
+
+	if timeline != nil {
+		for _, track := range timeline.CounterTracks {
+			if !counterTrackHasSignal(track) {
+				continue
+			}
+			pid := 1
+			if len(track.XcodeGroups) > 0 && track.XcodeGroups[0] != "" {
+				groupName := track.XcodeGroups[0]
+				if existingPID, exists := groupPIDs[groupName]; exists {
+					pid = existingPID
+				} else {
+					pid = nextGroupPID
+					groupPIDs[groupName] = pid
+					nextGroupPID++
+					metadataEvents = append(metadataEvents, TimelineEvent{
+						Name:      "process_name",
+						Category:  "__metadata",
+						Phase:     "M",
+						ProcessID: pid,
+						ThreadID:  0,
+						Args: map[string]interface{}{
+							"name": fmt.Sprintf("Counters: %s", groupName),
+						},
+					})
+				}
+			}
+
+			metadataEvents = append(metadataEvents, TimelineEvent{
+				Name:      "thread_name",
+				Category:  "__metadata",
+				Phase:     "M",
+				ProcessID: pid,
+				ThreadID:  threadID,
+				Args:      counterTrackMetadataArgs(track),
+			})
+
+			for _, sample := range track.Samples {
+				counterEvent := TimelineEvent{
+					Name:      track.Name,
+					Category:  "counter",
+					Phase:     "C",
+					Timestamp: sample.Timestamp / 1000,
+					ProcessID: pid,
+					ThreadID:  threadID,
+					Args: map[string]interface{}{
+						track.Name: sample.Value,
+					},
+				}
+				counterEvents = append(counterEvents, counterEvent)
+			}
+			threadID++
+		}
+	}
+
+	events := []TimelineEvent{}
+	if timeline != nil {
+		events = timeline.Events
+	}
+	allEvents := append(metadataEvents, events...)
+	allEvents = append(allEvents, counterEvents...)
+	allEvents = timelineMetadataForActiveTracks(allEvents)
+
+	tracing := map[string]interface{}{
+		"traceEvents": allEvents,
+	}
+
+	other := map[string]interface{}{}
+	if timeline != nil && timeline.Timing != nil {
+		other["gputrace_timing"] = timelineTimingArgs(timeline.Timing)
+	}
+	other["gputrace_xcode_metrics"] = timelineCoverageArgs(timeline, clock)
+	other["gputrace_clock_domain"] = timelineClockProvenance(clock)
+	tracing["otherData"] = other
+
+	return tracing
+}
+
 // exportHTML exports an interactive standalone HTML timeline viewer.
 func exportHTML(timeline *Timeline, outputPath string) error {
 	f, closeOutput, err := createCommandOutput(outputPath)
@@ -2695,8 +2987,15 @@ func exportHTML(timeline *Timeline, outputPath string) error {
 		return fmt.Errorf("marshal timeline: %w", err)
 	}
 
+	// Build the complete Perfetto trace object for parity
+	perfettoTrace := buildPerfettoTraceForHTML(timeline)
+	perfettoJSON, err := json.Marshal(perfettoTrace)
+	if err != nil {
+		return fmt.Errorf("marshal perfetto trace: %w", err)
+	}
+
 	// Generate the HTML content
-	html := generateInteractiveHTML(string(timelineJSON))
+	html := generateInteractiveHTML(string(timelineJSON), string(perfettoJSON))
 	_, err = io.WriteString(f, html)
 	return err
 }
@@ -2994,7 +3293,11 @@ func buildTimelineFromProfilerData(tracePath string, stats *counter.StreamDataSt
 }
 
 // generateInteractiveHTML creates a standalone interactive HTML timeline viewer.
-func generateInteractiveHTML(timelineJSON string) string {
+func generateInteractiveHTML(timelineJSON string, perfettoJSON ...string) string {
+	perfJSON := "{}"
+	if len(perfettoJSON) > 0 && perfettoJSON[0] != "" {
+		perfJSON = perfettoJSON[0]
+	}
 	return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -3301,6 +3604,7 @@ func generateInteractiveHTML(timelineJSON string) string {
     <script>
         // Embedded timeline data
         const timelineData = ` + timelineJSON + `;
+        const perfettoData = ` + perfJSON + `;
 
         // Timeline viewer state
         const state = {
