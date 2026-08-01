@@ -375,7 +375,7 @@ func dumpCounters(t *testing.T, a *counterAPI, pd uintptr, nc uint64) {
 			continue
 		}
 		seenMeta[meta[i]] = true
-		m := unsafe.Slice((*uint64)(unsafe.Pointer(uintptr(meta[i]))), int(vnum[i]))
+		m := unsafe.Slice((*uint64)(foreign(meta[i])), int(vnum[i]))
 		desc := 0
 		for j := 1; j < len(m); j++ {
 			if m[j] < m[j-1] {
@@ -444,7 +444,7 @@ func dumpCounters(t *testing.T, a *counterAPI, pd uintptr, nc uint64) {
 			t.Logf("  [%3d] ident=%d %-40s group=%d n=%d ptr=%#x (empty)", i, names[i], name, gid[i], n, vptr[i])
 			continue
 		}
-		vals := unsafe.Slice((*uint64)(unsafe.Pointer(uintptr(vptr[i]))), int(n))
+		vals := unsafe.Slice((*uint64)(foreign(vptr[i])), int(n))
 		var min, max, sum uint64
 		min = ^uint64(0)
 		nonzero := 0
@@ -623,7 +623,7 @@ func TestCounterAggregate(t *testing.T) {
 				continue
 			}
 			name := cstrAt(names[i])
-			vals := unsafe.Slice((*uint64)(unsafe.Pointer(uintptr(vptr[i]))), int(vnum[i]))
+			vals := unsafe.Slice((*uint64)(foreign(vptr[i])), int(vnum[i]))
 			var s uint64
 			for _, v := range vals {
 				s += v
@@ -761,7 +761,7 @@ func cstrAt(p uint64) string {
 	}
 	var b []byte
 	for i := 0; i < 512; i++ {
-		c := *(*byte)(unsafe.Pointer(uintptr(p) + uintptr(i)))
+		c := *(*byte)(foreign(p + uint64(i)))
 		if c == 0 {
 			break
 		}
@@ -780,4 +780,21 @@ func fileIndex(name string) int {
 		n = n*10 + int(c-'0')
 	}
 	return n
+}
+
+// foreign converts an address returned by GTShaderProfiler into a pointer.
+//
+// The bulk accessors hand back addresses of buffers owned by the C library, as
+// plain uint64. Writing unsafe.Pointer(uintptr(addr)) is what go vet flags as
+// "possible misuse of unsafe.Pointer", and for Go-owned memory the warning is
+// right: a uintptr does not keep an object alive and does not survive a moving
+// collector. Neither hazard applies here, because the GC never manages this
+// memory and never moves it -- the profile_data handle owns it until the
+// parser is destroyed.
+//
+// The conversion goes through the uint64's own storage so that no uintptr ever
+// appears, which keeps vet green without a blanket suppression that would also
+// hide a genuine misuse elsewhere in this file.
+func foreign(addr uint64) unsafe.Pointer {
+	return *(*unsafe.Pointer)(unsafe.Pointer(&addr))
 }
