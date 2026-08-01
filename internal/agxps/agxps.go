@@ -14,6 +14,7 @@
 package agxps
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -227,44 +228,30 @@ type KickTiming struct {
 	DurationNs  uint64
 }
 
-// KickTimings extracts kick timing data from parsed profile data.
-func KickTimings(profileData ProfileData) ([]KickTiming, error) {
-	if profileData == 0 {
-		return nil, fmt.Errorf("invalid profile data")
-	}
-	pd := gtshaderprofiler.AGXPSProfileData(profileData)
-	numKicks, err := gtshaderprofiler.Agxps_aps_profile_data_get_kicks_num(pd)
-	if err != nil {
-		return nil, fmt.Errorf("get kicks count: %w", err)
-	}
-	if numKicks == 0 {
-		return nil, nil
-	}
+// ErrBulkAccessorShape reports that a profile_data accessor cannot be called
+// through the generated bindings without producing wrong values silently.
+var ErrBulkAccessorShape = errors.New("agxps: profile_data accessors are bulk range copies, not indexed getters")
 
-	timings := make([]KickTiming, numKicks)
-	for i := range timings {
-		idx := uint64(i)
-		startNs, err := gtshaderprofiler.Agxps_aps_profile_data_get_kick_start(pd, idx)
-		if err != nil {
-			return nil, fmt.Errorf("get kick %d start: %w", idx, err)
-		}
-		endNs, err := gtshaderprofiler.Agxps_aps_profile_data_get_kick_end(pd, idx)
-		if err != nil {
-			return nil, fmt.Errorf("get kick %d end: %w", idx, err)
-		}
-		kickID, err := gtshaderprofiler.Agxps_aps_profile_data_get_kick_id(pd, idx)
-		if err != nil {
-			return nil, fmt.Errorf("get kick %d id: %w", idx, err)
-		}
-		timings[i] = KickTiming{
-			Index:       idx,
-			ID:          kickID,
-			StartTimeNs: startNs,
-			EndTimeNs:   endNs,
-			DurationNs:  endNs - startNs,
-		}
-	}
-	return timings, nil
+// bulkAccessorShapeError explains the refusal at the point of use.
+func bulkAccessorShapeError(what string) error {
+	return fmt.Errorf("%w: %s needs (profile_data, out*, first, count) -> bool, "+
+		"but the generated binding declares (profile_data, index) -> value. Calling it "+
+		"that way puts the index where the out-pointer belongs, so it copies nothing or "+
+		"writes through a garbage address and reports success -- the observed symptom was "+
+		"start=0 end=0 / start=1 end=1 sequences that read as real timestamps. Use the "+
+		"direct purego path in internal/agxps/rawprobe_manual_test.go, which parses a real "+
+		"Profiling_f_*.raw with the verified shapes. See docs/research/agxps-signatures.yaml",
+		ErrBulkAccessorShape, what)
+}
+
+// KickTimings extracts kick timing data from parsed profile data.
+//
+// It always fails. See [ErrBulkAccessorShape]: the underlying accessors take a
+// destination buffer and a range, and the bindings this package has declare
+// them as indexed getters, which yields plausible numbers rather than an error.
+// Refusing is the only honest option until the bindings take the real shape.
+func KickTimings(profileData ProfileData) ([]KickTiming, error) {
+	return nil, bulkAccessorShapeError("agxps_aps_profile_data_get_kick_start/_end/_id")
 }
 
 // TimingStats represents aggregate timing statistics.
@@ -302,58 +289,11 @@ type ESLCliqueTiming struct {
 }
 
 // ESLCliqueTimings extracts ESL clique timing data from parsed profile data.
+//
+// It always fails, for the same reason as [KickTimings]: see
+// [ErrBulkAccessorShape].
 func ESLCliqueTimings(profileData ProfileData) ([]ESLCliqueTiming, error) {
-	if profileData == 0 {
-		return nil, fmt.Errorf("invalid profile data")
-	}
-	pd := gtshaderprofiler.AGXPSProfileData(profileData)
-	numCliques, err := gtshaderprofiler.Agxps_aps_profile_data_get_esl_cliques_num(pd)
-	if err != nil {
-		return nil, fmt.Errorf("get esl clique count: %w", err)
-	}
-	if numCliques == 0 {
-		return nil, nil
-	}
-
-	timings := make([]ESLCliqueTiming, numCliques)
-	for i := range timings {
-		idx := uint64(i)
-		start, err := gtshaderprofiler.Agxps_aps_profile_data_get_esl_clique_start(pd, idx)
-		if err != nil {
-			return nil, fmt.Errorf("get esl clique %d start: %w", idx, err)
-		}
-		end, err := gtshaderprofiler.Agxps_aps_profile_data_get_esl_clique_end(pd, idx)
-		if err != nil {
-			return nil, fmt.Errorf("get esl clique %d end: %w", idx, err)
-		}
-		cliqueID, err := gtshaderprofiler.Agxps_aps_profile_data_get_esl_clique_clique_id(pd, idx)
-		if err != nil {
-			return nil, fmt.Errorf("get esl clique %d clique id: %w", idx, err)
-		}
-		kickID, err := gtshaderprofiler.Agxps_aps_profile_data_get_esl_clique_kick_id(pd, idx)
-		if err != nil {
-			return nil, fmt.Errorf("get esl clique %d kick id: %w", idx, err)
-		}
-		eslID, err := gtshaderprofiler.Agxps_aps_profile_data_get_esl_clique_esl_id(pd, idx)
-		if err != nil {
-			return nil, fmt.Errorf("get esl clique %d esl id: %w", idx, err)
-		}
-		missingEnd, err := gtshaderprofiler.Agxps_aps_profile_data_get_esl_clique_missing_end(pd, idx)
-		if err != nil {
-			return nil, fmt.Errorf("get esl clique %d missing end: %w", idx, err)
-		}
-		timings[i] = ESLCliqueTiming{
-			Index:      idx,
-			CliqueID:   cliqueID,
-			KickID:     kickID,
-			EslID:      eslID,
-			StartTime:  start,
-			EndTime:    end,
-			Duration:   end - start,
-			MissingEnd: missingEnd,
-		}
-	}
-	return timings, nil
+	return nil, bulkAccessorShapeError("agxps_aps_profile_data_get_esl_clique_start/_end/_clique_id/_kick_id/_esl_id/_missing_end")
 }
 
 // ESLCliqueInstructionTrace returns the instruction trace handle for a clique.
