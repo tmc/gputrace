@@ -72,9 +72,17 @@ type ShaderMetrics struct {
 	INT16InstructionCount  int `json:"int16_instruction_count"`  // INT16 instruction count
 	BranchInstructionCount int `json:"branch_instruction_count"` // Branch instruction count
 	ThreadgroupMemory      int `json:"threadgroup_memory"`       // Threadgroup memory usage
-	AllocatedRegisters     int `json:"allocated_registers"`      // Allocated register count
+	AllocatedRegisters     int `json:"allocated_registers"`      // Temporary register count
 	HighRegister           int `json:"high_register"`            // Highest live register, when source-backed
 	SpilledBytes           int `json:"spilled_bytes"`            // Bytes spilled to memory
+	DeviceLoadCount        int `json:"device_load_count"`        // Device memory load instructions
+	DeviceStoreCount       int `json:"device_store_count"`       // Device memory store instructions
+
+	// HasPipelineStats reports whether the compiler statistics above were
+	// found for this shader. Without it a zero count cannot be told apart
+	// from a missing one, and every field in this block is legitimately
+	// zero for some kernels.
+	HasPipelineStats bool `json:"has_pipeline_stats"`
 }
 
 const (
@@ -565,6 +573,9 @@ func applyPipelineStatsToMetrics(metrics *ShaderMetrics, p *counter.PipelineStat
 	metrics.ThreadgroupMemory = p.ThreadgroupMemory
 	metrics.AllocatedRegisters = p.TemporaryRegisterCount
 	metrics.SpilledBytes = p.SpilledBytes
+	metrics.DeviceLoadCount = p.DeviceLoadCount
+	metrics.DeviceStoreCount = p.DeviceStoreCount
+	metrics.HasPipelineStats = true
 }
 
 // estimateShaderDuration provides a rough duration estimate based on thread configuration.
@@ -668,6 +679,9 @@ func applyHardwareMetrics(metrics *ShaderMetrics, hw *counter.ShaderHardwareMetr
 	metrics.AllocatedRegisters = hw.AllocatedRegs
 	metrics.HighRegister = hw.HighRegister
 	metrics.SpilledBytes = hw.SpilledBytes
+	metrics.DeviceLoadCount = hw.DeviceLoadCount
+	metrics.DeviceStoreCount = hw.DeviceStoreCount
+	metrics.HasPipelineStats = hw.HasPipelineStats
 
 	// Also update ALU utilization if available
 	if hw.ALUUtilization > 0 {
@@ -917,6 +931,8 @@ func ExportShaderMetricsCSV(w io.Writer, report *ShaderMetricsReport) error {
 		"Threads/Group X", "Threads/Group Y", "Threads/Group Z",
 		"Total Threads", "Occupancy", "Classification",
 		"Estimated Bandwidth (GB/s)", "Bytes Accessed",
+		"Temporary Registers", "Spilled Bytes",
+		"Device Load Count", "Device Store Count",
 	}
 	if err := writer.Write(header); err != nil {
 		return err
@@ -943,6 +959,10 @@ func ExportShaderMetricsCSV(w io.Writer, report *ShaderMetricsReport) error {
 			metrics.Classification,
 			fmt.Sprintf("%.2f", metrics.EstimatedBandwidth),
 			fmt.Sprintf("%d", metrics.BytesAccessed),
+			pipelineStatCell(metrics.HasPipelineStats, metrics.AllocatedRegisters),
+			pipelineStatCell(metrics.HasPipelineStats, metrics.SpilledBytes),
+			pipelineStatCell(metrics.HasPipelineStats, metrics.DeviceLoadCount),
+			pipelineStatCell(metrics.HasPipelineStats, metrics.DeviceStoreCount),
 		}
 		if err := writer.Write(row); err != nil {
 			return err
@@ -950,6 +970,16 @@ func ExportShaderMetricsCSV(w io.Writer, report *ShaderMetricsReport) error {
 	}
 
 	return nil
+}
+
+// pipelineStatCell renders a compiler statistic, or an empty cell when the
+// statistics were not present. A zero is a real count for some kernels, so an
+// absent statistic must not be reported as one.
+func pipelineStatCell(present bool, v int) string {
+	if !present {
+		return ""
+	}
+	return fmt.Sprintf("%d", v)
 }
 
 // ExportShaderMetricsJSON exports shader metrics to JSON format.
@@ -995,10 +1025,11 @@ func FormatShadersSimple(w io.Writer, report *ShaderMetricsReport) error {
 // If showEstimates is false, uncomputed fields will show "?" instead of estimates.
 func FormatShadersXcodeStyle(w io.Writer, report *ShaderMetricsReport, trace *Trace, showEstimates bool) error {
 	// Header matching Xcode format with wider columns
-	fmt.Fprintf(w, "%-12s %-50s %-10s %-20s %15s %10s %10s %12s\n",
+	fmt.Fprintf(w, "%-12s %-50s %-10s %-20s %15s %10s %10s %12s %10s %10s\n",
 		shaderShareLabel(report), "Name", "Type", "Pipeline State",
-		"# SIMD Groups", "Registers", "High Reg", "Spilled")
-	fmt.Fprintf(w, "%s\n", repeatStr("─", 145))
+		"# SIMD Groups", "Temp Regs", "High Reg", "Spilled",
+		"Dev Load", "Dev Store")
+	fmt.Fprintf(w, "%s\n", repeatStr("─", 167))
 
 	// Sort shaders by percentage (descending) like Xcode does
 	// Already sorted by TotalDurationNs in ExtractShaderMetrics
@@ -1038,7 +1069,7 @@ func FormatShadersXcodeStyle(w io.Writer, report *ShaderMetricsReport, trace *Tr
 
 		// Register allocation and spilled bytes - use real data from metrics if available
 		var allocatedRegsStr, highRegStr, spilledBytesStr string
-		if metrics.AllocatedRegisters > 0 {
+		if metrics.HasPipelineStats || metrics.AllocatedRegisters > 0 {
 			// Use real data from PipelineStats (streamData)
 			allocatedRegsStr = fmt.Sprintf("%d", metrics.AllocatedRegisters)
 			spilledBytesStr = formatSpilledBytesShort(metrics.SpilledBytes)
@@ -1058,13 +1089,41 @@ func FormatShadersXcodeStyle(w io.Writer, report *ShaderMetricsReport, trace *Tr
 			highRegStr = "?"
 		}
 
+		// Device load/store counts are compiler statistics: zero is a real
+		// answer for a kernel that touches no device memory, so they are
+		// only printed when the statistics were actually found.
+		devLoadStr, devStoreStr := "?", "?"
+		if metrics.HasPipelineStats {
+			devLoadStr = fmt.Sprintf("%d", metrics.DeviceLoadCount)
+			devStoreStr = fmt.Sprintf("%d", metrics.DeviceStoreCount)
+		}
+
 		// Print row matching Xcode format
-		fmt.Fprintf(w, "%-12s %-50s %-10s %-20s %15s %10s %10s %12s\n",
+		fmt.Fprintf(w, "%-12s %-50s %-10s %-20s %15s %10s %10s %12s %10s %10s\n",
 			cost, name, shaderType, pipelineState,
-			simdGroups, allocatedRegsStr, highRegStr, spilledBytesStr)
+			simdGroups, allocatedRegsStr, highRegStr, spilledBytesStr,
+			devLoadStr, devStoreStr)
+	}
+
+	if missing := shadersMissingPipelineStats(report); missing > 0 {
+		fmt.Fprintf(w, "\n%d of %d shaders carry no compiler statistics in this trace; their\n"+
+			"  Temp Regs, Spilled, Dev Load and Dev Store columns read \"?\" rather than 0.\n",
+			missing, len(report.Shaders))
 	}
 
 	return nil
+}
+
+// shadersMissingPipelineStats counts shaders whose compiler statistics
+// (pipelinePerformanceStatistics) were not found.
+func shadersMissingPipelineStats(report *ShaderMetricsReport) int {
+	n := 0
+	for _, m := range report.Shaders {
+		if !m.HasPipelineStats {
+			n++
+		}
+	}
+	return n
 }
 
 func shaderShareLabel(report *ShaderMetricsReport) string {

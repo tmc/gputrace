@@ -28,9 +28,12 @@ type ShaderHardwareMetrics struct {
 	ShaderName                     string  // Shader/kernel function name
 	PipelineState                  uint64  // Pipeline state object address
 	SIMDGroups                     int     // Number of SIMD groups executed
-	AllocatedRegs                  int     // Number of allocated registers
+	AllocatedRegs                  int     // Temporary register count
 	HighRegister                   int     // Highest register used
 	SpilledBytes                   int     // Bytes spilled to memory
+	DeviceLoadCount                int     // Device memory load instructions
+	DeviceStoreCount               int     // Device memory store instructions
+	HasPipelineStats               bool    // Compiler statistics were found for this shader
 	ALUUtilization                 float64 // ALU utilization percentage (0-100)
 	KernelOccupancy                float64 // Kernel occupancy percentage (0-100)
 	MemoryBandwidth                uint64  // Memory bandwidth used (bytes)
@@ -1134,10 +1137,13 @@ func enhanceFromStreamData(t *trace.Trace, stats *PerfCounterStats) error {
 			}
 
 			newMetric := ShaderHardwareMetrics{
-				ShaderName:    funcName,
-				PipelineState: uint64(p.PipelineID),
-				AllocatedRegs: p.TemporaryRegisterCount,
-				SpilledBytes:  p.SpilledBytes,
+				ShaderName:       funcName,
+				PipelineState:    uint64(p.PipelineID),
+				AllocatedRegs:    p.TemporaryRegisterCount,
+				SpilledBytes:     p.SpilledBytes,
+				DeviceLoadCount:  p.DeviceLoadCount,
+				DeviceStoreCount: p.DeviceStoreCount,
+				HasPipelineStats: true,
 			}
 			stats.ShaderMetrics = append(stats.ShaderMetrics, newMetric)
 		}
@@ -1165,4 +1171,7 @@ func applyPipelineStats(metric *ShaderHardwareMetrics, p *PipelineStats) {
 	metric.INT16InstructionCount = p.INT16InstructionCount
 	metric.BranchInstructionCount = p.BranchInstructionCount
 	metric.ThreadgroupMemory = p.ThreadgroupMemory
+	metric.DeviceLoadCount = p.DeviceLoadCount
+	metric.DeviceStoreCount = p.DeviceStoreCount
+	metric.HasPipelineStats = true
 }

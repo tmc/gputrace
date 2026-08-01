@@ -201,7 +201,45 @@ NSDictionary mapping pipeline IDs to compilation metrics:
 | `Uniform register count` | int | Uniform registers |
 | `Spilled bytes` | int | Register spill to memory |
 | `Threadgroup memory` | int | Shared memory usage |
+| `Device load instruction count` | int | Device memory loads |
+| `Device store instruction count` | int | Device memory stores |
+| `Device atomic instruction count` | int | Device memory atomics |
+| `Threadgroup load instruction count` | int | Threadgroup memory loads |
+| `Threadgroup store instruction count` | int | Threadgroup memory stores |
+| `Threadgroup atomic instruction count` | int | Threadgroup memory atomics |
+| `Texture reads instruction count` | int | Texture reads |
+| `Texture writes instruction count` | int | Texture writes |
+| `Wait instruction count` | int | Wait instructions |
+| `Thread invariant spilled bytes` | int | Thread-invariant spill |
+| `Constant calculation temporary register count` | int | Temp registers in the constant phase |
+| `Constant calculation phase present` | bool | Constant phase was emitted |
 | `Compilation time in milliseconds` | float | Shader compile time |
+| `Compile Performance` | dict | Compiler timings and `Function Name` |
+| `Remarks` | string | YAML optimization remarks from the compiler |
+| `Telemetry Statistics` | dict | Empty in every archive seen so far |
+| `ComputeBufferPrefetch` | array | Per-buffer prefetch flags |
+
+[V] The full key set above was enumerated from every pipeline of
+`qwen25-05b-staticmask-warm-tokens2-4-rep1-perfdata2.gputrace` (18 pipelines,
+all 28 keys present on each).
+
+#### No instruction-type cost breakdown
+
+Xcode's shader inspector shows an "Instruction Type Cost" split (Math,
+Comparison, Permute, Data Movement, Load, Predication, Control Flow, Select).
+That table is **not** in the trace:
+
+- `pipelinePerformanceStatistics` has no such key; the 28 keys above are all of
+  them. It carries counts by *operand type* (FP32/FP16/INT32/…), not cost by
+  *instruction category*.
+- The top-level `shaderProfilerData` array is empty (0 entries) in the
+  profiler-only captures we have.
+- `grep` for `Permute`, `Predication`, `Data Movement`, and `Instruction Type`
+  over the whole 15 GB `.gputrace` bundle returns no match, in any file.
+
+[D] Xcode appears to derive the split by classifying GPRWCNTR PC samples
+against an AGX disassembly it obtains from the compiler service, neither of
+which the trace stores. Nothing in gputrace should print those percentages.
 
 ## Implementation
 

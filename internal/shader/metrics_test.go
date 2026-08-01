@@ -124,13 +124,13 @@ func TestFormatShadersXcodeStyleDoesNotDeriveHighRegister(t *testing.T) {
 	}
 
 	fields := xcodeStyleDataFields(t, buf.String())
-	if got, want := fields[len(fields)-3], "32"; got != want {
+	if got, want := fields[xcodeStyleTempRegs], "32"; got != want {
 		t.Fatalf("register field = %q, want %q in:\n%s", got, want, buf.String())
 	}
-	if got, want := fields[len(fields)-2], "?"; got != want {
+	if got, want := fields[xcodeStyleHighReg], "?"; got != want {
 		t.Fatalf("high register field = %q, want %q in:\n%s", got, want, buf.String())
 	}
-	if got, want := fields[len(fields)-1], "16B"; got != want {
+	if got, want := fields[xcodeStyleSpilled], "16B"; got != want {
 		t.Fatalf("spilled field = %q, want %q in:\n%s", got, want, buf.String())
 	}
 }
@@ -156,7 +156,7 @@ func TestFormatShadersXcodeStyleShowsSourceBackedHighRegister(t *testing.T) {
 	}
 
 	fields := xcodeStyleDataFields(t, buf.String())
-	if got, want := fields[len(fields)-2], "19"; got != want {
+	if got, want := fields[xcodeStyleHighReg], "19"; got != want {
 		t.Fatalf("high register field = %q, want %q in:\n%s", got, want, buf.String())
 	}
 }
@@ -186,6 +186,18 @@ func TestFormatShadersLabelsShareBasis(t *testing.T) {
 	}
 }
 
+// Field positions in a FormatShadersXcodeStyle data row. Shader names in the
+// tests are single words, so strings.Fields indexes line up with the columns.
+const (
+	xcodeStyleSIMDGroups = 4 + iota
+	xcodeStyleTempRegs
+	xcodeStyleHighReg
+	xcodeStyleSpilled
+	xcodeStyleDevLoad
+	xcodeStyleDevStore
+	xcodeStyleNumFields
+)
+
 func xcodeStyleDataFields(t *testing.T, output string) []string {
 	t.Helper()
 
@@ -194,8 +206,8 @@ func xcodeStyleDataFields(t *testing.T, output string) []string {
 		t.Fatalf("expected header, separator, and data row in:\n%s", output)
 	}
 	fields := strings.Fields(lines[2])
-	if len(fields) < 8 {
-		t.Fatalf("expected at least 8 data fields, got %d in row %q", len(fields), lines[2])
+	if len(fields) < xcodeStyleNumFields {
+		t.Fatalf("expected at least %d data fields, got %d in row %q", xcodeStyleNumFields, len(fields), lines[2])
 	}
 	return fields
 }

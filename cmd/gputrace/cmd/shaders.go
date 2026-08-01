@@ -39,9 +39,15 @@ Use --all for full Xcode Instruments format with additional columns:
   - Type (Compute)
   - Pipeline State address
   - # SIMD Groups (SIMD wavefronts dispatched)
-  - # Allocated Registers
+  - Temp Regs (temporary register count)
   - High Register, shown only when source-backed
   - Spilled Bytes (register spills to memory)
+  - Dev Load / Dev Store (device memory load and store instruction counts)
+
+Temp Regs, Spilled, Dev Load and Dev Store come from the shader compiler's
+pipelinePerformanceStatistics and are available for profiler-only traces too.
+They read "?" when the trace carries no statistics for that shader; zero is a
+real count and is printed as 0.
 
 Examples:
   gputrace shaders trace.gputrace                    # Simple cost + name output
@@ -340,6 +346,9 @@ func extractSIMDBasedMetrics(trace *gputrace.Trace, profilerDir string) (*gputra
 			m.ThreadgroupMemory = ps.ThreadgroupMemory
 			m.AllocatedRegisters = ps.TemporaryRegisterCount
 			m.SpilledBytes = ps.SpilledBytes
+			m.DeviceLoadCount = ps.DeviceLoadCount
+			m.DeviceStoreCount = ps.DeviceStoreCount
+			m.HasPipelineStats = true
 		}
 
 		report.Shaders = append(report.Shaders, m)
@@ -487,6 +496,9 @@ func convertPipelineStatsToShaderReport(stats *counter.StreamDataStats, execCost
 			ThreadgroupMemory:      p.ThreadgroupMemory,
 			AllocatedRegisters:     p.TemporaryRegisterCount,
 			SpilledBytes:           p.SpilledBytes,
+			DeviceLoadCount:        p.DeviceLoadCount,
+			DeviceStoreCount:       p.DeviceStoreCount,
+			HasPipelineStats:       true,
 			Bottlenecks:            make([]string, 0),
 			OptimizationHints:      make([]string, 0),
 		}
