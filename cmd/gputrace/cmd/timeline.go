@@ -428,7 +428,7 @@ func exportTextTimeline(timeline *Timeline, outputPath string) error {
 }
 
 // writeTimelineEncoders prints one command buffer's encoders and the kernels
-// each ran, as a tree under the command buffer line.
+// each ran, as a nested tree structure under the command buffer line.
 func writeTimelineEncoders(w io.Writer, timeline *Timeline, encoders []EncoderInfo, firstTimestamp uint64) {
 	for i, encoder := range encoders {
 		startMs := float64(encoder.StartTime-firstTimestamp) / 1e6
@@ -436,7 +436,7 @@ func writeTimelineEncoders(w io.Writer, timeline *Timeline, encoders []EncoderIn
 
 		label := encoder.Label
 		if label == "" {
-			label = "Unknown Encoder"
+			label = fmt.Sprintf("Encoder#%d", encoder.Index)
 		}
 
 		var encoderKernels []KernelInfo
@@ -446,20 +446,25 @@ func writeTimelineEncoders(w io.Writer, timeline *Timeline, encoders []EncoderIn
 			}
 		}
 
-		prefix := "├─"
-		if i == len(encoders)-1 {
-			prefix = "└─"
+		isLastEncoder := (i == len(encoders)-1)
+		encPrefix := "├─"
+		pipePrefix := "│ "
+		if isLastEncoder {
+			encPrefix = "└─"
+			pipePrefix = "  "
 		}
 
-		if len(encoderKernels) > 0 {
-			for _, k := range encoderKernels {
-				kStartMs := float64(k.StartTime-firstTimestamp) / 1e6
-				kDurationMs := float64(k.Duration) / 1e6
-				fmt.Fprintf(w, "  %s %.2fms: %s (%.2fms) - %s\n",
-					prefix, kStartMs, k.Name, kDurationMs, label)
+		fmt.Fprintf(w, "%s %s [%.2fms, duration=%.2fms]\n", encPrefix, label, startMs, durationMs)
+
+		for j, k := range encoderKernels {
+			kStartMs := float64(k.StartTime-firstTimestamp) / 1e6
+			kDurationMs := float64(k.Duration) / 1e6
+			isLastKernel := (j == len(encoderKernels)-1)
+			kPrefix := "├─"
+			if isLastKernel {
+				kPrefix = "└─"
 			}
-		} else {
-			fmt.Fprintf(w, "  %s %.2fms: %s (%.2fms) - %s\n", prefix, startMs, label, durationMs, "Encoder")
+			fmt.Fprintf(w, "%s %s %.2fms: %s (%.2fms)\n", pipePrefix, kPrefix, kStartMs, k.Name, kDurationMs)
 		}
 	}
 }
