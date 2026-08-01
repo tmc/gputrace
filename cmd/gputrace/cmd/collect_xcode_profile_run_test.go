@@ -503,21 +503,36 @@ func TestGoToFolderNavigationCompleteAfterExactEntry(t *testing.T) {
 	}
 }
 
+// TestGoToFolderNativeEntryReleasesCommandBeforePath pins the entry order:
+// select all, delete, wait for System Events to release Command, then type the
+// whole path in one keystroke. An earlier version typed the path body and then
+// moved the cursor back to insert the leading slash; under host load that final
+// insert was dropped and the field committed a relative path such as "tmp".
 func TestGoToFolderNativeEntryReleasesCommandBeforePath(t *testing.T) {
-	selectPath := `keystroke "a" using command down`
-	releaseDelay := "delay 0.2"
-	typePath := "keystroke (item 1 of argv)"
-	moveToStart := "key code 123 using command down"
-	typeSlash := `keystroke "/"`
-	selectIndex := strings.Index(typeGoToFolderPathScript, selectPath)
-	delayIndex := strings.Index(typeGoToFolderPathScript, releaseDelay)
-	typeIndex := strings.Index(typeGoToFolderPathScript, typePath)
-	startIndex := strings.Index(typeGoToFolderPathScript, moveToStart)
-	slashIndex := strings.Index(typeGoToFolderPathScript, typeSlash)
-	if selectIndex < 0 || delayIndex <= selectIndex || typeIndex <= delayIndex ||
-		startIndex <= typeIndex || slashIndex <= startIndex {
-		t.Fatalf("native entry script does not construct the absolute path safely:\n%s",
+	selectIndex := strings.Index(typeGoToFolderPathScript, `keystroke "a" using command down`)
+	clearIndex := strings.Index(typeGoToFolderPathScript, "key code 51")
+	delayIndex := strings.Index(typeGoToFolderPathScript, "delay 0.4")
+	typeIndex := strings.Index(typeGoToFolderPathScript, "keystroke (item 1 of argv)")
+	if selectIndex < 0 || clearIndex <= selectIndex || delayIndex <= clearIndex || typeIndex <= delayIndex {
+		t.Fatalf("native entry script does not clear and release before typing the path:\n%s",
 			typeGoToFolderPathScript)
+	}
+	if strings.Contains(typeGoToFolderPathScript, "key code 123 using command down") {
+		t.Error("script still moves the cursor to insert a separate leading slash")
+	}
+	if strings.Contains(typeGoToFolderPathScript, `keystroke "/"`) {
+		t.Error("script still types the leading slash separately")
+	}
+}
+
+// TestTypeGoToFolderPathSendsAbsolutePath guards that the whole absolute path,
+// leading separator included, is what gets typed.
+func TestTypeGoToFolderPathSendsAbsolutePath(t *testing.T) {
+	if _, err := goToFolderPathBody("tmp"); err == nil {
+		t.Error("goToFolderPathBody accepted a relative path")
+	}
+	if _, err := goToFolderPathBody("/tmp"); err != nil {
+		t.Errorf("goToFolderPathBody rejected an absolute path: %v", err)
 	}
 }
 

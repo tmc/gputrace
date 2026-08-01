@@ -241,6 +241,17 @@ func standaloneExportRecoveryFromFlags(cmd *cobra.Command) (standaloneExportReco
 	if !any {
 		return standaloneExportRecovery{}, nil
 	}
+	// --source on its own declares which trace the selected window holds, for
+	// the case where Xcode has cleared the window's AXDocument after replay.
+	// Identity is still verified against that trace after the export is written.
+	if source != "" && !enabled && !checkOnly && !finalize && pid == 0 && app == "" {
+		absolute, err := filepath.Abs(source)
+		if err != nil {
+			return standaloneExportRecovery{}, fmt.Errorf("resolve declared source: %w", err)
+		}
+		declaredExportSource = absolute
+		return standaloneExportRecovery{}, nil
+	}
 	if !enabled || source == "" || pid <= 0 || app == "" {
 		return standaloneExportRecovery{}, fmt.Errorf(
 			"untitled recovery requires --recover-untitled, --source, --xcode-pid, and --xcode-app",
@@ -335,6 +346,11 @@ func normalizeStandaloneRecoveryFailureWithGrace(ctx context.Context, scope *xco
 		recovery.Identity.PID, grace, original)
 }
 
+// declaredExportSource is the trace path given by a bare --source. It supplies
+// the identity that Xcode dropped from the window's AXDocument during replay,
+// so verifyExportTraceIdentity still runs against a known trace.
+var declaredExportSource string
+
 func standaloneExportTarget(windows []xcodeAXWindow) (uintptr, string, error) {
 	var matches []xcodeAXWindow
 	for _, window := range windows {
@@ -346,6 +362,20 @@ func standaloneExportTarget(windows []xcodeAXWindow) (uintptr, string, error) {
 	}
 	switch len(matches) {
 	case 0:
+		// Xcode clears a trace window's AXDocument while it replays and does not
+		// always restore it. Fall back to the window carrying GPU trace UI when
+		// exactly one does; uniqueness within the bound process is then the only
+		// available evidence of identity. The caller still verifies the exported
+		// bundle against the requested source.
+		var ui []xcodeAXWindow
+		for _, window := range windows {
+			if hasGPUTraceUI(window.Element) {
+				ui = append(ui, window)
+			}
+		}
+		if len(ui) == 1 {
+			return ui[0].Element, declaredExportSource, nil
+		}
 		return 0, "", fmt.Errorf("cannot establish standalone export target: no AXDocument-bound .gputrace window")
 	case 1:
 		return matches[0].Element, matches[0].Document, nil

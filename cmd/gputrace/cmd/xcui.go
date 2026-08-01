@@ -1721,24 +1721,22 @@ on run argv
 		tell process "Xcode"
 			set frontmost to true
 			keystroke "a" using command down
-			-- Let System Events release Command before editing the field.
-			delay 0.2
-			-- Type the path body first so the leading slash is not consumed as
-			-- Command-/. Then move to the start and insert it separately.
+			delay 0.3
+			-- Clear the field outright, then wait for System Events to release
+			-- Command. Typing the whole path in one go avoids the cursor move
+			-- that previously dropped the leading slash under host load.
+			key code 51
+			delay 0.4
 			keystroke (item 1 of argv)
-			key code 123 using command down
-			delay 0.1
-			keystroke "/"
 		end tell
 	end tell
 end run`
 
 func typeGoToFolderPath(folderPath string) error {
-	pathBody, err := goToFolderPathBody(folderPath)
-	if err != nil {
+	if _, err := goToFolderPathBody(folderPath); err != nil {
 		return err
 	}
-	if out, err := exec.Command("osascript", "-e", typeGoToFolderPathScript, pathBody).CombinedOutput(); err != nil {
+	if out, err := exec.Command("osascript", "-e", typeGoToFolderPathScript, folderPath).CombinedOutput(); err != nil {
 		return fmt.Errorf("type Go to Folder path: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
 	return nil

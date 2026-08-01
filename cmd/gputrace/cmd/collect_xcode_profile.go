@@ -89,11 +89,25 @@ func newXcodeWindowSelection(requestedTrace, title, document string) xcodeWindow
 }
 
 func selectionForWindow(requestedTrace string, window uintptr) xcodeWindowSelection {
-	return newXcodeWindowSelection(
+	selection := newXcodeWindowSelection(
 		requestedTrace,
 		axString(window, "AXTitle"),
 		axString(window, "AXDocument"),
 	)
+	return admitUIIdentifiedWindow(selection, window, uiIdentifiedTraceWindow)
+}
+
+// admitUIIdentifiedWindow accepts a window that getPreferredTraceWindow matched
+// by its GPU trace UI alone. Xcode clears a trace window's title and AXDocument
+// while it replays, which is exactly when that fallback runs, so uniqueness
+// within the bound process is the only remaining evidence of binding.
+func admitUIIdentifiedWindow(selection xcodeWindowSelection, window, uiIdentified uintptr) xcodeWindowSelection {
+	if selection.Bound || window == 0 || window != uiIdentified {
+		return selection
+	}
+	selection.Bound = true
+	selection.Evidence = "sole window with GPU trace UI in the bound Xcode process"
+	return selection
 }
 
 func boolPointer(value bool) *bool {

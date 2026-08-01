@@ -602,7 +602,16 @@ func waitForBoundTraceWindowAfterReplay(
 // getPreferredTraceWindow finds the best matching window for a trace filename.
 // When multiple windows match (e.g., document window + trace viewer), prefer the one
 // with GPU trace UI elements (Replay button, profiling status).
+// uiIdentifiedTraceWindow is the window that getPreferredTraceWindow last
+// accepted solely because it was the only one carrying GPU trace UI. Xcode
+// clears a trace window's title and AXDocument during replay, so that
+// uniqueness is the only remaining evidence that the window is the requested
+// trace. selectionForWindow consults it. The Xcode automation is single
+// threaded, so a package-level value is sufficient.
+var uiIdentifiedTraceWindow uintptr
+
 func getPreferredTraceWindow(appAX uintptr, traceFileName string) uintptr {
+	uiIdentifiedTraceWindow = 0
 	traceIdentity := strings.ToLower(filepath.Clean(traceFileName))
 	traceBase := strings.ToLower(filepath.Base(traceFileName))
 	allWindows := deduplicateAXWindows(GetAllWindows(appAX))
@@ -674,6 +683,9 @@ func getPreferredTraceWindow(appAX uintptr, traceFileName string) uintptr {
 		}
 		if len(matchingWindows) > 0 {
 			verboseLog("getPreferredTraceWindow: matched %d windows by GPU trace UI heuristic", len(matchingWindows))
+		}
+		if len(matchingWindows) == 1 {
+			uiIdentifiedTraceWindow = matchingWindows[0]
 		}
 	}
 

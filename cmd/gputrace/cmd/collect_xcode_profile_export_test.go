@@ -142,7 +142,6 @@ func TestStandaloneExportRecoveryFlagsRequireCompleteIdentity(t *testing.T) {
 		{name: "mode only", args: []string{"--recover-untitled"}},
 		{name: "check only", args: []string{"--check-recovery"}},
 		{name: "finalize only", args: []string{"--finalize-workload"}},
-		{name: "source only", args: []string{"--source", "/trace.gputrace"}},
 		{name: "missing app", args: []string{"--recover-untitled", "--source", "/trace.gputrace", "--xcode-pid", "81051"}},
 		{name: "missing pid", args: []string{"--recover-untitled", "--source", "/trace.gputrace", "--xcode-app", "/Applications/Xcode.app"}},
 	}
@@ -158,6 +157,28 @@ func TestStandaloneExportRecoveryFlagsRequireCompleteIdentity(t *testing.T) {
 				t.Fatalf("error = %v, want incomplete recovery flags", err)
 			}
 		})
+	}
+}
+
+func TestStandaloneExportSourceOnlyDeclaresIdentity(t *testing.T) {
+	previous := declaredExportSource
+	t.Cleanup(func() { declaredExportSource = previous })
+	declaredExportSource = ""
+
+	cmd := &cobra.Command{}
+	standaloneExportFlags(cmd)
+	if err := cmd.ParseFlags([]string{"--source", "/trace.gputrace"}); err != nil {
+		t.Fatal(err)
+	}
+	recovery, err := standaloneExportRecoveryFromFlags(cmd)
+	if err != nil {
+		t.Fatalf("source alone should declare identity, not start recovery: %v", err)
+	}
+	if recovery.Enabled {
+		t.Errorf("recovery.Enabled = true, want false")
+	}
+	if declaredExportSource != "/trace.gputrace" {
+		t.Errorf("declaredExportSource = %q, want %q", declaredExportSource, "/trace.gputrace")
 	}
 }
 
