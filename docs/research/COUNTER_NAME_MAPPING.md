@@ -108,13 +108,37 @@ references (`0x48025c`, `0x4f482c`, `0x506edc`, `0x5173e0`, `0x55f3e4`,
 `0x575c74`, `0x58726c`, `0x5985c8`) sit inside per-generation counter *enable
 lists*, never adjacent to that name. It replaced one wrong hash with another.
 
-## What to do instead
+## The obvious retarget does not work either
 
-Xcode does not deobfuscate; it *computes*. Named columns come from
-`GPUCounterGraph.plist` (534 vendorCounters, shipped in the framework Resources,
-present locally) evaluated over hashed raw inputs by
-`agxps_counter_compute_derived_counters` at `0x558f6c`. That path needs no
-deobfuscation and is fully available offline.
+Xcode does not deobfuscate; it *computes*, via
+`agxps_counter_compute_derived_counters`. That made
+`GPUCounterGraph.plist` — shipped in the framework Resources, present locally —
+look like a way to reproduce the named columns without any deobfuscation. It is
+not, for two independent reasons.
+
+[V] **The plist contains no arithmetic.** Its top-level keys are `counters`,
+`filterSynonyms`, `groups`, `strings`, `timelineGroups`; there is no top-level
+`vendorCounters` key. Each of the 455 entries under `counters` carries exactly
+`batchfiltered`, `counterType`, `dataType`, `datatype`, `description`,
+`mioVisible`, `name`, `prebatchfiltered`, `toolsCounter`, `unit`,
+`vendorCounters`, `visible`. No formula, no operands, no operator.
+`vendorCounters` is a list of names:
+
+	"1D Texture Array Sampler Calls" -> ["Texture1DArraySamplesPercent"]
+
+So the plist is a display catalog mapping a UI label to vendor counter
+identifiers. The arithmetic is compiled into the framework, not described here.
+
+[V] **The identifiers do not reach the archive.** Of the 533 distinct
+vendorCounter identifiers, only 259 appear anywhere in the GTShaderProfiler
+arm64 slice as exact strings. 274 do not, including every
+`ALUInstructionPerInvocation{Compute,Fragment,Vertex}` and
+`ALUToMemRatio{Compute,Fragment,Vertex}`. Appearing as a string would not
+constitute a resolution to a raw hash in any case.
+
+A count of how many Xcode column *names* appear in the plist is not a measure of
+what can be computed; that distinction is what made this route look viable for
+longer than it deserved. Verify inputs, not labels.
 
 ## Artifacts
 
