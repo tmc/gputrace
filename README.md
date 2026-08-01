@@ -27,12 +27,20 @@ gputrace profiler trace.gputrace
 gputrace pprof trace.gputrace -o trace.pb
 go tool pprof -http=:8080 trace.pb
 
-# View text timeline or export Chrome/Perfetto timeline
+# Export the readable, cumulative-GPU-busy Perfetto timeline (default)
 gputrace timeline trace.gputrace --format perfetto -o trace.json
+
+# Inspect command-buffer scheduling on its separate wall-clock axis
+gputrace timeline trace.gputrace --format perfetto --clock wall -o command-buffers.json
 
 # Compare two traces
 gputrace diff A.gputrace B.gputrace --explain
 ```
+
+Perfetto has one global time axis. `--clock busy` therefore contains encoders,
+dispatches, and source-backed busy-domain counters; `--clock wall` contains
+APSTimelineData command buffers and wall-clock profiler events. gputrace does
+not invent a mapping between these domains.
 
 ## Commands
 

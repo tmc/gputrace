@@ -2,8 +2,8 @@
 
 ## Status
 
-This document specifies the next exporter iteration. It is a design, not a
-claim that the listed counters or correlations are already decoded.
+This document specifies the exporter clock-domain contract. It does not claim
+that an undecoded counter or an unaligned timeline has become publishable.
 
 The reference capture is
 `/Users/tmc/tmp/mlx-go-fast/profiled/qwen25-05b-python-producer-tokens1-3-perfdata.gputrace`.
@@ -36,16 +36,19 @@ GPU-busy time. These are different clocks.
 
 ## Current shape
 
-The exporter emits these independent lanes:
+`gputrace timeline --format perfetto` defaults to `--clock busy`. It writes a
+single cumulative GPU-busy axis containing compute encoders, dispatches, and
+only source-backed counter tracks in that same domain. A dispatch shares its
+encoder track only when it is strictly contained; otherwise it carries
+`encoder_containment=not_strictly_contained` and remains on an explicitly
+named fallback track.
 
-1. Command buffers, using APSTimelineData hardware tick deltas relative to the
-   capture absolute time.
-2. Compute encoders and dispatches, using streamData cumulative busy time.
-   A dispatch shares its encoder lane only when its interval is strictly
-   contained by the encoder interval; otherwise it remains on an explicitly
-   named fallback lane.
-3. GPRWCNTR sample and encoder-profile events.
-4. Timing and Xcode-metrics provenance events.
+`--clock wall` writes a separate APSTimelineData axis with command buffers,
+encoder-profile spans, and GPRWCNTR samples. It deliberately contains no busy
+encoders, dispatches, or busy-domain counters.
+
+Both files preserve timing and Xcode-metrics provenance as instant metadata,
+but metadata is not a projection onto the selected axis.
 
 Zero-microsecond command buffers are instant events, not complete events with a
 missing `dur` field. This keeps the JSON valid for strict readers without
@@ -53,22 +56,22 @@ inventing a duration.
 
 ## Proposed track model
 
-Use stage-oriented names where the capture identifies the stage:
+The busy view uses stage-oriented names where the capture identifies the
+stage:
 
 ```
-GPU trace
-├── Command buffers (wall clock)
-├── Encoders / Compute (cumulative busy)
+Compute GPU execution (cumulative busy)
+├── Encoders / Compute
 │   └── Dispatches / Compute (strictly contained only)
-├── GPRWCNTR profiles
+├── Unattributed dispatches / Compute (not strictly contained)
 └── Measured counters
 ```
 
-The visual nesting is only encoder to dispatch. Command buffers remain a
-parallel wall-clock track. A future render or blit encoder gets a separate
-stage track only after parsing gives it a stable type and timestamp span.
-Lane numbering is an implementation detail of the overlap packer, not a
-user-visible stage name.
+The wall view contains command buffers and GPRWCNTR profiles. The visual
+nesting is only encoder to dispatch in the busy view. A future render or blit
+encoder gets a separate stage track only after parsing gives it a stable type
+and timestamp span. Lane numbering is an implementation detail of the overlap
+packer, not a user-visible stage name.
 
 ## Counter plan
 
@@ -91,6 +94,13 @@ join keys with this reference capture, so it can support a candidate name or
 unit but cannot validate a candidate value. A counter without a joinable oracle
 stays unpublished.
 
+The plaintext `nonOverlappingTimeline` dictionary is also unpublished. The
+reference capture exposes 19 channels, but all currently report `scope=2`,
+`scope_index=0`, a 32768-tick interval, and timestamps
+`333652959..2924098917`. No per-encoder join or correspondence to the busy or
+wall clock has been measured. This is an alignment limitation, not evidence
+that the values are zero or missing.
+
 ## Optional flow plan
 
 Flows are useful in Chrome and Android reference traces, but gputrace must not
@@ -104,7 +114,8 @@ the joining field and its source section.
 For every exporter change:
 
 1. `go test ./...` and `go vet ./...` pass.
-2. Generate the reference Perfetto JSON with `gputrace timeline`.
+2. Generate both reference JSON files with `gputrace timeline --format
+   perfetto --clock busy` and `--clock wall`.
 3. Load it with `trace_processor_shell` and inspect `stats`, `slice`,
    `counter`, `flow`, and `track` tables.
 4. Require zero error-severity parser statistics. The names that matter for a
@@ -125,8 +136,10 @@ For every exporter change:
    A gate on a nonexistent statistic passes unconditionally while reading as
    verified, which is the defect this document exists to avoid, relocated into
    the test harness.
-5. Assert export coverage for the reference capture: 30 command buffers, 21
-   encoders, and 864 dispatches.
+5. Run `tools/perfetto-validate.sh busy.json wall.json`. It asserts zero named
+   parser failures; 30 wall command buffers; 21 busy encoders; 864 busy
+   dispatches; 108 non-contained dispatches; and no events from the opposite
+   clock domain in either file.
 6. Pin the currently unattributed 108 of 864 dispatches. Any increase requires
    an attribution explanation and fixture update, not a rendering-only change.
 7. Compare emitted counter values and visible hierarchy against Xcode only when
@@ -136,6 +149,6 @@ For every exporter change:
 
 `~/tmp/gputrace-perfetto-reference/perfetto-reference-structure.md`, generated
 by `tools/perfetto-reference.sh`, records the SQL queries and results from
-Perfetto's Chrome and Android example traces and the current gputrace export.
+Perfetto's Chrome and Android example traces and both current gputrace exports.
 Those traces show that nested slices, counters, and flows are supported shapes;
 they do not prove that every shape is sourceable from an Apple GPU capture.

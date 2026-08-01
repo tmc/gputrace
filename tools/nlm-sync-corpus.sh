@@ -114,6 +114,13 @@ GPUTRACE_PROBE_COUNTERS_DIR="$PROFDIR" go -C "$REPO" test -v ./internal/agxps \
 	-run TestCounterAggregate > "$STAGE/probe-output/counter-aggregate.txt" 2>&1 || true
 go -C "$REPO" test -v ./internal/agxps -run TestCounterTableEnumerate \
 	> "$STAGE/probe-output/counter-table-enumerate.txt" 2>&1 || true
+# The memory-side timeline counters are populated by the Xcode model but carry
+# their own scope and tick domain. Keep the measured metadata beside the
+# Perfetto artifact so a review cannot mistake their absence from the busy or
+# wall export for a missing parser.
+go -C "$REPO" run ./cmd/extract_xcode_metrics "$CAPTURE" 2>&1 \
+	| awk '/^==========================================================================$/{emit=1} emit' \
+	> "$STAGE/probe-output/nonoverlapping-timeline-counters.txt" || true
 
 echo "running commands..."
 # brief and admit take two traces and are skipped deliberately; command-output
@@ -129,8 +136,19 @@ timeout 600 gputrace pprof "$CAPTURE" -o "$STAGE/command-output/profile.pb.gz" \
 echo "exporting timeline..."
 # --format perfetto matters: without it this writes the *text* rendering, and a
 # critique of "our Perfetto JSON" then reads prose instead of trace events.
-gputrace timeline "$CAPTURE" --format perfetto -o "$STAGE/perfetto/timeline-perfetto.json" >/dev/null 2>&1 || true
+gputrace timeline "$CAPTURE" --format perfetto --clock busy -o "$STAGE/perfetto/timeline-perfetto.json" >/dev/null 2>&1 || true
+gputrace timeline "$CAPTURE" --format perfetto --clock wall -o "$STAGE/perfetto/timeline-perfetto-wall.json" >/dev/null 2>&1 || true
 gputrace timeline "$CAPTURE" --format text -o "$STAGE/perfetto/timeline-text.txt" >/dev/null 2>&1 || true
+cp "$HOME/tmp/gputrace-perfetto-clock-domains/PERFETTO_EXPORT_FINDINGS.md" "$STAGE/perfetto/" 2>/dev/null || true
+if [ -x "$HOME/tmp/trace_processor_shell" ]; then
+	"$REPO/tools/perfetto-validate.sh" \
+		"$STAGE/perfetto/timeline-perfetto.json" \
+		"$STAGE/perfetto/timeline-perfetto-wall.json" \
+		> "$STAGE/perfetto/trace-processor-validation.txt" 2>&1
+else
+	echo "SKIPPED: trace_processor_shell is not installed" \
+		> "$STAGE/perfetto/trace-processor-validation.txt"
+fi
 
 cp "$REPO/tools/nlm-corpus-README.md" "$STAGE/README.md" 2>/dev/null || true
 cp "$REPO/tools/nlm-corpus-SUPERSEDED.md" "$STAGE/SUPERSEDED.md" 2>/dev/null || true

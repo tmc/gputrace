@@ -14,7 +14,8 @@ set -euo pipefail
 OUT="${1:-$HOME/tmp/gputrace-perfetto-reference}"
 CACHE="$HOME/tmp"
 TP="$CACHE/trace_processor_shell"
-OURS="$HOME/tmp/gputrace-nlm-corpus/perfetto/timeline-perfetto.json"
+OURS_BUSY="$HOME/tmp/gputrace-nlm-corpus/perfetto/timeline-perfetto.json"
+OURS_WALL="$HOME/tmp/gputrace-nlm-corpus/perfetto/timeline-perfetto-wall.json"
 
 CHROME_URL=https://storage.googleapis.com/perfetto-misc/chrome_example_wikipedia.perfetto_trace.gz
 ANDROID_URL=https://storage.googleapis.com/perfetto-misc/example_android_trace
@@ -43,7 +44,7 @@ ERRORS="select name, value from stats where value>0 and severity in ('error','da
 	echo
 	echo "The traces are binary protobuf and are not uploaded. Only this shape is."
 	echo
-	for t in "$CACHE/$(basename $CHROME_URL)" "$CACHE/$(basename $ANDROID_URL)" "$OURS"; do
+	for t in "$CACHE/$(basename $CHROME_URL)" "$CACHE/$(basename $ANDROID_URL)" "$OURS_BUSY" "$OURS_WALL"; do
 		echo "## $(basename "$t")"
 		echo '### totals';       q "$TOTALS" "$t"
 		echo '### slice depth';  q "$DEPTH"  "$t"

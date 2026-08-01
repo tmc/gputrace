@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"runtime"
 	"sort"
+	"unsafe"
 
 	puregoobjc "github.com/ebitengine/purego/objc"
 	"github.com/tmc/apple/foundation"
@@ -26,13 +27,18 @@ func check(id objc.ID, selector string, want reflect.Type, args ...any) {
 }
 
 type CounterStreamSummary struct {
-	Name       string
-	MaxVal     float64
-	AvgVal     float64
-	Count      uint64
-	IsHex      bool
-	IsUnread   bool
-	UnreadNote string
+	Name           string
+	MaxVal         float64
+	AvgVal         float64
+	Count          uint64
+	FirstTimestamp uint64
+	LastTimestamp  uint64
+	SampleInterval uint64
+	Scope          uint16
+	ScopeIndex     uint64
+	IsHex          bool
+	IsUnread       bool
+	UnreadNote     string
 }
 
 func main() {
@@ -46,6 +52,9 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: resolving absolute path for %s: %v\n", inputPath, err)
 		os.Exit(1)
+	}
+	if resolvedPath, err := filepath.EvalSymlinks(absPath); err == nil {
+		absPath = resolvedPath
 	}
 
 	// Resolve directory vs streamData file path
@@ -139,6 +148,12 @@ func main() {
 					kStr := foundation.NSStringFromID(key.GetID()).String()
 					cntObj := dictObj.ObjectForKey(key)
 					cnt := gtshaderprofiler.GTMioCounterDataFromID(cntObj.GetID())
+					check(cnt.GetID(), "sampleCount", reflect.TypeOf(uint64(0)))
+					check(cnt.GetID(), "values", reflect.TypeOf(unsafe.Pointer(nil)))
+					check(cnt.GetID(), "timestamps", reflect.TypeOf(unsafe.Pointer(nil)))
+					check(cnt.GetID(), "sampleInterval", reflect.TypeOf(uint64(0)))
+					check(cnt.GetID(), "scope", reflect.TypeOf(uint16(0)))
+					check(cnt.GetID(), "scopeIndex", reflect.TypeOf(uint64(0)))
 
 					// Seed the extremes from the data, not from zero: a series
 					// that never rises above zero would otherwise report a max
@@ -156,6 +171,15 @@ func main() {
 					avgV := 0.0
 					if len(vals) > 0 {
 						avgV = sumV / float64(len(vals))
+					}
+					stamps := cnt.TimestampsSlice()
+					if len(stamps) != len(vals) {
+						fmt.Fprintf(os.Stderr, "Error: %s timestamps=%d values=%d\n", kStr, len(stamps), len(vals))
+						os.Exit(1)
+					}
+					var first, last uint64
+					if len(stamps) > 0 {
+						first, last = stamps[0], stamps[len(stamps)-1]
 					}
 
 					isHex := false
@@ -181,13 +205,18 @@ func main() {
 					}
 
 					summaries = append(summaries, CounterStreamSummary{
-						Name:       kStr,
-						MaxVal:     maxV,
-						AvgVal:     avgV,
-						Count:      cnt.SampleCount(),
-						IsHex:      isHex,
-						IsUnread:   isUnread,
-						UnreadNote: unreadNote,
+						Name:           kStr,
+						MaxVal:         maxV,
+						AvgVal:         avgV,
+						Count:          cnt.SampleCount(),
+						FirstTimestamp: first,
+						LastTimestamp:  last,
+						SampleInterval: cnt.SampleInterval(),
+						Scope:          cnt.Scope(),
+						ScopeIndex:     cnt.ScopeIndex(),
+						IsHex:          isHex,
+						IsUnread:       isUnread,
+						UnreadNote:     unreadNote,
 					})
 				}
 			}
@@ -210,9 +239,9 @@ func main() {
 	fmt.Printf("\n[2. Memory Timeline Counters (%d Channels Extracted)]\n", len(summaries))
 	for _, s := range summaries {
 		if s.IsUnread {
-			fmt.Printf("  %-36s -> [Unread / Encoding Unestablished]%s\n", s.Name, s.UnreadNote)
+			fmt.Printf("  %-36s -> [Unread / Encoding Unestablished]%s (samples: %d, scope: %d/%d, interval: %d, ticks: %d..%d)\n", s.Name, s.UnreadNote, s.Count, s.Scope, s.ScopeIndex, s.SampleInterval, s.FirstTimestamp, s.LastTimestamp)
 		} else {
-			fmt.Printf("  %-36s -> Peak: %-10.2f Avg: %-10.2f (Samples: %d)\n", s.Name, s.MaxVal, s.AvgVal, s.Count)
+			fmt.Printf("  %-36s -> Peak: %-10.2f Avg: %-10.2f (samples: %d, scope: %d/%d, interval: %d, ticks: %d..%d)\n", s.Name, s.MaxVal, s.AvgVal, s.Count, s.Scope, s.ScopeIndex, s.SampleInterval, s.FirstTimestamp, s.LastTimestamp)
 		}
 	}
 

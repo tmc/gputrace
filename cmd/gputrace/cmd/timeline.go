@@ -19,12 +19,24 @@ import (
 
 var timelineCmd = newTimelineCommand(&timelineOptions{
 	format: "text",
+	clock:  timelineClockBusy,
 })
 
 type timelineOptions struct {
 	output string
 	format string
+	clock  timelineClock
 }
+
+// timelineClock selects one measured timestamp domain. The profiler records
+// command buffers in wall-clock ticks and encoders in cumulative GPU-busy
+// offsets. Those domains have no measured correspondence.
+type timelineClock string
+
+const (
+	timelineClockBusy timelineClock = "busy"
+	timelineClockWall timelineClock = "wall"
+)
 
 func newTimelineCommand(opts *timelineOptions) *cobra.Command {
 	cmd := &cobra.Command{
@@ -44,12 +56,23 @@ Output formats:
   - html: Interactive standalone HTML timeline viewer
   - json: Raw timeline data in JSON format
 
+Clock domains:
+  - busy (default): cumulative GPU execution offsets for encoders, dispatches,
+    and archive-backed counter tracks
+  - wall: APSTimelineData command-buffer scheduling and raw profiler samples
+
+The domains are exported separately. A trace does not contain a measured
+mapping between cumulative GPU-busy offsets and command-buffer wall time.
+
 Examples:
   # Generate interactive HTML timeline viewer
   gputrace timeline trace.gputrace -o timeline.html --format html
 
   # Generate Chrome tracing format
   gputrace timeline trace.gputrace --format chrome -o timeline.json
+
+  # Inspect wall-clock command-buffer scheduling separately
+  gputrace timeline trace.gputrace --format perfetto --clock wall -o command-buffers.json
 
   # View in Chrome
   # 1. Open chrome://tracing in Chrome
@@ -71,6 +94,7 @@ Examples:
 
 	cmd.Flags().StringVarP(&opts.output, "output", "o", opts.output, "Output file path (default: stdout for text, timeline.html for html, timeline.json otherwise)")
 	cmd.Flags().StringVar(&opts.format, "format", opts.format, "Output format: chrome, perfetto, html, json, text")
+	cmd.Flags().Var(&opts.clock, "clock", "Timeline clock domain: busy (default, cumulative GPU execution) or wall (command-buffer scheduling)")
 	return cmd
 }
 
@@ -81,6 +105,9 @@ func init() {
 func runTimeline(cmd *cobra.Command, args []string, opts *timelineOptions) error {
 	tracePath := args[0]
 	if err := validateTimelineFormat(opts.format); err != nil {
+		return err
+	}
+	if err := validateTimelineClock(opts.clock); err != nil {
 		return err
 	}
 
@@ -123,12 +150,13 @@ func runTimeline(cmd *cobra.Command, args []string, opts *timelineOptions) error
 		}
 	}
 
+	timeline = timelineForClock(timeline, opts.clock)
 	outputPath := timelineOutputPath(opts.format, opts.output)
 
 	// Export based on format
 	switch opts.format {
 	case "chrome", "perfetto":
-		if err := exportChromeTracing(timeline, outputPath); err != nil {
+		if err := exportChromeTracingForClock(timeline, outputPath, opts.clock); err != nil {
 			return fmt.Errorf("failed to export Chrome/Perfetto tracing: %w", err)
 		}
 	case "html":
@@ -153,6 +181,89 @@ func runTimeline(cmd *cobra.Command, args []string, opts *timelineOptions) error
 
 	printTimelineExportStatus(outputPath, opts.format, false)
 	return nil
+}
+
+func validateTimelineClock(clock timelineClock) error {
+	switch clock {
+	case timelineClockBusy, timelineClockWall:
+		return nil
+	default:
+		return fmt.Errorf("invalid timeline clock %q (supported: busy, wall)", clock)
+	}
+}
+
+// Set implements pflag.Value.
+func (c *timelineClock) Set(value string) error {
+	clock := timelineClock(value)
+	if err := validateTimelineClock(clock); err != nil {
+		return err
+	}
+	*c = clock
+	return nil
+}
+
+func (c *timelineClock) Type() string { return "clock" }
+
+func (c *timelineClock) String() string { return string(*c) }
+
+// timelineForClock copies the timeline and retains only events whose
+// timestamps have the requested meaning. A wall-clock coordinate is never
+// inferred for a cumulative GPU-busy event, or vice versa.
+func timelineForClock(timeline *Timeline, clock timelineClock) *Timeline {
+	if timeline == nil {
+		return nil
+	}
+	selected := *timeline
+	selected.ClockDomain = string(clock)
+	selected.Events = make([]TimelineEvent, 0, len(timeline.Events))
+	for _, event := range timeline.Events {
+		if timelineEventInClock(event, clock) {
+			selected.Events = append(selected.Events, event)
+		}
+	}
+	if clock == timelineClockWall {
+		selected.Encoders = []EncoderInfo{}
+		selected.Kernels = []KernelInfo{}
+		selected.CounterTracks = []CounterTrack{}
+	} else {
+		tracks := make([]CounterTrack, 0, len(timeline.CounterTracks))
+		for _, track := range timeline.CounterTracks {
+			if counterTrackHasSignal(track) {
+				tracks = append(tracks, track)
+			}
+		}
+		selected.CounterTracks = tracks
+	}
+	// API calls are not timestamped in this capture, so neither selected clock
+	// can place them honestly. Keep them out of raw and HTML exports too.
+	selected.APICallseq = []APICall{}
+	selected.StartTime = 0
+	selected.EndTime = 0
+	for _, event := range selected.Events {
+		if end := (event.Timestamp + event.Duration) * 1000; end > selected.EndTime {
+			selected.EndTime = end
+		}
+	}
+	for _, track := range selected.CounterTracks {
+		for _, sample := range track.Samples {
+			if sample.Timestamp > selected.EndTime {
+				selected.EndTime = sample.Timestamp
+			}
+		}
+	}
+	selected.Duration = selected.EndTime
+	return &selected
+}
+
+func timelineEventInClock(event TimelineEvent, clock timelineClock) bool {
+	switch clock {
+	case timelineClockBusy:
+		return event.Category == "encoder" || event.Category == "kernel"
+	case timelineClockWall:
+		return event.Category == "command_buffer" || event.Category == "encoder_profile" || event.Category == "gprwcntr"
+	default:
+		return false
+	}
 }
 
 func validateTimelineFormat(format string) error {
@@ -447,6 +558,7 @@ func timelineEventArgInt(args map[string]interface{}, key string) (int, bool) {
 // Timeline represents the complete timeline data.
 type Timeline struct {
 	TracePath     string          `json:"trace_path,omitempty"`
+	ClockDomain   string          `json:"clock_domain,omitempty"`
 	StartTime     uint64          `json:"start_time"`
 	EndTime       uint64          `json:"end_time"`
 	Duration      uint64          `json:"duration"`
@@ -1676,13 +1788,24 @@ func addDispatchKernelEvents(timeline *Timeline, stats *counter.StreamDataStats,
 		}
 
 		threadID := lanes.assign(startNs/1000, durationNs/1000)
+		contained := false
 		if d.EncoderIndex >= 0 && d.EncoderIndex < len(timeline.Encoders) {
 			encoder := timeline.Encoders[d.EncoderIndex]
 			if startNs >= encoder.StartTime && info.EndTime <= encoder.EndTime {
+				contained = true
 				if id, ok := timelineEncoderThreadID(timeline, d.EncoderIndex); ok {
 					threadID = id
 				}
 			}
+		}
+		if contained {
+			args["encoder_containment"] = "strict"
+		} else {
+			// The cumulative-time bucketing can place a dispatch on either
+			// side of an encoder boundary. Keep the inferred index in args,
+			// but leave it on a separate track rather than asserting a
+			// malformed parent/child relationship in Perfetto.
+			args["encoder_containment"] = "not_strictly_contained"
 		}
 		timeline.Events = append(timeline.Events, TimelineEvent{
 			Name:      name,
@@ -1994,6 +2117,13 @@ func timelineDurationPhase(durationUs uint64) string {
 
 // exportChromeTracing exports timeline in Chrome tracing format.
 func exportChromeTracing(timeline *Timeline, outputPath string) error {
+	return exportChromeTracingForClock(timeline, outputPath, timelineClockBusy)
+}
+
+// exportChromeTracingForClock exports one measured timestamp domain. Perfetto
+// has one global time axis, so callers must not combine wall-clock command
+// buffers and cumulative GPU-busy execution in the same export.
+func exportChromeTracingForClock(timeline *Timeline, outputPath string, clock timelineClock) error {
 	f, closeOutput, err := createCommandOutput(outputPath)
 	if err != nil {
 		return err
@@ -2002,7 +2132,12 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 		defer closeOutput()
 	}
 
-	// Add process and thread name metadata events
+	processName := "Compute GPU execution (cumulative busy; no wall-clock anchor)"
+	if clock == timelineClockWall {
+		processName = "Command buffers (wall clock; APSTimelineData)"
+	}
+
+	// Add process and thread name metadata events.
 	metadataEvents := []TimelineEvent{
 		{
 			Name:      "process_name",
@@ -2011,7 +2146,8 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 			ProcessID: 1,
 			ThreadID:  0,
 			Args: map[string]interface{}{
-				"name": "GPU Trace",
+				"name":                  processName,
+				"gputrace_clock_domain": string(clock),
 			},
 		},
 		{
@@ -2031,7 +2167,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 			ProcessID: 1,
 			ThreadID:  1,
 			Args: map[string]interface{}{
-				"name": "Encoders and Dispatches Lane 0 (cumulative busy)",
+				"name": "Compute encoders and dispatches (cumulative busy)",
 			},
 		},
 		{
@@ -2041,7 +2177,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 			ProcessID: 1,
 			ThreadID:  2,
 			Args: map[string]interface{}{
-				"name": "Encoders and Dispatches Lane 1 (cumulative busy)",
+				"name": "Compute encoders and dispatches lane 1 (cumulative busy)",
 			},
 		},
 		{
@@ -2051,7 +2187,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 			ProcessID: 1,
 			ThreadID:  3,
 			Args: map[string]interface{}{
-				"name": "Unattributed Dispatches Lane 0 (cumulative busy)",
+				"name": "Unattributed compute dispatches (cumulative busy)",
 			},
 		},
 		{
@@ -2061,7 +2197,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 			ProcessID: 1,
 			ThreadID:  4,
 			Args: map[string]interface{}{
-				"name": "Unattributed Dispatches Lane 1 (cumulative busy)",
+				"name": "Unattributed compute dispatches lane 1 (cumulative busy)",
 			},
 		},
 		{
@@ -2071,7 +2207,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 			ProcessID: 1,
 			ThreadID:  5,
 			Args: map[string]interface{}{
-				"name": "Unattributed Dispatches Lane 2 (cumulative busy)",
+				"name": "Unattributed compute dispatches lane 2 (cumulative busy)",
 			},
 		},
 		{
@@ -2081,7 +2217,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 			ProcessID: 1,
 			ThreadID:  6,
 			Args: map[string]interface{}{
-				"name": "Unattributed Dispatches Lane 3 (cumulative busy)",
+				"name": "Unattributed compute dispatches lane 3 (cumulative busy)",
 			},
 		},
 		{
@@ -2091,7 +2227,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 			ProcessID: 1,
 			ThreadID:  7,
 			Args: map[string]interface{}{
-				"name": "GPRWCNTR Lane 0",
+				"name": "GPRWCNTR Lane 0 (wall clock)",
 			},
 		},
 		{
@@ -2101,7 +2237,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 			ProcessID: 1,
 			ThreadID:  8,
 			Args: map[string]interface{}{
-				"name": "GPRWCNTR Lane 1",
+				"name": "GPRWCNTR Lane 1 (wall clock)",
 			},
 		},
 		{
@@ -2111,7 +2247,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 			ProcessID: 1,
 			ThreadID:  9,
 			Args: map[string]interface{}{
-				"name": "GPRWCNTR Lane 2",
+				"name": "GPRWCNTR Lane 2 (wall clock)",
 			},
 		},
 		{
@@ -2121,7 +2257,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 			ProcessID: 1,
 			ThreadID:  10,
 			Args: map[string]interface{}{
-				"name": "GPRWCNTR Lane 3",
+				"name": "GPRWCNTR Lane 3 (wall clock)",
 			},
 		},
 		{
@@ -2131,7 +2267,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 			ProcessID: 1,
 			ThreadID:  11,
 			Args: map[string]interface{}{
-				"name": "GPRWCNTR Lane 4",
+				"name": "GPRWCNTR Lane 4 (wall clock)",
 			},
 		},
 		{
@@ -2141,7 +2277,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 			ProcessID: 1,
 			ThreadID:  12,
 			Args: map[string]interface{}{
-				"name": "GPRWCNTR Lane 5",
+				"name": "GPRWCNTR Lane 5 (wall clock)",
 			},
 		},
 		{
@@ -2151,7 +2287,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 			ProcessID: 1,
 			ThreadID:  13,
 			Args: map[string]interface{}{
-				"name": "GPRWCNTR Lane 6",
+				"name": "GPRWCNTR Lane 6 (wall clock)",
 			},
 		},
 		{
@@ -2161,7 +2297,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 			ProcessID: 1,
 			ThreadID:  14,
 			Args: map[string]interface{}{
-				"name": "GPRWCNTR Lane 7",
+				"name": "GPRWCNTR Lane 7 (wall clock)",
 			},
 		},
 	}
@@ -2183,7 +2319,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 			Phase:     "i",
 			ProcessID: 1,
 			ThreadID:  15,
-			Args:      timelineXcodeMetricsArgs(timeline),
+			Args:      timelineCoverageArgs(timeline, clock),
 		},
 	)
 
@@ -2198,18 +2334,6 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 				Args:      timelineTimingArgs(timeline.Timing),
 			},
 		)
-		if timeline.Timing.DisplayDurationNs > 0 {
-			metadataEvents = append(metadataEvents, TimelineEvent{
-				Name:      "Xcode Display Duration",
-				Category:  "xcode_timing",
-				Phase:     "X",
-				Timestamp: 0,
-				Duration:  timeline.Timing.DisplayDurationNs / 1000,
-				ProcessID: 1,
-				ThreadID:  15,
-				Args:      timelineTimingArgs(timeline.Timing),
-			})
-		}
 	}
 
 	// Add counter track metadata and events.
@@ -2259,6 +2383,7 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 	// Combine metadata events with timeline events
 	allEvents := append(metadataEvents, timeline.Events...)
 	allEvents = append(allEvents, counterEvents...)
+	allEvents = timelineMetadataForActiveTracks(allEvents)
 
 	// Chrome tracing format
 	// Standard format: { "traceEvents": [ ... ] }
@@ -2280,12 +2405,34 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 	if timeline.Timing != nil {
 		other["gputrace_timing"] = timelineTimingArgs(timeline.Timing)
 	}
-	other["gputrace_xcode_metrics"] = timelineXcodeMetricsArgs(timeline)
+	other["gputrace_xcode_metrics"] = timelineCoverageArgs(timeline, clock)
+	other["gputrace_clock_domain"] = timelineClockProvenance(clock)
 	tracing["otherData"] = other
 
 	encoder := json.NewEncoder(f)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(tracing)
+}
+
+// timelineMetadataForActiveTracks omits names for tracks absent from this
+// clock-domain export. Perfetto otherwise renders empty tracks, which makes a
+// busy-only trace look as though it also contains wall-clock data.
+func timelineMetadataForActiveTracks(events []TimelineEvent) []TimelineEvent {
+	active := make(map[[2]int]bool)
+	for _, event := range events {
+		if event.Phase != "M" {
+			active[[2]int{event.ProcessID, event.ThreadID}] = true
+		}
+	}
+
+	result := events[:0]
+	for _, event := range events {
+		if event.Phase == "M" && event.Name == "thread_name" && !active[[2]int{event.ProcessID, event.ThreadID}] {
+			continue
+		}
+		result = append(result, event)
+	}
+	return result
 }
 
 func counterTrackMetadataArgs(track CounterTrack) map[string]interface{} {
@@ -2297,6 +2444,31 @@ func counterTrackMetadataArgs(track CounterTrack) map[string]interface{} {
 	}
 	if track.XcodeCatalogPath != "" {
 		args["xcode_catalog_path"] = track.XcodeCatalogPath
+	}
+	return args
+}
+
+func timelineCoverageArgs(timeline *Timeline, clock timelineClock) map[string]interface{} {
+	args := timelineXcodeMetricsArgs(timeline)
+	for key, value := range timelineClockProvenance(clock) {
+		args[key] = value
+	}
+	return args
+}
+
+func timelineClockProvenance(clock timelineClock) map[string]interface{} {
+	args := map[string]interface{}{
+		"clock_domain":  string(clock),
+		"clock_mapping": "none: trace records no measured correspondence between cumulative GPU-busy offsets and command-buffer wall time",
+	}
+	switch clock {
+	case timelineClockBusy:
+		args["included_categories"] = []string{"encoder", "kernel", "counter"}
+		args["excluded_categories"] = []string{"command_buffer", "encoder_profile", "gprwcntr"}
+		args["excluded_counter_series"] = "memory-side GTMioCounterData has scope=2/index=0 and a separate tick domain; it is not encoder-attributed or clock-aligned"
+	case timelineClockWall:
+		args["included_categories"] = []string{"command_buffer", "encoder_profile", "gprwcntr"}
+		args["excluded_categories"] = []string{"encoder", "kernel", "counter"}
 	}
 	return args
 }
@@ -2511,6 +2683,9 @@ func runTimelineFromProfiler(tracePath string, opts *timelineOptions) error {
 	if err := validateTimelineFormat(opts.format); err != nil {
 		return err
 	}
+	if err := validateTimelineClock(opts.clock); err != nil {
+		return err
+	}
 
 	// Find .gpuprofiler_raw directory
 	profilerDir := profilerraw.FindDir(tracePath)
@@ -2531,13 +2706,14 @@ func runTimelineFromProfiler(tracePath string, opts *timelineOptions) error {
 
 	// Build timeline from profiler data
 	timeline := buildTimelineFromProfilerData(tracePath, stats)
+	timeline = timelineForClock(timeline, opts.clock)
 
 	outputPath := timelineOutputPath(opts.format, opts.output)
 
 	// Export based on format
 	switch opts.format {
 	case "chrome", "perfetto":
-		if err := exportChromeTracing(timeline, outputPath); err != nil {
+		if err := exportChromeTracingForClock(timeline, outputPath, opts.clock); err != nil {
 			return fmt.Errorf("failed to export Chrome/Perfetto tracing: %w", err)
 		}
 	case "html":
@@ -3208,10 +3384,9 @@ func generateInteractiveHTML(timelineJSON string) string {
 
         function updateStats() {
             const timing = state.timeline.timing || {};
-            const displayDuration = timing.display_duration_ns || state.timeline.duration;
-            const source = timing.display_duration_source || 'timeline duration';
-            statsEl.textContent = ` + "`" + `${state.timeline.encoders.length} encoders | Display ${formatNs(displayDuration)} | Encoder span ${formatNs(timing.encoder_span_ns || state.timeline.duration)} | Zoom ${(state.zoom * 100).toFixed(0)}%` + "`" + `;
-            statsEl.title = timing.timing_source || source;
+            const clock = state.timeline.clock_domain || 'unclassified clock';
+            statsEl.textContent = ` + "`" + `${clock} | ${state.timeline.encoders.length} encoders | Range ${formatNs(state.timeline.duration)} | Zoom ${(state.zoom * 100).toFixed(0)}%` + "`" + `;
+            statsEl.title = timing.timing_source || 'selected timeline clock';
         }
 
         function formatNs(ns) {
