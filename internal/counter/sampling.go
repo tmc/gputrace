@@ -221,9 +221,9 @@ type EncoderCounterMetrics struct {
 
 	// Buffer L1 Cache Metrics (gputrace-66)
 	BufferL1MissRate       float64 // Buffer L1 cache miss rate percentage (0-100)
-	BufferL1ReadAccesses   float64 // Buffer L1 read accesses count
+	BufferL1ReadAccesses   float64 // Buffer L1 read accesses, percent of total L1 reads
 	BufferL1ReadBandwidth  float64 // Buffer L1 read bandwidth (GB/s)
-	BufferL1WriteAccesses  float64 // Buffer L1 write accesses count
+	BufferL1WriteAccesses  float64 // Buffer L1 write accesses, percent of total L1 writes
 	BufferL1WriteBandwidth float64 // Buffer L1 write bandwidth (GB/s)
 
 	// Shader Utilization Metrics (gputrace-67)

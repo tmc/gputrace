@@ -71,9 +71,9 @@ type ShaderHardwareMetrics struct {
 
 	// Buffer L1 Cache Metrics (gputrace-66)
 	BufferL1MissRate       float64 // Buffer L1 cache miss rate percentage (0-100)
-	BufferL1ReadAccesses   float64 // Buffer L1 read accesses count
+	BufferL1ReadAccesses   float64 // Buffer L1 read accesses, percent of total L1 reads
 	BufferL1ReadBandwidth  float64 // Buffer L1 read bandwidth (GB/s)
-	BufferL1WriteAccesses  float64 // Buffer L1 write accesses count
+	BufferL1WriteAccesses  float64 // Buffer L1 write accesses, percent of total L1 writes
 	BufferL1WriteBandwidth float64 // Buffer L1 write bandwidth (GB/s)
 
 	// Shader Utilization Metrics (gputrace-67)
@@ -445,11 +445,15 @@ var counterConfigs = []counterConfig{
 	// Buffer L1 Cache metrics (files 23-27)
 	{23, "Buffer L1 Miss Rate", CounterTypePercentage, 0.0, 100.0,
 		func(m *ShaderHardwareMetrics, v float64) { m.BufferL1MissRate = v }, nil},
-	{24, "Buffer L1 Read Accesses", CounterTypeCount, 0.0, 10000.0,
+	// [V] GPUCounterGraph.plist gives these the units "Percentage of Total L1
+	// Read Accesses" and "... Write Accesses". They were extracted as counts
+	// over a 0-10000 range; Xcode reports 93.48 and 0.12 for the first encoder
+	// of qwen25-05b-staticmask-warm-tokens2-4-rep1.
+	{24, "Buffer L1 Read Accesses", CounterTypePercentage, 0.0, 100.0,
 		func(m *ShaderHardwareMetrics, v float64) { m.BufferL1ReadAccesses = v }, nil},
 	{25, "Buffer L1 Read Bandwidth", CounterTypeBandwidth, 0.0, 1000.0,
 		func(m *ShaderHardwareMetrics, v float64) { m.BufferL1ReadBandwidth = v }, nil},
-	{26, "Buffer L1 Write Accesses", CounterTypeCount, 0.0, 10000.0,
+	{26, "Buffer L1 Write Accesses", CounterTypePercentage, 0.0, 100.0,
 		func(m *ShaderHardwareMetrics, v float64) { m.BufferL1WriteAccesses = v }, nil},
 	{27, "Buffer L1 Write Bandwidth", CounterTypeBandwidth, 0.0, 1000.0,
 		func(m *ShaderHardwareMetrics, v float64) { m.BufferL1WriteBandwidth = v }, nil},

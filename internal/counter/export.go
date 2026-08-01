@@ -14,6 +14,14 @@ type (
 	ComputeEncoder = trace.ComputeEncoder
 )
 
+const (
+	// countersCSVColumns is the total column count in Xcode's Counters.csv.
+	countersCSVColumns = 247
+	// countersCSVMetricStart is the first metric column. Columns 0-3 identify
+	// the encoder and column 4 is blank, matching Xcode's export exactly.
+	countersCSVMetricStart = 5
+)
+
 // CountersCSVExporter exports performance counter data in Xcode Counters.csv format.
 type CountersCSVExporter struct {
 	trace *Trace
@@ -105,12 +113,11 @@ func (e *CountersCSVExporter) ExportCountersCSVWithSummary(w io.Writer) (Counter
 // generateCounterRowMetadataOnly creates a CSV row identifying an encoder for
 // which no counter data was parsed. Every metric column is left blank.
 func (e *CountersCSVExporter) generateCounterRowMetadataOnly(index, functionIndex int, cbLabel, encoderLabel string) []string {
-	row := make([]string, 247)
+	row := make([]string, countersCSVColumns)
 	row[0] = fmt.Sprintf("%d", index)
 	row[1] = fmt.Sprintf("%d", functionIndex)
 	row[2] = cbLabel
-	row[3] = e.trace.DebugGroupForLabel(encoderLabel)
-	row[4] = encoderLabel
+	row[3] = encoderLabel
 	return row
 }
 
@@ -118,18 +125,12 @@ func (e *CountersCSVExporter) generateCounterRowMetadataOnly(index, functionInde
 // Maps EncoderCounterMetrics fields to the 247-column Xcode Counters.csv format.
 // Uses data from PopulateEncoderMetricsFromBinaryParsing (validated 100% accurate on kernel invocations).
 func (e *CountersCSVExporter) generateCounterRowFromBinaryData(index, functionIndex int, cbLabel, encoderLabel string, metrics *EncoderCounterMetrics) []string {
-	row := make([]string, 247)
-
-	// Get debug group for this encoder based on its label
-	debugGroup := e.trace.DebugGroupForLabel(encoderLabel)
-
-	// Columns 1-6: Metadata
+	row := make([]string, countersCSVColumns)
 	row[0] = fmt.Sprintf("%d", index)         // Index
 	row[1] = fmt.Sprintf("%d", functionIndex) // Encoder FunctionIndex
 	row[2] = cbLabel                          // CommandBuffer Label
-	row[3] = debugGroup                       // Debug Group
-	row[4] = encoderLabel                     // Encoder Label
-	row[5] = ""                               // Empty column
+	row[3] = encoderLabel                     // Encoder Label
+	row[4] = ""                               // Empty column
 
 	// Build map of counter values from binary parsing
 	// Only use fields available in EncoderCounterMetrics (counter_sampling.go:143-167)
@@ -138,11 +139,6 @@ func (e *CountersCSVExporter) generateCounterRowFromBinaryData(index, functionIn
 	// Core metrics from binary parsing (validated 100% accurate)
 	values["Kernel Invocations"] = float64(metrics.DispatchCount) // 100% accurate from gputrace-44
 	values["ALU Utilization"] = metrics.ALUUtilization            // From CSV enhancement (gputrace-63)
-
-	// Utilization metrics
-	values["Compute Shader Utilization"] = metrics.ComputeUtilization
-	values["Vertex Shader Utilization"] = metrics.VertexUtilization
-	values["Fragment Shader Utilization"] = metrics.FragmentUtilization
 
 	// Memory bandwidth - use real extracted values from gputrace-65
 	if metrics.BytesReadFromDeviceMemory > 0 || metrics.BytesWrittenToDeviceMemory > 0 {
@@ -180,15 +176,17 @@ func (e *CountersCSVExporter) generateCounterRowFromBinaryData(index, functionIn
 		values["L1 Write Bandwidth"] = metrics.BufferL1WriteBandwidth
 	}
 
-	// Shader Utilization Metrics (gputrace-67)
+	// Shader Utilization Metrics (gputrace-67). The column names are Xcode's:
+	// there is no "Compute Shader Utilization" counter, only a launch
+	// utilization, and writing the shorter name silently wrote nothing.
 	if metrics.ComputeShaderUtilization > 0 {
-		values["Compute Shader Utilization"] = metrics.ComputeShaderUtilization
+		values["Compute Shader Launch Utilization"] = metrics.ComputeShaderUtilization
 	}
 	if metrics.FragmentShaderUtilization > 0 {
-		values["Fragment Shader Utilization"] = metrics.FragmentShaderUtilization
+		values["Fragment Shader Launch Utilization"] = metrics.FragmentShaderUtilization
 	}
 	if metrics.VertexShaderUtilization > 0 {
-		values["Vertex Shader Utilization"] = metrics.VertexShaderUtilization
+		values["Vertex Shader Launch Utilization"] = metrics.VertexShaderUtilization
 	}
 	if metrics.ControlFlowUtilization > 0 {
 		values["Control Flow Utilization"] = metrics.ControlFlowUtilization
@@ -197,10 +195,10 @@ func (e *CountersCSVExporter) generateCounterRowFromBinaryData(index, functionIn
 		values["Instruction Throughput Utilization"] = metrics.InstructionThroughputUtil
 	}
 	if metrics.IntegerAndComplexUtil > 0 {
-		values["Integer And Complex Utilization"] = metrics.IntegerAndComplexUtil
+		values["Integer and Complex Utilization"] = metrics.IntegerAndComplexUtil
 	}
 	if metrics.IntegerAndConditionalUtil > 0 {
-		values["Integer And Conditional Utilization"] = metrics.IntegerAndConditionalUtil
+		values["Integer and Conditional Utilization"] = metrics.IntegerAndConditionalUtil
 	}
 	if metrics.F16Utilization > 0 {
 		values["F16 Utilization"] = metrics.F16Utilization
@@ -209,29 +207,16 @@ func (e *CountersCSVExporter) generateCounterRowFromBinaryData(index, functionIn
 		values["F32 Utilization"] = metrics.F32Utilization
 	}
 
-	// GPU time (convert ns to ms)
-	if metrics.Duration > 0 {
-		values["GPU Time"] = float64(metrics.Duration) / 1_000_000.0
-	}
-
 	// Draw counts
 	if metrics.DrawCount > 0 {
 		values["Primitives"] = float64(metrics.DrawCount)
-	}
-
-	// Fragment/Vertex shader metrics based on encoder type
-	if metrics.EncoderType == "compute" {
-		values["FS ALU Utilization"] = 0.0
-		values["FS Occupancy"] = 0.0
-		values["VS ALU Utilization"] = 0.0
-		values["VS Occupancy"] = 0.0
 	}
 
 	// Map values to CSV columns (6-246). Columns gputrace does not know how to
 	// derive are left blank rather than zeroed: roughly 240 of the 241 metric
 	// columns fall in that bucket, and "0.00" in all of them is
 	// indistinguishable from a measured zero.
-	for i := 6; i < 247; i++ {
+	for i := countersCSVMetricStart; i < countersCSVColumns; i++ {
 		metricName := getMetricNameForColumn(i)
 		if unmeasurableCounters[metricName] {
 			// Leave blank rather than 0.00: a zero here would read as a
@@ -242,12 +227,10 @@ func (e *CountersCSVExporter) generateCounterRowFromBinaryData(index, functionIn
 		if !exists {
 			continue
 		}
-		switch metricName {
-		case "Kernel Invocations", "Primitives", "Threadgroups", "Threads":
-			row[i] = fmt.Sprintf("%.0f", val)
-		default:
-			row[i] = fmt.Sprintf("%.2f", val)
-		}
+		// Xcode writes two decimal places in every metric column, counts
+		// included ("8058.00"), so match it: this file exists to be diffed
+		// against Xcode's own export.
+		row[i] = fmt.Sprintf("%.2f", val)
 	}
 
 	return row
@@ -262,24 +245,23 @@ var unmeasurableCounters = map[string]bool{
 	"Kernel Occupancy": true,
 }
 
-// getCountersCSVHeader returns the header row for Counters.csv (247 columns).
-// Uses the complete 241-metric list from file_mapping.go (gputrace-114).
+// getCountersCSVHeader returns the header row for Counters.csv. The layout is
+// byte-identical to Xcode's own export: four identifying columns, one blank
+// column, then the 242 metric names from AllCounterNames.
 func getCountersCSVHeader() []string {
-	header := make([]string, 247)
+	header := make([]string, countersCSVColumns)
 
 	// Columns 1-6: Metadata
 	header[0] = "Index"
 	header[1] = "Encoder FunctionIndex"
 	header[2] = "CommandBuffer Label"
-	header[3] = "Debug Group"
-	header[4] = "Encoder Label"
-	header[5] = ""
+	header[3] = "Encoder Label"
+	header[4] = ""
 
-	// Columns 7-247: Performance metrics (241 metrics)
-	// Use the complete list from file_mapping.go (verified against Xcode Instruments)
+	// Columns 6-247: the 242 metric names, in Xcode's order.
 	for i, metricName := range AllCounterNames {
-		if i+6 < 247 {
-			header[i+6] = metricName
+		if i+countersCSVMetricStart < countersCSVColumns {
+			header[i+countersCSVMetricStart] = metricName
 		}
 	}
 
@@ -288,7 +270,7 @@ func getCountersCSVHeader() []string {
 
 // getMetricNameForColumn returns the metric name for a given column index.
 func getMetricNameForColumn(colIndex int) string {
-	if colIndex < 6 {
+	if colIndex < countersCSVMetricStart {
 		return ""
 	}
 

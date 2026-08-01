@@ -75,9 +75,12 @@ func FromGPUTrace(tracePath string, shaderSearchPaths ...string) (*GPUTraceProfi
 
 	streamStats, _ := counter.ExtractPipelineStatsFromTraceStreamData(trace)
 
+	// A trace with no timing still yields a useful profile: call counts,
+	// instruction counts and structure are all independent of duration. Only
+	// the duration columns are empty, which is the honest report.
 	timingSelection, err := selectGPUTraceTimings(trace)
 	if err != nil {
-		return nil, err
+		fmt.Fprintf(os.Stderr, "Warning: %v; durations will be reported as zero\n", err)
 	}
 
 	// Initialize source mapper

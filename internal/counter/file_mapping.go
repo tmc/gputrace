@@ -92,8 +92,9 @@ var CounterNameToFile = map[string]int{
 	"Cull Unit Limiter":                           39,
 }
 
-// AllCounterNames lists all 241 performance counter names in CSV column order.
-// This includes all metrics beyond the 40 files (Counters_f_0 through Counters_f_39).
+// AllCounterNames lists the 242 performance counter names in Xcode Counters.csv
+// column order. Verified column-for-column against an Xcode export of
+// qwen25-05b-staticmask-warm-tokens2-4-rep1 on 2026-07-31.
 var AllCounterNames = []string{
 	"1D Texture Array Sampler Calls",
 	"1D Texture Sampler Calls",
@@ -145,6 +146,7 @@ var AllCounterNames = []string{
 	"Device Atomic Bytes Read",
 	"Device Atomic Bytes Written",
 	"Device Memory Bandwidth",
+	"Explicit Gradient Texture Samples",
 	"F16 Limiter",
 	"F16 Utilization",
 	"F32 Limiter",

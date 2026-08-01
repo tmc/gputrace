@@ -436,13 +436,13 @@ func TestAddDispatchKernelEventsIncludesXcodeShaderArgs(t *testing.T) {
 	}
 	perfStats := &gputrace.PerfCounterStats{
 		ShaderMetrics: []gputrace.ShaderHardwareMetrics{{
-			ShaderName:      "kernel0",
-			PipelineState:   0xabc,
-			SIMDGroups:      128,
-			AllocatedRegs:   17,
-			HighRegister:    19,
-			SpilledBytes:    16,
-			ALUUtilization:  71.25,
+			ShaderName:     "kernel0",
+			PipelineState:  0xabc,
+			SIMDGroups:     128,
+			AllocatedRegs:  17,
+			HighRegister:   19,
+			SpilledBytes:   16,
+			ALUUtilization: 71.25,
 		}},
 	}
 	shaderReport := &gputrace.ShaderMetricsReport{
