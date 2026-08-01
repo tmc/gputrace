@@ -122,14 +122,12 @@ func TestCalculateCorrelationSummaryCountsMetricsIndependently(t *testing.T) {
 			{
 				ShaderName:            "kernel_a",
 				ALUUtilization:        80,
-				KernelOccupancy:       50,
 				TotalCycles:           2_000,
 				EstimatedGPUFreqGHz:   1.5,
 				CorrelationConfidence: 1,
 			},
 			{
 				ShaderName:            "kernel_b",
-				KernelOccupancy:       70,
 				TotalCycles:           3_000,
 				EstimatedGPUFreqGHz:   2.5,
 				CorrelationConfidence: 1,
@@ -144,9 +142,6 @@ func TestCalculateCorrelationSummaryCountsMetricsIndependently(t *testing.T) {
 	}
 	if got, want := report.AvgALUUtilization, 80.0; math.Abs(got-want) > 1e-9 {
 		t.Fatalf("AvgALUUtilization = %f, want %f", got, want)
-	}
-	if got, want := report.AvgKernelOccupancy, 60.0; math.Abs(got-want) > 1e-9 {
-		t.Fatalf("AvgKernelOccupancy = %f, want %f", got, want)
 	}
 	if got, want := report.EstimatedGPUFreqGHz, 2.0; math.Abs(got-want) > 1e-9 {
 		t.Fatalf("EstimatedGPUFreqGHz = %f, want %f", got, want)
@@ -172,7 +167,6 @@ func TestFormatCorrelationReportDisplaysTimingSource(t *testing.T) {
 		CorrelatedShaders:  0,
 		CorrelationRate:    0,
 		AvgALUUtilization:  50,
-		AvgKernelOccupancy: 25,
 		Shaders: []*CorrelatedShaderMetrics{
 			{
 				ShaderName:            "kernel_a",
@@ -181,7 +175,6 @@ func TestFormatCorrelationReportDisplaysTimingSource(t *testing.T) {
 				TimingSource:          timingSourceSyntheticThread,
 				TimingApprox:          true,
 				ALUUtilization:        50,
-				KernelOccupancy:       25,
 				CorrelationMethod:     "timing-only",
 				CorrelationConfidence: 1,
 			},

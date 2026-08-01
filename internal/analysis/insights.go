@@ -178,31 +178,32 @@ func detectBottlenecks(shader *ShaderMetrics, report *InsightsReport) {
 
 // detectOptimizations identifies optimization opportunities.
 func detectOptimizations(t *trace.Trace, shader *ShaderMetrics, report *InsightsReport) {
-	// Low occupancy detection
+	// Small-threadgroup detection. This reports dispatch shape only: how much of
+	// the per-threadgroup ceiling a kernel asks for. It is not occupancy, which
+	// needs a per-core residency denominator Apple does not publish.
 	threadsPerGroup := shader.ThreadsPerGroupX * shader.ThreadsPerGroupY * shader.ThreadsPerGroupZ
 
-	// Typical Metal GPU has 1024 threads per SIMD group max
+	// Apple documents 1024 as the maximum threads per threadgroup on all families.
 	const maxThreadsPerGroup = 1024
-	occupancy := float64(threadsPerGroup) / float64(maxThreadsPerGroup)
 
-	if !shader.TimingApprox && threadsPerGroup > 0 && occupancy < 0.5 && shader.PercentOfTotal > 5.0 {
+	if !shader.TimingApprox && threadsPerGroup > 0 && threadsPerGroup < maxThreadsPerGroup/2 && shader.PercentOfTotal > 5.0 {
 		insight := &PerformanceInsight{
 			Type:         InsightOptimization,
 			Severity:     SeverityMedium,
 			ShaderName:   shader.Name,
 			TimingSource: shader.TimingSource,
 			TimingApprox: shader.TimingApprox,
-			Title:        fmt.Sprintf("%s has suboptimal occupancy", shader.Name),
-			Description: fmt.Sprintf("Threadgroup size is %d threads (%.0f%% occupancy). Low occupancy can limit GPU utilization.",
-				threadsPerGroup, occupancy*100),
+			Title:        fmt.Sprintf("%s uses a small threadgroup", shader.Name),
+			Description: fmt.Sprintf("Threadgroup size is %d of a possible %d threads, which gives the scheduler less work to interleave.",
+				threadsPerGroup, maxThreadsPerGroup),
 			Metrics: map[string]interface{}{
-				"threads_per_group": threadsPerGroup,
-				"occupancy_percent": occupancy * 100,
+				"threads_per_group":     threadsPerGroup,
+				"max_threads_per_group": maxThreadsPerGroup,
 			},
 			Recommendations: []string{
 				fmt.Sprintf("Increase threadgroup size closer to %d threads", maxThreadsPerGroup),
-				"Consider 2D threadgroup configuration for better occupancy",
-				"Balance between occupancy and shared memory usage",
+				"Consider a 2D threadgroup configuration",
+				"Balance threadgroup size against register and threadgroup-memory usage",
 			},
 			Impact: "Potential for improved GPU utilization",
 		}

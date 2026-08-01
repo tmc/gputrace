@@ -439,11 +439,6 @@ func WriteShaderSourceAttribution(w io.Writer, attr *ShaderSourceAttribution, sh
 		if _, err := fmt.Fprintf(w, "Invocations: %d\n", attr.Metrics.InvocationCount); err != nil {
 			return err
 		}
-		if attr.Metrics.Occupancy > 0 {
-			if _, err := fmt.Fprintf(w, "Occupancy: %.1f%%\n", attr.Metrics.Occupancy*100); err != nil {
-				return err
-			}
-		}
 	}
 	if _, err := fmt.Fprint(w, "\n"); err != nil {
 		return err
@@ -604,10 +599,6 @@ h1 {
 			float64(attr.Metrics.TotalDurationNs)/1e6)
 		html += fmt.Sprintf("<strong>Invocations:</strong> %d<br>\n",
 			attr.Metrics.InvocationCount)
-		if attr.Metrics.Occupancy > 0 {
-			html += fmt.Sprintf("<strong>Occupancy:</strong> %.1f%%<br>\n",
-				attr.Metrics.Occupancy*100)
-		}
 	}
 	html += "</div>\n"
 

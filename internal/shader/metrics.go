@@ -41,10 +41,9 @@ type ShaderMetrics struct {
 	ThreadsPerGroupZ uint64 `json:"threads_per_group_z"` // Threads per threadgroup (Z)
 
 	// Computed Thread Metrics
-	TotalThreadgroups uint64  `json:"total_threadgroups"` // Total threadgroups dispatched
-	ThreadsPerGroup   uint64  `json:"threads_per_group"`  // Total threads per threadgroup
-	TotalThreads      uint64  `json:"total_threads"`      // Total threads dispatched
-	Occupancy         float64 `json:"occupancy"`          // Estimated GPU occupancy (0.0-1.0)
+	TotalThreadgroups uint64 `json:"total_threadgroups"` // Total threadgroups dispatched
+	ThreadsPerGroup   uint64 `json:"threads_per_group"`  // Total threads per threadgroup
+	TotalThreads      uint64 `json:"total_threads"`      // Total threads dispatched
 
 	// Memory Access Patterns (estimated)
 	BufferBindings     int     `json:"buffer_bindings"`     // Number of buffer bindings
@@ -182,9 +181,6 @@ func ExtractShaderMetrics(t *trace.Trace) (*ShaderMetricsReport, error) {
 		metrics.TotalThreadgroups = metrics.ThreadgroupsX * metrics.ThreadgroupsY * metrics.ThreadgroupsZ
 		metrics.ThreadsPerGroup = metrics.ThreadsPerGroupX * metrics.ThreadsPerGroupY * metrics.ThreadsPerGroupZ
 		metrics.TotalThreads = metrics.TotalThreadgroups * metrics.ThreadsPerGroup
-
-		// Estimate occupancy (simplified)
-		metrics.Occupancy = calculateOccupancy(metrics)
 
 		// Classify shader performance characteristics
 		classifyShaderPerformance(metrics)
@@ -702,38 +698,6 @@ func fuzzyMatch(name1, name2 string) bool {
 	return strings.Contains(name1, name2)
 }
 
-// calculateOccupancy estimates GPU occupancy based on thread configuration.
-// Apple Silicon GPUs have different occupancy characteristics than NVIDIA/AMD.
-func calculateOccupancy(metrics *ShaderMetrics) float64 {
-	threadsPerGroup := metrics.ThreadsPerGroup
-	if threadsPerGroup == 0 {
-		return 0.0
-	}
-
-	// Apple Silicon optimal threadgroup sizes:
-	// - M1/M2/M3: typically 256-1024 threads per threadgroup
-	// - Optimal: 512 threads for balanced workloads
-	optimalThreads := uint64(512)
-
-	// Calculate occupancy based on how close we are to optimal
-	occupancy := float64(threadsPerGroup) / float64(optimalThreads)
-	if occupancy > 1.0 {
-		// Large threadgroups don't necessarily mean better occupancy
-		// Diminishing returns above optimal
-		occupancy = 1.0 - (occupancy-1.0)*0.5
-	}
-
-	// Clamp to [0, 1]
-	if occupancy > 1.0 {
-		occupancy = 1.0
-	}
-	if occupancy < 0.0 {
-		occupancy = 0.0
-	}
-
-	return occupancy
-}
-
 // classifyShaderPerformance classifies a shader as compute-bound, memory-bound, or balanced.
 func classifyShaderPerformance(metrics *ShaderMetrics) {
 	// Heuristics for classification:
@@ -778,18 +742,17 @@ func classifyShaderPerformance(metrics *ShaderMetrics) {
 
 // identifyBottlenecks identifies potential performance bottlenecks.
 func identifyBottlenecks(metrics *ShaderMetrics) {
-	// Low occupancy
-	if metrics.Occupancy < 0.3 {
-		metrics.Bottlenecks = append(metrics.Bottlenecks, "low_gpu_occupancy")
+	// A threadgroup smaller than a few simdgroups gives the scheduler little to
+	// interleave. simdWidth is Apple-documented (32 on every Apple GPU); the
+	// threshold is a rule of thumb, not a residency calculation. gputrace has no
+	// way to compute real occupancy from a trace bundle, so this reports the
+	// dispatch shape and nothing more.
+	const simdWidth = 32
+	if tpg := metrics.ThreadsPerGroup; tpg > 0 && tpg < 4*simdWidth {
+		metrics.Bottlenecks = append(metrics.Bottlenecks, "small_threadgroup")
 		metrics.OptimizationHints = append(metrics.OptimizationHints,
-			fmt.Sprintf("Increase threadgroup size (current: %d threads, optimal: ~512)", metrics.ThreadsPerGroup))
-	}
-
-	// Very high occupancy might indicate too many threads
-	if metrics.Occupancy > 0.95 && metrics.ThreadsPerGroup > 512 {
-		metrics.Bottlenecks = append(metrics.Bottlenecks, "potential_resource_contention")
-		metrics.OptimizationHints = append(metrics.OptimizationHints,
-			"Consider reducing threadgroup size to reduce register pressure")
+			fmt.Sprintf("Threadgroup is %d threads (%d simdgroups); larger threadgroups give the scheduler more to interleave",
+				tpg, tpg/simdWidth))
 	}
 
 	// Memory-bound shaders
@@ -891,7 +854,6 @@ func formatDetailedShaderMetrics(metrics *ShaderMetrics) string {
 			metrics.ThreadsPerGroup,
 			metrics.ThreadsPerGroupX, metrics.ThreadsPerGroupY, metrics.ThreadsPerGroupZ)
 		out += fmt.Sprintf("  Total Threads:  %d\n", metrics.TotalThreads)
-		out += fmt.Sprintf("  Occupancy:      %.1f%%\n", metrics.Occupancy*100)
 	}
 
 	out += fmt.Sprintf("  Classification: %s (ratio: %.0f)\n",
@@ -929,7 +891,7 @@ func ExportShaderMetricsCSV(w io.Writer, report *ShaderMetricsReport) error {
 		"Min Duration (ns)", "Max Duration (ns)", "Percent of Total",
 		"Threadgroups X", "Threadgroups Y", "Threadgroups Z",
 		"Threads/Group X", "Threads/Group Y", "Threads/Group Z",
-		"Total Threads", "Occupancy", "Classification",
+		"Total Threads", "Classification",
 		"Estimated Bandwidth (GB/s)", "Bytes Accessed",
 		"Temporary Registers", "Spilled Bytes",
 		"Device Load Count", "Device Store Count",
@@ -955,7 +917,6 @@ func ExportShaderMetricsCSV(w io.Writer, report *ShaderMetricsReport) error {
 			fmt.Sprintf("%d", metrics.ThreadsPerGroupY),
 			fmt.Sprintf("%d", metrics.ThreadsPerGroupZ),
 			fmt.Sprintf("%d", metrics.TotalThreads),
-			fmt.Sprintf("%.4f", metrics.Occupancy),
 			metrics.Classification,
 			fmt.Sprintf("%.2f", metrics.EstimatedBandwidth),
 			fmt.Sprintf("%d", metrics.BytesAccessed),
@@ -1181,7 +1142,7 @@ func estimateAllocatedRegisters(metrics *ShaderMetrics) int {
 	}
 
 	// More threads per threadgroup often means fewer registers per thread
-	// to maximize occupancy. Apple Silicon has different characteristics
+	// per thread. Apple Silicon has different characteristics
 	// than NVIDIA/AMD GPUs.
 	//
 	// Heuristics based on common patterns:
@@ -1263,9 +1224,6 @@ func applyCounterDataToMetrics(metrics *ShaderMetrics, name string, counterData 
 
 	// Store counter data
 	metrics.ALUUtilization = matchedEncoder.ALUUtilization
-	if matchedEncoder.KernelOccupancy > 0 {
-		metrics.Occupancy = matchedEncoder.KernelOccupancy
-	}
 
 	// Calculate weighted cost using Kernel ALU Performance (absolute instruction count)
 	// Higher instruction count = longer execution time (direct relationship)

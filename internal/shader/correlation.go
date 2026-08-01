@@ -35,8 +35,7 @@ type CorrelatedShaderMetrics struct {
 	TimingApprox   bool          `json:"timing_approximate,omitempty"`
 
 	// Hardware Metrics (from .gpuprofiler_raw)
-	ALUUtilization  float64 `json:"alu_utilization"`  // 0-100%
-	KernelOccupancy float64 `json:"kernel_occupancy"` // 0-100%
+	ALUUtilization  float64 `json:"alu_utilization"` // 0-100%
 	SIMDGroups      int     `json:"simd_groups"`
 	AllocatedRegs   int     `json:"allocated_regs"`
 	SpilledBytes    int     `json:"spilled_bytes"`
@@ -61,7 +60,6 @@ type ShaderCorrelationReport struct {
 
 	// Summary Statistics
 	AvgALUUtilization   float64 `json:"avg_alu_utilization"`
-	AvgKernelOccupancy  float64 `json:"avg_kernel_occupancy"`
 	TotalGPUCycles      uint64  `json:"total_gpu_cycles"`
 	EstimatedGPUFreqGHz float64 `json:"estimated_gpu_freq_ghz"`
 
@@ -290,7 +288,6 @@ func mergeTimingAndHardware(timing *correlationTiming, hardware *ShaderHardwareM
 		TimingSource:          timing.TimingSource,
 		TimingApprox:          timing.TimingApprox,
 		ALUUtilization:        hardware.ALUUtilization,
-		KernelOccupancy:       hardware.KernelOccupancy,
 		SIMDGroups:            hardware.SIMDGroups,
 		AllocatedRegs:         hardware.AllocatedRegs,
 		SpilledBytes:          hardware.SpilledBytes,
@@ -320,11 +317,9 @@ func calculateCorrelationSummary(report *ShaderCorrelationReport) {
 	}
 
 	totalALU := 0.0
-	totalOccupancy := 0.0
 	totalCycles := uint64(0)
 	totalFreq := 0.0
 	countWithALU := 0
-	countWithOccupancy := 0
 	countWithFreq := 0
 
 	for _, shader := range report.Shaders {
@@ -334,10 +329,6 @@ func calculateCorrelationSummary(report *ShaderCorrelationReport) {
 			totalALU += shader.ALUUtilization
 			countWithALU++
 		}
-		if hardwarePercentAvailable(shader.KernelOccupancy) {
-			totalOccupancy += shader.KernelOccupancy
-			countWithOccupancy++
-		}
 		if shader.EstimatedGPUFreqGHz > 0 {
 			totalFreq += shader.EstimatedGPUFreqGHz
 			countWithFreq++
@@ -346,9 +337,6 @@ func calculateCorrelationSummary(report *ShaderCorrelationReport) {
 
 	if countWithALU > 0 {
 		report.AvgALUUtilization = totalALU / float64(countWithALU)
-	}
-	if countWithOccupancy > 0 {
-		report.AvgKernelOccupancy = totalOccupancy / float64(countWithOccupancy)
 	}
 	if countWithFreq > 0 {
 		report.EstimatedGPUFreqGHz = totalFreq / float64(countWithFreq)
@@ -381,13 +369,10 @@ func FormatCorrelationReport(report *ShaderCorrelationReport) string {
 		output += "\n"
 	}
 
-	if report.CorrelatedShaders > 0 && (report.AvgALUUtilization > 0 || report.AvgKernelOccupancy > 0 || report.TotalGPUCycles > 0 || report.EstimatedGPUFreqGHz > 0) {
+	if report.CorrelatedShaders > 0 && (report.AvgALUUtilization > 0 || report.TotalGPUCycles > 0 || report.EstimatedGPUFreqGHz > 0) {
 		output += "=== Summary Statistics ===\n"
 		if report.AvgALUUtilization > 0 {
 			output += fmt.Sprintf("Average ALU Utilization: %.1f%%\n", report.AvgALUUtilization)
-		}
-		if report.AvgKernelOccupancy > 0 {
-			output += fmt.Sprintf("Average Kernel Occupancy: %.1f%%\n", report.AvgKernelOccupancy)
 		}
 		if report.TotalGPUCycles > 0 {
 			output += fmt.Sprintf("Total GPU Cycles: %d\n", report.TotalGPUCycles)
@@ -399,18 +384,17 @@ func FormatCorrelationReport(report *ShaderCorrelationReport) string {
 	}
 
 	output += "=== Per-Shader Metrics ===\n\n"
-	output += fmt.Sprintf("%-40s %10s %10s %8s %8s %10s\n",
-		"Shader", "Count", "Avg(µs)", "ALU%", "Occ%", "Method")
-	output += fmtutil.RepeatChar('-', 95) + "\n"
+	output += fmt.Sprintf("%-40s %10s %10s %8s %10s\n",
+		"Shader", "Count", "Avg(µs)", "ALU%", "Method")
+	output += fmtutil.RepeatChar('-', 85) + "\n"
 
 	for _, shader := range report.Shaders {
 		avgUs := shader.AvgDuration.Microseconds()
-		output += fmt.Sprintf("%-40s %10d %10d %8s %8s %10s\n",
+		output += fmt.Sprintf("%-40s %10d %10d %8s %10s\n",
 			fmtutil.TruncateString(shader.ShaderName, 40),
 			shader.ExecutionCount,
 			avgUs,
 			formatHardwarePercent(shader, shader.ALUUtilization),
-			formatHardwarePercent(shader, shader.KernelOccupancy),
 			shader.CorrelationMethod)
 	}
 
