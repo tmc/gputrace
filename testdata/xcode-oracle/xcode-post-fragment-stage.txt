@@ -1,0 +1,24 @@
+Thumbnails	Name	Execution Cost	Texture Device Memory Bytes Written	Texture Device Memory Bytes Written	Pixels Stored	Texture Pixels Stored	Attachment Pixels Stored	Lossless Compressed Pixels Stored	Lossy Compressed Pixels Stored	Texture Device Memory Bytes Written	Compression Ratio of Texture Memory Written	Predicated Texture Thread Writes	2X MSAA Resolved Pixels Stored	4X MSAA Resolved Pixels Stored	Average Samples Per Pixel	
+-	546 Compute Encoder 0 0x79f00c8c0	3.520%	41.25 KiB	41.25 KiB	0 	0.00%	0.00%	0.00%	0.00%	41.25 KiB	0.00 	100.00%	0.00%	0.00%	0 	
+-	1501 Compute Encoder 0 0x79f00dfe0	4.917%	960 bytes	960 bytes	0 	0.00%	0.00%	0.00%	0.00%	960 bytes	0.00 	100.00%	0.00%	0.00%	0 	
+-	2615 Compute Encoder 0 0x79f00e260	3.781%	0 bytes	0 bytes	0 	0.00%	0.00%	0.00%	0.00%	0 bytes	0.00 	100.00%	0.00%	0.00%	0 	
+-	3851 Compute Encoder 0 0x79f00e580	4.763%	2.12 KiB	2.12 KiB	0 	0.00%	0.00%	0.00%	0.00%	2.12 KiB	0.00 	100.00%	0.00%	0.00%	0 	
+-	5096 Compute Encoder 0 0x79f00e940	4.826%	0 bytes	0 bytes	0 	0.00%	0.00%	0.00%	0.00%	0 bytes	0.00 	100.00%	0.00%	0.00%	0 	
+-	6329 Compute Encoder 0 0x79f00ed00	4.533%	256 bytes	256 bytes	0 	0.00%	0.00%	0.00%	0.00%	256 bytes	0.00 	100.00%	0.00%	0.00%	0 	
+-	7539 Compute Encoder 0 0x79f00f0c0	4.007%	2.50 KiB	2.50 KiB	0 	0.00%	0.00%	0.00%	0.00%	2.50 KiB	0.00 	100.00%	0.00%	0.00%	0 	
+-	8772 Compute Encoder 0 0x79f00f480	4.915%	0 bytes	0 bytes	0 	0.00%	0.00%	0.00%	0.00%	0 bytes	0.00 	100.00%	0.00%	0.00%	0 	
+-	10012 Compute Encoder 0 0x79f00f840	4.514%	384 bytes	384 bytes	0 	0.00%	0.00%	0.00%	0.00%	384 bytes	0.00 	100.00%	0.00%	0.00%	0 	
+-	10974 Compute Encoder 0 0x79f00fac0	9.740%	0 bytes	0 bytes	0 	0.00%	0.00%	0.00%	0.00%	0 bytes	0.00 	100.00%	0.00%	0.00%	0 	
+-	11333 Compute Encoder 0 0x79f00fe80	0.570%	0 bytes	0 bytes	0 	0.00%	0.00%	0.00%	0.00%	0 bytes	0.00 	100.00%	0.00%	0.00%	0 	
+-	11823 Compute Encoder 0 0x7a0834280	0.003%	0 bytes	0 bytes	0 	0.00%	0.00%	0.00%	0.00%	0 bytes	0.00 	100.00%	0.00%	0.00%	0 	
+-	12189 Compute Encoder 0 0x7a0834320	3.747%	2.31 KiB	2.31 KiB	0 	0.00%	0.00%	0.00%	0.00%	2.31 KiB	0.00 	100.00%	0.00%	0.00%	0 	
+-	13138 Compute Encoder 0 0x7a08343c0	3.743%	0 bytes	0 bytes	0 	0.00%	0.00%	0.00%	0.00%	0 bytes	0.00 	100.00%	0.00%	0.00%	0 	
+-	14105 Compute Encoder 0 0x7a0834460	4.650%	0 bytes	0 bytes	0 	0.00%	0.00%	0.00%	0.00%	0 bytes	0.00 	100.00%	0.00%	0.00%	0 	
+-	15089 Compute Encoder 0 0x7a08345a0	4.232%	0 bytes	0 bytes	0 	0.00%	0.00%	0.00%	0.00%	0 bytes	0.00 	100.00%	0.00%	0.00%	0 	
+-	16051 Compute Encoder 0 0x7a0834640	4.179%	2.50 KiB	2.50 KiB	0 	0.00%	0.00%	0.00%	0.00%	2.50 KiB	0.00 	100.00%	0.00%	0.00%	0 	
+-	17039 Compute Encoder 0 0x7a0834780	4.813%	0 bytes	0 bytes	0 	0.00%	0.00%	0.00%	0.00%	0 bytes	0.00 	100.00%	0.00%	0.00%	0 	
+-	18011 Compute Encoder 0 0x7a0834960	3.598%	384 bytes	384 bytes	0 	0.00%	0.00%	0.00%	0.00%	384 bytes	0.00 	100.00%	0.00%	0.00%	0 	
+-	18976 Compute Encoder 0 0x7a0834b40	4.851%	0 bytes	0 bytes	0 	0.00%	0.00%	0.00%	0.00%	0 bytes	0.00 	100.00%	0.00%	0.00%	0 	
+-	19952 Compute Encoder 0 0x7a0834d20	3.857%	725.12 KiB	725.12 KiB	0 	0.00%	0.00%	0.00%	0.00%	725.12 KiB	0.00 	100.00%	0.00%	0.00%	0 	
+-	20919 Compute Encoder 0 0x7a0834f00	11.487%	4.38 MiB	4.38 MiB	0 	0.00%	0.00%	0.00%	0.00%	4.38 MiB	0.00 	100.00%	0.00%	0.00%	0 	
+-	21903 Compute Encoder 0 0x7a0834280	0.749%	0 bytes	0 bytes	0 	0.00%	0.00%	0.00%	0.00%	0 bytes	0.00 	100.00%	0.00%	0.00%	0 	

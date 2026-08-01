@@ -89,6 +89,15 @@ type counterAPI struct {
 
 	uarchFromGRCList func(list *byte, size uint64) int32
 
+	// disasm: get_kick_software_id @ 0x4ebbac copies with ldr/str x and bounds
+	// checks `asr #3`, so 8-byte elements; get_kick_kick_slot @ 0x4ebd0c uses
+	// ldrh/strh and `asr #1`, so 2-byte. Another accessor pair in the same
+	// family with different widths, as the signature notes warn.
+	pdKickSoftwareID func(pd uintptr, out *uint64, first, count uint64) bool
+	pdKickSlot       func(pd uintptr, out *uint16, first, count uint64) bool
+	pdKickStart      func(pd uintptr, out *uint64, first, count uint64) bool
+	pdKickEnd        func(pd uintptr, out *uint64, first, count uint64) bool
+
 	pulsePeriodNum func(uintptr) uint64
 	pulsePeriod    func(uintptr, uint64) uint32
 	eraPeriodNum   func(uintptr) uint64
@@ -144,6 +153,10 @@ func loadCounterAPI(t *testing.T) *counterAPI {
 	reg(&a.counterGRCEnable, "agxps_counter_get_grc_enable_str")
 	reg(&a.counterNumGroups, "agxps_counter_get_num_groups")
 	reg(&a.uarchFromGRCList, "agxps_aps_get_uarch_behaviour_from_GRC_counter_list")
+	reg(&a.pdKickSoftwareID, "agxps_aps_profile_data_get_kick_software_id")
+	reg(&a.pdKickSlot, "agxps_aps_profile_data_get_kick_kick_slot")
+	reg(&a.pdKickStart, "agxps_aps_profile_data_get_kick_start")
+	reg(&a.pdKickEnd, "agxps_aps_profile_data_get_kick_end")
 	reg(&a.pulsePeriodNum, "agxps_aps_get_valid_pulse_period_num")
 	reg(&a.pulsePeriod, "agxps_aps_get_valid_pulse_period")
 	reg(&a.eraPeriodNum, "agxps_aps_get_valid_era_period_num")
@@ -247,6 +260,18 @@ func TestCounterFileParse(t *testing.T) {
 				a.pdChunksTotal(pd), a.pdChunkSize(pd), a.pdChunksFailed(pd),
 				a.pdParsedTokens(pd), a.pdParsedBits(pd), a.pdParseErrsNum(pd),
 				a.pdKicksNum(pd), a.pdESLNum(pd), a.pdSysTSNum(pd), a.pdUSCTSNum(pd), nc)
+			// The raw system timestamp range, printed unconditionally: it is
+			// what decides whether these files share a clock with
+			// APSTimelineData's command buffer ticks, and it is available even
+			// when a file carries no counters.
+			if n := a.pdSysTSNum(pd); n > 0 {
+				sys := make([]uint64, n)
+				if a.pdSysTS(pd, &sys[0], 0, n) {
+					t.Logf("  systemTimestamps[%d] raw %d..%d span=%d ticks (%.3f ms)",
+						n, sys[0], sys[n-1], sys[n-1]-sys[0],
+						float64(sys[n-1]-sys[0])*1000/24/1e6)
+				}
+			}
 			if nc > 0 {
 				dumpCounters(t, a, pd, nc)
 			}
@@ -566,6 +591,106 @@ func TestCounterAggregate(t *testing.T) {
 		}
 		t.Logf("%s files=%d samples=%d total=%d perFile[%s]",
 			name, len(e.perFile), e.samples, e.total, strings.Join(head, " "))
+	}
+}
+
+// TestCounterKickIdentity looks for a join between the kicks inside a counter
+// file and streamData's encoders that does not require the two clocks to be
+// reconciled.
+//
+// This matters because they cannot currently be reconciled: the APS system
+// timestamps in Counters_f_*.raw and Profiling_f_*.raw sit around 5.3177e12
+// ticks while APSTimelineData's command buffer ticks sit around 5.1818e12, and
+// neither offset the archive offers (continuousTime-absoluteTime =
+// 136,692,207,206) closes the gap -- it leaves about 30 seconds of residual
+// against a 2-second window.
+//
+// If kick_software_id carried streamData's encoder sequence ids (1239, 1242,
+// 1265, ...) the windowing would be solved by identity instead. Pass the
+// expected ids in GPUTRACE_PROBE_ENCODER_SEQIDS to test that directly.
+func TestCounterKickIdentity(t *testing.T) {
+	path := os.Getenv("GPUTRACE_PROBE_COUNTERS")
+	if path == "" {
+		t.Skip("set GPUTRACE_PROBE_COUNTERS to a raw file")
+	}
+	a := loadCounterAPI(t)
+	a.initialize()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pin runtime.Pinner
+	defer pin.Unpin()
+	p := counterProbeParser(t, a, &pin, 0)
+	defer a.parserDestroy(p)
+	var perr uint32
+	pd := a.parserParse(p, unsafe.Pointer(&data[0]), uint64(len(data)), 1, &perr)
+	if pd == 0 {
+		t.Fatalf("parse null err=%d", perr)
+	}
+	defer a.pdDestroy(pd)
+
+	nk := a.pdKicksNum(pd)
+	if nk == 0 {
+		t.Fatalf("no kicks")
+	}
+	sw := make([]uint64, nk)
+	slot := make([]uint16, nk)
+	if !a.pdKickSoftwareID(pd, &sw[0], 0, nk) {
+		t.Fatalf("kick_software_id range get failed")
+	}
+	if !a.pdKickSlot(pd, &slot[0], 0, nk) {
+		t.Fatalf("kick_kick_slot range get failed")
+	}
+	// Describe the whole id space, not a head sample: a spot check of the first
+	// entries is how the kick_id identity misreading survived.
+	swSet := map[uint64]int{}
+	slotSet := map[uint16]int{}
+	var swMin, swMax uint64 = ^uint64(0), 0
+	for i := range sw {
+		swSet[sw[i]]++
+		slotSet[slot[i]]++
+		if sw[i] < swMin {
+			swMin = sw[i]
+		}
+		if sw[i] > swMax {
+			swMax = sw[i]
+		}
+	}
+	t.Logf("kicks=%d software_id distinct=%d range=%d..%d; kick_slot distinct=%d",
+		nk, len(swSet), swMin, swMax, len(slotSet))
+	var slots []int
+	for s := range slotSet {
+		slots = append(slots, int(s))
+	}
+	sort.Ints(slots)
+	t.Logf("kick slots present: %v", slots)
+
+	want := os.Getenv("GPUTRACE_PROBE_ENCODER_SEQIDS")
+	if want == "" {
+		t.Skip("set GPUTRACE_PROBE_ENCODER_SEQIDS to a comma-separated encoder sequence id list to test the join")
+	}
+	var hit, miss []uint64
+	for _, f := range strings.Split(want, ",") {
+		f = strings.TrimSpace(f)
+		if f == "" {
+			continue
+		}
+		var v uint64
+		for _, c := range f {
+			v = v*10 + uint64(c-'0')
+		}
+		if swSet[v] > 0 {
+			hit = append(hit, v)
+		} else {
+			miss = append(miss, v)
+		}
+	}
+	t.Logf("encoder sequence ids present in kick_software_id: %d hit, %d miss", len(hit), len(miss))
+	t.Logf("  hit=%v", hit)
+	t.Logf("  miss=%v", miss)
+	if len(miss) > 0 {
+		t.Logf("REFUTED: kick_software_id is not streamData's encoder sequence id space")
 	}
 }
 
