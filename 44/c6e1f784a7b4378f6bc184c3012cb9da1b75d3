@@ -1,0 +1,7 @@
+landed: 44c6e1f784a7b4378f6bc184c3012cb9da1b75d3 on 2026-08-01T04:34:36Z
+claude-code: 2.1.220 (Claude Code)
+model: claude-opus-5[1m]
+tty: not a tty
+pid: 42264
+ITERM_SESSION_ID: w0t1p3:BE93B99A-FA9B-469D-9C12-0B1009E84F85
+occupancy branch rebased onto api-forwarders; conflicts resolved against the real-zero-vs-unknown work in f9a863b; go build ./... && go test ./... green
