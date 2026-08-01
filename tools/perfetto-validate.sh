@@ -5,8 +5,16 @@
 # Usage: tools/perfetto-validate.sh busy.json wall.json
 #
 # The expected counts are intentionally pinned to
-# qwen25-05b-python-producer-tokens1-3-perfdata.gputrace. They are an
-# integration guard for the exporter, not a generic trace-format rule.
+# ~/tmp/qwen25-05b-python-producer-tokens1-3-perfdata.gputrace. They are an
+# integration guard for the exporter, not a generic trace-format rule, so
+# running this against any other capture fails on the counts rather than on
+# anything being wrong.
+#
+# Produce the two inputs with:
+#
+#   T=~/tmp/qwen25-05b-python-producer-tokens1-3-perfdata.gputrace
+#   gputrace timeline "$T" --format perfetto --clock busy -o busy.json
+#   gputrace timeline "$T" --format perfetto --clock wall -o wall.json
 set -euo pipefail
 
 [ $# -eq 2 ] || { echo "usage: $0 busy.json wall.json" >&2; exit 2; }
