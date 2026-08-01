@@ -27,6 +27,10 @@ import (
 type EncoderSamples struct {
 	EncoderID   uint64 `json:"encoder_id"`
 	KickTraceID uint64 `json:"kick_trace_id,omitempty"` // Set when every sample agrees
+	Group       int    `json:"group"`                   // Encoder Infos group (one per pass)
+	Ordinal     int    `json:"ordinal"`                 // Position within the group, i.e. encoder execution order
+	BatchID     int    `json:"batch_id"`                // From the TraceId tables, by ordinal
+	SampleIndex int    `json:"sample_index"`            // From the TraceId tables, by ordinal
 	SampleCount int    `json:"sample_count"`
 	StartTicks  uint64 `json:"start_ticks"`
 	EndTicks    uint64 `json:"end_ticks"`
@@ -41,6 +45,7 @@ type CounterArchive struct {
 	MachineWideSamples int              `json:"machine_wide_samples"` // Records with GRC_ENCODER_ID 0xFFFFFFFF
 	KnownEncoderIDs    int              `json:"known_encoder_ids"`    // Distinct ids in Encoder Infos
 	PassColumns        [][]string       `json:"pass_columns,omitempty"`
+	TraceIDs           *TraceIDTable    `json:"trace_ids,omitempty"`
 	Blobs              int              `json:"blobs"`
 	StrideMismatches   int              `json:"stride_mismatches"` // Blobs rejected because the stride did not divide
 }
@@ -56,16 +61,16 @@ func (a *CounterArchive) AttributedFraction() float64 {
 
 // ParseCounterArchive decodes per-encoder counter attribution from the
 // APSCounterData blobs. It returns nil when no blob carries a counter archive.
-func ParseCounterArchive(blobs [][]byte, timebaseNumer, timebaseDenom uint64) *CounterArchive {
+func ParseCounterArchive(blobs [][]byte, timebaseNumer, timebaseDenom uint64, traceIDs *TraceIDTable) *CounterArchive {
 	for i := len(blobs) - 1; i >= 0; i-- {
-		if a := parseCounterArchiveBlob(blobs[i], timebaseNumer, timebaseDenom); a != nil {
+		if a := parseCounterArchiveBlob(blobs[i], timebaseNumer, timebaseDenom, traceIDs); a != nil {
 			return a
 		}
 	}
 	return nil
 }
 
-func parseCounterArchiveBlob(data []byte, timebaseNumer, timebaseDenom uint64) *CounterArchive {
+func parseCounterArchiveBlob(data []byte, timebaseNumer, timebaseDenom uint64, traceIDs *TraceIDTable) *CounterArchive {
 	root, objects, ok := archiveRoot(data)
 	if !ok {
 		return nil
@@ -80,7 +85,9 @@ func parseCounterArchiveBlob(data []byte, timebaseNumer, timebaseDenom uint64) *
 	}
 
 	known := encoderInfoIDs(dict["Encoder Infos"], objects)
+	place := encoderInfoPlacement(dict["Encoder Infos"], objects)
 	archive := &CounterArchive{
+		TraceIDs:        traceIDs,
 		KnownEncoderIDs: len(known),
 		PassColumns:     passColumnNames(dict["Subdivided Dictionary"], objects),
 	}
@@ -110,6 +117,15 @@ func parseCounterArchiveBlob(data []byte, timebaseNumer, timebaseDenom uint64) *
 					KickTraceID: s.KickTraceID,
 					StartTicks:  s.Timestamp,
 					EndTicks:    s.Timestamp,
+				}
+				if pl, ok := place[s.EncoderID]; ok {
+					e.Group, e.Ordinal = pl.group, pl.ordinal
+					if b, ok := traceIDs.BatchForOrdinal(pl.ordinal); ok {
+						e.BatchID = b
+					}
+					if idx, ok := traceIDs.SampleIndexForOrdinal(pl.ordinal); ok {
+						e.SampleIndex = idx
+					}
 				}
 				byEncoder[s.EncoderID] = e
 			}
@@ -148,6 +164,25 @@ func encoderInfoIDs(v any, objects []any) map[uint64]struct{} {
 		}
 	}
 	return ids
+}
+
+// encoderPlacement is an encoder id's position in Encoder Infos: which group
+// (pass) it belongs to and its ordinal within that group.
+type encoderPlacement struct{ group, ordinal int }
+
+// encoderInfoPlacement maps each encoder id to its position. Ids come in
+// (start, end) pairs, so a group of 23 encoders holds 46 ids; both ids of a
+// pair get the same ordinal.
+func encoderInfoPlacement(v any, objects []any) map[uint64]encoderPlacement {
+	place := make(map[uint64]encoderPlacement)
+	for group, item := range nsArray(v, objects) {
+		data := nsData(item, objects)
+		for off := 0; off+4 <= len(data); off += 4 {
+			id := uint64(binary.LittleEndian.Uint32(data[off:]))
+			place[id] = encoderPlacement{group: group, ordinal: off / 8}
+		}
+	}
+	return place
 }
 
 // passColumnNames returns the column-name list of each pass, which is what

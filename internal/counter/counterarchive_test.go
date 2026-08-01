@@ -80,3 +80,67 @@ func TestCounterArchiveFromTrace(t *testing.T) {
 		}
 	}
 }
+
+// TestTraceIDTableFromTrace checks the TraceId hop against a real archive.
+//
+// The ids in the TraceId tables do not equal any GRC_ENCODER_ID or
+// GRC_KICK_TRACE_ID; the connection is positional. What is asserted here is
+// what that positional reading requires: the tables cover every ordinal an
+// encoder group uses, and the sample indices ascend with the ordinal, which is
+// the encoder execution order.
+func TestTraceIDTableFromTrace(t *testing.T) {
+	dir := os.Getenv("GPUTRACE_TEST_GPUPROFILER_DIR")
+	if dir == "" {
+		t.Skip("set GPUTRACE_TEST_GPUPROFILER_DIR to a .gpuprofiler_raw directory")
+	}
+	stats, err := ParseStreamData(dir, nil)
+	if err != nil {
+		t.Fatalf("ParseStreamData: %v", err)
+	}
+	if stats.CounterArchive == nil || stats.CounterArchive.TraceIDs == nil {
+		t.Fatal("no TraceId table parsed")
+	}
+	rows := stats.CounterArchive.TraceIDs.Rows
+	t.Logf("trace ids: %d rows, %#x..%#x", len(rows), rows[0].TraceID, rows[len(rows)-1].TraceID)
+
+	seenBatch := make(map[int]bool, len(rows))
+	for i, r := range rows {
+		if seenBatch[r.BatchID] {
+			t.Errorf("batch id %d appears twice", r.BatchID)
+		}
+		seenBatch[r.BatchID] = true
+		if i > 0 && r.SampleIndex <= rows[i-1].SampleIndex {
+			t.Errorf("row %d sample index %d does not exceed the previous %d",
+				i, r.SampleIndex, rows[i-1].SampleIndex)
+		}
+	}
+
+	// Every encoder the counter samples attribute must have an ordinal the
+	// table covers; otherwise the positional reading is claiming a batch it
+	// cannot support.
+	for _, e := range stats.CounterArchive.Encoders {
+		if e.Ordinal >= len(rows) {
+			t.Errorf("encoder %#x has ordinal %d, beyond the %d trace ids",
+				e.EncoderID, e.Ordinal, len(rows))
+		}
+	}
+
+	// Encoders of one group must have distinct ordinals, and each group must
+	// use the same ordinal range.
+	byGroup := make(map[int]map[int]bool)
+	for _, e := range stats.CounterArchive.Encoders {
+		if byGroup[e.Group] == nil {
+			byGroup[e.Group] = make(map[int]bool)
+		}
+		if byGroup[e.Group][e.Ordinal] {
+			t.Errorf("group %d has two encoders at ordinal %d", e.Group, e.Ordinal)
+		}
+		byGroup[e.Group][e.Ordinal] = true
+	}
+	for g, ords := range byGroup {
+		if len(ords) != len(rows) {
+			t.Errorf("group %d covers %d ordinals, want %d", g, len(ords), len(rows))
+		}
+	}
+	t.Logf("%d groups, each covering %d ordinals", len(byGroup), len(rows))
+}

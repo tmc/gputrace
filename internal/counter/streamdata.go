@@ -261,7 +261,7 @@ func ParseStreamData(gpuprofilerDir string, addressToName map[uint64]string) (*S
 				if stats.Timeline != nil {
 					numer, denom = stats.Timeline.TimebaseNumer, stats.Timeline.TimebaseDenom
 				}
-				stats.CounterArchive = ParseCounterArchive(counterBlobs, numer, denom)
+				stats.CounterArchive = ParseCounterArchive(counterBlobs, numer, denom, ParseTraceIDTable(counterBlobs))
 			}
 		}
 	}
