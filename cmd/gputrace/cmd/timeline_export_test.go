@@ -953,3 +953,64 @@ func TestAddDispatchKernelEventsJoinsPipelinesByID(t *testing.T) {
 		t.Fatalf("instruction_count = %#v, want %#v", got, want)
 	}
 }
+
+// TestAddDispatchKernelEventsNamesAgreeWithPipelineID checks the invariant the
+// positional join broke, over every emitted event rather than a single
+// dispatch: an event's name comes from pipelineStateInfoData by pipeline index
+// and its function_name argument comes from pipelinePerformanceStatistics by
+// pipeline ID, so the two must name the same kernel. Under the positional join
+// this reported, for example, pipeline 458's name next to pipeline_id 446.
+func TestAddDispatchKernelEventsNamesAgreeWithPipelineID(t *testing.T) {
+	const n = 8
+	timeline := &Timeline{
+		Encoders: []EncoderInfo{{Index: 0, Label: "encoder0", Type: "compute", StartTime: 1000, EndTime: 21000, Duration: 20000}},
+	}
+	stats := &counter.StreamDataStats{}
+	for i := 0; i < n; i++ {
+		// Dictionary order is rotated relative to the pipeline index order, so
+		// every pipeline lands at a different slice position than its index.
+		j := (i + 3) % n
+		stats.Pipelines = append(stats.Pipelines, counter.PipelineStats{
+			PipelineID:       440 + j,
+			FunctionName:     fmt.Sprintf("kernel%d", j),
+			InstructionCount: 100 + j,
+		})
+		stats.Dispatches = append(stats.Dispatches, counter.DispatchInfo{
+			Index:         i,
+			PipelineIndex: i,
+			PipelineID:    440 + i,
+			FunctionName:  fmt.Sprintf("kernel%d", i),
+			EncoderIndex:  0,
+			DurationUs:    1,
+		})
+	}
+	if !addDispatchKernelEvents(timeline, stats, timelineDispatchSIMDStats{}, nil, nil, nil, nil) {
+		t.Fatal("addDispatchKernelEvents returned false")
+	}
+	if len(timeline.Kernels) != n {
+		t.Fatalf("got %d kernels, want %d", len(timeline.Kernels), n)
+	}
+	check := func(kind, name string, args map[string]interface{}) {
+		t.Helper()
+		fn, ok := args["function_name"].(string)
+		if !ok {
+			t.Errorf("%s %q: no function_name argument", kind, name)
+			return
+		}
+		if fn != name {
+			t.Errorf("%s pipeline_id=%v: name %q but function_name %q", kind, args["pipeline_id"], name, fn)
+		}
+		want := 100 + args["pipeline_id"].(int) - 440
+		if got := args["instruction_count"]; got != want {
+			t.Errorf("%s pipeline_id=%v: instruction_count = %v, want %v", kind, args["pipeline_id"], got, want)
+		}
+	}
+	for _, k := range timeline.Kernels {
+		check("kernel", k.Name, k.Args)
+	}
+	for _, e := range timeline.Events {
+		if e.Category == "kernel" {
+			check("event", e.Name, e.Args)
+		}
+	}
+}
