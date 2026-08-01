@@ -2399,8 +2399,62 @@ func exportChromeTracingForClock(timeline *Timeline, outputPath string, clock ti
 		threadID++
 	}
 
-	// Combine metadata events with timeline events
-	allEvents := append(metadataEvents, timeline.Events...)
+	// Register dynamic per-pipeline state tracks under ProcessID 1 (cumulative busy).
+	pipelineThreads := make(map[string]int)
+	if clock == timelineClockBusy {
+		nextTID := 100
+		for _, ev := range timeline.Events {
+			if ev.Category == "kernel" && ev.Args != nil {
+				pipeName := ""
+				if fn, ok := ev.Args["function_name"].(string); ok && fn != "" {
+					pipeName = fn
+				} else if pID, ok := ev.Args["pipeline_id"].(int); ok && pID > 0 {
+					pipeName = fmt.Sprintf("Pipeline 0x%x", pID)
+				}
+				if pipeName != "" {
+					if _, exists := pipelineThreads[pipeName]; !exists {
+						pipelineThreads[pipeName] = nextTID
+						pipeLabel := pipeName
+						if pState, ok := ev.Args["pipeline_state"].(string); ok && pState != "" {
+							pipeLabel = fmt.Sprintf("%s (%s)", pipeName, pState)
+						} else if pID, ok := ev.Args["pipeline_id"].(int); ok && pID > 0 {
+							pipeLabel = fmt.Sprintf("%s (0x%x)", pipeName, pID)
+						}
+						metadataEvents = append(metadataEvents, TimelineEvent{
+							Name:      "thread_name",
+							Category:  "__metadata",
+							Phase:     "M",
+							ProcessID: 1,
+							ThreadID:  nextTID,
+							Args: map[string]interface{}{
+								"name": pipeLabel,
+							},
+						})
+						nextTID++
+					}
+				}
+			}
+		}
+	}
+
+	// Re-assign kernel dispatch events to their per-pipeline state track (Option B: 1:1, no duplication)
+	eventsToEmit := make([]TimelineEvent, 0, len(timeline.Events))
+	for _, ev := range timeline.Events {
+		if clock == timelineClockBusy && ev.Category == "kernel" && ev.Args != nil {
+			pipeName := ""
+			if fn, ok := ev.Args["function_name"].(string); ok && fn != "" {
+				pipeName = fn
+			} else if pID, ok := ev.Args["pipeline_id"].(int); ok && pID > 0 {
+				pipeName = fmt.Sprintf("Pipeline 0x%x", pID)
+			}
+			if tid, exists := pipelineThreads[pipeName]; exists {
+				ev.ThreadID = tid
+			}
+		}
+		eventsToEmit = append(eventsToEmit, ev)
+	}
+
+	allEvents := append(metadataEvents, eventsToEmit...)
 	allEvents = append(allEvents, counterEvents...)
 	allEvents = timelineMetadataForActiveTracks(allEvents)
 
