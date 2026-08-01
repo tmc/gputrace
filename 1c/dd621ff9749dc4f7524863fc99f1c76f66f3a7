@@ -1,0 +1,8 @@
+commit 1cdd621
+date: 2026-08-01T03:39:47Z
+claude-code: 2.1.220 (Claude Code)
+model: claude-opus-5[1m]
+pid: 7014
+ITERM_SESSION_ID: w0t1p3:BE93B99A-FA9B-469D-9C12-0B1009E84F85
+task: #16 profiler low-sample marker; authored by subagent, verified in main checkout on perfdata2
+reported-by: peer session 86CEEAB2
