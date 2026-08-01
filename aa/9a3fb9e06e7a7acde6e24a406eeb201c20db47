@@ -1,0 +1,1 @@
+salvaged from worktree ~/tmp/gputrace-winbind-fix (uncommitted, another session's WIP) during worktree cleanup. Patch preserved at ~/tmp/gputrace-worktree-salvage-20260801/. Verified: applies clean, GOWORK=off go build ./... and go test ./... both green. Authorship not mine. 2026-08-01T05:39:54Z claude-code opus-5[1m] pid=77449 iterm=w0t1p3:BE93B99A-FA9B-469D-9C12-0B1009E84F85
