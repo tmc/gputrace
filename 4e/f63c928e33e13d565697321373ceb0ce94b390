@@ -1,0 +1,9 @@
+commit 4ef63c9
+date: 2026-08-01T03:24:44Z
+claude-code: 2.1.220 (Claude Code)
+model: claude-opus-5[1m]
+tty: not a tty
+none
+pid: 88079
+ITERM_SESSION_ID: w0t1p3:BE93B99A-FA9B-469D-9C12-0B1009E84F85
+reported-by: peer session 86CEEAB2 (measured on qwen25-15b-static_tokens_2_to_3.gputrace)
