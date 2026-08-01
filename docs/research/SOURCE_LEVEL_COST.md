@@ -1,18 +1,29 @@
 # Source-level cost and the Heat Map
 
-Two questions, both answered negatively:
+Two questions:
 
 1. Can gputrace attribute cost to a line inside a Metal kernel, the way Xcode's
-   shader source viewer does?
-2. What backs Xcode's Heat Map tab, and can gputrace reproduce it?
+   shader source viewer does? **No** — nothing in the archive supports it.
+2. What backs Xcode's Heat Map tab, and can gputrace reproduce it? A heat map
+   **does** exist for compute dispatches, showing per-thread-position Shader
+   Execution Cost. But no part of it is in the archive, so gputrace cannot
+   reproduce it from a bundle.
 
-The answer to both is no, and the reason is the same in each case: the data is
-not archived. This document records the falsifiers that were run and what they
-returned, so the negatives can be rechecked rather than taken on faith.
+This document records the falsifiers that were run and what they returned, so
+the conclusions can be rechecked rather than taken on faith.
+
+> **Correction.** An earlier revision of this document claimed the Heat Map was
+> a render-pipeline-only feature, "absent by construction" for compute work.
+> That was wrong. It was inferred from a single oracle screenshot in which a
+> *pipeline* happened to be selected, plus a grep for guessed key names that
+> returned zero. Driving Xcode and selecting an actual *dispatch* renders a heat
+> map immediately. The corrected finding is in "The Heat Map is real" below. The
+> lesson is the one this project keeps relearning: a zero from a grep for names
+> you invented is not evidence of absence.
 
 ## Method
 
-Two genuinely independent archives were used:
+Three archives were used. Two for the byte-level censuses:
 
 - `qwen25-05b-staticmask-warm-tokens2-4-rep1-perfdata2.gputrace`
 - `qwen25-05b-python-producer-tokens1-3-perfdata.gputrace`
@@ -21,8 +32,13 @@ The `-perfdata2` and `-perfdata3` bundles are byte-identical (sha1 `295eecd5`)
 and count as one observation, not two. Every count below was reproduced on both
 archives independently; where the two disagree, both numbers are given.
 
-Xcode's own rendering of the same workload is available as the oracle capture in
-`~/tmp/gputrace-xcode-oracle-20260731` (`ui-heatmap.png`, `ui-shaders.png`).
+and a third, `qwen25-05b-static_tokens_2_to_3-wperfdata.gputrace`, which was the
+one open in Xcode and so the one the UI observations below were made against.
+
+Xcode's own rendering is available as oracle captures in
+`~/tmp/gputrace-xcode-oracle-20260731`: `ui-shaders.png`, `ui-costgraph.png`,
+`ui-heatmap.png` (pipeline selected, no heat map) and `ui-heatmap-dispatch.png`
+(dispatch selected, heat map rendered — captured while writing this document).
 
 ## What the archive does carry
 
@@ -119,29 +135,88 @@ Key census over `streamData` (440 MB), both archives, all counts identical:
 | `threadgroupID`, `tileCost`, `perTile`, `quadCost` | 0 |
 | `fragmentCost`, `pixelCost`, `attachmentCost`, `RenderTarget` | 0 |
 
-[V] Verified. `shaderProfilerData` appears, but a sibling investigation
+[V] Verified as counts. Note carefully what this does and does not establish:
+these are names that were *guessed*, so a zero means "not under this name", not
+"not present". Reading the spatial rows as proof that no per-position data
+exists anywhere is exactly the error corrected at the top of this document. The
+rows are retained because they are true and worth not re-running, not because
+they carry the weight originally put on them.
+
+`shaderProfilerData` appears, but a sibling investigation
 established that the blobs it names hold only machine-wide samples
 (`GRC_ENCODER_ID` `0xFFFFFFFF`) and no source field. Every other key is absent.
 
 ## What Xcode actually shows
-
-[V] The oracle screenshot `ui-heatmap.png` shows the Heat Map tab selected with
-a compute pipeline selected in the encoder list. Xcode renders:
-
-> Heat map unavailable for compute pipeline states
-> Select a compute dispatch to view heat maps
-
-That is Xcode declining to draw a heat map for this workload. The Heat Map is a
-**render**-pipeline feature: it shades a render target by per-pixel or per-tile
-cost, which is why the spatial keys in falsifier 3 are the ones to look for and
-why they are all zero in a compute-only trace. A pure-compute Metal workload has
-no render target to shade.
 
 [V] `ui-shaders.png` shows the Shaders tab is per-**pipeline**, not per-line:
 its columns are Cost, Name, Type, Pipeline State, # SIMD Groups, # Allocated
 Registers. Xcode's own per-line source cost requires a shader-profiling capture
 with debug info retained, which these archives do not contain — consistent with
 falsifier 1.
+
+[V] `ui-costgraph.png`, and the same view driven live, settle the Cost Graph
+question. With a pipeline state selected the Cost Call Graph is a **single**
+frame spanning the whole 0–100% axis, labelled with the pipeline:
+
+```
+gemv_bfloat16_bm8_bn1_sm1_sn32_tm4_tn4_nc0_axpby0 (Compute Pipeline 0xa432f8a80)
+```
+
+There are no child frames and no expansion into source. The Source Files panel
+beside it lists `MTLLibra…9f5bfac0` with one child, `3BAA0D…160BC9` — which is
+exactly the Metal source sidecar identified above, confirming that Xcode's own
+notion of "the source" for a library is that same archived text. The source
+viewer next to it renders empty (line numbers 1 and 2, no content).
+
+So Xcode itself resolves cost no deeper than the pipeline for these traces, and
+that is precisely what falsifier 1 predicts: with no `DEBI` section there is no
+mapping to attribute a cost to a line, so the flame graph bottoms out at the
+function and the source pane has nothing to shade.
+
+## The Heat Map is real, and is not in the archive
+
+[V] Selecting a compute **dispatch** — not an encoder, not a pipeline state —
+renders a heat map. The tab's placeholder text tracks the selected object and
+says what it wants:
+
+| Selection | Message |
+|-----------|---------|
+| compute encoder | "Heat map unavailable for compute encoders" |
+| compute pipeline state | "Heat map unavailable for compute pipeline states" |
+| compute shader | "Heat map unavailable for compute shader" |
+| **compute dispatch** | **renders** |
+
+All four end with "Select a compute dispatch to view heat maps". The earlier
+reading of this as a refusal was wrong; it is an instruction.
+
+[V] What renders is titled **Shader Execution Cost**: a 2D grid over the
+dispatch, shaded red by cost, with a zoom control, `X:` and `Y:` spinners that
+fill in with the position under the cursor (33, 12 in the captured example), and
+a detail pane reading "Select a pixel to view SIMD Group". So the underlying
+datum is a per-thread-position execution cost, drillable to the SIMD group that
+ran at that position. This is a genuine spatial cost map, and it is the answer
+to "which part of my dispatch is slow".
+
+[D] **It is not archived.** A key census over the same trace's `streamData`
+returns zero for `ShaderExecutionCost`, `ExecutionCost`, `HeatMap`, `heatMap`,
+`heatMapData`, `ShaderCost`, `SIMDGroup`, `simdGroup`, `PerPixel` and
+`perPixel`, and falsifier 3 already found no per-position key under any other
+name tried. Nothing of the size or shape of a per-thread-position cost grid is
+present for any of the 488 dispatches.
+
+Marked [D] and not [V] because the census can only show that the guessed names
+are absent, which is the mistake this document already made once. The positive
+claim that Xcode computes the heat map by **replaying the dispatch on the
+device** with an instrumented shader is untested here. It is the natural
+explanation — it needs the GPU, it is per-dispatch, and the project already has
+an `internal/replay` package wrapping `GPUToolsReplay` — but it has not been
+proven, and it should be proven before anyone builds on it.
+
+Either way the consequence for gputrace is the same and is firm: **a heat map
+cannot be produced from a `.gputrace` bundle alone.** Reproducing it means
+replaying, not parsing. That is a much larger piece of work than reading a
+record, and it should not be started on the assumption that the data is sitting
+in the archive under a name nobody has grepped for yet.
 
 ## Consequence for `pprof --source-lines`
 
@@ -175,8 +250,15 @@ LC_ALL=C grep -c -a -o sourceLine <bundle>/*.gpuprofiler_raw/streamData
 
 ## What would change the answer
 
-A capture taken with shader profiling enabled *and* the metallib built with
-debug info retained would put a `DEBI` section in the library. Whether Apple
-then archives an instruction-level sample stream alongside it is untested — no
-such capture was available here. Until one is, source-line cost should be
-reported as absent, not approximated.
+For source-line cost: a capture taken with shader profiling enabled *and* the
+metallib built with debug info retained would put a `DEBI` section in the
+library. Whether Apple then archives an instruction-level sample stream
+alongside it is untested — no such capture was available here. Until one is,
+source-line cost should be reported as absent, not approximated.
+
+For the heat map: confirming or refuting the replay hypothesis. Two cheap
+checks, neither run here — whether the Heat Map tab still renders with the
+capture device absent or the trace opened on a different machine, and whether
+`GPUToolsReplay` is entered when a dispatch is selected. A negative on the first
+would prove the data is archived after all, under a name not yet guessed, and
+would reopen this entirely.
