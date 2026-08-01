@@ -102,17 +102,47 @@ func Observe(tracePath string) (*Observation, error) {
 	return obs, nil
 }
 
-// observeExecutionCost records why Execution Cost, the leading column of every
-// Xcode Counters sub-tab, is not produced per encoder.
+// observeExecutionCost publishes Execution Cost, the leading column of every
+// Xcode Counters sub-tab.
+//
+// The per-encoder attribution comes from APSCounterData, not from
+// Profiling_f_*.raw. The Profiling files key cost by pipeline ID, which is why
+// this used to publish nothing; CounterArchive.EncoderCosts attributes cycles
+// to encoders through the GRC_SAMPLE_TYPE start/end records instead.
 func (o *Observation) observeExecutionCost(dir string, stats *counter.StreamDataStats) {
-	costs, err := counter.ExtractExecutionCostFromDir(dir)
-	if err != nil {
-		o.Notes = append(o.Notes, fmt.Sprintf("Execution Cost: Profiling_f_*.raw parsing failed: %v", err))
+	costs := stats.CounterArchive.EncoderCosts()
+	if len(costs) == 0 {
+		o.Notes = append(o.Notes, "Execution Cost: APSCounterData attributes no sample to any encoder, "+
+			"so no value is published. A capture whose counter stream is entirely machine-wide reaches this.")
 		return
 	}
-	o.Notes = append(o.Notes, fmt.Sprintf(
-		"Execution Cost: Profiling_f_*.raw yields cost for %d pipelines from %d samples, keyed by pipeline ID. Xcode's column is per encoder, and we have no per-encoder sample attribution, so no value is published",
-		len(costs.PipelineCosts), costs.TotalSamples))
+	if len(costs) != len(o.Encoders) {
+		// Publishing a column of a different length would silently align cost
+		// to the wrong encoders, which is the join defect this package exists
+		// to catch. Report the disagreement rather than pad or truncate.
+		o.Notes = append(o.Notes, fmt.Sprintf(
+			"Execution Cost: APSCounterData yields %d encoder costs for %d encoders; not joinable, so no value is published",
+			len(costs), len(o.Encoders)))
+		return
+	}
+
+	vals := make([]string, len(costs))
+	sparse := 0
+	for i, c := range costs {
+		vals[i] = fmt.Sprintf("%.3f%%", c.CostPercent)
+		if c.Sparse() {
+			sparse++
+		}
+	}
+	o.set("Execution Cost", vals, Derivation{
+		Kind: "runtime",
+		How:  "APSCounterData GRC_SAMPLE_TYPE 4/5 encoder spans, GPU cycles summed per ordinal",
+	})
+	if sparse > 0 {
+		o.Notes = append(o.Notes, fmt.Sprintf(
+			"Execution Cost: %d of %d encoders rest on fewer than 16 end records, so their figure is below anything measured",
+			sparse, len(costs)))
+	}
 }
 
 // observeCounterFiles adds whatever the Counters_f_*.raw path yields per
