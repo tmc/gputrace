@@ -85,7 +85,14 @@ done
 cp -r "$REPO"/docs/*.md "$REPO"/docs/research "$STAGE/docs/" 2>/dev/null || true
 cp "$HOME"/tmp/agent-collab/gputrace/*.md "$STAGE/collab/" 2>/dev/null || true
 cp "$HOME"/tmp/gputrace-xcode-oracle-*/*.txt "$STAGE/oracle/" 2>/dev/null || true
-cp "$HOME"/tmp/gputrace-xcode-oracle-*/*.png "$STAGE/oracle/" 2>/dev/null || true
+
+# Structure of two well-formed Perfetto traces published by the Perfetto
+# project, extracted with trace_processor. The traces themselves are binary
+# protobuf and are deliberately not uploaded: a language model cannot read
+# protobuf, so only the extracted structure is worth anything. Regenerate with
+# tools/perfetto-reference.sh.
+mkdir -p "$STAGE/perfetto-reference"
+cp "$HOME"/tmp/gputrace-perfetto-reference/*.md "$STAGE/perfetto-reference/" 2>/dev/null || true
 
 # The transcript is the largest and most useful single source: it carries the
 # reasoning behind each conclusion AND each retraction. nlm chunks it at 5 MB.
@@ -129,4 +136,31 @@ cp "$REPO/tools/nlm-corpus-SUPERSEDED.md" "$STAGE/SUPERSEDED.md" 2>/dev/null || 
 
 echo "syncing $(find "$STAGE" -type f | wc -l | tr -d ' ') files as \"$SOURCE_NAME\"..."
 ( cd "$STAGE" && nlm source sync --name "$SOURCE_NAME" "$NOTEBOOK" . )
+
+# Images cannot ride in the txtar bundle: it is a text archive, so a PNG in it
+# is at best inert bytes. They go up as individual sources, which is also what
+# lets the notebook actually look at them.
+#
+# Xcode's own timeline, counter and heat map screenshots are the only record of
+# what its UI shows. Without them the notebook answers questions about Xcode's
+# track hierarchy from prose descriptions of it.
+sync_images() {
+	local existing name id
+	existing="$(nlm source list "$NOTEBOOK" 2>/dev/null)"
+	for img in "$HOME"/tmp/gputrace-xcode-oracle-*/*.png; do
+		[ -e "$img" ] || continue
+		# nlm ignores --name for file uploads and titles the source after the
+		# file, so match on the basename or every run adds another copy.
+		name="$(basename "$img")"
+		id="$(printf '%s\n' "$existing" | awk -F'\t' -v n="$name" '$2==n {print $1; exit}')"
+		if [ -n "$id" ]; then
+			nlm source add --replace "$id" "$NOTEBOOK" "$img" >/dev/null 2>&1 \
+				&& echo "  replaced $name" || echo "  FAILED $name"
+		else
+			nlm source add "$NOTEBOOK" "$img" >/dev/null 2>&1 \
+				&& echo "  added $name" || echo "  FAILED $name"
+		fi
+	done
+}
+sync_images
 echo "done. prune superseded sets with: $0 --prune $NOTEBOOK"
