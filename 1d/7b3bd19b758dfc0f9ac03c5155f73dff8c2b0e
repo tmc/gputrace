@@ -1,0 +1,7 @@
+landed: 1d7b3bd on 2026-08-01T04:48:23Z
+claude-code: 2.1.220 (Claude Code)
+model: claude-opus-5[1m]
+tty: not a tty
+pid: 49807
+ITERM_SESSION_ID: w0t1p3:BE93B99A-FA9B-469D-9C12-0B1009E84F85
+Verified independently before landing: 3,707,451 GPRWCNTR magics in streamData spaced at 64/168/144/104/112/120, so the magic is per-record and the old data[8:] then /168 dropped the last record of every blob. Gated integration tests pass on qwen25-05b-python-producer (a genuinely independent archive; perfdata2 and perfdata3 are byte-identical, sha1 295eecd5, and are NOT two observations). go build ./... && go test ./... green.
