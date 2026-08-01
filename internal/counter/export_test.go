@@ -192,7 +192,7 @@ func TestExportComparison(t *testing.T) {
 
 func TestExportCountersCSVWithSummaryCountsMixedRowSources(t *testing.T) {
 	tracePath, perfDir := makeTraceWithPerfDir(t)
-	if err := os.WriteFile(filepath.Join(perfDir, "Counters_f_0.raw"), syntheticCounterRaw(28416), 0o666); err != nil {
+	if err := os.WriteFile(filepath.Join(perfDir, "Counters_f_0.raw"), syntheticCounterRaw(), 0o666); err != nil {
 		t.Fatal(err)
 	}
 	tr := &trace.Trace{
@@ -210,11 +210,14 @@ func TestExportCountersCSVWithSummaryCountsMixedRowSources(t *testing.T) {
 	if summary.Rows != 3 {
 		t.Fatalf("Rows = %d, want 3", summary.Rows)
 	}
-	if summary.ParsedCounterRows != 1 {
-		t.Fatalf("ParsedCounterRows = %d, want 1", summary.ParsedCounterRows)
+	// Counters_f_*.raw no longer yields parsed rows: the only field ever read
+	// out of a sample record was Kernel Invocations at 0x0064 ÷ 27.75, and that
+	// divisor could not be sourced. Every row now comes from the fallback.
+	if summary.ParsedCounterRows != 0 {
+		t.Fatalf("ParsedCounterRows = %d, want 0", summary.ParsedCounterRows)
 	}
-	if summary.SyntheticFallbackRows != 2 {
-		t.Fatalf("SyntheticFallbackRows = %d, want 2", summary.SyntheticFallbackRows)
+	if summary.SyntheticFallbackRows != 3 {
+		t.Fatalf("SyntheticFallbackRows = %d, want 3", summary.SyntheticFallbackRows)
 	}
 	if !summary.HasSyntheticFallback() {
 		t.Fatal("HasSyntheticFallback() = false, want true")

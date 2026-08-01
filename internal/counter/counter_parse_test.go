@@ -10,8 +10,12 @@ import (
 	"github.com/tmc/gputrace/internal/trace"
 )
 
-func TestParseCounterFileWithMetricsKernelInvocations(t *testing.T) {
-	path := writeCounterRawFile(t, syntheticCounterRaw(28416))
+// TestParseCounterFileWithMetricsCountsRecords checks record accounting only.
+// It used to assert ExecutionCount == 1024 from a synthetic record carrying
+// 28,416 at offset 0x0064, which merely replayed the ÷27.75 divisor back at
+// itself; both the divisor and the metrics it gated are gone.
+func TestParseCounterFileWithMetricsCountsRecords(t *testing.T) {
+	path := writeCounterRawFile(t, syntheticCounterRaw())
 
 	stats, metrics, err := parseCounterFileWithMetrics(path)
 	if err != nil {
@@ -20,14 +24,8 @@ func TestParseCounterFileWithMetricsKernelInvocations(t *testing.T) {
 	if stats.TotalRecords != 2 {
 		t.Fatalf("TotalRecords = %d, want 2", stats.TotalRecords)
 	}
-	if stats.DispatchCount != 1 {
-		t.Fatalf("DispatchCount = %d, want 1", stats.DispatchCount)
-	}
-	if len(metrics) != 1 {
-		t.Fatalf("got %d metrics, want 1", len(metrics))
-	}
-	if metrics[0].ExecutionCount != 1024 {
-		t.Fatalf("ExecutionCount = %d, want 1024", metrics[0].ExecutionCount)
+	if len(metrics) != 0 {
+		t.Fatalf("got %d metrics, want 0", len(metrics))
 	}
 }
 
@@ -84,7 +82,7 @@ func TestParsePerfCountersRejectsInvalidCounterFiles(t *testing.T) {
 
 func TestParsePerfCountersProcessesSyntheticCounterFile(t *testing.T) {
 	tracePath, perfDir := makeTraceWithPerfDir(t)
-	if err := os.WriteFile(filepath.Join(perfDir, "Counters_f_0.raw"), syntheticCounterRaw(28416), 0o666); err != nil {
+	if err := os.WriteFile(filepath.Join(perfDir, "Counters_f_0.raw"), syntheticCounterRaw(), 0o666); err != nil {
 		t.Fatal(err)
 	}
 
@@ -101,15 +99,15 @@ func TestParsePerfCountersProcessesSyntheticCounterFile(t *testing.T) {
 	if stats.ConfidenceLevel != 1 {
 		t.Fatalf("ConfidenceLevel = %v, want 1", stats.ConfidenceLevel)
 	}
-	if len(stats.ShaderMetrics) != 1 {
-		t.Fatalf("got %d shader metrics, want 1", len(stats.ShaderMetrics))
-	}
-	if stats.ShaderMetrics[0].ExecutionCount != 1024 {
-		t.Fatalf("ExecutionCount = %d, want 1024", stats.ShaderMetrics[0].ExecutionCount)
+	if len(stats.ShaderMetrics) != 0 {
+		t.Fatalf("got %d shader metrics, want 0", len(stats.ShaderMetrics))
 	}
 }
 
-func syntheticCounterRaw(kernelInvocations uint32) []byte {
+// syntheticCounterRaw builds a two-record counter file: one metadata-sized
+// record and one smaller record. Only the record framing is meaningful — no
+// field inside either record is decoded any more.
+func syntheticCounterRaw() []byte {
 	const (
 		metadataSize = 2300
 		sampleSize   = 464
@@ -120,7 +118,6 @@ func syntheticCounterRaw(kernelInvocations uint32) []byte {
 
 	sample := data[metadataSize:]
 	binary.LittleEndian.PutUint32(sample[0:], 0x4e)
-	binary.LittleEndian.PutUint32(sample[0x64:], kernelInvocations)
 	return data
 }
 

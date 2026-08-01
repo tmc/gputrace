@@ -101,20 +101,12 @@ type ShaderHardwareMetrics struct {
 
 // CounterRecord represents a single parsed record from a counter file.
 type CounterRecord struct {
-	Offset       int64                  // File offset where record starts
-	RecordType   uint32                 // Type identifier
-	RecordSize   uint32                 // Size of this record in bytes
-	Data         []byte                 // Raw record data
-	ShaderMetric *ShaderHardwareMetrics // Parsed metrics (if applicable)
-	IsMetadata   bool                   // True if this is a metadata record (2.3-2.9 KB)
-	EncoderID    uint64                 // Encoder identifier from metadata record
-}
-
-// EncoderGroup represents a group of records belonging to a single encoder.
-type EncoderGroup struct {
-	EncoderID      uint64           // Encoder identifier
-	MetadataRecord *CounterRecord   // Metadata record for this encoder
-	SampleRecords  []*CounterRecord // Sample records for this encoder
+	Offset     int64  // File offset where record starts
+	RecordType uint32 // Type identifier
+	RecordSize uint32 // Size of this record in bytes
+	Data       []byte // Raw record data
+	IsMetadata bool   // True if this is a metadata record (2.3-2.9 KB)
+	EncoderID  uint64 // Encoder identifier from metadata record
 }
 
 // ParsePerfCounters parses hardware performance counters from .gpuprofiler_raw files.
@@ -238,14 +230,13 @@ type counterFileStats struct {
 	TotalRecords  int
 }
 
-// parseCounterFileWithMetrics parses a counter file and returns both statistics and extracted metrics.
+// parseCounterFileWithMetrics parses a counter file and returns record statistics.
 //
-// This function implements the encoder grouping and aggregation strategy documented in
-// docs/research/PERFCOUNTERS_REFERENCE.md:
-// 1. Parse all records and classify by size (metadata vs sample)
-// 2. Group sample records by their associated metadata/encoder
-// 3. Aggregate metrics within each encoder group
-// 4. Return aggregated metrics for validation against CSV
+// It no longer derives per-encoder shader metrics. The former sample-record
+// path keyed off a 464-byte record size and an unsourced ÷27.75 scale on offset
+// 0x0064; neither survived contact with real archives (see the removal note on
+// parseCounterRecord), so nothing it produced was ever emitted. Deterministic
+// metrics come from extractDeterministicMetrics and the streamData path instead.
 func parseCounterFileWithMetrics(path string) (*counterFileStats, []*ShaderHardwareMetrics, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -283,20 +274,7 @@ func parseCounterFileWithMetrics(path string) (*counterFileStats, []*ShaderHardw
 		return nil, nil, fmt.Errorf("no valid counter records found")
 	}
 
-	// Group records by encoder
-	groups := groupRecordsByEncoder(records)
-
-	// Aggregate metrics for each encoder group
-	metrics := make([]*ShaderHardwareMetrics, 0, len(groups))
-	for _, group := range groups {
-		aggregated := aggregateEncoderMetrics(group)
-		if aggregated != nil && aggregated.ExecutionCount > 0 {
-			metrics = append(metrics, aggregated)
-			stats.DispatchCount++
-		}
-	}
-
-	return stats, metrics, nil
+	return stats, nil, nil
 }
 
 // correlateShaderNames attempts to match pipeline state addresses with shader names from the trace.
@@ -340,14 +318,23 @@ func correlateShaderNames(t *trace.Trace, stats *PerfCounterStats) error {
 
 // parseCounterRecord parses a single counter record.
 //
-// Based on analysis in docs/research/PERFCOUNTERS_REFERENCE.md:
-// - Metadata records: 2,300-2,900 bytes (contain encoder identification)
-// - Sample records: 464 bytes (contain per-sample performance metrics)
+// It classifies a record as encoder metadata by size (2,300-2,900 bytes) and
+// pulls a candidate encoder ID from offset 0x01b4. [?] Both come from one
+// archive and neither has been checked against a second.
 //
-// Aggregation strategy:
-// 1. Metadata record identifies encoder/command buffer context
-// 2. Following sample records contain metrics for that encoder
-// 3. Metrics are summed/averaged across samples to produce CSV values
+// A "sample record" path used to sit alongside this: records of exactly 464
+// bytes, from which Kernel Invocations was read at offset 0x0064 and divided by
+// 27.75, with the remaining metrics recovered by scanning for float32 values in
+// hand-tuned ranges. It was removed because the divisor could not be sourced.
+// 27.75 was back-fitted from a single pair, 28,416 raw against 1,024 in one
+// Xcode CSV export (28,416/1,024 = 27.75 exactly); no hardware quantity
+// explains 111/4, and no second observation was ever recorded. Measuring the
+// records in a real archive settled it: over the first five Counters_f_*.raw of
+// /tmp/qwen25-05b-staticmask-warm-tokens2-4-rep1-perfdata3.gputrace, zero of
+// ~30,000 records are 464 bytes (the common sizes are 1742, 612, 671, 8192),
+// so the branch produced no metrics at all and, because emission was gated on
+// a non-zero invocation count, nothing downstream of it was ever displayed.
+// Removing it changes no user-visible value.
 func parseCounterRecord(data []byte, offset int64) *CounterRecord {
 	if len(data) < 16 {
 		return nil
@@ -376,200 +363,9 @@ func parseCounterRecord(data []byte, offset int64) *CounterRecord {
 		if len(data) >= 0x01b8 {
 			record.EncoderID = binary.LittleEndian.Uint64(data[0x01b4:0x01bc])
 		}
-	} else if len(data) == 464 {
-		record.IsMetadata = false
-
-		// This is a sample record - extract performance metrics
-		// Based on field offset analysis from docs/research/PERFCOUNTERS_REFERENCE.md
-		metrics := &ShaderHardwareMetrics{}
-
-		// Kernel Invocations - offset 0x0064
-		// From analysis: offset 0x0064 contains a scaled value
-		// Value 28,416 / 27.75 ≈ 1,024 (CSV value)
-		// Hypothesis: This field counts in units of ~28 (possibly SIMD-related scaling)
-		if len(data) >= 0x0068 {
-			rawValue := binary.LittleEndian.Uint32(data[0x0064:0x0068])
-			// Apply scaling factor: divide by 27.75 to get invocation count
-			metrics.ExecutionCount = int(float64(rawValue) / 27.75)
-		}
-
-		// ALU Utilization - search for float32 values that look like percentages
-		// Range: 0.0 to 5.0 (since we've seen 3.10 in test data)
-		// These are already in percentage format (not 0-1 scale)
-		if aluUtil := findFloatInRange(data, 0.0, 5.0); aluUtil >= 0 {
-			if aluUtil > 0.001 { // Filter out near-zero noise
-				metrics.ALUUtilization = aluUtil // Already in percentage format
-			}
-		}
-
-		// Kernel Occupancy - search for float32 value in occupancy range
-		// Range: 0.0 to 2.0 (typically < 1.0 but can exceed)
-		if occupancy := findFloatInRange(data, 0.0, 2.0); occupancy >= 0 && occupancy != metrics.ALUUtilization {
-			metrics.KernelOccupancy = occupancy // Already in percentage format
-		}
-
-		// Memory Bandwidth - search for byte count fields
-		// Look for reasonable byte values (typically < 100KB per sample)
-		for i := 0; i < len(data)-8; i += 4 {
-			// Try uint64 for bytes read/written
-			if i+8 <= len(data) {
-				val := binary.LittleEndian.Uint64(data[i : i+8])
-				// Reasonable range: 1KB - 100KB per sample
-				if val >= 1000 && val <= 100000 {
-					// Assign to bytes read if not set
-					if metrics.BytesReadFromDeviceMemory == 0 {
-						metrics.BytesReadFromDeviceMemory = val
-					} else if metrics.BytesWrittenToDeviceMemory == 0 {
-						metrics.BytesWrittenToDeviceMemory = val
-						break // Found both
-					}
-				}
-			}
-		}
-
-		// Shader Limiters - search for float32 values in limiter range (0.01-5.0)
-		// Limiters are bottleneck indicators, typically small percentages
-		// From CSV analysis: ranges from 0.01 to 3.74 for complex shaders
-		limiters := findAllFloatsInRange(data, 0.001, 5.0, 20) // Find up to 20 limiter candidates
-
-		// Map limiters to fields (heuristic assignment based on observed value ranges)
-		// This is experimental and will need validation against CSV ground truth
-		for i, val := range limiters {
-			switch {
-			case i == 0 && val >= 0.03 && val <= 0.1:
-				// First small value likely Compute Shader Launch Limiter (0.03-0.08 range)
-				if metrics.ComputeShaderLaunchLimiter == 0 {
-					metrics.ComputeShaderLaunchLimiter = val
-				}
-			case val >= 0.01 && val <= 0.02:
-				// Very small values often L1 Cache or Control Flow limiters
-				if metrics.L1CacheLimiter == 0 {
-					metrics.L1CacheLimiter = val
-				} else if metrics.ControlFlowLimiter == 0 {
-					metrics.ControlFlowLimiter = val
-				}
-			case val >= 0.02 && val <= 0.04:
-				// Small values in this range: MMU, Texture Write, or Last Level Cache
-				if metrics.MMULimiter == 0 {
-					metrics.MMULimiter = val
-				} else if metrics.TextureWriteLimiter == 0 {
-					metrics.TextureWriteLimiter = val
-				} else if metrics.LastLevelCacheLimiter == 0 {
-					metrics.LastLevelCacheLimiter = val
-				}
-			case val >= 0.05 && val <= 0.1:
-				// Medium-small values: Instruction Throughput (0.06-0.08 range)
-				if metrics.InstructionThroughputLimiter == 0 {
-					metrics.InstructionThroughputLimiter = val
-				}
-			case val >= 1.0 && val <= 2.0:
-				// Larger values: Integer limiters for complex shaders
-				if metrics.IntegerAndComplexLimiter == 0 {
-					metrics.IntegerAndComplexLimiter = val
-				} else if metrics.IntegerAndConditionalLimiter == 0 {
-					metrics.IntegerAndConditionalLimiter = val
-				}
-			case val >= 2.0 && val <= 4.0:
-				// Large values: F32 limiter for complex math (3.74 seen)
-				if metrics.F32Limiter == 0 {
-					metrics.F32Limiter = val
-				}
-			}
-		}
-
-		// Buffer L1 Cache Metrics (gputrace-66)
-		// Search for float32 values in reasonable ranges for cache metrics
-		// Miss Rate: 0-100% (e.g., 25.15%, 66.67%)
-		// Accesses: typically 10-100 (e.g., 19.95, 58.62)
-		// Bandwidth: 0-10 GB/s (e.g., 0.49, 1.04, 10.57)
-		l1CacheValues := findAllFloatsInRange(data, 0.0, 100.0, 30)
-
-		for _, val := range l1CacheValues {
-			switch {
-			case val >= 10.0 && val <= 100.0 && metrics.BufferL1MissRate == 0:
-				// Miss rate is typically higher (25-67%)
-				metrics.BufferL1MissRate = val
-			case val >= 10.0 && val <= 100.0 && metrics.BufferL1ReadAccesses == 0:
-				// Read accesses (10-60 range)
-				metrics.BufferL1ReadAccesses = val
-			case val >= 5.0 && val <= 100.0 && metrics.BufferL1WriteAccesses == 0:
-				// Write accesses (5-30 range)
-				metrics.BufferL1WriteAccesses = val
-			case val >= 0.1 && val <= 15.0 && metrics.BufferL1ReadBandwidth == 0:
-				// Read bandwidth (0.5-11 GB/s range)
-				metrics.BufferL1ReadBandwidth = val
-			case val >= 0.1 && val <= 10.0 && metrics.BufferL1WriteBandwidth == 0:
-				// Write bandwidth (0.4-1.0 GB/s range)
-				metrics.BufferL1WriteBandwidth = val
-			}
-		}
-
-		// Shader Utilization Metrics (gputrace-67)
-		// Utilization values are complementary to limiters
-		// Search for float32 values in utilization range (0-100%)
-		// Note: Utilization and limiter values often appear in same range but at different offsets
-		utilizationValues := findAllFloatsInRange(data, 0.0, 100.0, 30)
-
-		for _, val := range utilizationValues {
-			// Skip values already assigned to other metrics
-			if val == metrics.ALUUtilization || val == metrics.KernelOccupancy ||
-				val == metrics.BufferL1MissRate || val == metrics.BufferL1ReadAccesses ||
-				val == metrics.BufferL1WriteAccesses || val == metrics.BufferL1ReadBandwidth ||
-				val == metrics.BufferL1WriteBandwidth {
-				continue
-			}
-
-			switch {
-			case val >= 0.01 && val <= 5.0 && metrics.ComputeShaderUtilization == 0:
-				// Compute shader utilization (low percentage range)
-				metrics.ComputeShaderUtilization = val
-			case val >= 0.01 && val <= 5.0 && metrics.FragmentShaderUtilization == 0:
-				// Fragment shader utilization
-				metrics.FragmentShaderUtilization = val
-			case val >= 0.01 && val <= 5.0 && metrics.VertexShaderUtilization == 0:
-				// Vertex shader utilization
-				metrics.VertexShaderUtilization = val
-			case val >= 0.01 && val <= 2.0 && metrics.ControlFlowUtilization == 0:
-				// Control flow utilization
-				metrics.ControlFlowUtilization = val
-			case val >= 0.01 && val <= 5.0 && metrics.InstructionThroughputUtil == 0:
-				// Instruction throughput utilization
-				metrics.InstructionThroughputUtil = val
-			case val >= 0.01 && val <= 5.0 && metrics.IntegerAndComplexUtil == 0:
-				// Integer and complex utilization
-				metrics.IntegerAndComplexUtil = val
-			case val >= 0.01 && val <= 5.0 && metrics.IntegerAndConditionalUtil == 0:
-				// Integer and conditional utilization
-				metrics.IntegerAndConditionalUtil = val
-			case val >= 0.01 && val <= 5.0 && metrics.F16Utilization == 0:
-				// FP16 utilization
-				metrics.F16Utilization = val
-			case val >= 0.01 && val <= 5.0 && metrics.F32Utilization == 0:
-				// FP32 utilization
-				metrics.F32Utilization = val
-			}
-		}
-
-		record.ShaderMetric = metrics
 	}
 
 	return record
-}
-
-// findFloatInRange scans record data for float32 values in the specified range.
-// Returns the first matching value, or -1 if not found.
-func findFloatInRange(data []byte, minVal, maxVal float64) float64 {
-	for i := 0; i < len(data)-4; i += 4 {
-		// Try reading as float32
-		bits := binary.LittleEndian.Uint32(data[i : i+4])
-		val := float64(intBitsToFloat32(bits))
-
-		// Check for valid float (not NaN or Inf)
-		if val >= minVal && val <= maxVal && !isNaNOrInf(val) {
-			return val
-		}
-	}
-	return -1
 }
 
 // findAllFloatsInRange scans record data for all float32 values in the specified range.
@@ -600,124 +396,6 @@ func isNaNOrInf(val float64) bool {
 
 func intBitsToFloat32(bits uint32) float32 {
 	return math.Float32frombits(bits)
-}
-
-// groupRecordsByEncoder groups records by encoder for aggregation.
-//
-// Strategy (gputrace-75):
-// 1. Metadata records (2.3-2.9 KB) mark encoder boundaries
-// 2. Following sample records (464 bytes) belong to that encoder
-// 3. Each metadata record represents a unique encoder in sequence
-// 4. Use sequential index as EncoderID (binary field extraction unreliable)
-//
-// Note: Previous approach extracted EncoderID from offset 0x01b4, but this field
-// is not unique per encoder. Sequential indexing provides correct grouping.
-func groupRecordsByEncoder(records []*CounterRecord) []*EncoderGroup {
-	groups := make([]*EncoderGroup, 0)
-	var currentGroup *EncoderGroup
-	encoderIndex := uint64(0)
-
-	for _, record := range records {
-		if record.IsMetadata {
-			// Start new encoder group with sequential ID
-			if currentGroup != nil {
-				groups = append(groups, currentGroup)
-			}
-
-			encoderIndex++
-			currentGroup = &EncoderGroup{
-				EncoderID:      encoderIndex, // Use sequential index instead of extracted value
-				MetadataRecord: record,
-				SampleRecords:  make([]*CounterRecord, 0),
-			}
-		} else if currentGroup != nil {
-			// Add sample record to current group
-			currentGroup.SampleRecords = append(currentGroup.SampleRecords, record)
-		}
-	}
-
-	// Add final group
-	if currentGroup != nil {
-		groups = append(groups, currentGroup)
-	}
-
-	return groups
-}
-
-// aggregateEncoderMetrics aggregates metrics from sample records within an encoder group.
-//
-// Aggregation rules (gputrace-76):
-//   - Deterministic metrics (Kernel Invocations): Use FIRST/REPRESENTATIVE
-//     value (not sum). These are constant across samples for the same encoder.
-//   - Timing metrics (ALU Utilization, Occupancy): AVERAGE across samples
-//     These vary with time/load
-//   - Counter metrics (Memory Bytes): SUM across samples
-//     These accumulate over time
-func aggregateEncoderMetrics(group *EncoderGroup) *ShaderHardwareMetrics {
-	if len(group.SampleRecords) == 0 {
-		return nil
-	}
-
-	aggregated := &ShaderHardwareMetrics{
-		PipelineState: group.EncoderID, // Use encoder ID as identifier
-	}
-
-	var firstInvocations int // DETERMINISTIC: use first value
-	var invocationsSet bool
-	var totalALUUtil float64
-	var totalOccupancy float64
-	var aluSamples int
-	var occupancySamples int
-	var totalBytesRead uint64    // COUNTER: sum
-	var totalBytesWritten uint64 // COUNTER: sum
-
-	for _, record := range group.SampleRecords {
-		if record.ShaderMetric == nil {
-			continue
-		}
-
-		metrics := record.ShaderMetric
-
-		// FIRST: Kernel Invocations (deterministic metric)
-		// These are constant for an encoder, so take the first non-zero value
-		if !invocationsSet && metrics.ExecutionCount > 0 {
-			firstInvocations = metrics.ExecutionCount
-			invocationsSet = true
-		}
-
-		// Average: ALU Utilization (timing metric - varies across samples)
-		if metrics.ALUUtilization > 0 {
-			totalALUUtil += metrics.ALUUtilization
-			aluSamples++
-		}
-
-		// Average: Kernel Occupancy (timing metric - varies across samples)
-		if metrics.KernelOccupancy > 0 {
-			totalOccupancy += metrics.KernelOccupancy
-			occupancySamples++
-		}
-
-		// Sum: Memory bandwidth (counter metric - accumulates)
-		totalBytesRead += metrics.BytesReadFromDeviceMemory
-		totalBytesWritten += metrics.BytesWrittenToDeviceMemory
-	}
-
-	aggregated.ExecutionCount = firstInvocations
-
-	if aluSamples > 0 {
-		aggregated.ALUUtilization = totalALUUtil / float64(aluSamples)
-	}
-
-	if occupancySamples > 0 {
-		aggregated.KernelOccupancy = totalOccupancy / float64(occupancySamples)
-	}
-
-	// Aggregate memory bandwidth
-	aggregated.BytesReadFromDeviceMemory = totalBytesRead
-	aggregated.BytesWrittenToDeviceMemory = totalBytesWritten
-	aggregated.MemoryBandwidth = totalBytesRead + totalBytesWritten
-
-	return aggregated
 }
 
 // CounterType indicates the data type and aggregation method for a counter.

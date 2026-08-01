@@ -10,9 +10,8 @@ Implementation lives in `internal/counter`.
 ## Overview
 
 The performance counter parsing framework is no longer only scaffolding. Current
-`internal/counter` code parses `.gpuprofiler_raw` counter records, extracts the
-validated `Kernel Invocations` field at offset `0x0064`, applies file-mapped
-counter extraction for selected metrics, optionally imports Xcode CSV data as
+`internal/counter` code parses `.gpuprofiler_raw` counter records, applies
+file-mapped counter extraction for selected metrics, optionally imports Xcode CSV data as
 ground truth, and enriches shader metrics with compilation statistics from
 `streamData`.
 
@@ -22,11 +21,35 @@ from `streamData` `pipelinePerformanceStatistics`, not from direct
 binding-gap note records that the likely `GTMioShaderBinaryData` path needs a
 safe adapter before it can be used in export paths.
 
+## Retraction: the ÷27.75 Kernel Invocations scale
+
+Everything below that describes a 464-byte "sample record", an unsigned 32-bit
+Kernel Invocations field at offset `0x0064`, or a `÷ 27.75` scale on it, is
+WRONG and has been removed from the code. It is kept here as a record of a
+false lead, not as a description of the format.
+
+[V] The divisor was never measured. It was back-fitted from exactly one pair:
+raw `28,416` against `1,024` in one Xcode CSV export, and `28,416/1,024 = 27.75`
+exactly. No hardware quantity produces `111/4`, and no second observation of the
+pair was ever recorded, so the "VALIDATED" marks below were unearned.
+
+[V] The record size that gated it does not occur. Over the first five
+`Counters_f_*.raw` of
+`/tmp/qwen25-05b-staticmask-warm-tokens2-4-rep1-perfdata3.gputrace` (~30,000
+records) not one record is 464 bytes; the common sizes are 1742, 612, 671 and
+8192. The branch therefore produced no metrics on real archives, and since
+emission was gated on a non-zero invocation count, nothing downstream of it was
+ever displayed. Removing it changed no user-visible value.
+
+Real Kernel Invocations ground truth does exist — the Xcode counter-tab exports
+carry per-encoder values such as 8,058 and 11,297 — but no offset in
+`Counters_f_*.raw` has been shown to yield them.
+
 ## Current Implementation Snapshot
 
 | Metric or field | Current source | Evidence in repo | Remaining gap |
 |-----------------|----------------|------------------|---------------|
-| Kernel Invocations | `Counters_f_*.raw` sample record offset `0x0064`, scaled by `27.75` | `parseCounterRecord` and `aggregateEncoderMetrics` in `internal/counter/counter.go` | Scaling is validated for existing analysis traces, but still needs broader GPU-family validation. |
+| Kernel Invocations | RETRACTED — not extracted from `Counters_f_*.raw` at all | see "Retraction: the ÷27.75 Kernel Invocations scale" below | No sourced route from a counter file to this metric. |
 | ALU Utilization | Xcode CSV when present; otherwise deterministic `Counters_f_12.raw` extraction and legacy float-range fallback | `ImportCountersCSV`, `counterConfigs`, `extractDeterministicMetrics` | Exact raw float offset is still not known. |
 | Kernel Occupancy | `Profiling_f_*.raw` in encoder metric conversion, with counter-file fallback | `ParseProfilingFiles` and `PopulateEncoderMetricsFromPerfCounterStats` | Profiling extraction is heuristic and needs more fixtures. |
 | Allocated registers | `streamData` `Temporary register count` | `PipelineStats.TemporaryRegisterCount`, `enhanceFromStreamData`, `applyPipelineStats` | Not a raw counter-file field offset. |
@@ -56,7 +79,7 @@ Offset    Size  Type     Field Name                 Notes
 0x0004    4     uint32   Record type                Varies
 0x0008    8     uint64   Pipeline state addr (?)    Hypothesis
 ...
-0x0064    4     uint32   Kernel Invocations         VALIDATED: rawValue / 27.75
+0x0064    4     uint32   Kernel Invocations         RETRACTED: rawValue / 27.75 (see retraction)
 0x0068    ?     ?        Unknown
 ...
 various   4     float32  ALU Utilization            Range: 0.0 - 5.0%
@@ -83,7 +106,7 @@ Offset    Size  Type     Field Name                 Notes
 
 | Offset | Size | Type | Field Name | Scaling | Status |
 |--------|------|------|------------|---------|--------|
-| 0x0064 | 4 | uint32 | Kernel Invocations | ÷ 27.75 | ✅ VALIDATED |
+| 0x0064 | 4 | uint32 | Kernel Invocations | ÷ 27.75 | ❌ RETRACTED, removed from code |
 
 ### Heuristic Extraction (Float32 Range Search)
 
