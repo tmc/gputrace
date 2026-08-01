@@ -517,7 +517,7 @@ func selectLimiterRows(all []limiterMetrics, limit int) (rows []limiterMetrics, 
 }
 
 func limiterPeak(row limiterMetrics) float64 {
-	return max(row.OccupancyManager, row.InstructionThroughput, row.IntegerComplex, row.F32Limiter, row.L1Cache)
+	return max(row.InstructionThroughput, row.IntegerComplex, row.F32Limiter, row.L1Cache)
 }
 
 func dispatchedFunctionNames(dispatches []counter.DispatchInfo) []string {

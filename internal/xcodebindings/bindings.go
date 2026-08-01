@@ -177,7 +177,7 @@ func Probe() Report {
 			Binding: "XRGPUAPSDataProcessor derived counters",
 			// The binding exists, but no adapter can help: the source data is
 			// not in the archive at all.
-			Status:    gapStatus(report, "XRGPUAPSDataProcessor", "getAPSDerivedCounterData:timestamps:sampleCount:counterIndex:count:") + "; source data absent from the archive",
+			Status:    "derived-counter selector present; source data absent from the archive",
 			Next:      "requires GPU counter sampling at capture time; occupancy is not archived in streamData, and on Apple9 registers and threadgroup memory are allocated dynamically from L1 so no static residency model can supply a denominator",
 			Signature: "counter buffer methods need caller-owned numeric buffers and count validation",
 		},

@@ -80,7 +80,7 @@ func TestSelectLimiterRowsSuppressesZerosAndHonorsLimit(t *testing.T) {
 		{EncoderIndex: 1},
 		{EncoderIndex: 2, F32Limiter: 0.04},
 		{EncoderIndex: 3, L1Cache: 10},
-		{EncoderIndex: 4, OccupancyManager: 20},
+		{EncoderIndex: 4, IntegerComplex: 20},
 		{EncoderIndex: 5, InstructionThroughput: 5},
 	}
 

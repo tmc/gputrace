@@ -162,7 +162,6 @@ func (o *Observation) observeCounterFiles(tracePath string, pipelines int) {
 	}
 
 	add("ALU Utilization", func(m counter.EncoderCounterMetrics) float64 { return m.ALUUtilization }, "%.2f%%")
-	add("Kernel Occupancy", func(m counter.EncoderCounterMetrics) float64 { return m.KernelOccupancy }, "%.2f%%")
 	add("Compute Shader Utilization", func(m counter.EncoderCounterMetrics) float64 { return m.ComputeShaderUtilization }, "%.2f%%")
 	add("Control Flow Utilization", func(m counter.EncoderCounterMetrics) float64 { return m.ControlFlowUtilization }, "%.2f%%")
 	add("Instruction Throughput Utilization", func(m counter.EncoderCounterMetrics) float64 { return m.InstructionThroughputUtil }, "%.2f%%")
