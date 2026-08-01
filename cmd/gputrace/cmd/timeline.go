@@ -984,17 +984,46 @@ func generateCounterTracks(trace *gputrace.Trace, timeline *Timeline) []CounterT
 		return tracks
 	}
 
-	// Only use real performance counter data - no synthetic fallback
-	perfStats, err := gputrace.ParsePerfCounters(trace)
-	if err == nil && len(perfStats.ShaderMetrics) > 0 {
-		// Also get PipelineStats from streamData for instruction counts
-		streamStats, _ := gputrace.ExtractPipelineStats(trace)
-		encoderMetrics, _ := counter.PopulateEncoderMetricsFromPerfCounterStats(perfStats)
-		return generateCounterTracksFromPerfData(perfStats, streamStats, encoderMetrics, timeline)
+	streamStats, _ := gputrace.ExtractPipelineStats(trace)
+	if streamStats != nil {
+		tracks = append(tracks, generateCounterTracksFromCounterArchive(streamStats.CounterArchive, timeline)...)
 	}
 
-	// No synthetic data - return empty if no real perf data available
+	// Only use real performance counter data - no synthetic fallback.
+	perfStats, err := gputrace.ParsePerfCounters(trace)
+	if err == nil && len(perfStats.ShaderMetrics) > 0 {
+		encoderMetrics, _ := counter.PopulateEncoderMetricsFromPerfCounterStats(perfStats)
+		tracks = append(tracks, generateCounterTracksFromPerfData(perfStats, streamStats, encoderMetrics, timeline)...)
+	}
 	return tracks
+}
+
+// generateCounterTracksFromCounterArchive records measured per-encoder GPU
+// cycles and their archive-derived execution-cost share.
+func generateCounterTracksFromCounterArchive(archive *counter.CounterArchive, timeline *Timeline) []CounterTrack {
+	if archive == nil || timeline == nil {
+		return nil
+	}
+	costs := archive.EncoderCosts()
+	if len(costs) == 0 {
+		return nil
+	}
+	cycles := CounterTrack{Name: "GPU Cycles", Unit: "cycles"}
+	cost := CounterTrack{Name: "Execution Cost", Unit: "%"}
+	for _, c := range costs {
+		if c.Ordinal < 0 || c.Ordinal >= len(timeline.Encoders) {
+			continue
+		}
+		encoder := timeline.Encoders[c.Ordinal]
+		appendCounterTrackSampleValue(&cycles, encoder, float64(c.GPUCycles))
+		appendCounterTrackSampleValue(&cost, encoder, c.CostPercent)
+	}
+	calculateTrackStats(&cycles)
+	calculateTrackStats(&cost)
+	if len(cycles.Samples) == 0 || len(cost.Samples) == 0 {
+		return nil
+	}
+	return []CounterTrack{cycles, cost}
 }
 
 // generateCounterTracksFromPerfData creates counter tracks from real performance counter data.

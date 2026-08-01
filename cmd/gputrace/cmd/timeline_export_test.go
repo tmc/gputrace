@@ -857,6 +857,30 @@ func TestGenerateCounterTracksFromPerfDataUsesEncoderCounters(t *testing.T) {
 	}
 }
 
+func TestGenerateCounterTracksFromCounterArchive(t *testing.T) {
+	timeline := &Timeline{Encoders: []EncoderInfo{
+		{Index: 0, StartTime: 100, EndTime: 200},
+		{Index: 1, StartTime: 300, EndTime: 400},
+	}}
+	archive := &counter.CounterArchive{Encoders: []counter.EncoderSamples{
+		{Ordinal: 0, GPUCycles: 100, EndSamples: 16},
+		{Ordinal: 1, GPUCycles: 300, EndSamples: 16},
+	}}
+	tracks := generateCounterTracksFromCounterArchive(archive, timeline)
+	if got, want := len(tracks), 2; got != want {
+		t.Fatalf("tracks = %d, want %d", got, want)
+	}
+	if got, want := tracks[0].Name, "GPU Cycles"; got != want {
+		t.Fatalf("cycles track = %q, want %q", got, want)
+	}
+	if got, want := tracks[1].Name, "Execution Cost"; got != want {
+		t.Fatalf("cost track = %q, want %q", got, want)
+	}
+	if got, want := tracks[1].Samples[0].Value, 25.0; got != want {
+		t.Fatalf("first cost = %v, want %v", got, want)
+	}
+}
+
 func TestGenerateCounterTracksFromPerfDataKeepsSourceBackedZeroValues(t *testing.T) {
 	timeline := &Timeline{
 		Encoders: []EncoderInfo{{
