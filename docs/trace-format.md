@@ -116,6 +116,35 @@ Xcode's shader table combines timing and sampling metrics:
 2. **Kernel Duration**: Aggregated dispatch time per pipeline
 3. **Execution Cost**: Statistical GPU sampling percentage (from Profiling_f_*.raw)
 
+### Execution Cost per encoder
+
+Xcode's Execution Cost column is keyed per encoder, not per pipeline, and is
+absent from the Counters.csv export. It is rebuilt from `APSCounterData`:
+
+- Each pass reads the hardware counters twice per encoder, `GRC_SAMPLE_TYPE` 4
+  at the start and 5 at the end. The end record's `GRC_GPU_CYCLES` is the
+  cycles spent between them. [D] derived: every attributed sample in the
+  reference archive is one of these two types, they pair by encoder id within a
+  blob, and the begin records' counter columns are uniformly zero.
+- Encoders are identified by **ordinal**, not by id. The capture is replayed
+  once per Encoder Infos group, so an encoder gets a fresh `GRC_ENCODER_ID` in
+  each group and only its position is stable. [D]
+- Cost is the encoder's share of summed `GRC_GPU_CYCLES`.
+
+Measured against Xcode's own export of the same capture
+(`testdata/xcode-oracle/compute-kernel-encoders.txt`, 23 encoders): max
+residual **0.911 pp**, rms **0.278 pp**. The figure is close but not Xcode's
+number, and no aggregation tried reproduced it exactly - see
+`internal/counter/encodercost.go` for the variants ruled out. [D]
+
+Sample **counts** are not a cost proxy: the counter reads are scheduled, so 20
+of 23 encoders have exactly 304 samples and 3 have exactly 112 regardless of
+cost. [V]
+
+Not attributed: cost per individual `dispatchThreads` command inside an
+encoder, which Xcode also shows. The counter archive reads counters at encoder
+boundaries only, so nothing finer is archived there.
+
 Timeline and summary views use APSTimelineData when available for Effective GPU Time and
 command-buffer active/wall spans. Non-profiled traces may use approximate extracted or
 synthetic timing and should be treated as visualization data.

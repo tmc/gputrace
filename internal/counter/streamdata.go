@@ -160,6 +160,7 @@ type StreamDataStats struct {
 	Timeline              *TimelineInfo       `json:"timeline,omitempty"`        // CB timestamps from APSTimelineData
 	CounterArchive        *CounterArchive     `json:"counter_archive,omitempty"` // Per-encoder counter attribution from APSCounterData
 	APSTimelineData       [][]byte            `json:"-"`                         // Raw APSTimelineData blobs (nested plists)
+	APSCounterData        [][]byte            `json:"-"`                         // Raw APSCounterData blobs (nested archives)
 	NumEncoders           int                 `json:"num_encoders"`
 	NumGPUCommands        int                 `json:"num_gpu_commands"`
 	NumPipelines          int                 `json:"num_pipelines"`
@@ -257,6 +258,7 @@ func ParseStreamData(gpuprofilerDir string, addressToName map[uint64]string) (*S
 			// Counter samples that name an encoder live in APSCounterData, not
 			// in the ShaderProfilerData blobs above.
 			if counterBlobs := extractDataArray(objects, obj1, "APSCounterData"); len(counterBlobs) > 0 {
+				stats.APSCounterData = counterBlobs
 				numer, denom := uint64(1), uint64(1)
 				if stats.Timeline != nil {
 					numer, denom = stats.Timeline.TimebaseNumer, stats.Timeline.TimebaseDenom

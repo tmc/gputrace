@@ -51,6 +51,19 @@ var GRCColumnNames = [grcNumFixedColumns]string{
 // the replay's own carries this id.
 const GRCMachineWideID = 0xFFFFFFFF
 
+// GRC_SAMPLE_TYPE values seen on samples that name an encoder of the capture.
+// Each pass reads the counters once when the encoder starts and once when it
+// ends, so an encoder appears twice per pass. The end record carries the
+// counter deltas accumulated over the encoder, including GRC_GPU_CYCLES.
+// [D] derived: in the reference archive every attributed sample is one of
+// these two types (3,024 begins and 3,392 ends of 6,416), begins pair with
+// ends by encoder id within a blob, and the begin records' counter columns are
+// uniformly zero.
+const (
+	GRCSampleTypeEncoderBegin = 4
+	GRCSampleTypeEncoderEnd   = 5
+)
+
 // GRCMachineWideSampleType is the GRC_SAMPLE_TYPE that accompanies
 // GRCMachineWideID. [D] derived: it holds for all 552,308 RDE_0 records in the
 // reference archive and all 807,444 in a second, independent one.

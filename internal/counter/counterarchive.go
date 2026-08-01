@@ -32,6 +32,8 @@ type EncoderSamples struct {
 	BatchID     int    `json:"batch_id"`                // From the TraceId tables, by ordinal
 	SampleIndex int    `json:"sample_index"`            // From the TraceId tables, by ordinal
 	SampleCount int    `json:"sample_count"`
+	EndSamples  int    `json:"end_samples"` // Records with GRC_SAMPLE_TYPE 5, one per pass
+	GPUCycles   uint64 `json:"gpu_cycles"`  // Sum of GRC_GPU_CYCLES over the end records
 	StartTicks  uint64 `json:"start_ticks"`
 	EndTicks    uint64 `json:"end_ticks"`
 	DurationNs  uint64 `json:"duration_ns,omitempty"`
@@ -130,6 +132,10 @@ func parseCounterArchiveBlob(data []byte, timebaseNumer, timebaseDenom uint64, t
 				byEncoder[s.EncoderID] = e
 			}
 			e.SampleCount++
+			if s.SampleType == GRCSampleTypeEncoderEnd {
+				e.EndSamples++
+				e.GPUCycles += s.GPUCycles
+			}
 			if s.KickTraceID != e.KickTraceID {
 				e.KickTraceID = 0 // Not a single kick; do not claim one.
 			}

@@ -21,6 +21,7 @@ import (
 type ProfilerOutputStats struct {
 	*counter.StreamDataStats
 	ExecutionCost []counter.ExecutionCostByFunction `json:"execution_cost,omitempty"`
+	EncoderCost   []counter.EncoderCost             `json:"encoder_execution_cost,omitempty"`
 	// TimelineInfo is explicitly included to ensure it appears in JSON output
 	// (StreamDataStats.Timeline is already included via embedding, but this ensures visibility)
 }
@@ -108,6 +109,7 @@ func runProfiler(cmd *cobra.Command, args []string, opts *profilerOptions) error
 		output := ProfilerOutputStats{
 			StreamDataStats: stats,
 			ExecutionCost:   execCost,
+			EncoderCost:     stats.CounterArchive.EncoderCosts(),
 		}
 		return writeProfilerJSON(cmd.OutOrStdout(), output)
 	}
@@ -177,6 +179,24 @@ func runProfiler(cmd *cobra.Command, args []string, opts *profilerOptions) error
 		fmt.Println()
 		fmt.Print(formatProfilerFunctionCalls(sortedFuncs, opts.minCalls,
 			strings.Contains(stats.TimingSource, "gpuCommandInfoData")))
+	}
+
+	// Per-encoder execution cost, which is how Xcode groups the column.
+	if encCost := stats.CounterArchive.EncoderCosts(); len(encCost) > 0 {
+		fmt.Println()
+		fmt.Println(Colorize("Execution Cost by Encoder (from APSCounterData GRC_GPU_CYCLES)", ColorBold))
+		fmt.Println(TableSeparator(60))
+		fmt.Printf("%-10s %10s %14s %10s\n", "Encoder", "Cost", "GPU Cycles", "Reads")
+		fmt.Println(TableSeparator(60))
+		for _, c := range encCost {
+			mark := ""
+			if c.Sparse() {
+				mark = "  (few reads)"
+			}
+			fmt.Printf("%-10d %9s %14s %10d%s\n",
+				c.Ordinal, FormatPercent(c.CostPercent), FormatCount(int(c.GPUCycles)), c.EndRecords, mark)
+		}
+		fmt.Println("Differs from Xcode's Execution Cost column by up to ~0.9 pp; see internal/counter/encodercost.go.")
 	}
 
 	// Detailed kernel info only with --kernels flag
