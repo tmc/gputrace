@@ -172,7 +172,7 @@ func TestFormatCorrelationReportDisplaysTimingSource(t *testing.T) {
 				ShaderName:            "kernel_a",
 				ExecutionCount:        1,
 				AvgDuration:           time.Microsecond,
-				TimingSource:          timingSourceSyntheticThread,
+				TimingSource:          timingSourceCaptureHeuristic,
 				TimingApprox:          true,
 				ALUUtilization:        50,
 				CorrelationMethod:     "timing-only",
@@ -182,7 +182,7 @@ func TestFormatCorrelationReportDisplaysTimingSource(t *testing.T) {
 	}
 
 	out := FormatCorrelationReport(report)
-	if !strings.Contains(out, "Timing Sources: "+timingSourceSyntheticThread+" (approximate)") {
+	if !strings.Contains(out, "Timing Sources: "+timingSourceCaptureHeuristic+" (approximate)") {
 		t.Fatalf("formatted report missing approximate timing source:\n%s", out)
 	}
 	if !strings.Contains(out, "duration-derived frequency is omitted") {
@@ -199,7 +199,7 @@ func TestFormatCorrelationReportDisplaysTimingSource(t *testing.T) {
 func TestCreateTimingOnlyReportHasNoHardwareCorrelations(t *testing.T) {
 	report := createTimingOnlyReport([]*correlationTiming{{
 		Name:         "kernel",
-		TimingSource: timingSourceSyntheticKernel,
+		TimingSource: timingSourceCaptureHeuristic,
 	}}, "trace.gputrace")
 	if report.CorrelatedShaders != 0 || report.CorrelationRate != 0 {
 		t.Fatalf("timing-only correlation = %d %.1f%%, want 0", report.CorrelatedShaders, report.CorrelationRate)

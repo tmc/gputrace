@@ -298,7 +298,6 @@ type sourceLineTimingSource string
 const (
 	sourceLineTimingProfiler      sourceLineTimingSource = "profiler"
 	sourceLineTimingEncoderLabels sourceLineTimingSource = "encoder_labels"
-	sourceLineTimingSynthetic     sourceLineTimingSource = "synthetic"
 )
 
 type sourceLineTimingSelection struct {
@@ -323,10 +322,9 @@ func selectSourceLineTimings(trace *gputrace.Trace) sourceLineTimingSelection {
 		}
 	}
 
-	return sourceLineTimingSelection{
-		timings: timing.GenerateSyntheticTiming(trace),
-		source:  sourceLineTimingSynthetic,
-	}
+	// No timing source available. Source-line attribution without durations is
+	// still useful; invented durations are not.
+	return sourceLineTimingSelection{}
 }
 
 func sourceLineProfilerTimings(profilerTimings []gputrace.EncoderTimingInfo) []*export.EncoderTiming {
@@ -354,10 +352,8 @@ func formatSourceLineTimingNotice(source sourceLineTimingSource, count int) stri
 		return fmt.Sprintf("Timing source: profiler .gpuprofiler_raw data (%s)\n", formatTimingRows(count))
 	case sourceLineTimingEncoderLabels:
 		return fmt.Sprintf("Timing source: encoder label timing data (%s)\n", formatTimingRows(count))
-	case sourceLineTimingSynthetic:
-		return fmt.Sprintf("Timing source: synthetic fallback (%s; no real profiler or encoder label timing found)\n", formatTimingRows(count))
 	default:
-		return fmt.Sprintf("Timing source: unknown (%s)\n", formatTimingRows(count))
+		return "Timing source: none (no profiler or encoder label timing found); source lines are reported without durations\n"
 	}
 }
 

@@ -85,7 +85,6 @@ func TestTimingSourceApproximationLabels(t *testing.T) {
 	}{
 		{source: TimingSourceProfiler, want: false},
 		{source: TimingSourceExtracted, want: true},
-		{source: TimingSourceSynthetic, want: true},
 	}
 
 	for _, tt := range tests {

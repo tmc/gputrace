@@ -43,7 +43,6 @@ type TimingSource string
 const (
 	TimingSourceProfiler  TimingSource = "profiler"
 	TimingSourceExtracted TimingSource = "extracted"
-	TimingSourceSynthetic TimingSource = "synthetic"
 )
 
 // IsApproximate reports whether the source is heuristic or synthetic rather than measured profiler data.

@@ -48,16 +48,13 @@ func main() {
 	// Extract timing
 	fmt.Println("Extracting timing data...")
 	timings, err := gputrace.ExtractTimingData(trace)
-	if err != nil || len(timings) == 0 {
-		// Try synthetic timing
-		timings = gputrace.GenerateSyntheticTiming(trace)
-		if len(timings) == 0 {
-			log.Fatal("No timing data available")
-		}
-		fmt.Println("⚠ Using synthetic timing (no real timing data)")
-	} else {
-		fmt.Printf("✓ Extracted %d timing samples\n", len(timings))
+	if err != nil {
+		log.Fatalf("Failed to extract timing: %v", err)
 	}
+	if len(timings) == 0 {
+		log.Fatal("No timing data available: this trace carries no measured timing")
+	}
+	fmt.Printf("✓ Extracted %d timing samples\n", len(timings))
 
 	// Create source mapper
 	fmt.Println("\nIndexing Metal shader sources...")

@@ -806,11 +806,6 @@ func TestGenerateCounterTracksFromPerfDataUsesEncoderCounters(t *testing.T) {
 		t.Fatalf("memory limiter samples = %+v, want two samples at 0.75", memoryLimiter.Samples)
 	}
 
-	activeCores := findCounterTrackForTest(t, tracks, "Active Cores")
-	if len(activeCores.Samples) != 0 {
-		t.Fatalf("active cores samples = %+v, want none", activeCores.Samples)
-	}
-
 	allocated := findCounterTrackForTest(t, tracks, "Allocated Registers")
 	if len(allocated.Samples) != 2 || allocated.Samples[0].Value != 46 {
 		t.Fatalf("allocated register samples = %+v, want two samples at 46", allocated.Samples)

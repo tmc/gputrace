@@ -264,17 +264,13 @@ func TestPopulateFallbackTimingMetricsMarksSyntheticThreadEstimate(t *testing.T)
 
 	populateFallbackTimingMetrics(&trace.Trace{}, metricsMap)
 
+	// Durations used to be invented from the thread count at 10ns per thread
+	// with a 100us floor. A shader with no timing source now reports none.
 	metrics := metricsMap["unknown_kernel"]
-	if got, want := metrics.TotalDurationNs, uint64(200_000); got != want {
-		t.Fatalf("TotalDurationNs = %d, want %d", got, want)
+	if got := metrics.TotalDurationNs; got != 0 {
+		t.Fatalf("TotalDurationNs = %d, want 0", got)
 	}
-	if got, want := metrics.AvgDurationNs, uint64(100_000); got != want {
-		t.Fatalf("AvgDurationNs = %d, want %d", got, want)
-	}
-	if got := metrics.TimingSource; got != timingSourceSyntheticThread {
-		t.Fatalf("TimingSource = %q, want %q", got, timingSourceSyntheticThread)
-	}
-	if !metrics.TimingApprox {
-		t.Fatal("synthetic thread estimate should be marked approximate")
+	if got := metrics.TimingSource; got != "" {
+		t.Fatalf("TimingSource = %q, want empty", got)
 	}
 }

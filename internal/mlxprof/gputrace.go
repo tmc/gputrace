@@ -33,8 +33,11 @@ const (
 	TimingSourceExtracted = "extracted"
 	// TimingSourceStore0 indicates timings came from store0 timing extraction.
 	TimingSourceStore0 = "store0"
-	// TimingSourceSynthetic indicates timings were estimated from kernel names.
-	TimingSourceSynthetic = "synthetic"
+	// TimingSourceUnavailable indicates the trace carries no timing at all.
+	// The profile is still produced: most of its value types -- register
+	// counts, instruction counts, threadgroup memory -- are compiler
+	// statistics that do not depend on timing. Only durations are missing.
+	TimingSourceUnavailable = "unavailable"
 )
 
 type gpuTraceTimingSelection struct {
@@ -128,7 +131,7 @@ func selectGPUTraceTimings(trace *gputrace.Trace) (gpuTraceTimingSelection, erro
 	}
 
 	// Strategy 2: Try standard timing extraction.
-	timings, timingErr := gputrace.ExtractTimingData(trace)
+	timings, _ := gputrace.ExtractTimingData(trace)
 	if len(timings) > 0 {
 		return gpuTraceTimingSelection{
 			timings: timings,
@@ -145,21 +148,11 @@ func selectGPUTraceTimings(trace *gputrace.Trace) (gpuTraceTimingSelection, erro
 		}, nil
 	}
 
-	// Strategy 4: Generate synthetic timing from kernel names. This provides
-	// qualitative analysis even without real timing data.
-	timings = gputrace.GenerateSyntheticTiming(trace)
-	if len(timings) > 0 {
-		return gpuTraceTimingSelection{
-			timings:     timings,
-			source:      TimingSourceSynthetic,
-			approximate: true,
-		}, nil
-	}
-
-	if timingErr == nil {
-		timingErr = fmt.Errorf("standard timing extraction returned no timings")
-	}
-	return gpuTraceTimingSelection{}, fmt.Errorf("no timing data available (tried profiler, standard, store0, and synthetic): %w (profiler: %v, store0: %v)", timingErr, profilerErr, store0Err)
+	// No measured timing. That is not a reason to refuse the profile: the
+	// non-duration value types are still real. Report the absence and carry
+	// on with no timings rather than inventing them, which is what the
+	// removed synthetic fallback did.
+	return gpuTraceTimingSelection{source: TimingSourceUnavailable}, nil
 }
 
 // TimingSource reports which timing strategy populated this profiler's encoder timings.

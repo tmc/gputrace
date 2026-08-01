@@ -87,8 +87,6 @@ type ShaderMetrics struct {
 const (
 	timingSourceStreamDataDispatch = "streamData gpuCommandInfoData dispatch durations"
 	timingSourceCaptureHeuristic   = "capture timestamp heuristic"
-	timingSourceSyntheticKernel    = "synthetic kernel-name estimate"
-	timingSourceSyntheticThread    = "synthetic thread-count estimate"
 )
 
 // ShaderMetricsReport aggregates metrics for all shaders in a trace.
@@ -486,16 +484,10 @@ func populateFallbackTimingMetrics(t *trace.Trace, metricsMap map[string]*Shader
 			metrics.MaxDurationNs = durationPerInvocation
 			metrics.TimingSource = source
 			metrics.TimingApprox = approximate
-			continue
 		}
-
-		estimatedNs := estimateShaderDuration(metrics)
-		metrics.TotalDurationNs = estimatedNs * uint64(metrics.InvocationCount)
-		metrics.AvgDurationNs = estimatedNs
-		metrics.MinDurationNs = estimatedNs
-		metrics.MaxDurationNs = estimatedNs
-		metrics.TimingSource = timingSourceSyntheticThread
-		metrics.TimingApprox = true
+		// No timing for this shader. Leave the duration fields zero and the
+		// source empty rather than inventing a number: a duration column is
+		// read as a measurement no matter what flag sits beside it.
 	}
 }
 
@@ -503,11 +495,6 @@ func extractFallbackTimings(t *trace.Trace) ([]*timing.EncoderTiming, string, bo
 	timings, err := timing.ExtractTimingData(t)
 	if err == nil && len(timings) > 0 {
 		return timings, timingSourceCaptureHeuristic, true
-	}
-
-	timings = timing.GenerateSyntheticTiming(t)
-	if len(timings) > 0 {
-		return timings, timingSourceSyntheticKernel, true
 	}
 
 	return nil, "", true
@@ -575,32 +562,6 @@ func applyPipelineStatsToMetrics(metrics *ShaderMetrics, p *counter.PipelineStat
 	metrics.DeviceLoadCount = p.DeviceLoadCount
 	metrics.DeviceStoreCount = p.DeviceStoreCount
 	metrics.HasPipelineStats = true
-}
-
-// estimateShaderDuration provides a rough duration estimate based on thread configuration.
-func estimateShaderDuration(metrics *ShaderMetrics) uint64 {
-	totalThreadgroups := metrics.ThreadgroupsX * metrics.ThreadgroupsY * metrics.ThreadgroupsZ
-	if totalThreadgroups == 0 {
-		totalThreadgroups = 1
-	}
-
-	threadsPerGroup := metrics.ThreadsPerGroupX * metrics.ThreadsPerGroupY * metrics.ThreadsPerGroupZ
-	if threadsPerGroup == 0 {
-		threadsPerGroup = 256 // Default
-	}
-
-	// More threads = more work (roughly linear)
-	totalThreads := totalThreadgroups * threadsPerGroup
-
-	// Estimate: 10ns per thread on average
-	estimatedNs := totalThreads * 10
-
-	// Minimum 100µs
-	if estimatedNs < 100_000 {
-		estimatedNs = 100_000
-	}
-
-	return estimatedNs
 }
 
 // populateInstructionCounts populates instruction counts from PipelineStats (streamData).

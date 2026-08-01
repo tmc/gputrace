@@ -1079,19 +1079,6 @@ func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, str
 			// Use real hardware metrics
 			aluUtil = metrics.ALUUtilization
 
-			// Calculate active cores from SIMD groups
-			// Typical M-series GPU: 8-10 cores, each core has 128-1024 SIMD lanes
-			// Heuristic: map SIMD groups to estimated core count
-			if metrics.SIMDGroups > 0 {
-				activeCores = float64(metrics.SIMDGroups) / 100.0 // Rough estimate
-				if activeCores > 8.0 {
-					activeCores = 8.0 // Cap at typical M-series core count
-				}
-				if activeCores < 1.0 {
-					activeCores = 1.0
-				}
-			}
-
 			// Calculate bandwidth from memory bandwidth counter (convert bytes to GB/s)
 			if metrics.MemoryBandwidth > 0 && encoder.Duration > 0 {
 				durationSec := float64(encoder.Duration) / 1e9
@@ -1210,7 +1197,7 @@ func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, str
 				memRead = float64(metrics.BytesReadFromDeviceMemory) / 1e9 / durationSec
 				memWrite = float64(metrics.BytesWrittenToDeviceMemory) / 1e9 / durationSec
 			}
-			compLimit = metrics.ComputeShaderLaunchLimiter + metrics.ALUUtilization
+			compLimit = metrics.ComputeShaderLaunchLimiter
 			memLimit = metrics.L1CacheLimiter + metrics.LastLevelCacheLimiter + metrics.TextureReadLimiter
 		}
 		if encoderMetric != nil {

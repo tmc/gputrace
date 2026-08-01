@@ -21,11 +21,6 @@ func ConvertStore0ToEncoderTimings(t *Trace, store0Data *timing.Store0TimingData
 	return timing.ConvertStore0ToEncoderTimings(t, store0Data)
 }
 
-// GenerateSyntheticTiming generates synthetic timing data for t.
-func GenerateSyntheticTiming(t *Trace) []*EncoderTiming {
-	return timing.GenerateSyntheticTiming(t)
-}
-
 // NewTimingMetricsExtractor returns a timing metrics extractor for t.
 func NewTimingMetricsExtractor(t *Trace) *TimingMetricsExtractor {
 	return timing.NewTimingMetricsExtractor(t)
