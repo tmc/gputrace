@@ -32,7 +32,7 @@ This command performs comprehensive analysis to identify:
     * Memory-bound vs compute-bound classification
     * Dominant shader detection
   - OPTIMIZATIONS: Opportunities to improve performance
-    * Low occupancy issues
+    * Small threadgroup sizes
     * Excessive dispatch overhead
     * Work distribution imbalance
   - ANTI-PATTERNS: Common performance pitfalls

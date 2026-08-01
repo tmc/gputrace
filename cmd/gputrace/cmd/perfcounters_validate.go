@@ -26,7 +26,7 @@ func newPerfcountersValidateCommand(opts *perfcountersValidateOptions) *cobra.Co
 This command is critical for validating the binary parsing implementation:
 - Extracts metrics from .gpuprofiler_raw binary files
 - Compares against known-good Xcode Instruments data
-- Reports accuracy for key metrics (Kernel Invocations, ALU Utilization, Occupancy)
+- Reports accuracy for key metrics (Kernel Invocations, ALU Utilization)
 
 Used to validate replay engine accuracy by cross-checking against ground truth.`,
 		Args: cobra.ExactArgs(2),
@@ -73,7 +73,6 @@ type ReferenceCSVData struct {
 	// Key metrics from first data row (index 0)
 	KernelInvocations  int
 	ALUUtilization     float64
-	KernelOccupancy    float64
 	MemoryBandwidthGBs float64
 }
 
@@ -126,12 +125,6 @@ func loadReferenceCSV(path string) (*ReferenceCSVData, error) {
 		if idx, ok := colIndex["ALU Utilization"]; ok && idx < len(firstRow) {
 			val := strings.TrimSpace(firstRow[idx])
 			data.ALUUtilization, _ = strconv.ParseFloat(val, 64)
-		}
-
-		// Kernel Occupancy (%) - column ~107
-		if idx, ok := colIndex["Kernel Occupancy"]; ok && idx < len(firstRow) {
-			val := strings.TrimSpace(firstRow[idx])
-			data.KernelOccupancy, _ = strconv.ParseFloat(val, 64)
 		}
 
 		// Device Memory Bandwidth (GB/s) - column ~52
@@ -187,19 +180,6 @@ func validateMetrics(stats *gputrace.PerfCounterStats, ref *ReferenceCSVData) er
 		ref.ALUUtilization,
 		aluDelta,
 		aluStatus)
-
-	// Kernel Occupancy
-	occupancyDelta := firstEncoder.KernelOccupancy - ref.KernelOccupancy
-	occupancyStatus := "✅ PASS"
-	if abs(occupancyDelta) > 5.0 {
-		occupancyStatus = "❌ FAIL"
-	}
-	fmt.Printf("%-30s %14.2f%%  %14.2f%%  %+12.2f%%  %s\n",
-		"Kernel Occupancy",
-		firstEncoder.KernelOccupancy,
-		ref.KernelOccupancy,
-		occupancyDelta,
-		occupancyStatus)
 
 	fmt.Printf("\n=== Summary ===\n")
 	fmt.Printf("Total Encoders:      %d\n", len(stats.ShaderMetrics))

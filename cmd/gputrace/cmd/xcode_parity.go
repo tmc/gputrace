@@ -201,9 +201,6 @@ func buildXcodeParityReport(tracePath string, timeline *Timeline, bindings xcode
 	for _, field := range report.PresentFields {
 		present[field] = true
 	}
-	if present["occupancy_pct"] {
-		report.ClosedExamples = append(report.ClosedExamples, "occupancy_pct present on kernel events")
-	}
 	if present["alu_utilization_pct"] {
 		report.ClosedExamples = append(report.ClosedExamples, "alu_utilization_pct present on kernel events")
 	}

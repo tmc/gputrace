@@ -39,7 +39,7 @@ Features:
   - Multiple output formats (text, HTML, JSON)
 
 The analysis uses:
-  - Shader performance metrics from trace (timing, invocations, occupancy)
+  - Shader performance metrics from trace (timing, invocations)
   - Metal shader source files (.metal) from indexed locations
   - Static analysis to estimate relative cost of each line
   - Heuristics to classify instruction types

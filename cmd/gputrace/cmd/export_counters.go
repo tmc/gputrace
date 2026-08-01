@@ -35,7 +35,7 @@ Metadata Columns (1-5):
 
 Performance Metrics (6-246):
   241 performance counter metrics including:
-  - ALU Utilization, Kernel Occupancy
+  - ALU Utilization
   - Memory bandwidth (Buffer/Texture Device Memory Bytes)
   - Cache miss rates (L1, Texture Cache)
   - Shader-specific metrics (VS/FS/Compute)

@@ -442,7 +442,6 @@ func TestAddDispatchKernelEventsIncludesXcodeShaderArgs(t *testing.T) {
 			AllocatedRegs:   17,
 			HighRegister:    19,
 			SpilledBytes:    16,
-			KernelOccupancy: 62.5,
 			ALUUtilization:  71.25,
 		}},
 	}
@@ -523,7 +522,6 @@ func TestAddDispatchKernelEventsUsesEncoderCounterFallback(t *testing.T) {
 	}
 	encoderMetrics := []counter.EncoderCounterMetrics{{
 		EncoderIndex:       0,
-		KernelOccupancy:    62.5,
 		ALUUtilization:     71.25,
 		ComputeUtilization: 80,
 	}}
@@ -532,14 +530,11 @@ func TestAddDispatchKernelEventsUsesEncoderCounterFallback(t *testing.T) {
 		t.Fatal("addDispatchKernelEvents returned false")
 	}
 	args := timeline.Events[0].Args
-	if got, want := args["occupancy_pct"], 62.5; got != want {
-		t.Fatalf("occupancy_pct = %#v, want %#v", got, want)
-	}
 	if got, want := args["alu_utilization_pct"], 71.25; got != want {
 		t.Fatalf("alu_utilization_pct = %#v, want %#v", got, want)
 	}
-	if got, want := args["occupancy_source"], "encoder counter fallback"; got != want {
-		t.Fatalf("occupancy_source = %#v, want %#v", got, want)
+	if _, ok := args["occupancy_pct"]; ok {
+		t.Fatal("occupancy_pct must not be emitted; gputrace cannot measure occupancy")
 	}
 	if got, want := args["alu_utilization_source"], "encoder counter fallback"; got != want {
 		t.Fatalf("alu_utilization_source = %#v, want %#v", got, want)
@@ -602,7 +597,6 @@ func TestBuildXcodeParityReport(t *testing.T) {
 		Events: []TimelineEvent{{
 			Category: "kernel",
 			Args: map[string]interface{}{
-				"occupancy_pct":       62.5,
 				"alu_utilization_pct": 0.0,
 				"allocated_registers": 13,
 			},
@@ -616,9 +610,6 @@ func TestBuildXcodeParityReport(t *testing.T) {
 		t.Fatal("missing remaining gaps")
 	}
 	for _, gap := range report.RemainingGaps {
-		if gap.Metric == "occupancy_pct" {
-			t.Fatalf("occupancy_pct should be closed: %+v", report.RemainingGaps)
-		}
 		if gap.Metric == "alu_utilization_pct" {
 			t.Fatalf("alu_utilization_pct should be closed: %+v", report.RemainingGaps)
 		}
@@ -683,12 +674,6 @@ func xcodebindingsReportForTest() xcodebindings.Report {
 				Binding: "XRGPUAPSDataProcessor derived counters",
 				Status:  "binding present; adapter missing",
 				Next:    "resolve ALU counter",
-			},
-			{
-				Metric:  "occupancy_pct",
-				Binding: "XRGPUAPSDataProcessor derived counters",
-				Status:  "binding present; adapter missing",
-				Next:    "resolve occupancy counter",
 			},
 		},
 	}
@@ -768,7 +753,6 @@ func TestGenerateCounterTracksFromPerfDataUsesEncoderCounters(t *testing.T) {
 	encoderMetrics := []counter.EncoderCounterMetrics{{
 		EncoderIndex:               1,
 		EncoderLabel:               "kernel0",
-		KernelOccupancy:            0.81,
 		ALUUtilization:             3.25,
 		DeviceMemoryBandwidthGBps:  12.5,
 		BytesReadFromDeviceMemory:  500,
@@ -793,20 +777,6 @@ func TestGenerateCounterTracksFromPerfDataUsesEncoderCounters(t *testing.T) {
 	}
 
 	tracks := generateCounterTracksFromPerfData(&gputrace.PerfCounterStats{}, streamStats, encoderMetrics, timeline)
-	occupancy := findCounterTrackForTest(t, tracks, "Occupancy")
-	if len(occupancy.Samples) != 2 {
-		t.Fatalf("occupancy samples = %d, want 2", len(occupancy.Samples))
-	}
-	if got := occupancy.Samples[0].Timestamp; got != uint64(100) {
-		t.Fatalf("occupancy first timestamp = %d, want 100", got)
-	}
-	if got := occupancy.Samples[1].Timestamp; got != uint64(200) {
-		t.Fatalf("occupancy second timestamp = %d, want 200", got)
-	}
-	if got := occupancy.Samples[0].Value; got != 0.81 {
-		t.Fatalf("occupancy value = %v, want 0.81", got)
-	}
-
 	alu := findCounterTrackForTest(t, tracks, "ALU Utilization")
 	if len(alu.Samples) != 2 || alu.Samples[0].Value != 3.25 {
 		t.Fatalf("ALU samples = %+v, want two samples at 3.25", alu.Samples)
@@ -887,14 +857,8 @@ func TestGenerateCounterTracksFromPerfDataKeepsSourceBackedZeroValues(t *testing
 
 func TestDispatchKernelArgsKeepsSourceBackedZeroEncoderCounters(t *testing.T) {
 	args := dispatchKernelArgs(counter.DispatchInfo{}, nil, 0, 0, nil, nil, &counter.EncoderCounterMetrics{}, nil)
-	if got, ok := args["occupancy_pct"]; !ok || got != float64(0) {
-		t.Fatalf("occupancy_pct = %#v, %v, want source-backed zero", got, ok)
-	}
 	if got, ok := args["alu_utilization_pct"]; !ok || got != float64(0) {
 		t.Fatalf("alu_utilization_pct = %#v, %v, want source-backed zero", got, ok)
-	}
-	if got, want := args["occupancy_source"], "encoder counter fallback"; got != want {
-		t.Fatalf("occupancy_source = %#v, want %#v", got, want)
 	}
 	if got, want := args["alu_utilization_source"], "encoder counter fallback"; got != want {
 		t.Fatalf("alu_utilization_source = %#v, want %#v", got, want)

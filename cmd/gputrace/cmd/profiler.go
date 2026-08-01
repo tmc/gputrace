@@ -415,13 +415,13 @@ func runProfiler(cmd *cobra.Command, args []string, opts *profilerOptions) error
 				fmt.Printf(" (%d zero rows omitted)", zero)
 			}
 			fmt.Println()
-			fmt.Println(TableSeparator(95))
-			fmt.Printf("%-5s %-16s %-18s %-16s %-16s %-16s\n",
-				"Record", "Occupancy Mgr", "Instr Throughput", "Int & Complex", "F32 Limiter", "L1 Cache")
-			fmt.Println(TableSeparator(95))
+			fmt.Println(TableSeparator(78))
+			fmt.Printf("%-5s %-18s %-16s %-16s %-16s\n",
+				"Record", "Instr Throughput", "Int & Complex", "F32 Limiter", "L1 Cache")
+			fmt.Println(TableSeparator(78))
 			for _, ld := range rows {
-				fmt.Printf("%-5d %15s %17s %15s %15s %15s\n",
-					ld.EncoderIndex, FormatPercent(ld.OccupancyManager), FormatPercent(ld.InstructionThroughput),
+				fmt.Printf("%-5d %17s %15s %15s %15s\n",
+					ld.EncoderIndex, FormatPercent(ld.InstructionThroughput),
 					FormatPercent(ld.IntegerComplex), FormatPercent(ld.F32Limiter), FormatPercent(ld.L1Cache))
 			}
 			fmt.Println("\nNote: Values are heuristic candidates, not source-backed bottleneck measurements.")
@@ -562,7 +562,6 @@ func writeProfilerJSON(w io.Writer, output ProfilerOutputStats) error {
 // limiterMetrics holds extracted performance limiter values per encoder.
 type limiterMetrics struct {
 	EncoderIndex          int
-	OccupancyManager      float64
 	InstructionThroughput float64
 	IntegerComplex        float64
 	F32Limiter            float64
@@ -633,9 +632,6 @@ func extractLimiterData(profilerDir string) []limiterMetrics {
 			// Map extracted values to limiter types (heuristic based on value ranges)
 			for _, val := range limiters {
 				switch {
-				case val >= 50 && val <= 100 && ld.OccupancyManager == 0:
-					// Occupancy Manager typically 50-80%
-					ld.OccupancyManager = val
 				case val >= 0.01 && val <= 5 && ld.InstructionThroughput == 0:
 					// Instruction throughput limiter (small %)
 					ld.InstructionThroughput = val

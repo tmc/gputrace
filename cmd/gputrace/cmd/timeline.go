@@ -569,7 +569,7 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 	}
 	var encoderMetrics []counter.EncoderCounterMetrics
 	if perfStats != nil {
-		encoderMetrics, _ = counter.PopulateEncoderMetricsFromPerfCounterStats(trace, perfStats)
+		encoderMetrics, _ = counter.PopulateEncoderMetricsFromPerfCounterStats(perfStats)
 	}
 	var shaderReport *gputrace.ShaderMetricsReport
 	if profilerDir != "" {
@@ -980,7 +980,7 @@ func generateCounterTracks(trace *gputrace.Trace, timeline *Timeline) []CounterT
 	if err == nil && len(perfStats.ShaderMetrics) > 0 {
 		// Also get PipelineStats from streamData for instruction counts
 		streamStats, _ := gputrace.ExtractPipelineStats(trace)
-		encoderMetrics, _ := counter.PopulateEncoderMetricsFromPerfCounterStats(trace, perfStats)
+		encoderMetrics, _ := counter.PopulateEncoderMetricsFromPerfCounterStats(perfStats)
 		return generateCounterTracksFromPerfData(perfStats, streamStats, encoderMetrics, timeline)
 	}
 
@@ -999,12 +999,6 @@ func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, str
 		Samples: make([]CounterSample, 0),
 	}
 
-	occupancyTrack := CounterTrack{
-		Name:    "Occupancy",
-		Unit:    "%",
-		Samples: make([]CounterSample, 0),
-	}
-
 	aluTrack := CounterTrack{
 		Name:    "ALU Utilization",
 		Unit:    "%",
@@ -1019,12 +1013,6 @@ func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, str
 
 	throughputTrack := CounterTrack{
 		Name:    "Instruction Throughput",
-		Unit:    "%",
-		Samples: make([]CounterSample, 0),
-	}
-
-	occupancyManagerTrack := CounterTrack{
-		Name:    "Occupancy Manager",
 		Unit:    "%",
 		Samples: make([]CounterSample, 0),
 	}
@@ -1082,16 +1070,13 @@ func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, str
 
 		// Calculate values from real hardware data.
 		var activeCores float64
-		var occupancy float64
 		var aluUtil float64
 		var bandwidth float64
 		var throughput float64
-		var occupancyManager float64
 		var shaderLaunchLimiter float64
 
 		if metrics != nil {
 			// Use real hardware metrics
-			occupancy = metrics.KernelOccupancy
 			aluUtil = metrics.ALUUtilization
 
 			// Calculate active cores from SIMD groups
@@ -1113,20 +1098,9 @@ func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, str
 				bandwidth = float64(metrics.MemoryBandwidth) / 1e9 / durationSec
 			}
 
-			// Estimate throughput from occupancy and ALU utilization
-			if occupancy > 0 && aluUtil > 0 {
-				throughput = (occupancy + aluUtil) / 2.0
-			}
-
-			// Occupancy Manager: Tracks how well the GPU scheduler manages threadgroup dispatch
-			// High when occupancy is maintained well, low when there are bubbles
-			if occupancy > 0 {
-				occupancyManager = occupancy * 0.95 // Typically slightly lower than raw occupancy
-			}
-
 			// Shader Launch Limiter: Percentage of time shader launches are limited by resources
 			// High values indicate resource contention (registers, threadgroup memory, etc.)
-			// Estimate from register pressure and occupancy
+			// Estimate from register pressure
 			if metrics.AllocatedRegs > 0 {
 				// More registers = more likely to hit launch limits
 				regPressure := float64(metrics.AllocatedRegs) / 256.0 // 256 max registers typical
@@ -1137,9 +1111,6 @@ func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, str
 			}
 		}
 		if encoderMetric != nil {
-			if occupancy == 0 {
-				occupancy = encoderMetric.KernelOccupancy
-			}
 			if aluUtil == 0 {
 				aluUtil = encoderMetric.ALUUtilization
 			}
@@ -1155,9 +1126,6 @@ func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, str
 			if throughput == 0 {
 				throughput = encoderMetric.InstructionThroughputUtil
 			}
-			if occupancyManager == 0 {
-				occupancyManager = encoderMetric.ComputeUtilization
-			}
 			if shaderLaunchLimiter == 0 {
 				shaderLaunchLimiter = encoderMetric.ComputeShaderLaunchLimiter
 			}
@@ -1171,24 +1139,20 @@ func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, str
 		// Xcode counters, zero is a meaningful value and should appear as a
 		// flat track instead of being reported as unavailable.
 		appendCounterTrackSample(&activeCoresTrack, encoder, activeCores)
-		appendCounterTrackSampleValue(&occupancyTrack, encoder, occupancy)
 		appendCounterTrackSampleValue(&aluTrack, encoder, aluUtil)
 		appendCounterTrackSampleValue(&bandwidthTrack, encoder, bandwidth)
 		appendCounterTrackSampleValue(&throughputTrack, encoder, throughput)
-		appendCounterTrackSampleValue(&occupancyManagerTrack, encoder, occupancyManager)
 		appendCounterTrackSampleValue(&shaderLaunchLimiterTrack, encoder, shaderLaunchLimiter)
 	}
 
 	// Calculate statistics for each track
 	calculateTrackStats(&activeCoresTrack)
-	calculateTrackStats(&occupancyTrack)
 	calculateTrackStats(&aluTrack)
 	calculateTrackStats(&bandwidthTrack)
 	calculateTrackStats(&throughputTrack)
-	calculateTrackStats(&occupancyManagerTrack)
 	calculateTrackStats(&shaderLaunchLimiterTrack)
 
-	tracks = append(tracks, activeCoresTrack, occupancyTrack, aluTrack, bandwidthTrack, throughputTrack, occupancyManagerTrack, shaderLaunchLimiterTrack)
+	tracks = append(tracks, activeCoresTrack, aluTrack, bandwidthTrack, throughputTrack, shaderLaunchLimiterTrack)
 
 	// Add L1 Cache Miss Rate Track
 	l1MissTrack := CounterTrack{
@@ -1781,18 +1745,11 @@ func dispatchKernelArgs(d counter.DispatchInfo, p *counter.PipelineStats, simdGr
 		if hardware.SpilledBytes > 0 {
 			args["spilled_bytes"] = hardware.SpilledBytes
 		}
-		if hardware.KernelOccupancy > 0 {
-			args["occupancy_pct"] = hardware.KernelOccupancy
-		}
 		if hardware.ALUUtilization > 0 {
 			args["alu_utilization_pct"] = hardware.ALUUtilization
 		}
 	}
 	if encoderMetric != nil {
-		if args["occupancy_pct"] == nil {
-			args["occupancy_pct"] = encoderMetric.KernelOccupancy
-			args["occupancy_source"] = "encoder counter fallback"
-		}
 		if args["alu_utilization_pct"] == nil {
 			args["alu_utilization_pct"] = encoderMetric.ALUUtilization
 			args["alu_utilization_source"] = "encoder counter fallback"
@@ -2270,7 +2227,6 @@ func timelineXcodeMetricsArgs(timeline *Timeline) map[string]interface{} {
 			"spilled_bytes",
 			"threadgroup_memory",
 			"instruction_count",
-			"occupancy_pct",
 			"alu_utilization_pct",
 			"pipeline_id",
 			"pipeline_state",
@@ -2292,7 +2248,6 @@ func timelineXcodeMetricsArgs(timeline *Timeline) map[string]interface{} {
 		"spilled_bytes",
 		"threadgroup_memory",
 		"instruction_count",
-		"occupancy_pct",
 		"alu_utilization_pct",
 		"pipeline_id",
 		"pipeline_state",
@@ -2338,7 +2293,6 @@ func timelineXcodeMetricsArgs(timeline *Timeline) map[string]interface{} {
 func xcodeMetricBindingCandidates(fields []string) map[string]string {
 	candidates := map[string]string{
 		"high_register":       "GTMioShaderBinaryData.LiveRegisterForInstructionAtIndex",
-		"occupancy_pct":       "XRGPUAPSDataProcessor derived counters",
 		"alu_utilization_pct": "XRGPUAPSDataProcessor derived counters",
 	}
 	result := make(map[string]string)
