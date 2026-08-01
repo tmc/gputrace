@@ -110,9 +110,11 @@ func (tme *TimingMetricsExtractor) Extract() (*TimingMetrics, error) {
 		CommandBufferTimings: make([]*CommandBufferTiming, 0),
 	}
 
-	// Extract encoder timings - try profiler timing first (most accurate), then heuristic, then synthetic
+	// Extract encoder timings - profiler timing first (measured), then the
+	// capture-derived heuristic. There is no third fallback: a trace with
+	// neither reports that timing is unavailable rather than inventing it.
 	var encoderTimings []*EncoderTiming
-	timingSource := TimingSourceSynthetic
+	timingSource := TimingSourceUnavailable
 
 	// 1. Try real profiler timing from .gpuprofiler_raw (most accurate)
 	profilerTimings, _, profilerErr := counter.ExtractEncoderTimingsFromProfiler(tme.trace)
@@ -143,9 +145,11 @@ func (tme *TimingMetricsExtractor) Extract() (*TimingMetrics, error) {
 		if err == nil && len(encoderTimings) > 0 {
 			timingSource = TimingSourceExtracted
 		} else {
-			// 3. Last resort: synthetic timing
-			encoderTimings = GenerateSyntheticTiming(tme.trace)
-			timingSource = TimingSourceSynthetic
+			// No third fallback. Guessing a duration from a kernel's name
+			// produces a table that is sorted, shared and per-kernel, which
+			// reads as measurement no matter what the header calls it.
+			encoderTimings = nil
+			timingSource = TimingSourceUnavailable
 		}
 	}
 	metrics.EncoderTimings = encoderTimings
@@ -322,12 +326,16 @@ func WriteTimingMetrics(w io.Writer, metrics *TimingMetrics) error {
 	if _, err := fmt.Fprintf(w, "Trace: %s\n", metrics.TracePath); err != nil {
 		return err
 	}
-	durationLabel := "Encoder/dispatch span"
-	if metrics.TimingSource == TimingSourceProfiler {
-		durationLabel = "Dispatch span"
-	}
-	if _, err := fmt.Fprintf(w, "%s: %v (%.2f ms)\n", durationLabel, metrics.TotalDuration, float64(metrics.TotalDuration)/float64(time.Millisecond)); err != nil {
-		return err
+	// A span line is itself a measurement. Omit it when there is nothing
+	// measured, rather than printing a zero that reads as one.
+	if metrics.TimingSource != TimingSourceUnavailable {
+		durationLabel := "Encoder/dispatch span"
+		if metrics.TimingSource == TimingSourceProfiler {
+			durationLabel = "Dispatch span"
+		}
+		if _, err := fmt.Fprintf(w, "%s: %v (%.2f ms)\n", durationLabel, metrics.TotalDuration, float64(metrics.TotalDuration)/float64(time.Millisecond)); err != nil {
+			return err
+		}
 	}
 	if metrics.TimingSource != "" {
 		sourceKind := "measured"
@@ -345,6 +353,14 @@ func WriteTimingMetrics(w io.Writer, metrics *TimingMetrics) error {
 		return err
 	}
 	if _, err := fmt.Fprintf(w, "Timed Functions: %d\n\n", len(metrics.KernelTimings)); err != nil {
+		return err
+	}
+
+	// Structural counts above are real; the cost table is not available. Say
+	// so in place of the table rather than printing an empty one, which reads
+	// as "no kernels ran" rather than "this trace cannot say".
+	if metrics.TimingSource == TimingSourceUnavailable {
+		_, err := fmt.Fprint(w, unavailableTimingNote)
 		return err
 	}
 

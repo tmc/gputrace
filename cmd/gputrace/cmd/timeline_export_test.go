@@ -297,7 +297,10 @@ func TestExportTextTimelineSummarizesUnitsAndMissingDuration(t *testing.T) {
 	}
 }
 
-func TestGenerateTimelineAnnotatesSyntheticTimingSource(t *testing.T) {
+// The timeline used to place encoder spans built from name-guessed durations
+// on the same axis as measured ones, where a span's width reads as its cost.
+// A trace with no measured timing now contributes no encoder spans at all.
+func TestGenerateTimelineOmitsSpansWhenTimingUnavailable(t *testing.T) {
 	tr := &gputrace.Trace{
 		Path:        timelineTimingSourceTraceDir(t),
 		KernelNames: []string{"block_softmax_float32"},
@@ -311,25 +314,15 @@ func TestGenerateTimelineAnnotatesSyntheticTimingSource(t *testing.T) {
 	if timeline.Timing == nil {
 		t.Fatal("timeline timing metadata is nil")
 	}
-	if got, want := timeline.Timing.EncoderTimingSource, "synthetic"; got != want {
+	if got, want := timeline.Timing.EncoderTimingSource, "unavailable"; got != want {
 		t.Fatalf("EncoderTimingSource = %q, want %q", got, want)
 	}
 	if !timeline.Timing.EncoderTimingApproximate {
-		t.Fatal("EncoderTimingApproximate = false, want true")
+		t.Fatal("EncoderTimingApproximate = false, want true: an absent measurement is not an exact one")
 	}
 
-	event := firstTimelineEventByCategory(timeline, "encoder")
-	if event == nil {
-		t.Fatal("missing encoder event")
-	}
-	if got, want := event.Args["timing_source"], "synthetic"; got != want {
-		t.Fatalf("event timing_source = %v, want %q", got, want)
-	}
-	if got, want := event.Args["timing_approximate"], true; got != want {
-		t.Fatalf("event timing_approximate = %v, want %v", got, want)
-	}
-	if got, want := event.Args["real_timing"], false; got != want {
-		t.Fatalf("event real_timing = %v, want %v", got, want)
+	if event := firstTimelineEventByCategory(timeline, "encoder"); event != nil {
+		t.Fatalf("encoder span emitted for an unmeasured trace: %+v", event.Args)
 	}
 }
 

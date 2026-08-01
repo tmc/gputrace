@@ -8,7 +8,10 @@ import (
 	"testing"
 )
 
-func TestTimingMetricsExtractMarksSyntheticFallbackApproximate(t *testing.T) {
+// A trace with a kernel name but no measured timing used to be given synthetic
+// durations guessed from that name. It now reports that timing is unavailable:
+// the name is not evidence of how long the kernel ran.
+func TestTimingMetricsExtractReportsUnavailableRatherThanSynthetic(t *testing.T) {
 	tr := &Trace{
 		Path:        timingMetricsTestTraceDir(t),
 		KernelNames: []string{"block_softmax_float32"},
@@ -19,17 +22,29 @@ func TestTimingMetricsExtractMarksSyntheticFallbackApproximate(t *testing.T) {
 		t.Fatalf("Extract failed: %v", err)
 	}
 
-	if metrics.TimingSource != TimingSourceSynthetic {
-		t.Fatalf("TimingSource = %q, want %q", metrics.TimingSource, TimingSourceSynthetic)
+	if metrics.TimingSource != TimingSourceUnavailable {
+		t.Fatalf("TimingSource = %q, want %q", metrics.TimingSource, TimingSourceUnavailable)
 	}
-	if !metrics.TimingApproximate {
-		t.Fatalf("TimingApproximate = false, want true")
+	if len(metrics.EncoderTimings) != 0 {
+		t.Fatalf("EncoderTimings = %d rows, want none invented", len(metrics.EncoderTimings))
 	}
-	if got, want := metrics.TotalEncoders, 1; got != want {
-		t.Fatalf("TotalEncoders = %d, want %d", got, want)
+	if len(metrics.KernelTimings) != 0 {
+		t.Fatalf("KernelTimings = %d rows, want none invented", len(metrics.KernelTimings))
 	}
-	if got, want := metrics.EncoderTimings[0].Label, "block_softmax_float32"; got != want {
-		t.Fatalf("encoder label = %q, want %q", got, want)
+	if metrics.TotalDuration != 0 {
+		t.Fatalf("TotalDuration = %v, want 0: no span was measured", metrics.TotalDuration)
+	}
+
+	// The report replaces the cost table, rather than printing an empty one.
+	report := FormatTimingMetrics(metrics)
+	if !strings.Contains(report, "cannot say how long they took") {
+		t.Errorf("report does not state timing is unavailable:\n%s", report)
+	}
+	if strings.Contains(report, "Functions by Attributed Span") {
+		t.Errorf("report still prints the cost table header:\n%s", report)
+	}
+	if strings.Contains(report, "Encoder/dispatch span") {
+		t.Errorf("report still prints a span line for an unmeasured trace:\n%s", report)
 	}
 }
 
