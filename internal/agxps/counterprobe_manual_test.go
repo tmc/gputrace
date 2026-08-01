@@ -169,30 +169,90 @@ func loadCounterAPI(t *testing.T) *counterAPI {
 // TestCounterTableEnumerate walks the framework's static counter table. It
 // needs no trace data: the table is a global in the binary, so this establishes
 // the ident space that a decoded file's counter names index into.
+//
+// agxps_counter_is_valid is NOT a bound on that space. The earlier version of
+// this probe took the comment on it at face value -- "compares the argument
+// against the length of a global vector of 0x50-byte records, so the ident
+// space is a dense 0..n-1 index" -- and walked until it returned false. It
+// returned true for 196915 consecutive idents and only stopped at the probe's
+// own cap, then reported "counter idents valid: 0..196914" as a measurement.
+// It was reading far past the table: names begin repeating in adjacent pairs
+// at 1926, stop being hash-shaped at 52867, and ident 196914 reads
+// "AGenInstructions", which is unrelated memory. Nothing derived from that
+// output means anything.
+//
+// So do not ask is_valid where the table ends. Walk while the entries still
+// look like table entries, and prove is_valid is not a bound instead of
+// trusting it.
 func TestCounterTableEnumerate(t *testing.T) {
 	a := loadCounterAPI(t)
 	a.initialize()
-	// disasm: agxps_counter_is_valid @ 0x4ac804 compares the argument against
-	// the length of a global vector of 0x50-byte records, so the ident space is
-	// a dense 0..n-1 index. Walk until it stops being valid rather than
-	// assuming a size.
-	const cap = 1 << 20
-	var n uint64
-	for n = 0; n < cap; n++ {
-		if !a.counterIsValid(n) {
+
+	const wayPastAnyTable = 1 << 20
+
+	// Stop at the first name that is not a distinct, hash-shaped identifier.
+	// Past the table the accessor returns duplicates and then unrelated
+	// strings, and both are visible without knowing the true size.
+	seen := make(map[string]uint64)
+	var idents []string
+	for i := uint64(0); i < wayPastAnyTable; i++ {
+		name := a.counterGetName(i)
+		if !obfuscatedCounterName(name) {
+			t.Logf("stopped at ident %d: %q is not a hash-shaped counter name", i, name)
+			break
+		}
+		if prev, dup := seen[name]; dup {
+			t.Logf("stopped at ident %d: name repeats ident %d", i, prev)
+			break
+		}
+		seen[name] = i
+		idents = append(idents, name)
+	}
+
+	t.Logf("counter idents that look like table entries: %d (num_groups=%d)", len(idents), a.counterNumGroups())
+	t.Logf("NOTE: this is where the entries stop looking like entries, which is an "+
+		"upper bound on the table, not the table size. %d hashes are independently "+
+		"attested; see docs/research/COUNTER_NAME_MAPPING.md.", knownRawCounterHashes)
+
+	// is_valid does return false eventually, which is what made it look like a
+	// bound on this table. Show that its cutoff is orders of magnitude past the
+	// point where the entries stop being entries, so a later reader does not
+	// reach for it again. If the two ever converge, this probe should be
+	// rewritten to use it.
+	var validUntil uint64
+	for validUntil = 0; validUntil < wayPastAnyTable; validUntil++ {
+		if !a.counterIsValid(validUntil) {
 			break
 		}
 	}
-	if n == cap {
-		t.Logf("WARNING: hit the probe's own cap at %d; this is not the table size", cap)
-	}
-	t.Logf("counter idents valid: 0..%d (n=%d), num_groups=%d", n-1, n, a.counterNumGroups())
-	for i := uint64(0); i < n; i++ {
+	t.Logf("agxps_counter_is_valid accepts 0..%d, which is %dx the entries above; "+
+		"it bounds some other vector, not this table", validUntil-1, validUntil/uint64(max(len(idents), 1)))
+
+	for i, name := range idents {
 		t.Logf("  [%3d] %-44s group=%d real=%v derived=%v norm=%v rel=%v grc=%q",
-			i, a.counterGetName(i), a.counterGetGroup(i), a.counterIsReal(i),
-			a.counterIsDerived(i), a.counterIsNorm(i), a.counterIsRelative(i),
-			a.counterGRCEnable(i))
+			i, name, a.counterGetGroup(uint64(i)), a.counterIsReal(uint64(i)),
+			a.counterIsDerived(uint64(i)), a.counterIsNorm(uint64(i)), a.counterIsRelative(uint64(i)),
+			a.counterGRCEnable(uint64(i)))
 	}
+}
+
+// knownRawCounterHashes is the number of obfuscated raw counter hashes found in
+// the framework by direct byte scan, established separately from this probe.
+const knownRawCounterHashes = 578
+
+// obfuscatedCounterName reports whether name has the shape the framework uses
+// for a raw counter ident: an underscore and 64 lowercase hex digits.
+func obfuscatedCounterName(name string) bool {
+	if len(name) != 65 || name[0] != '_' {
+		return false
+	}
+	for i := 1; i < len(name); i++ {
+		c := name[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // counterProbeParser builds a parser with the descriptor shape that the kick
