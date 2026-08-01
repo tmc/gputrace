@@ -2152,10 +2152,20 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 		}
 	}
 
-	// Add counter track metadata and events
+	// Add counter track metadata and events.
+	//
+	// A track whose every sample is zero is not a measurement of zero, it is a
+	// counter we could not decode. Emitting it draws a flat line at the bottom
+	// of the UI that reads as "this capture used no bandwidth" rather than "we
+	// do not know". On the 21-encoder capture that was all nine tracks and 252
+	// samples, none of them nonzero. internal/parity refuses all-zero columns
+	// for the same reason; do the same here.
 	threadID := 16 // Start after GPRWCNTR lanes (7-14) and provenance lane (15).
 	counterEvents := make([]TimelineEvent, 0)
 	for _, track := range timeline.CounterTracks {
+		if !counterTrackHasSignal(track) {
+			continue
+		}
 		// Add thread name for this counter track
 		metadataEvents = append(metadataEvents, TimelineEvent{
 			Name:      "thread_name",
@@ -3630,4 +3640,20 @@ func (p *lanePacker) assign(start, duration uint64) int {
 		p.ends[best] = end
 	}
 	return p.base + best
+}
+
+// counterTrackHasSignal reports whether a counter track carries any nonzero
+// sample.
+//
+// The distinction that matters is between a counter that measured zero and a
+// counter we never decoded. Nothing in the archive marks which is which, so a
+// track that is zero throughout is treated as undecoded and dropped rather than
+// published as a flat zero line.
+func counterTrackHasSignal(track CounterTrack) bool {
+	for _, s := range track.Samples {
+		if s.Value != 0 {
+			return true
+		}
+	}
+	return false
 }

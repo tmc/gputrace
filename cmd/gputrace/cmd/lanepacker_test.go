@@ -75,3 +75,20 @@ func TestCommandBuffersKeepIdleGaps(t *testing.T) {
 		t.Fatalf("first command buffer offset = %d, want 0", offsets[0])
 	}
 }
+
+// TestCounterTrackSignal pins the rule that an all-zero counter track is an
+// undecoded counter, not a measured zero. Publishing it drew nine flat lines on
+// the 21-encoder capture that read as "no bandwidth used" rather than "unknown".
+func TestCounterTrackSignal(t *testing.T) {
+	zero := CounterTrack{Name: "ALU Utilization", Samples: []CounterSample{{Value: 0}, {Value: 0}}}
+	if counterTrackHasSignal(zero) {
+		t.Error("all-zero track reported signal")
+	}
+	if counterTrackHasSignal(CounterTrack{Name: "empty"}) {
+		t.Error("track with no samples reported signal")
+	}
+	live := CounterTrack{Name: "Bandwidth", Samples: []CounterSample{{Value: 0}, {Value: 12.5}}}
+	if !counterTrackHasSignal(live) {
+		t.Error("track with a nonzero sample reported no signal")
+	}
+}
