@@ -4,10 +4,66 @@ import (
 	"bytes"
 	"compress/zlib"
 	"encoding/binary"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// TestOpenProfilerOnlyBundle checks that a bundle with a .gpuprofiler_raw
+// payload but no capture stream opens, is marked ProfilerOnly, and refuses
+// capture-derived work with a message that names what is missing.
+func TestOpenProfilerOnlyBundle(t *testing.T) {
+	tracePath := writeSyntheticTraceBundle(t)
+	if err := os.Remove(filepath.Join(tracePath, "capture")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Without a profiler payload the bundle is still unopenable.
+	if _, err := Open(tracePath); err == nil {
+		t.Fatal("Open succeeded on a bundle with neither capture nor profiler data")
+	}
+
+	perfDir := tracePath + ".gpuprofiler_raw"
+	if err := os.Mkdir(perfDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(perfDir, "streamData"), []byte("bplist00"))
+
+	tr, err := Open(tracePath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if !tr.ProfilerOnly {
+		t.Error("ProfilerOnly = false, want true")
+	}
+	if len(tr.CaptureData) != 0 {
+		t.Errorf("CaptureData = %d bytes, want none", len(tr.CaptureData))
+	}
+	err = tr.RequireCaptureRecords()
+	if !errors.Is(err, ErrNoCaptureRecords) {
+		t.Fatalf("RequireCaptureRecords() = %v, want ErrNoCaptureRecords", err)
+	}
+	if !strings.Contains(err.Error(), tracePath) {
+		t.Errorf("error %q does not name the bundle", err)
+	}
+}
+
+// TestOpenFullTraceRequiresCaptureRecords checks the tolerance did not weaken
+// the guard for a normal bundle.
+func TestOpenFullTraceRequiresCaptureRecords(t *testing.T) {
+	tr, err := Open(writeSyntheticTraceBundle(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr.ProfilerOnly {
+		t.Error("ProfilerOnly = true on a bundle with a capture file")
+	}
+	if err := tr.RequireCaptureRecords(); err != nil {
+		t.Errorf("RequireCaptureRecords() = %v, want nil", err)
+	}
+}
 
 func TestOpen(t *testing.T) {
 	testPath := writeSyntheticTraceBundle(t)

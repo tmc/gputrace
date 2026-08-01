@@ -61,6 +61,9 @@ func runTree(cmd *cobra.Command, args []string, opts *treeOptions) error {
 		return fmt.Errorf("open trace: %w", err)
 	}
 	defer t.Close()
+	if err := t.RequireCaptureRecords(); err != nil {
+		return err
+	}
 
 	// 1. Parse top-level MTSP records (preserving hierarchy)
 	records, err := t.ParseMTSPRecords()

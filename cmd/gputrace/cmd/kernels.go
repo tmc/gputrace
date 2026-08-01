@@ -77,10 +77,15 @@ func runKernels(cmd *cobra.Command, args []string, opts *kernelsOptions) error {
 		return fmt.Errorf("failed to open trace: %w", err)
 	}
 
-	// Analyze kernels to get stats
-	stats, err := trace.AnalyzeKernels()
-	if err != nil {
-		return fmt.Errorf("analyze kernels: %w", err)
+	// Analyze kernels from capture records. A profiler-only bundle has none;
+	// the streamData dispatch list below replaces them wholesale, so only
+	// insist on capture records when that list is unavailable.
+	stats := make(map[string]*gputrace.KernelStat)
+	if !trace.ProfilerOnly {
+		stats, err = trace.AnalyzeKernels()
+		if err != nil {
+			return fmt.Errorf("analyze kernels: %w", err)
+		}
 	}
 
 	var timingStats map[string]*gputrace.TimingStat
@@ -111,6 +116,8 @@ func runKernels(cmd *cobra.Command, args []string, opts *kernelsOptions) error {
 			}
 			s.TotalTime += float64(dispatch.DurationUs) / 1000
 		}
+	} else if err := trace.RequireCaptureRecords(); err != nil {
+		return err
 	}
 
 	// Filter and sort

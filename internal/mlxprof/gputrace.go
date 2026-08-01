@@ -94,7 +94,11 @@ func FromGPUTrace(tracePath string, shaderSearchPaths ...string) (*GPUTraceProfi
 	var stats *gputrace.PerfCounterStats
 	if s, err := gputrace.ParsePerfCounters(trace); err == nil {
 		stats = s
-		fmt.Fprintf(os.Stderr, "Counter source: parsed capture records (decoder confidence %.2f)\n", stats.ConfidenceLevel)
+		// ParsePerfCounters reads .gpuprofiler_raw counter files, not the Metal
+		// capture stream; the old "parsed capture records" wording claimed a
+		// source it never used, which only became visible once profiler-only
+		// bundles started reaching here.
+		fmt.Fprintf(os.Stderr, "Counter source: .gpuprofiler_raw counter files (decoder confidence %.2f)\n", stats.ConfidenceLevel)
 	} else {
 		// Only log if verbose? Or just ignore silently as it's optional.
 		// fmt.Printf("Note: No performance counters: %v\n", err)

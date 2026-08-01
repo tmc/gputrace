@@ -93,6 +93,9 @@ func runBufferTimeline(cmd *cobra.Command, args []string, opts *bufferTimelineOp
 	if err != nil {
 		return fmt.Errorf("failed to open trace: %w", err)
 	}
+	if err := trace.RequireCaptureRecords(); err != nil {
+		return err
+	}
 
 	// Extract buffer timeline
 	timeline, err := gputrace.ExtractBufferTimeline(trace)

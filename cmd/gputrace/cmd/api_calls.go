@@ -79,6 +79,9 @@ func runAPICalls(cmd *cobra.Command, args []string, opts *apiCallsOptions) error
 	if err != nil {
 		return fmt.Errorf("failed to open trace: %w", err)
 	}
+	if err := trace.RequireCaptureRecords(); err != nil {
+		return err
+	}
 
 	apiList, err := trace.ParseAPICallList()
 	if err != nil {

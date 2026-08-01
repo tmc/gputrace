@@ -85,6 +85,9 @@ func runCommandBuffers(cmd *cobra.Command, args []string, opts *commandBuffersOp
 	if err != nil {
 		return fmt.Errorf("failed to open trace: %w", err)
 	}
+	if err := trace.RequireCaptureRecords(); err != nil {
+		return err
+	}
 
 	// Parse command buffers. The capture handle keeps the file and the
 	// command-buffer index so the loops below do not reread per buffer.

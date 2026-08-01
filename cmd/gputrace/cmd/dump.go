@@ -88,6 +88,9 @@ func runDump(cmd *cobra.Command, args []string, opts dumpOptions) error {
 	if err != nil {
 		return fmt.Errorf("open trace: %w", err)
 	}
+	if err := trace.RequireCaptureRecords(); err != nil {
+		return err
+	}
 
 	apiList, err := trace.ParseAPICallList()
 	if err != nil {

@@ -67,6 +67,9 @@ func runBufferAccess(cmd *cobra.Command, args []string, opts *bufferAccessOption
 	if err != nil {
 		return fmt.Errorf("failed to open trace: %w", err)
 	}
+	if err := trace.RequireCaptureRecords(); err != nil {
+		return err
+	}
 
 	// Analyze buffer access patterns
 	analysis, err := gputrace.AnalyzeBufferAccess(trace)

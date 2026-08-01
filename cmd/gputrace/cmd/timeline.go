@@ -91,8 +91,10 @@ func runTimeline(cmd *cobra.Command, args []string, opts *timelineOptions) error
 
 	// Try to open full trace first
 	trace, err := gputrace.Open(tracePath)
-	if err != nil {
-		// Fall back to profiler-only mode if unsorted-capture is missing
+	if err != nil || trace.ProfilerOnly {
+		// Fall back to profiler-only mode when there is no capture stream.
+		// Open now succeeds on such bundles, so the flag, not the error, is
+		// what distinguishes them.
 		return runTimelineFromProfiler(tracePath, opts)
 	}
 

@@ -104,6 +104,9 @@ func runBuffers(cmd *cobra.Command, args []string, cmdOpts *buffersCommandOption
 	if err != nil {
 		return fmt.Errorf("failed to open trace: %w", err)
 	}
+	if err := trace.RequireCaptureRecords(); err != nil {
+		return err
+	}
 
 	// If --inspect is specified, handle buffer inspection
 	if cmdOpts.inspect != "" {

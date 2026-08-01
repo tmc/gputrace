@@ -85,8 +85,10 @@ func runStats(cmd *cobra.Command, args []string, opts *statsOptions) error {
 	payload, payloadErr := tracebundle.InspectPayload(tracePath)
 
 	// Open trace
+	// Open now succeeds on a bundle with no capture stream, so ProfilerOnly,
+	// not the error, is what routes to the profiler-backed report.
 	trace, err := gputrace.Open(tracePath)
-	if err != nil {
+	if err != nil || trace.ProfilerOnly {
 		if findProfilerDir(tracePath) != "" {
 			return runStatsFromProfiler(cmd.OutOrStdout(), tracePath, opts)
 		}

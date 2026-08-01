@@ -71,6 +71,9 @@ func runCorrelate(cmd *cobra.Command, args []string, opts *correlateOptions) err
 	if err != nil {
 		return fmt.Errorf("failed to open trace: %w", err)
 	}
+	if err := trace.RequireCaptureRecords(); err != nil {
+		return err
+	}
 	defer trace.Close()
 
 	// Correlate shader metrics

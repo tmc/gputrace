@@ -66,6 +66,9 @@ func runEncoders(cmd *cobra.Command, args []string, opts *encodersOptions) error
 	if err != nil {
 		return fmt.Errorf("failed to open trace: %w", err)
 	}
+	if err := trace.RequireCaptureRecords(); err != nil {
+		return err
+	}
 
 	// Parse compute encoders
 	encoders := trace.ParseComputeEncoders()

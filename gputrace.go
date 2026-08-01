@@ -92,6 +92,11 @@ var (
 	ErrInvalidTrace    = trace.ErrInvalidTrace
 	ErrInvalidMagic    = trace.ErrInvalidMagic
 	ErrMissingMetadata = trace.ErrMissingMetadata
+
+	// ErrNoCaptureRecords reports that a bundle carries no Metal capture
+	// stream. Open succeeds on profiler-only bundles; ask for capture records
+	// with Trace.RequireCaptureRecords when a command needs them.
+	ErrNoCaptureRecords = trace.ErrNoCaptureRecords
 )
 
 // Re-export magic constants

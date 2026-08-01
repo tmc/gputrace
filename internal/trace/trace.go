@@ -43,6 +43,29 @@ type Trace struct {
 	DeviceLabels       map[uint64]string // Maps device resource address to label (e.g. "fences")
 	FunctionToName     map[uint64]string // Maps Ct function addresses to kernel names (computed from dispatch order)
 	MTLBLibraries      []*metallib.File  // Parsed Metal libraries found in the bundle
+
+	// ProfilerOnly reports that the bundle has no Metal capture stream but does
+	// carry a .gpuprofiler_raw payload. CaptureData is nil and every
+	// capture-derived field above is empty. Callers that need capture records
+	// should say so with RequireCaptureRecords rather than reporting nothing.
+	ProfilerOnly bool
+}
+
+// ErrNoCaptureRecords reports that a bundle carries no Metal capture stream.
+// Profiler-only bundles — those with a .gpuprofiler_raw payload but no capture
+// or unsorted-capture file — open successfully and return this from
+// RequireCaptureRecords.
+var ErrNoCaptureRecords = errors.New("trace has no capture records")
+
+// RequireCaptureRecords reports an error when the bundle has no capture stream,
+// naming what is missing. Commands that read buffer bindings, argument tables,
+// grid sizes, or anything else that only exists in the encoded Metal command
+// stream should call it right after Open.
+func (t *Trace) RequireCaptureRecords() error {
+	if len(t.CaptureData) > 0 {
+		return nil
+	}
+	return fmt.Errorf("%w: %s is profiler-only (.gpuprofiler_raw without capture or unsorted-capture); this data is only in the Metal command stream", ErrNoCaptureRecords, t.Path)
 }
 
 // Metadata contains information from the metadata plist file.
@@ -115,9 +138,15 @@ func Open(path string) (*Trace, error) {
 		return nil, fmt.Errorf("parse metadata: %w", err)
 	}
 
-	// Load capture data
+	// Load capture data. A bundle exported by the GPU profiler may have no
+	// capture stream at all; open it anyway when the profiler payload is there,
+	// so commands with a profiler-backed source can serve it. Callers that need
+	// capture records ask for them with RequireCaptureRecords.
 	if err := trace.loadCaptureData(); err != nil {
-		return nil, fmt.Errorf("load capture: %w", err)
+		if !errors.Is(err, os.ErrNotExist) || profilerraw.FindDirWithStreamData(path) == "" {
+			return nil, fmt.Errorf("load capture: %w", err)
+		}
+		trace.ProfilerOnly = true
 	}
 
 	// Load device resources

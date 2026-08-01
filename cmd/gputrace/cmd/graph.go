@@ -71,6 +71,9 @@ func runGraph(cmd *cobra.Command, args []string, opts *graphOptions) error {
 	if err != nil {
 		return fmt.Errorf("failed to open trace: %w", err)
 	}
+	if err := trace.RequireCaptureRecords(); err != nil {
+		return err
+	}
 
 	// Create graph generator based on format
 	var generator graph.Generator
