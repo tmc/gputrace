@@ -63,6 +63,29 @@ functions, not one debug-info section between them. There is no offset-to-line
 mapping to join against, so even a perfect instruction-level profile could not
 be projected onto source.
 
+**This particular zero is a property of how the shaders were built, not of the
+archive format, and it is reversible.** Both archives were produced by a stock
+MLX build, and MLX gates Metal debug info behind an option that defaults off:
+
+	CMakeLists.txt:39
+	  option(MLX_METAL_DEBUG "Enhance metal debug workflow" OFF)
+
+	mlx/backend/metal/kernels/CMakeLists.txt:22
+	  set(METAL_FLAGS ${METAL_FLAGS} -gline-tables-only -frecord-sources)
+
+	cmake/extension.cmake:30-32
+	  if(MLX_METAL_DEBUG OR MTLLIB_DEBUG)  ... same two flags
+
+[V] Read from the MLX checkout, not from documentation. `-gline-tables-only`
+and `-frecord-sources` are exactly the pair that emits the `LINE` and `SORC`
+sections counted as zero above, so the census result is the documented default
+rather than evidence about what Metal can archive. A producer rebuilt with
+`-DMLX_METAL_DEBUG=ON` should carry them, which would reopen falsifier 1.
+
+Falsifiers 2 and 3 below do not depend on the build and are unaffected: no
+rebuild adds a program counter to `GRC_SOURCE_ID`, and none gives a compute
+pipeline the render target the Heat Map shades.
+
 ## Falsifier 2: does any counter record carry a program counter or source line?
 
 `GRC_SOURCE_ID` is one of the seven fixed GPRWCNTR columns and its name invites
