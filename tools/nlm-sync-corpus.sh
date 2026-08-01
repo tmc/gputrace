@@ -29,6 +29,7 @@ set -euo pipefail
 # SOURCE_NAME is the contract with the notebook. Changing it orphans the old
 # set rather than replacing it, so do not add a date or a qualifier.
 SOURCE_NAME="gputrace corpus"
+BINDINGS_NAME="repo: private apple bindings"
 STAGE="$HOME/tmp/gputrace-nlm-corpus"
 
 # Titles this script has used before. Pruning matches on these so a stray
@@ -136,6 +137,32 @@ cp "$REPO/tools/nlm-corpus-SUPERSEDED.md" "$STAGE/SUPERSEDED.md" 2>/dev/null || 
 
 echo "syncing $(find "$STAGE" -type f | wc -l | tr -d ' ') files as \"$SOURCE_NAME\"..."
 ( cd "$STAGE" && nlm source sync --name "$SOURCE_NAME" "$NOTEBOOK" . )
+
+# Generated Objective-C bindings for the private frameworks Xcode itself is
+# built on. Synced as a separate source so it can be scoped with
+# --source-match 'repo: private apple bindings' and so re-syncing the corpus
+# does not re-upload 32 MB that almost never changes.
+#
+# The GPU-relevant package is xcode/gtshaderprofiler: XRGPUAPSDerivedCounter
+# carries CounterId/CounterType/Name/DocString, which is the raw-hash to
+# plaintext counter mapping we have not decoded, and
+# GTShaderProfilerCounterSpec carries CounterTableGroups, Xcode's own counter
+# grouping.
+#
+# The rest is synced too, not as filler. Several are plausibly load-bearing:
+# instrumentstrace and xctracecore model the trace container Xcode writes,
+# dvtinstrumentsanalysiscore the analysis passes over it, ktracedt the kernel
+# trace stream, and treemodel the tabular views the counter tab renders. We
+# have been naming blobs by inference from bytes; these frameworks name them
+# directly, so a matching class or selector is evidence in a way a plausible
+# guess is not.
+BINDINGS="$HOME/go/src/github.com/tmc/apple-wt-private-frameworks/private"
+if [ -d "$BINDINGS" ]; then
+	echo "syncing private framework bindings as \"$BINDINGS_NAME\"..."
+	( cd "$BINDINGS" && nlm source sync --name "$BINDINGS_NAME" "$NOTEBOOK" . )
+else
+	echo "skipping bindings: $BINDINGS not present"
+fi
 
 # Images cannot ride in the txtar bundle: it is a text archive, so a PNG in it
 # is at best inert bytes. They go up as individual sources, which is also what
