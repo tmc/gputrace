@@ -1,0 +1,11 @@
+task #17 rename pairing; authored by subagent, verified in main checkout
+date: 2026-08-01T03:44:20Z
+model: claude-opus-5[1m]  pid: 13353
+ITERM_SESSION_ID: w0t1p3:BE93B99A-FA9B-469D-9C12-0B1009E84F85
+NOTE: my similarity-threshold hypothesis was REFUTED - no similarity code existed
+in internal/difftrace at 4ef63c9. Real causes: (1) the timing By Function table
+never rendered rename notes at all (render.go), which is the dominant cause;
+(2) pairing required the count to be unique on BOTH sides.
+verified: 7 rename annotations on real traces, incl. an honest
+'2 rename candidates with the same count, none decisive' rather than a guess.
+reported-by: peer session 86CEEAB2
