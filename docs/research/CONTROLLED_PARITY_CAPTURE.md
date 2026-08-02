@@ -68,6 +68,12 @@ whether these labels reach profiler-only `streamData` and the processed model,
 where the MLX captures showed no content-bearing field at all. That half stays
 open, as does any wall-to-busy mapping.
 
+`[V]` The timing-only bundle has no `.gpuprofiler_raw` directory, `streamData`
+file, or `Counters_f_*.raw` shard. Its labels are recoverable from `capture`
+and `unsorted-capture` only. Direct parsing therefore cannot answer the
+profiler-model half of Q1, Q4, or Q5; each requires a profiled export of this
+same source bundle.
+
 Two attempts to create the corresponding profiled export reached Xcode's
 Performance state, but the Export control remained disabled. The first
 source-bound recovery/finalization attempt stopped at
