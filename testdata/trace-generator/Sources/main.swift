@@ -12,6 +12,15 @@
 
 import Metal
 import Foundation
+import os
+
+extension JSONEncoder {
+    static var pretty: JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return encoder
+    }
+}
 
 // MARK: - Scenario Definitions
 
@@ -27,6 +36,7 @@ enum Scenario: String, CaseIterable {
     case highALU = "high-alu-complex-math"
     case lowOccupancy = "low-occupancy-high-registers"
     case highOccupancy = "high-occupancy-low-registers"
+    case parityAsymmetric = "parity-asymmetric"
 
     var description: String {
         switch self {
@@ -52,8 +62,45 @@ enum Scenario: String, CaseIterable {
             return "Low occupancy: high register pressure (large arrays)"
         case .highOccupancy:
             return "High occupancy: low register pressure (minimal state)"
+        case .parityAsymmetric:
+            return "Parity instrument: 4 command buffers, 3 labelled encoders, 1/3/7 dispatches"
         }
     }
+}
+
+// MARK: - Parity Ground Truth
+
+struct ParityEncoderTruth: Codable {
+    let label: String
+    let kernel: String
+    let dispatchCount: Int
+}
+
+final class ParityCommandBufferTruth: Codable {
+    let label: String
+    let encoder: ParityEncoderTruth?
+    let cpuEncodeStartUptimeNS: UInt64
+    var cpuEncodeEndUptimeNS: UInt64
+    var cpuCommitUptimeNS: UInt64?
+    var cpuCompleteUptimeNS: UInt64?
+    var gpuStartTimeSeconds: Double?
+    var gpuEndTimeSeconds: Double?
+    var kernelStartTimeSeconds: Double?
+    var kernelEndTimeSeconds: Double?
+
+    init(label: String, encoder: ParityEncoderTruth?, cpuEncodeStartUptimeNS: UInt64) {
+        self.label = label
+        self.encoder = encoder
+        self.cpuEncodeStartUptimeNS = cpuEncodeStartUptimeNS
+        cpuEncodeEndUptimeNS = cpuEncodeStartUptimeNS
+    }
+}
+
+struct ParityGroundTruth: Codable {
+    let schemaVersion: Int
+    let scenario: String
+    let device: String
+    let commandBuffers: [ParityCommandBufferTruth]
 }
 
 // MARK: - Metal Shaders
@@ -165,6 +212,7 @@ class TraceGenerator {
     let queue: MTLCommandQueue
     let library: MTLLibrary
     let captureManager: MTLCaptureManager
+    let signpostLog = OSLog(subsystem: "com.tmc.gputrace.parity", category: "trace-generator")
 
     init?() {
         guard let device = MTLCreateSystemDefaultDevice() else {
@@ -210,7 +258,7 @@ class TraceGenerator {
         }
     }
 
-    func run(scenario: Scenario, outputPath: String?) {
+    func run(scenario: Scenario, outputPath: String?, groundTruthPath: String?) {
         // Start capture if output path provided
         if let outputPath = outputPath {
             do {
@@ -248,6 +296,8 @@ class TraceGenerator {
             runLowOccupancy()
         case .highOccupancy:
             runHighOccupancy()
+        case .parityAsymmetric:
+            runParityAsymmetric(groundTruthPath: groundTruthPath ?? defaultGroundTruthPath(outputPath: outputPath))
         }
 
         // Stop capture if it was started
@@ -261,6 +311,110 @@ class TraceGenerator {
                 print("   Size: \(traceSize / 1024) KB")
             }
         }
+    }
+
+    // MARK: - Controlled Parity Instrument
+
+    // runParityAsymmetric makes count-based joins fail loudly. Four command
+    // buffers contain three compute encoders with 1, 3, and 7 dispatches; the
+    // fourth command buffer is intentionally empty. Every capture-local label
+    // includes a stable, content-bearing identifier.
+    func runParityAsymmetric(groundTruthPath: String?) {
+        let plans: [(commandBufferLabel: String, encoderLabel: String?, kernel: String?, dispatchCount: Int)] = [
+            ("gputrace.parity.cb.alpha.1d", "gputrace.parity.encoder.alpha.simple_add.1d", "simple_add", 1),
+            ("gputrace.parity.cb.bravo.3d", "gputrace.parity.encoder.bravo.simple_multiply.3d", "simple_multiply", 3),
+            ("gputrace.parity.cb.charlie.7d", "gputrace.parity.encoder.charlie.simple_subtract.7d", "simple_subtract", 7),
+            ("gputrace.parity.cb.delta.empty", nil, nil, 0),
+        ]
+        let bufferSize = 1024
+        guard let (bufferA, bufferB, bufferC) = createBuffers(size: bufferSize) else { return }
+
+        var records: [ParityCommandBufferTruth] = []
+        var commandBuffers: [(MTLCommandBuffer, ParityCommandBufferTruth)] = []
+
+        for plan in plans {
+            let encodeSignpost = OSSignpostID(log: signpostLog)
+            os_signpost(.begin, log: signpostLog, name: "Encode", signpostID: encodeSignpost, "%{public}s", plan.commandBufferLabel)
+            let record = ParityCommandBufferTruth(
+                label: plan.commandBufferLabel,
+                encoder: plan.encoderLabel.flatMap { label in
+                    plan.kernel.map { ParityEncoderTruth(label: label, kernel: $0, dispatchCount: plan.dispatchCount) }
+                },
+                cpuEncodeStartUptimeNS: DispatchTime.now().uptimeNanoseconds)
+            guard let commandBuffer = queue.makeCommandBuffer() else {
+                os_signpost(.end, log: signpostLog, name: "Encode", signpostID: encodeSignpost)
+                print("❌ Failed to create command buffer for \(plan.commandBufferLabel)")
+                return
+            }
+            commandBuffer.label = plan.commandBufferLabel
+
+            if let encoderLabel = plan.encoderLabel, let kernel = plan.kernel {
+                guard let pipeline = makePipeline(function: kernel),
+                      let encoder = commandBuffer.makeComputeCommandEncoder() else {
+                    os_signpost(.end, log: signpostLog, name: "Encode", signpostID: encodeSignpost)
+                    print("❌ Failed to encode \(encoderLabel)")
+                    return
+                }
+                encoder.label = encoderLabel
+                encoder.setComputePipelineState(pipeline)
+                encoder.setBuffer(bufferA, offset: 0, index: 0)
+                encoder.setBuffer(bufferB, offset: 0, index: 1)
+                encoder.setBuffer(bufferC, offset: 0, index: 2)
+                let gridSize = MTLSize(width: bufferSize, height: 1, depth: 1)
+                let threadGroupSize = MTLSize(width: 64, height: 1, depth: 1)
+                for _ in 0..<plan.dispatchCount {
+                    encoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadGroupSize)
+                }
+                encoder.endEncoding()
+            }
+            record.cpuEncodeEndUptimeNS = DispatchTime.now().uptimeNanoseconds
+            os_signpost(.end, log: signpostLog, name: "Encode", signpostID: encodeSignpost)
+
+            let completionSignpost = OSSignpostID(log: signpostLog)
+            os_signpost(.begin, log: signpostLog, name: "CommitToComplete", signpostID: completionSignpost, "%{public}s", plan.commandBufferLabel)
+            commandBuffer.addCompletedHandler { completed in
+                record.cpuCompleteUptimeNS = DispatchTime.now().uptimeNanoseconds
+                record.gpuStartTimeSeconds = completed.gpuStartTime
+                record.gpuEndTimeSeconds = completed.gpuEndTime
+                record.kernelStartTimeSeconds = completed.kernelStartTime
+                record.kernelEndTimeSeconds = completed.kernelEndTime
+                os_signpost(.end, log: self.signpostLog, name: "CommitToComplete", signpostID: completionSignpost)
+                os_signpost(.event, log: self.signpostLog, name: "Complete", "%{public}s", record.label)
+            }
+            record.cpuCommitUptimeNS = DispatchTime.now().uptimeNanoseconds
+            commandBuffer.commit()
+            records.append(record)
+            commandBuffers.append((commandBuffer, record))
+        }
+
+        for (commandBuffer, _) in commandBuffers {
+            commandBuffer.waitUntilCompleted()
+        }
+
+        guard let groundTruthPath else {
+            print("⚠️ No ground-truth path supplied; run with --ground-truth to retain timing evidence")
+            return
+        }
+        let truth = ParityGroundTruth(
+            schemaVersion: 1,
+            scenario: Scenario.parityAsymmetric.rawValue,
+            device: device.name,
+            commandBuffers: records)
+        do {
+            let data = try JSONEncoder.pretty.encode(truth)
+            let url = URL(fileURLWithPath: groundTruthPath)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: url, options: .atomic)
+            print("✓ Wrote parity ground truth: \(groundTruthPath)")
+        } catch {
+            print("❌ Write parity ground truth: \(error)")
+        }
+    }
+
+    func defaultGroundTruthPath(outputPath: String?) -> String? {
+        guard let outputPath else { return nil }
+        let output = URL(fileURLWithPath: outputPath)
+        return output.deletingPathExtension().appendingPathExtension("ground-truth.json").path
     }
 
     // MARK: - Single Encoder
@@ -504,11 +658,12 @@ print()
 
 let args = CommandLine.arguments
 func printUsage() {
-    print("Usage: trace-generator <scenario> [output-path]")
+    print("Usage: trace-generator <scenario> [output-path] [--ground-truth path]")
     print()
     print("Arguments:")
     print("  scenario     - Scenario to run (see below)")
     print("  output-path  - Optional .gputrace output path")
+    print("  --ground-truth path  - Write controlled timing/label evidence to path")
     print()
     print("Available scenarios:")
     for scenario in Scenario.allCases {
@@ -518,7 +673,7 @@ func printUsage() {
     print()
     print("Examples:")
     print("  # With programmatic capture")
-    print("  trace-generator 01-single-encoder output.gputrace")
+    print("  trace-generator parity-asymmetric output.gputrace --ground-truth truth.json")
     print()
     print("  # Or use the Makefile target:")
     print("  make run-capture SCENARIO=01-single-encoder")
@@ -539,7 +694,27 @@ guard let generator = TraceGenerator() else {
 }
 
 let scenarioArg = args[1]
-let outputPath = args.count > 2 ? args[2] : nil
+var outputPath: String?
+var groundTruthPath: String?
+var index = 2
+while index < args.count {
+    switch args[index] {
+    case "--ground-truth":
+        index += 1
+        guard index < args.count else {
+            print("❌ --ground-truth requires a path")
+            exit(1)
+        }
+        groundTruthPath = args[index]
+    default:
+        guard outputPath == nil else {
+            print("❌ Unexpected argument: \(args[index])")
+            exit(1)
+        }
+        outputPath = args[index]
+    }
+    index += 1
+}
 
 if scenarioArg == "all" {
     if outputPath != nil {
@@ -549,7 +724,7 @@ if scenarioArg == "all" {
     }
 
     for scenario in Scenario.allCases {
-        generator.run(scenario: scenario, outputPath: nil)
+        generator.run(scenario: scenario, outputPath: nil, groundTruthPath: nil)
         Thread.sleep(forTimeInterval: 0.5)
     }
 } else {
@@ -559,7 +734,7 @@ if scenarioArg == "all" {
         exit(1)
     }
 
-    generator.run(scenario: scenario, outputPath: outputPath)
+    generator.run(scenario: scenario, outputPath: outputPath, groundTruthPath: groundTruthPath)
 }
 
 if outputPath == nil {
