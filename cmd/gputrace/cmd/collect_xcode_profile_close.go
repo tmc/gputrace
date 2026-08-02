@@ -29,7 +29,11 @@ func runCloseTrace(cmd *cobra.Command, args []string) error {
 	defer cfRelease(appAX)
 
 	var windowAX uintptr
-	windowAX, err = findTargetWindow(cmd.Context(), appAX, traceFile)
+	if traceFile != "" {
+		windowAX, err = waitForExactTraceWindow(cmd.Context(), appAX, traceFile, 10*time.Second)
+	} else {
+		windowAX, err = findTargetWindow(cmd.Context(), appAX, "")
+	}
 	if err != nil {
 		return err
 	}
@@ -66,6 +70,39 @@ func runCloseTrace(cmd *cobra.Command, args []string) error {
 		Phase:            "closed",
 		Evidence:         "selected trace window is absent from the Xcode AX window list",
 	})
+}
+
+// waitForExactTraceWindow finds the one Xcode window whose AXDocument names
+// traceFile. It does not use the GPU UI fallback: close is destructive, and an
+// untitled replay window cannot be safely attributed to a requested trace.
+func waitForExactTraceWindow(ctx context.Context, appAX uintptr, traceFile string, timeout time.Duration) (uintptr, error) {
+	traceIdentity := strings.ToLower(filepath.Clean(traceFile))
+	deadline := time.Now().Add(timeout)
+	for {
+		windows := deduplicateAXWindows(GetAllWindows(appAX))
+		window, err := exactTraceWindow(windows, traceIdentity)
+		if err == nil {
+			return window, nil
+		}
+		if len(exactTraceWindows(windows, traceIdentity)) == 0 {
+			if time.Now().After(deadline) {
+				return 0, fmt.Errorf("find exact Xcode trace window for %q: no AXDocument match", filepath.Base(traceFile))
+			}
+		} else {
+			return 0, fmt.Errorf("find exact Xcode trace window for %q: %w", filepath.Base(traceFile), err)
+		}
+		if err := waitForAutomation(ctx, 100*time.Millisecond); err != nil {
+			return 0, err
+		}
+	}
+}
+
+func exactTraceWindow(windows []xcodeAXWindow, traceIdentity string) (uintptr, error) {
+	matches := exactTraceWindows(windows, traceIdentity)
+	if len(matches) != 1 {
+		return 0, fmt.Errorf("found %d AXDocument matches", len(matches))
+	}
+	return matches[0], nil
 }
 
 func waitForClosedTraceWindow(ctx context.Context, appAX uintptr, title, document string, initialCount int, timeout time.Duration) error {

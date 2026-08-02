@@ -2,7 +2,28 @@
 
 package cmd
 
-import "testing"
+import (
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestExactTraceWindow(t *testing.T) {
+	windows := []xcodeAXWindow{
+		{Element: 1, Document: "/tmp/other.gputrace"},
+		{Element: 2, Document: "/tmp/target.gputrace"},
+	}
+
+	window, err := exactTraceWindow(windows, strings.ToLower(filepath.Clean("/tmp/target.gputrace")))
+	if err != nil || window != 2 {
+		t.Fatalf("exactTraceWindow(target) = %d, %v, want 2, nil", window, err)
+	}
+
+	window, err = exactTraceWindow(windows, strings.ToLower(filepath.Clean("/tmp/missing.gputrace")))
+	if err == nil || window != 0 {
+		t.Fatalf("exactTraceWindow(missing) = %d, %v, want 0, error", window, err)
+	}
+}
 
 func TestWindowSnapshotContainsTarget(t *testing.T) {
 	windows := []xcodeAXWindow{
