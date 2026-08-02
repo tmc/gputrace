@@ -58,6 +58,30 @@ original header.
 
 So gputrace can say *where a kernel is written*. That is the whole of it.
 
+## Compiler source locations are present, but have no cost edge
+
+The processed `GTMioShaderBinaryData` model carries a small compiler location
+table even though the archived metallib has no `DEBI` or `LINE` section. Each
+record has a file path, function name, line, column, and owning shader-binary
+index. The mapping is decoded through the model's `debugStrings` table, not by
+guessing the raw struct field order:
+
+| Capture | Shader binaries | Source locations |
+| --- | ---: | ---: |
+| `static_tokens_2_to_3` | 801 | 59 |
+| `staticmask-warm-tokens2-4-rep1` | 1,617 | 78 |
+
+`[V]` In both captures the location records' first two fields are bounded by
+their binary's string table. The table contents establish the measured order:
+field 1 selects source paths, field 2 selects function names, and fields 3 and
+4 are line and column. The named direct accessors agree with the table when
+read as `NSString` objects.
+
+This is source mapping, not source-level cost. The current model exposes no
+validated instruction-to-location edge and no cost attributed to an instruction
+or location. It therefore cannot change a duration or counter observation into
+a line-level measurement.
+
 ## Falsifier 1: does the archived MTLLibrary carry debug info?
 
 If per-line cost were reconstructible, the metallib would need a debug-info

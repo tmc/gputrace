@@ -12,6 +12,7 @@ import (
 	"sync"
 	"unsafe"
 
+	"github.com/tmc/apple/foundation"
 	"github.com/tmc/apple/objc"
 	"github.com/tmc/apple/private/xcode/gtshaderprofiler"
 )
@@ -211,11 +212,25 @@ type GPUCommandRecord struct {
 // InstructionsExecuted stays zero unless the capture recorded execution
 // counters; the instruction tables themselves are always present.
 type BinarySummary struct {
-	Count                uint64 `json:"count"`
-	InstructionCount     uint64 `json:"instruction_count"`
-	InstructionsExecuted uint64 `json:"instructions_executed"`
-	HighRegister         int32  `json:"high_register"`
-	DebugLocationCount   uint64 `json:"debug_location_count"`
+	Count                 uint64                 `json:"count"`
+	InstructionCount      uint64                 `json:"instruction_count"`
+	InstructionsExecuted  uint64                 `json:"instructions_executed"`
+	HighRegister          int32                  `json:"high_register"`
+	DebugLocationCount    uint64                 `json:"debug_location_count"`
+	DebugLocations        []ShaderSourceLocation `json:"debug_locations,omitempty"`
+	DebugSelectorFile     string                 `json:"-"`
+	DebugSelectorFunction string                 `json:"-"`
+	DebugSelectorString   string                 `json:"-"`
+}
+
+// ShaderSourceLocation maps a compiler-reported shader location to its source
+// file and function. The capture contains no cost attributed to this location.
+type ShaderSourceLocation struct {
+	BinaryIndex  uint64 `json:"binary_index"`
+	FilePath     string `json:"file_path"`
+	FunctionName string `json:"function_name"`
+	Line         uint32 `json:"line"`
+	Column       uint32 `json:"column"`
 }
 
 // llvmHelperRelPath locates GTLLVMHelper inside a Developer directory.
@@ -931,7 +946,19 @@ func readBinaries(result objc.ID) BinarySummary {
 			summary.InstructionsExecuted += objc.Send[uint64](binary, objc.Sel("instructionExecuted"))
 		}
 		if objc.RespondsToSelector(binary, objc.Sel("debugLocationCount")) {
-			summary.DebugLocationCount += objc.Send[uint64](binary, objc.Sel("debugLocationCount"))
+			locations := objc.Send[uint64](binary, objc.Sel("debugLocationCount"))
+			summary.DebugLocationCount += locations
+			summary.DebugLocations = append(summary.DebugLocations,
+				decodeDebugLocations(binary, summary.Count-1, locations)...)
+			if locations != 0 && summary.DebugSelectorFile == "" {
+				model := gtshaderprofiler.GTMioShaderBinaryDataFromID(binary)
+				summary.DebugSelectorFile = foundation.NSStringFromID(
+					model.DebugFilePathForDebugLocationAtIndex(0).GetID()).UTF8String()
+				summary.DebugSelectorFunction = foundation.NSStringFromID(
+					model.DebugFunctionNameForDebugLocationAtIndex(0).GetID()).UTF8String()
+				summary.DebugSelectorString = foundation.NSStringFromID(
+					model.DebugStringForStringIndex(0).GetID()).UTF8String()
+			}
 		}
 		if high := highestLiveRegister(binary, instructions); high > summary.HighRegister {
 			summary.HighRegister = high
@@ -941,6 +968,46 @@ func readBinaries(result objc.ID) BinarySummary {
 		summary.HighRegister = 0
 	}
 	return summary
+}
+
+// decodeDebugLocations resolves the location array through its per-binary
+// NSString table. Field1 and Field2 are required to be table indices before
+// any location is returned. On two capture-backed runs, Field1 selected paths
+// and Field2 selected function names; Field3 and Field4 behaved as line and
+// column coordinates.
+func decodeDebugLocations(id objc.ID, binaryIndex, count uint64) []ShaderSourceLocation {
+	if count == 0 || count > uint64(^uint(0)>>1) {
+		return nil
+	}
+	binary := gtshaderprofiler.GTMioShaderBinaryDataFromID(id)
+	table := binary.DebugStrings()
+	if table.GetID() == 0 || table.Count() == 0 {
+		return nil
+	}
+	stringCount := uint64(table.Count())
+	locations := binary.DebugLocations()
+	if locations == nil {
+		return nil
+	}
+	values := unsafe.Slice(locations, int(count))
+	for _, location := range values {
+		if uint64(location.Field1) >= stringCount || uint64(location.Field2) >= stringCount {
+			return nil
+		}
+	}
+	result := make([]ShaderSourceLocation, 0, len(values))
+	for _, location := range values {
+		path := foundation.NSStringFromID(table.ObjectAtIndex(uint(location.Field1)).GetID()).UTF8String()
+		function := foundation.NSStringFromID(table.ObjectAtIndex(uint(location.Field2)).GetID()).UTF8String()
+		result = append(result, ShaderSourceLocation{
+			BinaryIndex:  binaryIndex,
+			FilePath:     path,
+			FunctionName: function,
+			Line:         location.Field3,
+			Column:       location.Field4,
+		})
+	}
+	return result
 }
 
 // highestLiveRegister reports the largest live-register count over a binary's

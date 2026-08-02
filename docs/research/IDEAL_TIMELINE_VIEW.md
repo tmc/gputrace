@@ -135,11 +135,12 @@ missing join suppresses that step rather than being replaced with a heuristic.
 The most valuable endpoint is a source-level answer: not merely “encoder 9 is
 expensive,” but “this kernel region is expensive.”
 
-`[D]` Existing ordinary bundles do not provide the debug line mapping and
-program-counter-attributed cost required for that projection. See
-`SOURCE_LEVEL_COST.md`. The eventual path requires a debug-info build, a
-stable source-to-instruction mapping, and a capture or replay cost join. Until
-then, GTLLVMHelper clique and instruction traces are shader diagnostics, not
+`[D]` Existing ordinary bundles provide sparse compiler source locations, but
+not the stable source-to-instruction mapping and program-counter-attributed
+cost required for that projection. See `SOURCE_LEVEL_COST.md`. The eventual
+path requires a validated instruction edge and a capture or replay cost join;
+a debug-info build may supply the missing instruction mapping. Until then,
+GTLLVMHelper clique and instruction traces are shader diagnostics, not
 line-level cost measurements.
 
 ## Objectives and evidence gates

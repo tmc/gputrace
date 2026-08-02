@@ -197,6 +197,26 @@ func TestProcessStreamData(t *testing.T) {
 	}
 	t.Logf("binaries: count=%d instructions=%d executed=%d highRegister=%d debugLocations=%d",
 		b.Count, b.InstructionCount, b.InstructionsExecuted, b.HighRegister, b.DebugLocationCount)
+	if len(b.DebugLocations) != int(b.DebugLocationCount) {
+		t.Errorf("decoded debug locations = %d, want %d", len(b.DebugLocations), b.DebugLocationCount)
+	}
+	if len(b.DebugLocations) != 0 {
+		first := b.DebugLocations[0]
+		if b.DebugSelectorFile != first.FilePath || b.DebugSelectorFunction != first.FunctionName {
+			t.Errorf("debug location selectors = (%q, %q), want (%q, %q)", b.DebugSelectorFile,
+				b.DebugSelectorFunction, first.FilePath, first.FunctionName)
+		}
+		if b.DebugSelectorString != first.FilePath {
+			t.Errorf("debug string selector = %q, want first table value %q", b.DebugSelectorString, first.FilePath)
+		}
+	}
+	for _, location := range b.DebugLocations {
+		if location.FilePath == "" || location.FunctionName == "" {
+			t.Errorf("debug location %d has empty source mapping", location.BinaryIndex)
+		}
+		t.Logf("debug location: binary=%d %s:%d:%d %s", location.BinaryIndex, location.FilePath,
+			location.Line, location.Column, location.FunctionName)
+	}
 	for _, p := range summary.Pipelines {
 		t.Logf("  objectId=%#x pointerId=%#x fnIndex=%d index=%d commands=%d mcaHighRegister=%d %q",
 			p.ObjectID, p.PointerID, p.FunctionIndex, p.Index, p.NumGPUCommands, p.MCAHighRegister, p.FunctionName)
