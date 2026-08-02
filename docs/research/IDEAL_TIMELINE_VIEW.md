@@ -148,7 +148,7 @@ line-level cost measurements.
 | --- | --- | --- | --- |
 | Maintain nested busy execution | A compact, useful default Perfetto view | Strictly contained dispatches share the owning encoder track; trace_processor accepts the file | Shipped |
 | Decode additional encoder counters | Counter lanes for occupancy, instruction mix, bandwidth, cache, and limits | Decoded source and unit; meaningful values including valid zeroes; capture-matched Xcode oracle or equivalent value validation; compatible timestamp domain | Blocked on decoding and capture-matched validation |
-| Correlate wall command buffers to busy work | One truthful command-buffer to encoder hierarchy | Per-command-buffer busy-origin anchor and evidence for encoder placement within that buffer | Not established |
+| Correlate wall command buffers to busy work | One truthful command-buffer to encoder hierarchy | Per-command-buffer busy-origin anchor and evidence for encoder placement within that buffer | Identity half established; clock half not |
 | Add timestamped kicks | Submission and profiler-detail drill-down | GTMioKickTrace field semantics, a measured start/end clock, and an ownership join | Structural grouping/order is proven; time rendering remains blocked |
 | Add External Process and host annotations | Xcode-like external spans plus userland context | A capture-side concurrent signpost collection (`.logarchive` or `log stream`) and a stable join from os_signpost data to a command buffer or kick | Unobtainable from existing captures |
 | Add memory-side timeline counters | Memory and cache lanes | Plaintext metric, unit, scope, and compatible clock or ownership; no per-encoder interpolation | Current series is scope=2/index=0 and unaligned |
@@ -162,6 +162,30 @@ The measured kick-accessor scan provides no host-tag join. `[V]`
 captures. Xcode obtains the relevant signpost data outside the `.gputrace`
 bundle. A concurrent signpost capture is therefore a higher-value experiment
 than another archive-only parser pass.
+
+`[V]` `GTMioShaderProfilerResult` partitions all 466 GPUCommand records exactly
+once into 11 contiguous `GTMioShaderProfilerEncoder` ranges, and each command's
+independently stored `encoderInfoIndex` equals its owning encoder's `index`.
+The range partition and the per-command index are separate fields, so their
+agreement is a cross-check rather than a restatement. Commands expose 11
+distinct capture-local `commandBufferIndex` values, exactly `0..10`, matching
+Xcode's reported 11 command buffers and the 11 `APSTimelineData`
+command-buffer row indices from the same streamData.
+
+`[D]` That last correspondence is positional, not by shared identifier: a dense
+`0..10` agreeing with a count of 11 is what any zero-based index of 11 items
+looks like, whether or not the orders match. It establishes cardinality
+agreement and a plausible mapping. It does not prove that
+`commandBufferIndex` *n* is `APSTimelineData` row *n*, and if the two orders
+ever differ the join fails silently. Confirming it needs a field both sides
+carry, not a count both sides happen to satisfy.
+
+That is the *identity* half of a busy-to-wall correlation, and only that half.
+The processed model exposes no timestamps, and `commandBufferIndex` is not yet
+joined to the archive's wall command-buffer records. It authorizes a
+dispatch-to-encoder ownership claim; it does not authorize a command-buffer
+timeline lane, a `ClockSnapshot`, or any placement of busy work on the wall
+axis. Reproduce with `TestProcessStreamData`.
 
 `[V]` The static-tokens capture's 6,304 timeline kick indexes partition into
 three generated top-kick-track lanes with no duplicates or out-of-range values.
