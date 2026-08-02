@@ -46,14 +46,15 @@ type PipelineStats struct {
 
 // DispatchInfo contains per-dispatch timing and metadata.
 type DispatchInfo struct {
-	Index            int     `json:"index"`                        // Dispatch index (0-based)
-	PipelineIndex    int     `json:"pipeline_index"`               // Index into Pipelines array
-	PipelineID       int     `json:"pipeline_id,omitempty"`        // Pipeline ID for execution cost lookup
-	FunctionName     string  `json:"function_name,omitempty"`      // Kernel function name
-	EncoderIndex     int     `json:"encoder_index"`                // Which encoder this dispatch belongs to
-	CumulativeUs     int     `json:"cumulative_us"`                // Cumulative time in microseconds
-	DurationUs       int     `json:"duration_us"`                  // Duration of this dispatch in microseconds
-	ExecutionCostPct float64 `json:"execution_cost_pct,omitempty"` // Execution cost from statistical profiling (0-100%)
+	Index                   int     `json:"index"`                                // Dispatch index (0-based)
+	PipelineIndex           int     `json:"pipeline_index"`                       // Index into Pipelines array
+	PipelineID              int     `json:"pipeline_id,omitempty"`                // Pipeline ID for execution cost lookup
+	FunctionName            string  `json:"function_name,omitempty"`              // Kernel function name
+	EncoderIndex            int     `json:"encoder_index"`                        // Which encoder this dispatch belongs to
+	CumulativeUs            int     `json:"cumulative_us"`                        // Cumulative time in microseconds
+	DurationUs              int     `json:"duration_us"`                          // Duration of this dispatch in microseconds
+	ExecutionCostPct        float64 `json:"execution_cost_pct,omitempty"`         // Cost from a validated source (0-100%)
+	ProfilingSampleSharePct float64 `json:"profiling_sample_share_pct,omitempty"` // Pipeline share of Profiling_f samples; an estimate, not Xcode Execution Cost
 	// GPRWCNTR sample correlation (populated by CorrelateDispatchSamples)
 	SampleCount     int     `json:"sample_count,omitempty"`     // Number of GPRWCNTR samples during this dispatch
 	SamplingDensity float64 `json:"sampling_density,omitempty"` // Samples per microsecond (GPU utilization proxy)

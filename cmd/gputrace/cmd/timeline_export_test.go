@@ -85,6 +85,23 @@ func TestExportChromeTracingIncludesTimingMetadata(t *testing.T) {
 	}
 }
 
+func TestApplyXcodeGPUTime(t *testing.T) {
+	timeline := &Timeline{Timing: &TimelineTiming{TimingSource: "APSTimelineData"}}
+	applyXcodeGPUTime(timeline, 9_161_250)
+	if timeline.Timing.EffectiveGPUTimeNs == nil || *timeline.Timing.EffectiveGPUTimeNs != 9_161_250 {
+		t.Fatalf("effective GPU time = %#v, want 9161250", timeline.Timing.EffectiveGPUTimeNs)
+	}
+	if got, want := timeline.Timing.DisplayDurationNs, uint64(9_161_250); got != want {
+		t.Fatalf("display duration = %d, want %d", got, want)
+	}
+	if !strings.Contains(timeline.Timing.DisplayDurationSource, "Xcode Overview GPU Time") {
+		t.Fatalf("display duration source = %q", timeline.Timing.DisplayDurationSource)
+	}
+	if !strings.Contains(timeline.Timing.TimingSource, "Xcode Overview GPU Time") {
+		t.Fatalf("timing source = %q", timeline.Timing.TimingSource)
+	}
+}
+
 func TestExportChromeTracingDoesNotMutateTimelineEvents(t *testing.T) {
 	timeline := &Timeline{
 		Events: []TimelineEvent{{
@@ -120,6 +137,58 @@ func TestExportChromeTracingDoesNotMutateTimelineEvents(t *testing.T) {
 	}
 }
 
+func TestExportChromeTracingKeepsContainedDispatchOnEncoderTrack(t *testing.T) {
+	timeline := &Timeline{Events: []TimelineEvent{
+		{
+			Name:      "encoder",
+			Category:  "encoder",
+			Phase:     "X",
+			Timestamp: 10,
+			Duration:  20,
+			ProcessID: 1,
+			ThreadID:  1,
+		},
+		{
+			Name:      "kernel",
+			Category:  "kernel",
+			Phase:     "X",
+			Timestamp: 12,
+			Duration:  5,
+			ProcessID: 1,
+			ThreadID:  1,
+			Args: map[string]interface{}{
+				"encoder_containment": "strict",
+				"function_name":       "kernel",
+				"pipeline_state":      "0x1234",
+			},
+		},
+	}}
+
+	out := filepath.Join(t.TempDir(), "timeline.json")
+	if err := exportChromeTracing(timeline, out); err != nil {
+		t.Fatalf("exportChromeTracing: %v", err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	var doc struct {
+		TraceEvents []TimelineEvent `json:"traceEvents"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	for _, event := range doc.TraceEvents {
+		if event.Name == "kernel" && event.Category == "kernel" {
+			if got, want := event.ThreadID, 1; got != want {
+				t.Fatalf("kernel tid = %d, want encoder tid %d", got, want)
+			}
+			return
+		}
+	}
+	t.Fatal("missing kernel event")
+}
+
 func TestTimelineMetadataForActiveTracks(t *testing.T) {
 	events := []TimelineEvent{
 		{Name: "process_name", Category: "__metadata", Phase: "M", ProcessID: 1},
@@ -145,7 +214,7 @@ func TestTimelineClockProvenance(t *testing.T) {
 		included []string
 	}{
 		{clock: timelineClockBusy, included: []string{"encoder", "kernel", "counter"}},
-		{clock: timelineClockWall, included: []string{"command_buffer", "encoder_profile", "gprwcntr"}},
+		{clock: timelineClockWall, included: []string{"command_buffer", "profiler_stream", "gprwcntr"}},
 	} {
 		t.Run(string(test.clock), func(t *testing.T) {
 			args := timelineClockProvenance(test.clock)
@@ -341,7 +410,7 @@ func TestTimelineForClockKeepsOnlyComparableEvents(t *testing.T) {
 		Duration:  999_999_900,
 		Events: []TimelineEvent{
 			{Category: "command_buffer", Timestamp: 300_000},
-			{Category: "encoder_profile", Timestamp: 320_000},
+			{Category: "profiler_stream", Timestamp: 320_000},
 			{Category: "gprwcntr", Timestamp: 340_000},
 			{Category: "encoder", Timestamp: 0},
 			{Category: "kernel", Timestamp: 100},
@@ -391,6 +460,48 @@ func TestTimelineForClockKeepsOnlyComparableEvents(t *testing.T) {
 	}
 }
 
+func TestTimelineForClockWithoutRawProfilerSamples(t *testing.T) {
+	timeline := &Timeline{Events: []TimelineEvent{
+		{Category: "command_buffer", Timestamp: 300_000},
+		{Category: "profiler_stream", Timestamp: 320_000},
+		{Category: "gprwcntr", Timestamp: 340_000},
+	}}
+
+	wall := timelineForClockWithRawSamples(timeline, timelineClockWall, false)
+	if got, want := len(wall.Events), 1; got != want {
+		t.Fatalf("wall events without raw samples = %d, want %d", got, want)
+	}
+	if wall.RawProfilerSamples {
+		t.Fatal("wall timeline says raw profiler samples were included")
+	}
+	for _, event := range wall.Events {
+		if event.Category == "gprwcntr" {
+			t.Fatalf("wall timeline retained raw profiler record: %#v", event)
+		}
+	}
+
+	withRaw := timelineForClockWithRawSamples(timeline, timelineClockWall, true)
+	if got, want := len(withRaw.Events), 3; got != want {
+		t.Fatalf("wall events with raw samples = %d, want %d", got, want)
+	}
+	if !withRaw.RawProfilerSamples {
+		t.Fatal("wall timeline does not record raw profiler samples")
+	}
+}
+
+func TestTimelineClockProvenanceWithoutRawProfilerSamples(t *testing.T) {
+	args := timelineClockProvenanceWithRawSamples(timelineClockWall, false)
+	if got := strings.Join(args["included_categories"].([]string), ","); got != "command_buffer" {
+		t.Fatalf("included_categories = %q, want command_buffer", got)
+	}
+	if got := strings.Join(args["excluded_categories"].([]string), ","); !strings.Contains(got, "gprwcntr") {
+		t.Fatalf("excluded_categories = %q, want gprwcntr", got)
+	}
+	if args["raw_profiler_samples"] == "" {
+		t.Fatal("raw profiler sample provenance is missing")
+	}
+}
+
 func TestTimelineClockValidation(t *testing.T) {
 	if err := validateTimelineClock(timelineClockBusy); err != nil {
 		t.Fatalf("validate busy: %v", err)
@@ -398,14 +509,87 @@ func TestTimelineClockValidation(t *testing.T) {
 	if err := validateTimelineClock(timelineClockWall); err != nil {
 		t.Fatalf("validate wall: %v", err)
 	}
+	if err := validateTimelineClock(timelineClockBoth); err != nil {
+		t.Fatalf("validate both: %v", err)
+	}
 	if err := validateTimelineClock("mixed"); err == nil {
 		t.Fatal("validate mixed = nil, want error")
 	}
 }
 
+func TestExportTimelineBothKeepsClockDomainsSeparate(t *testing.T) {
+	timeline := &Timeline{
+		Events: []TimelineEvent{
+			{Category: "command_buffer", Timestamp: 300_000, Duration: 10},
+			{Category: "encoder", Timestamp: 0, Duration: 10},
+			{Category: "kernel", Timestamp: 10, Duration: 5},
+		},
+		Encoders: []EncoderInfo{{Index: 0, Duration: 10}},
+		Kernels:  []KernelInfo{{Name: "kernel", Encoder: 0, Duration: 5}},
+	}
+
+	out := filepath.Join(t.TempDir(), "both.json")
+	if err := exportTimelineBoth(timeline, "json", out); err != nil {
+		t.Fatalf("exportTimelineBoth: %v", err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	var got timelineBothJSON
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if got.ClockDomain != string(timelineClockBoth) {
+		t.Fatalf("clock_domain = %q, want %q", got.ClockDomain, timelineClockBoth)
+	}
+	if got.ClockMapping == "" {
+		t.Fatal("clock_mapping is empty")
+	}
+	if got.Busy == nil || got.Wall == nil {
+		t.Fatalf("missing clock view: busy=%v wall=%v", got.Busy != nil, got.Wall != nil)
+	}
+	if got.Busy.ClockDomain != string(timelineClockBusy) || got.Wall.ClockDomain != string(timelineClockWall) {
+		t.Fatalf("clock domains = busy %q, wall %q", got.Busy.ClockDomain, got.Wall.ClockDomain)
+	}
+	if got, want := len(got.Busy.Events), 2; got != want {
+		t.Fatalf("busy events = %d, want %d", got, want)
+	}
+	if got, want := len(got.Wall.Events), 1; got != want {
+		t.Fatalf("wall events = %d, want %d", got, want)
+	}
+}
+
+func TestExportTimelineBothHTMLHasSeparatePanels(t *testing.T) {
+	timeline := &Timeline{Events: []TimelineEvent{
+		{Category: "command_buffer", Timestamp: 300_000, Duration: 10},
+		{Category: "encoder", Timestamp: 0, Duration: 10},
+	}}
+	out := filepath.Join(t.TempDir(), "both.html")
+	if err := exportTimelineBoth(timeline, "html", out); err != nil {
+		t.Fatalf("exportTimelineBoth: %v", err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	for _, want := range []string{"total information view", "GPU busy time", "Wall-clock scheduling", "no measured mapping"} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("HTML does not contain %q", want)
+		}
+	}
+}
+
+func TestExportTimelineBothRejectsOneAxisFormats(t *testing.T) {
+	err := exportTimelineBoth(&Timeline{}, "perfetto", filepath.Join(t.TempDir(), "both.json"))
+	if err == nil || !strings.Contains(err.Error(), "one global time axis") {
+		t.Fatalf("exportTimelineBoth perfetto error = %v, want one-axis error", err)
+	}
+}
+
 func TestExportTextTimelineWritesOutputFile(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "timeline.txt")
-	if err := exportTextTimeline(&Timeline{}, out); err != nil {
+	if err := exportTextTimeline(&Timeline{}, nil, out); err != nil {
 		t.Fatalf("exportTextTimeline: %v", err)
 	}
 	data, err := os.ReadFile(out)
@@ -414,6 +598,28 @@ func TestExportTextTimelineWritesOutputFile(t *testing.T) {
 	}
 	if got, want := string(data), "No timeline data available.\n"; got != want {
 		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
+
+func TestExportTextTimelineSyntheticCommandBufferUsesMilliseconds(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "timeline.txt")
+	timeline := &Timeline{
+		Duration: 10_837_000,
+		Encoders: []EncoderInfo{{
+			Index:    0,
+			Label:    "encoder",
+			Duration: 10_837_000,
+		}},
+	}
+	if err := exportTextTimeline(timeline, nil, out); err != nil {
+		t.Fatalf("exportTextTimeline: %v", err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	if !strings.Contains(string(data), "CB#0 [0.0ms, duration=10.84ms]") {
+		t.Fatalf("synthetic command buffer has wrong duration: %s", data)
 	}
 }
 
@@ -435,7 +641,7 @@ func TestExportTextTimelineSummarizesUnitsAndMissingDuration(t *testing.T) {
 			EncoderTimingSource:   "profiler",
 		},
 	}
-	if err := exportTextTimeline(timeline, out); err != nil {
+	if err := exportTextTimeline(timeline, nil, out); err != nil {
 		t.Fatalf("exportTextTimeline: %v", err)
 	}
 	data, err := os.ReadFile(out)
@@ -590,18 +796,18 @@ func TestAddDispatchKernelEventsIncludesXcodeShaderArgs(t *testing.T) {
 			FP16InstructionCount:   55,
 		}},
 		Dispatches: []counter.DispatchInfo{{
-			Index:            2,
-			PipelineIndex:    0,
-			PipelineID:       42,
-			FunctionName:     "kernel0",
-			EncoderIndex:     0,
-			CumulativeUs:     7,
-			DurationUs:       7,
-			ExecutionCostPct: 85.25,
-			SampleCount:      3,
-			SamplingDensity:  0.42,
-			StartTicks:       10,
-			EndTicks:         20,
+			Index:                   2,
+			PipelineIndex:           0,
+			PipelineID:              42,
+			FunctionName:            "kernel0",
+			EncoderIndex:            0,
+			CumulativeUs:            7,
+			DurationUs:              7,
+			ProfilingSampleSharePct: 85.25,
+			SampleCount:             3,
+			SamplingDensity:         0.42,
+			StartTicks:              10,
+			EndTicks:                20,
 		}},
 	}
 	perfStats := &gputrace.PerfCounterStats{
@@ -656,8 +862,8 @@ func TestAddDispatchKernelEventsIncludesXcodeShaderArgs(t *testing.T) {
 			t.Fatalf("arg %s = %#v, want %#v", key, got, want)
 		}
 	}
-	checkArg("xcode_cost_pct", 100.0)
-	checkArg("profiling_cost_pct", 85.25)
+	checkArg("simd_group_share_pct", 100.0)
+	checkArg("profiling_sample_share_estimate_pct", 85.25)
 	checkArg("pipeline_state", "0xabc")
 	checkArg("simd_groups", uint64(4096))
 	checkArg("allocated_registers", 17)
@@ -926,7 +1132,7 @@ func TestGenerateTimelineWithoutPerfDataIncludesDispatchSIMDGroups(t *testing.T)
 func TestGenerateInteractiveHTMLIncludesShaderTooltipFields(t *testing.T) {
 	html := generateInteractiveHTML(`{"events":[]}`)
 	for _, want := range []string{
-		"Profiling Cost",
+		"Profiling Sample Share (estimate)",
 		"Pipeline ID",
 		"Instructions",
 		"ALU Instructions",
@@ -1059,6 +1265,25 @@ func TestGenerateCounterTracksFromCounterArchive(t *testing.T) {
 	}
 	if got, want := tracks[1].Samples[0].Value, 25.0; got != want {
 		t.Fatalf("first cost = %v, want %v", got, want)
+	}
+	if got, want := tracks[1].Description, "Derived per encoder from APSCounterData GRC_GPU_CYCLES; not Xcode's exact Execution Cost column."; got != want {
+		t.Fatalf("cost description = %q, want %q", got, want)
+	}
+}
+
+func TestGenerateCounterTracksFromCounterArchiveMarksSparseValues(t *testing.T) {
+	timeline := &Timeline{Encoders: []EncoderInfo{{Index: 0, StartTime: 100, EndTime: 200}}}
+	archive := &counter.CounterArchive{Encoders: []counter.EncoderSamples{{
+		Ordinal:    0,
+		GPUCycles:  100,
+		EndSamples: 15,
+	}}}
+	tracks := generateCounterTracksFromCounterArchive(archive, timeline)
+	if got, want := len(tracks), 2; got != want {
+		t.Fatalf("tracks = %d, want %d", got, want)
+	}
+	if !strings.Contains(tracks[0].Description, "1 encoder value(s) have fewer than 16 end-counter reads, the minimum for the archive's 16 replay groups") {
+		t.Fatalf("cycles description = %q, want sparse-read caveat", tracks[0].Description)
 	}
 }
 
