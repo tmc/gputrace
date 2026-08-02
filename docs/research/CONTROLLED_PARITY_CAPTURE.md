@@ -68,13 +68,14 @@ whether these labels reach profiler-only `streamData` and the processed model,
 where the MLX captures showed no content-bearing field at all. That half stays
 open, as does any wall-to-busy mapping.
 
-The attempt to create the corresponding profiled export reached Xcode's
-Performance state, but its Export control remained disabled. An explicit
-source-bound recovery/finalization attempt then stopped at the accessibility
-guard `cannot establish selected Summary right-pane bounds`. This is an
-automation HOLD, not a negative result about labels or timestamps. Preserve the
-source bundle and ground truth; retry profiling from a verified Xcode Summary
-window rather than replaying or substituting another capture.
+Two attempts to create the corresponding profiled export reached Xcode's
+Performance state, but the Export control remained disabled. The first
+source-bound recovery/finalization attempt stopped at
+`cannot establish selected Summary right-pane bounds`; a fresh foreground
+replay then stopped at `want one exact untitled 95% Summary window, found 0`.
+This is an automation HOLD, not a negative result about labels or timestamps.
+Preserve the source bundle and ground truth; retry profiling from a verified
+Xcode Summary window rather than replaying or substituting another capture.
 
 ## Host-signpost collection control
 
