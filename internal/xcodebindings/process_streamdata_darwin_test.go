@@ -82,10 +82,10 @@ func TestProcessStreamData(t *testing.T) {
 			t.Errorf("timeline pipeline records = %d, want %d", len(timeline.PipelineDraws), len(summary.Pipelines))
 		}
 		var pipelineDraws uint64
-		var pipelineGPUTime uint64
+		var pipelineDuration uint64
 		for _, pipeline := range timeline.PipelineDraws {
 			pipelineDraws += pipeline.DrawCount
-			pipelineGPUTime += pipeline.GPUTimeDataMaster2
+			pipelineDuration += pipeline.DrawDurationDataMaster2
 		}
 		if pipelineDraws != timeline.DrawCount {
 			t.Errorf("timeline pipeline draw total = %d, want %d", pipelineDraws, timeline.DrawCount)
@@ -97,8 +97,8 @@ func TestProcessStreamData(t *testing.T) {
 		if os.Getenv("GPUTRACE_MIO_SETUP_DATA_PATH") == "1" && len(timeline.DrawDurationsDataMaster2) > 0 && timeline.DrawDurationsDataMaster2[0] == 0 {
 			t.Errorf("setup-backed timeline draw duration is zero: %#v", timeline.DrawDurationsDataMaster2)
 		}
-		if os.Getenv("GPUTRACE_MIO_SETUP_DATA_PATH") == "1" && pipelineGPUTime == 0 {
-			t.Errorf("setup-backed pipeline GPU time is zero: %#v", timeline.PipelineDraws)
+		if os.Getenv("GPUTRACE_MIO_SETUP_DATA_PATH") == "1" && pipelineDuration == 0 {
+			t.Errorf("setup-backed pipeline duration is zero: %#v", timeline.PipelineDraws)
 		}
 		t.Logf("timeline: draws=%d encoders=%d costs=%d pipelines=%d scope0=%.6g scope4=%.6g pipelineDraws=%#v encoders=%#v drawDurations=%#v", timeline.DrawCount, timeline.EncoderCount, timeline.CostCount, timeline.PipelineStateCount, timeline.Scope0DataMaster2, timeline.Scope4DataMaster2, timeline.PipelineDraws, timeline.EncoderDurations, timeline.DrawDurationsDataMaster2)
 	}

@@ -94,11 +94,13 @@ func nsErrorMessage(err objc.ID) string {
 	return objc.GoString(cstr)
 }
 
-// TimelinePipelineSummary attributes the number of draws to one pipeline.
+// TimelinePipelineSummary attributes draws and their Data Master 2 duration
+// aggregate to one pipeline. The duration aggregate is not Xcode GPU Time:
+// on the reference capture its sum differs from the model's GPUTime.
 type TimelinePipelineSummary struct {
-	ObjectID           uint64 `json:"object_id"`
-	DrawCount          uint64 `json:"draw_count"`
-	GPUTimeDataMaster2 uint64 `json:"gpu_time_data_master2,omitempty"`
+	ObjectID                uint64 `json:"object_id"`
+	DrawCount               uint64 `json:"draw_count"`
+	DrawDurationDataMaster2 uint64 `json:"draw_duration_data_master2,omitempty"`
 }
 
 // TimelineEncoderSummary attributes duration and draw count to one encoder.
@@ -689,7 +691,7 @@ func readTimelinePipelineTimes(timeline objc.ID, drawCount uint64, result *Timel
 		totals[id] += duration
 	}
 	for i := range result.PipelineDraws {
-		result.PipelineDraws[i].GPUTimeDataMaster2 = totals[result.PipelineDraws[i].ObjectID]
+		result.PipelineDraws[i].DrawDurationDataMaster2 = totals[result.PipelineDraws[i].ObjectID]
 	}
 	return true
 }
