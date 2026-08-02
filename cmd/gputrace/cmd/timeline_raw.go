@@ -168,10 +168,6 @@ func EnhanceTimelineWithRawData(timeline *Timeline, tracePath string) error {
 	// Correlate samples to kernels
 	CorrelateSamplesToKernels(timeline)
 
-	// Add Kick Traces if available
-	// Disabled by default to reduce trace width (focus on work spans)
-	// _ = EnhanceTimelineWithKickTraces(timeline, tracePath, rawData)
-
 	return nil
 }
 
@@ -524,54 +520,6 @@ func ParseAPSTimelineData(tracePath string) (*RawData, error) {
 	return rawData, nil
 }
 
-// ParseGTMioKickTrace parses a raw file to extract potential kick timestamps.
-func ParseGTMioKickTrace(path string) ([]uint64, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-
-	// Heuristic: Harvest timestamps > 1e9
-	var candidates []uint64
-	offset := 0
-	for offset < len(data) {
-		val, n := decodeVarint(data[offset:])
-		if n == 0 {
-			offset++
-			continue
-		}
-
-		// Try ZigZag and Raw
-		zzVal := int64((val >> 1) ^ uint64(-(int64(val) & 1)))
-
-		// Filter for reasonable timestamps (e.g., > 1 second).
-		// 1e9 ns = 1s.
-		if val > 1_000_000_000 && val < 100_000_000_000_000 {
-			candidates = append(candidates, val)
-		} else if zzVal > 1_000_000_000 && zzVal < 100_000_000_000_000 {
-			candidates = append(candidates, uint64(zzVal))
-		}
-
-		offset += n
-	}
-	return candidates, nil
-}
-
-func decodeVarint(buf []byte) (x uint64, n int) {
-	for shift := uint(0); shift < 64; shift += 7 {
-		if n >= len(buf) {
-			return 0, 0
-		}
-		b := uint64(buf[n])
-		n++
-		x |= (b & 0x7F) << shift
-		if (b & 0x80) == 0 {
-			return x, n
-		}
-	}
-	return 0, 0
-}
-
 func plistUint64(v any) (uint64, bool) {
 	switch n := v.(type) {
 	case uint64:
@@ -596,100 +544,4 @@ func plistUint64(v any) (uint64, bool) {
 	default:
 		return 0, false
 	}
-}
-
-// EnhanceTimelineWithKickTraces adds kick trace candidates to the timeline.
-func EnhanceTimelineWithKickTraces(timeline *Timeline, tracePath string, rawData *RawData) error {
-	// Add "Kick Candidates" track
-	trKick := TimelineEvent{
-		Name:      "thread_name",
-		Phase:     "M",
-		ProcessID: 1,
-		ThreadID:  11,
-		Args: map[string]interface{}{
-			"name": "Kick Candidates",
-		},
-	}
-	timeline.Events = append(timeline.Events, trKick)
-
-	processedFiles := make(map[string]bool)
-
-	// 1. Collect all candidates and find global min timestamp
-	var allCandidates []struct {
-		rawTs    uint64
-		filename string
-	}
-	var globalMinTs uint64 = ^uint64(0)
-
-	// Iterate mappings
-	profilerDir := tracePath
-	if dir := findProfilerDir(tracePath); dir != "" {
-		profilerDir = dir
-	}
-	for _, mapping := range rawData.Mappings {
-		fPath := filepath.Join(profilerDir, mapping.Filename)
-
-		if processedFiles[fPath] {
-			continue
-		}
-		processedFiles[fPath] = true
-
-		candidates, err := ParseGTMioKickTrace(fPath)
-		if err != nil {
-			continue
-		}
-
-		for _, rawTs := range candidates {
-			// Filter out clearly bogus small values if any (though candidates are > 1e9)
-			if rawTs < globalMinTs {
-				globalMinTs = rawTs
-			}
-			allCandidates = append(allCandidates, struct {
-				rawTs    uint64
-				filename string
-			}{rawTs, mapping.Filename})
-		}
-	}
-
-	// 2. Generate events
-	if globalMinTs == ^uint64(0) {
-		return nil // No candidates found
-	}
-
-	// Use Timebase for scaling deltas (Ticks -> us)
-	numer := timeline.TimebaseNumer
-	denom := timeline.TimebaseDenom
-	if denom == 0 {
-		denom = 1
-	}
-
-	// Sort all candidates by time (optional but good for visual order)
-	// Actually, simply appending is fine, Perfetto sorts.
-
-	for _, c := range allCandidates {
-		deltaTicks := c.rawTs - globalMinTs
-		ts := (deltaTicks * numer / denom) / 1000
-
-		// Decimate/Filter if needed
-		// Just filter by huge duration?
-		if ts > timeline.Duration+1000000 { // +1s margin
-			continue
-		}
-
-		ev := TimelineEvent{
-			Name:      "Kick",
-			Category:  "kick",
-			Phase:     "I",
-			Timestamp: ts,
-			ProcessID: 1,
-			ThreadID:  11,
-			Args: map[string]interface{}{
-				"raw_ts": c.rawTs,
-				"file":   c.filename,
-			},
-		}
-		timeline.Events = append(timeline.Events, ev)
-	}
-
-	return nil
 }
