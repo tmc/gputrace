@@ -622,13 +622,15 @@ func (cs *CounterSampler) getCounterSet(name string) *CounterSet {
 	}
 }
 
-// PopulateEncoderMetricsFromBinaryParsing populates EncoderCounterMetrics from .gpuprofiler_raw parsing.
+// PopulateEncoderMetricsFromBinaryParsing parses Counters_f_*.raw and returns
+// one EncoderCounterMetrics per pipeline, not per encoder, despite the name and
+// the type. The two counts coincide on some captures; on
+// staticmask-warm-tokens2-4 it returns 18 rows for 23 encoders.
 //
-// This bridges the binary parsing approach (gputrace-44) with the replay counter sampling framework.
-// Uses validated binary parsing to extract real counter data from Xcode Instruments captures.
-//
-// Purpose: Provide REAL counter data to the CSV export and validation pipeline while waiting
-// for Metal bindings. This enables end-to-end validation: Binary parsing → EncoderMetrics → CSV → Compare with Xcode
+// The returned slice therefore must not be indexed by encoder position. No
+// encoder join for these rows is established: see
+// docs/research/XCODE_PARITY.md, which records both the timebase disagreement
+// and the refuted kick_software_id candidate.
 func PopulateEncoderMetricsFromBinaryParsing(t *trace.Trace) ([]EncoderCounterMetrics, error) {
 	// Parse performance counters from Counters_f_*.raw files
 	stats, err := ParsePerfCounters(t)

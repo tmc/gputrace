@@ -29,9 +29,12 @@ type CountersCSVExporter struct {
 
 // CountersCSVExportSummary reports the source of data rows written to Counters.csv.
 type CountersCSVExportSummary struct {
-	Rows              int // Data rows written, excluding the header.
-	ParsedCounterRows int // Rows populated from parsed Counters_f_*.raw metrics.
-	SkippedRows       int // Encoders with no parsed counter data, written as metadata only.
+	Rows int // Data rows written, excluding the header.
+	// ParsedCounterRows counts rows carrying measured counter values. It is
+	// always zero: parsed rows are pipeline-scoped and no encoder join exists.
+	// The field and its test are a tripwire for reintroducing that path.
+	ParsedCounterRows int
+	SkippedRows       int // Encoders written as metadata only.
 }
 
 // NewCountersCSVExporter creates a new CSV exporter for the given trace.
@@ -41,9 +44,8 @@ func NewCountersCSVExporter(trace *Trace) *CountersCSVExporter {
 	}
 }
 
-// ExportCountersCSV generates a Counters.csv file matching Xcode Instruments format.
-// Attempts to use REAL counter data from .gpuprofiler_raw parsing (gputrace-44).
-// Falls back to synthetic values if binary data unavailable.
+// ExportCountersCSV generates a Counters.csv-shaped export. Metric columns are
+// blank until a capture-backed join maps their source rows to encoders.
 func (e *CountersCSVExporter) ExportCountersCSV(w io.Writer) error {
 	_, err := e.ExportCountersCSVWithSummary(w)
 	return err
@@ -61,17 +63,6 @@ func (e *CountersCSVExporter) ExportCountersCSVWithSummary(w io.Writer) (Counter
 		return summary, fmt.Errorf("write header: %w", err)
 	}
 
-	// Try to get REAL counter data from binary parsing (gputrace-44)
-	var encoderMetrics []EncoderCounterMetrics
-	var useBinaryData bool
-	if e.trace.HasPerfCounters() {
-		metrics, err := PopulateEncoderMetricsFromBinaryParsing(e.trace)
-		if err == nil && len(metrics) > 0 {
-			encoderMetrics = metrics
-			useBinaryData = true
-		}
-	}
-
 	// Get encoder information
 	computeEncoders := e.trace.ParseComputeEncoders()
 
@@ -87,18 +78,11 @@ func (e *CountersCSVExporter) ExportCountersCSVWithSummary(w io.Writer) (Counter
 			encoderLabel = fmt.Sprintf("Compute Encoder %d 0x%x", encIndex, encoder.Address)
 		}
 
-		// Generate counter values for this encoder
-		var row []string
-		if useBinaryData && encIndex < len(encoderMetrics) {
-			row = e.generateCounterRowFromBinaryData(rowIndex, encIndex, commandBufferLabel, encoderLabel, &encoderMetrics[encIndex])
-			summary.ParsedCounterRows++
-		} else {
-			// No counter data for this encoder. Write the identifying columns
-			// and leave every metric blank: a number here would be read as a
-			// measurement, and a zero is indistinguishable from a measured zero.
-			row = e.generateCounterRowMetadataOnly(rowIndex, encIndex, commandBufferLabel, encoderLabel)
-			summary.SkippedRows++
-		}
+		// Parsed Counters_f rows are pipeline-scoped. Indexing them by encoder
+		// position mislabels data whenever the two cardinalities happen to agree,
+		// so no counter value is exported until a stable join exists.
+		row := e.generateCounterRowMetadataOnly(rowIndex, encIndex, commandBufferLabel, encoderLabel)
+		summary.SkippedRows++
 
 		if err := writer.Write(row); err != nil {
 			return summary, fmt.Errorf("write row %d: %w", rowIndex, err)
@@ -118,121 +102,6 @@ func (e *CountersCSVExporter) generateCounterRowMetadataOnly(index, functionInde
 	row[1] = fmt.Sprintf("%d", functionIndex)
 	row[2] = cbLabel
 	row[3] = encoderLabel
-	return row
-}
-
-// generateCounterRowFromBinaryData creates a CSV row using REAL binary-parsed counter data.
-// Maps EncoderCounterMetrics fields to the 247-column Xcode Counters.csv format.
-// Uses data from PopulateEncoderMetricsFromBinaryParsing (validated 100% accurate on kernel invocations).
-func (e *CountersCSVExporter) generateCounterRowFromBinaryData(index, functionIndex int, cbLabel, encoderLabel string, metrics *EncoderCounterMetrics) []string {
-	row := make([]string, countersCSVColumns)
-	row[0] = fmt.Sprintf("%d", index)         // Index
-	row[1] = fmt.Sprintf("%d", functionIndex) // Encoder FunctionIndex
-	row[2] = cbLabel                          // CommandBuffer Label
-	row[3] = encoderLabel                     // Encoder Label
-	row[4] = ""                               // Empty column
-
-	// Build map of counter values from binary parsing
-	// Only use fields available in EncoderCounterMetrics (counter_sampling.go:143-167)
-	values := make(map[string]float64)
-
-	// Core metrics from binary parsing (validated 100% accurate)
-	values["Kernel Invocations"] = float64(metrics.DispatchCount) // 100% accurate from gputrace-44
-	values["ALU Utilization"] = metrics.ALUUtilization            // From CSV enhancement (gputrace-63)
-
-	// Memory bandwidth - use real extracted values from gputrace-65
-	if metrics.BytesReadFromDeviceMemory > 0 || metrics.BytesWrittenToDeviceMemory > 0 {
-		values["Bytes Read From Device Memory"] = float64(metrics.BytesReadFromDeviceMemory)
-		values["Bytes Written To Device Memory"] = float64(metrics.BytesWrittenToDeviceMemory)
-	}
-	if metrics.BufferDeviceMemoryBytesRead > 0 || metrics.BufferDeviceMemoryBytesWritten > 0 {
-		values["Buffer Device Memory Bytes Read"] = float64(metrics.BufferDeviceMemoryBytesRead)
-		values["Buffer Device Memory Bytes Written"] = float64(metrics.BufferDeviceMemoryBytesWritten)
-	}
-	if metrics.DeviceMemoryBandwidthGBps > 0 {
-		values["Device Memory Bandwidth"] = metrics.DeviceMemoryBandwidthGBps
-	}
-	if metrics.GPUReadBandwidthGBps > 0 {
-		values["GPU Read Bandwidth"] = metrics.GPUReadBandwidthGBps
-	}
-	if metrics.GPUWriteBandwidthGBps > 0 {
-		values["GPU Write Bandwidth"] = metrics.GPUWriteBandwidthGBps
-	}
-
-	// Buffer L1 Cache Metrics (gputrace-66)
-	if metrics.BufferL1MissRate > 0 {
-		values["Buffer L1 Miss Rate"] = metrics.BufferL1MissRate
-	}
-	if metrics.BufferL1ReadAccesses > 0 {
-		values["Buffer L1 Read Accesses"] = metrics.BufferL1ReadAccesses
-	}
-	if metrics.BufferL1ReadBandwidth > 0 {
-		values["L1 Read Bandwidth"] = metrics.BufferL1ReadBandwidth
-	}
-	if metrics.BufferL1WriteAccesses > 0 {
-		values["Buffer L1 Write Accesses"] = metrics.BufferL1WriteAccesses
-	}
-	if metrics.BufferL1WriteBandwidth > 0 {
-		values["L1 Write Bandwidth"] = metrics.BufferL1WriteBandwidth
-	}
-
-	// Shader Utilization Metrics (gputrace-67). The column names are Xcode's:
-	// there is no "Compute Shader Utilization" counter, only a launch
-	// utilization, and writing the shorter name silently wrote nothing.
-	if metrics.ComputeShaderUtilization > 0 {
-		values["Compute Shader Launch Utilization"] = metrics.ComputeShaderUtilization
-	}
-	if metrics.FragmentShaderUtilization > 0 {
-		values["Fragment Shader Launch Utilization"] = metrics.FragmentShaderUtilization
-	}
-	if metrics.VertexShaderUtilization > 0 {
-		values["Vertex Shader Launch Utilization"] = metrics.VertexShaderUtilization
-	}
-	if metrics.ControlFlowUtilization > 0 {
-		values["Control Flow Utilization"] = metrics.ControlFlowUtilization
-	}
-	if metrics.InstructionThroughputUtil > 0 {
-		values["Instruction Throughput Utilization"] = metrics.InstructionThroughputUtil
-	}
-	if metrics.IntegerAndComplexUtil > 0 {
-		values["Integer and Complex Utilization"] = metrics.IntegerAndComplexUtil
-	}
-	if metrics.IntegerAndConditionalUtil > 0 {
-		values["Integer and Conditional Utilization"] = metrics.IntegerAndConditionalUtil
-	}
-	if metrics.F16Utilization > 0 {
-		values["F16 Utilization"] = metrics.F16Utilization
-	}
-	if metrics.F32Utilization > 0 {
-		values["F32 Utilization"] = metrics.F32Utilization
-	}
-
-	// Draw counts
-	if metrics.DrawCount > 0 {
-		values["Primitives"] = float64(metrics.DrawCount)
-	}
-
-	// Map values to CSV columns (6-246). Columns gputrace does not know how to
-	// derive are left blank rather than zeroed: roughly 240 of the 241 metric
-	// columns fall in that bucket, and "0.00" in all of them is
-	// indistinguishable from a measured zero.
-	for i := countersCSVMetricStart; i < countersCSVColumns; i++ {
-		metricName := getMetricNameForColumn(i)
-		if unmeasurableCounters[metricName] {
-			// Leave blank rather than 0.00: a zero here would read as a
-			// measurement gputrace made.
-			continue
-		}
-		val, exists := values[metricName]
-		if !exists {
-			continue
-		}
-		// Xcode writes two decimal places in every metric column, counts
-		// included ("8058.00"), so match it: this file exists to be diffed
-		// against Xcode's own export.
-		row[i] = fmt.Sprintf("%.2f", val)
-	}
-
 	return row
 }
 

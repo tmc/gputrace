@@ -13,60 +13,29 @@ func TestFormatExportCounterSourceNotice(t *testing.T) {
 		avoid   []string
 	}{
 		{
-			name: "all parsed",
+			name: "metadata only without perf counters",
 			summary: exportCounterSourceSummary{
-				totalRows:             2,
-				parsedCounterRows:     2,
-				syntheticFallbackRows: 0,
-				perfCountersPresent:   true,
+				totalRows:        2,
+				metadataOnlyRows: 2,
 			},
 			want: []string{
-				"parsed counter data (2 rows)",
-			},
-			avoid: []string{
-				"synthetic fallback",
-			},
-		},
-		{
-			name: "all synthetic without perf counters",
-			summary: exportCounterSourceSummary{
-				totalRows:             2,
-				parsedCounterRows:     0,
-				syntheticFallbackRows: 2,
-				perfCountersPresent:   false,
-			},
-			want: []string{
-				"synthetic fallback (2 rows)",
+				"metadata only (2 rows)",
 				"no parsed .gpuprofiler_raw counter data found",
 			},
 			avoid: []string{
-				"parsed counter data (",
+				"parsed counter data",
 			},
 		},
 		{
-			name: "mixed parsed and synthetic",
+			name: "metadata only with perf counters",
 			summary: exportCounterSourceSummary{
-				totalRows:             3,
-				parsedCounterRows:     1,
-				syntheticFallbackRows: 2,
-				perfCountersPresent:   true,
+				totalRows:           3,
+				metadataOnlyRows:    3,
+				perfCountersPresent: true,
 			},
 			want: []string{
-				"parsed counter data (1 row)",
-				"synthetic fallback (2 rows)",
-			},
-		},
-		{
-			name: "synthetic despite perf counters",
-			summary: exportCounterSourceSummary{
-				totalRows:             1,
-				parsedCounterRows:     0,
-				syntheticFallbackRows: 1,
-				perfCountersPresent:   true,
-			},
-			want: []string{
-				"synthetic fallback (1 row)",
-				"performance counter files were present but no parsed row metrics were available",
+				"metadata only (3 rows)",
+				"pipeline-scoped and lack an encoder join",
 			},
 		},
 	}
@@ -88,12 +57,12 @@ func TestFormatExportCounterSourceNotice(t *testing.T) {
 	}
 }
 
-func TestExportCountersHelpDistinguishesSyntheticFallback(t *testing.T) {
+func TestExportCountersHelpWithholdsUnjoinedCounters(t *testing.T) {
 	help := exportCountersCmd.Long
 	for _, want := range []string{
-		"parsed counter rows",
-		"SYNTHETIC FALLBACK",
-		"reports the row source counts on stderr",
+		"pipeline-scoped, not encoder-scoped",
+		"withheld until a stable join exists",
+		"state on stderr",
 	} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("export-counters help does not contain %q", want)
