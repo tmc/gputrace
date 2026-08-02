@@ -148,7 +148,8 @@ line-level cost measurements.
 | --- | --- | --- | --- |
 | Maintain nested busy execution | A compact, useful default Perfetto view | Strictly contained dispatches share the owning encoder track; trace_processor accepts the file | Shipped |
 | Decode additional encoder counters | Counter lanes for occupancy, instruction mix, bandwidth, cache, and limits | Decoded source and unit; meaningful values including valid zeroes; capture-matched Xcode oracle or equivalent value validation; compatible timestamp domain | Blocked on decoding and capture-matched validation |
-| Correlate wall command buffers to busy work | One truthful command-buffer to encoder hierarchy | Per-command-buffer busy-origin anchor and evidence for encoder placement within that buffer | Identity half established; clock half not |
+| Correlate wall command buffers to busy work | One truthful command-buffer to encoder hierarchy | Per-command-buffer busy-origin anchor and evidence for encoder placement within that buffer | Not established; the positional `commandBufferIndex` bridge is refuted |
+| Attribute dispatches to encoders | Correct dispatch nesting under its owning encoder | A partition cross-checked against an independently stored per-command index | Established |
 | Add timestamped kicks | Submission and profiler-detail drill-down | GTMioKickTrace field semantics, a measured start/end clock, and an ownership join | Structural grouping/order is proven; time rendering remains blocked |
 | Add External Process and host annotations | Xcode-like external spans plus userland context | A capture-side concurrent signpost collection (`.logarchive` or `log stream`) and a stable join from os_signpost data to a command buffer or kick | Unobtainable from existing captures |
 | Add memory-side timeline counters | Memory and cache lanes | Plaintext metric, unit, scope, and compatible clock or ownership; no per-encoder interpolation | Current series is scope=2/index=0 and unaligned |
@@ -168,17 +169,20 @@ once into 11 contiguous `GTMioShaderProfilerEncoder` ranges, and each command's
 independently stored `encoderInfoIndex` equals its owning encoder's `index`.
 The range partition and the per-command index are separate fields, so their
 agreement is a cross-check rather than a restatement. Commands expose 11
-distinct capture-local `commandBufferIndex` values, exactly `0..10`, matching
-Xcode's reported 11 command buffers and the 11 `APSTimelineData`
-command-buffer row indices from the same streamData.
+distinct capture-local `commandBufferIndex` values.
 
-`[D]` That last correspondence is positional, not by shared identifier: a dense
-`0..10` agreeing with a count of 11 is what any zero-based index of 11 items
-looks like, whether or not the orders match. It establishes cardinality
-agreement and a plausible mapping. It does not prove that
-`commandBufferIndex` *n* is `APSTimelineData` row *n*, and if the two orders
-ever differ the join fails silently. Confirming it needs a field both sides
-carry, not a count both sides happen to satisfy.
+`[V]` **The `commandBufferIndex`-to-`APSTimelineData` correspondence is
+refuted as a general rule.** On static-tokens the indexes are exactly `0..10`
+against 11 `APSTimelineData` rows, which looks like a join. On
+staticmask-perfdata2 the same code yields 23 distinct `commandBufferIndex`
+values against 24 `APSTimelineData` command-buffer rows. The counts do not
+agree, so the two are not the same enumeration.
+
+The static-tokens agreement was never evidence: a dense zero-based index over
+11 items matches a count of 11 whether or not the orders correspond. That is
+why one capture could not settle it and a second one refuted it. Any future
+command-buffer join must use a field both sides carry — an address, a label, a
+duration — never a count both sides happen to satisfy.
 
 That is the *identity* half of a busy-to-wall correlation, and only that half.
 The processed model exposes no timestamps, and `commandBufferIndex` is not yet
