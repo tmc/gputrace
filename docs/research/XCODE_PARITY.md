@@ -76,15 +76,19 @@ attributed.
 ### Counter-file rows are per pipeline, not per encoder `[D]`
 
 `Counters_f_*.raw` parsing produces 18 rows for a 23-encoder capture. 18 is
-exactly the pipeline count. `PopulateEncoderMetricsFromBinaryParsing` returns
-one row per pipeline, and the `Counters.csv` exporter indexes that result by
-encoder position — so pipeline data is published under encoder labels whenever
-the two counts happen to allow it.
+exactly the pipeline count. `PopulateEncoderMetricsFromBinaryParsing` retains
+its historical name, but returns one row per pipeline rather than one row per
+encoder.
 
-This is the highest-value fix on the list: it is a silent mislabeling, not a
-missing feature, and it currently gates every counter-file column. No
-counter-file column is published today, which is the correct fail-closed
-behavior, but the indexing bug remains latent.
+`f04175b` removed the unsafe `Counters.csv` exporter path that indexed those
+rows by encoder position. It now writes encoder identity with blank metric
+columns and reports the withholding on stderr. This stays safe even when the
+pipeline and encoder counts happen to agree.
+
+The remaining problem is an identity join, not an exporter bounds check. A
+counter-file metric may be published only after a capture-backed mapping shows
+which encoder owns its pipeline row, and after its timestamp, unit, and
+capture-matched Xcode residual are established.
 
 ### The counter stream sits in neither published timebase `[V]`
 
@@ -181,9 +185,9 @@ computes, not export noise.
 
 ## Order of work
 
-1. Fix the per-pipeline/per-encoder indexing in
-   `PopulateEncoderMetricsFromBinaryParsing`. It is a live mislabeling and it
-   gates the whole counter-file surface.
+1. Establish a capture-backed pipeline-to-encoder identity join for
+   `Counters_f_*.raw` rows. The exporter already withholds these rows; no
+   position-based fallback is permitted.
 2. Resolve the counter-stream timebase. It converts 137 decoded series from
    unjoinable to scoreable, which is the only path to a large fraction of the
    83 unproduced columns.
