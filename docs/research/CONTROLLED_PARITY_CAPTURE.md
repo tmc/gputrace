@@ -31,7 +31,7 @@ The capture and signpost-collection commands are in
 | --- | --- | --- |
 | Q1. Do command-buffer and encoder labels survive streamData and the processed model? | Find the exact non-ordinal label on each model object, not merely matching counts. | Raw capture half established; profiler-model half pending export. |
 | Q2. Do Metal GPU timestamps bridge APSTimelineData and busy offsets? | A transform reproduces every ground-truth/APSTimeline span and busy offset without fitted placement. | Pending profiled capture. |
-| Q3. Do host signposts reach Xcode External Process and join GPU work? | A concurrent system-log record appears in Xcode and joins by an explicit shared identifier. | Pending concurrent capture. |
+| Q3. Do host signposts reach Xcode External Process and join GPU work? | A concurrent system-log record appears in Xcode and joins by an explicit shared identifier. | Default log collection is negative; Xcode log-tap capture pending. |
 | Q4. Which counter-stream epoch/domain field is wrong? | The selected transform reproduces the known ground-truth time window across the whole sample population. | Pending profiled counter capture. |
 | Q5. Do `Counters_f_*.raw` rows carry pipeline-to-encoder identity? | Every row joins through a content-bearing label or identifier, not row position. | Pending profiled counter capture. |
 
@@ -75,6 +75,42 @@ guard `cannot establish selected Summary right-pane bounds`. This is an
 automation HOLD, not a negative result about labels or timestamps. Preserve the
 source bundle and ground truth; retry profiling from a verified Xcode Summary
 window rather than replaying or substituting another capture.
+
+## Host-signpost collection control
+
+`[V]` The generator calls `os_signpost` for `Encode`, `CommitToComplete`, and
+`Complete` under subsystem `com.tmc.gputrace.parity`. A concurrent
+
+```sh
+log stream --info --style json \
+  --predicate 'subsystem == "com.tmc.gputrace.parity"'
+```
+
+produced only its filtering banner in two no-capture runs and in the timing
+capture `parity-asymmetric-signpost-control.gputrace`; `log show --info` over
+the same interval also returned an empty array. The program's ground-truth
+JSON was written in each run, so this control completed its workload.
+
+This is a negative result about the **default log collection path**, not about
+the source calls and not about Xcode External Process.
+
+`[?]` Before concluding anything about the collection path, note what the
+instrument chose. `main.swift:215` opens its log as
+`OSLog(subsystem: "com.tmc.gputrace.parity", category: "trace-generator")` — a
+**custom category**, not the reserved
+`OS_LOG_CATEGORY_POINTS_OF_INTEREST`. Points of Interest is the category
+Instruments and Xcode surface by convention; a custom category is the case
+least likely to be collected without explicit configuration. So the empty
+result may be a property of our own category choice rather than of the log
+path or of Xcode.
+
+That is the same shape as the label finding above, where an apparent absence in
+the format turned out to be MLX never calling `setLabel:`. Retest with
+`.pointsOfInterest` before treating the default path as the explanation. It is
+a one-line change and it distinguishes the two.
+
+Until a capture yields labelled records and an explicit GPU identity join, Q3
+remains open and no External Process lane is emitted.
 
 ## Publication rule
 

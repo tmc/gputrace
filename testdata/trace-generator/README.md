@@ -170,8 +170,8 @@ The program emits `os_signpost` records with subsystem
 - `Complete` event at the completion callback.
 
 `MTL_CAPTURE_ENABLED=1` and `MTLCaptureManager` do not collect these host
-signposts. Start a separate system log stream before launching the capture,
-then stop it after the program exits:
+signposts. Use this concurrent `log stream` as a capture-side control, then
+stop it after the program exits:
 
 ```bash
 LOG=~/tmp/gputrace-parity/signposts-$(date +%Y%m%d-%H%M%S).jsonl
@@ -187,6 +187,15 @@ wait "$LOG_PID" 2>/dev/null || true
 
 Keep the trace, its `*.ground-truth.json`, and the concurrent signpost log as
 one experiment. The log uses CPU time and is not by itself a GPU clock bridge.
+
+On the current host, this default command is a **negative control**: it
+produced no records for the custom subsystem both without and with
+`MTLCaptureManager` capture. Do not interpret an empty log as proof that the
+signpost calls did not run, and do not claim External Process support from it.
+Capturing custom signposts requires an Xcode/system-trace collection with its
+custom log-tap configuration enabled; retain the resulting `.logarchive` or
+stream output beside the trace and ground truth. A non-empty capture with the
+labelled signpost payload is required before testing an External Process join.
 
 ## Expected Output
 
