@@ -246,10 +246,17 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 		SourcePath: inputPath,
 		Identity:   xcodeIdentity,
 	}
+	recovery := recoveryWindows(appAX)
 	performanceWindow, err := transitionedRecoveryPerformanceTarget(
-		recoveryWindows(appAX), transitionRecovery, traceGeometryKey,
+		recovery, transitionRecovery, traceGeometryKey,
 	)
 	if err != nil {
+		for i, candidate := range recovery {
+			verboseLog("post-replay window[%d]: pid=%d geometry=%q title=%q document=%q performance=%t summary=%t sheet=%t stop=%d enabled=%t show=%d enabled=%t",
+				i, candidate.PID, standaloneRecoveryGeometryKey(candidate), candidate.Title, candidate.Document,
+				candidate.PerformanceView, candidate.SummaryView, candidate.SheetOpen,
+				candidate.StopCount, candidate.StopEnabled, candidate.ShowCount, candidate.ShowEnabled)
+		}
 		return fmt.Errorf("verify post-replay Performance state: %w", err)
 	}
 	if performanceWindow.StopCount > 1 {
