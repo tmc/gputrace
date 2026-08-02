@@ -192,10 +192,20 @@ On the current host, this default command is a **negative control**: it
 produced no records for the custom subsystem both without and with
 `MTLCaptureManager` capture. Do not interpret an empty log as proof that the
 signpost calls did not run, and do not claim External Process support from it.
-Capturing custom signposts requires an Xcode/system-trace collection with its
-custom log-tap configuration enabled; retain the resulting `.logarchive` or
-stream output beside the trace and ground truth. A non-empty capture with the
-labelled signpost payload is required before testing an External Process join.
+Xcode's `Logging` template does capture the same custom intervals and messages:
+
+```bash
+xcrun xctrace record --template Logging \
+  --output ~/tmp/gputrace-parity/signposts.trace \
+  --launch -- .build/release/trace-generator parity-asymmetric \
+  --ground-truth ~/tmp/gputrace-parity/signposts.ground-truth.json
+```
+
+Keep that `.trace` and its ground truth as the host-annotation artifact. It is
+a separate time domain from a GPU trace, so it does not itself establish an
+External Process-to-command-buffer join. A combined Xcode collection must
+retain the same labelled signpost payload and expose an explicit GPU identity
+before gputrace can emit an External Process lane.
 
 ## Expected Output
 

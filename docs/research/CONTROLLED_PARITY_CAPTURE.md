@@ -30,8 +30,8 @@ The capture and signpost-collection commands are in
 | Question | Falsifiable result | Status |
 | --- | --- | --- |
 | Q1. Do command-buffer and encoder labels survive streamData and the processed model? | Find the exact non-ordinal label on each model object, not merely matching counts. | Raw capture half established; profiler-model half pending export. |
-| Q2. Do Metal GPU timestamps bridge APSTimelineData and busy offsets? | A transform reproduces every ground-truth/APSTimeline span and busy offset without fitted placement. | Pending profiled capture. |
-| Q3. Do host signposts reach Xcode External Process and join GPU work? | A concurrent system-log record appears in Xcode and joins by an explicit shared identifier. | Default log collection is negative; Xcode log-tap capture pending. |
+| Q2. Do Metal GPU timestamps bridge APSTimelineData and busy offsets? | A transform reproduces every ground-truth/APSTimeline span and busy offset without fitted placement. | Xcode Metal System Trace establishes its own GPU-time mapping; profiler-only test pending. |
+| Q3. Do host signposts reach Xcode External Process and join GPU work? | A concurrent system-log record appears in Xcode and joins by an explicit shared identifier. | Xcode Logging captures labels; combined GPU/signpost join pending. |
 | Q4. Which counter-stream epoch/domain field is wrong? | The selected transform reproduces the known ground-truth time window across the whole sample population. | Pending profiled counter capture. |
 | Q5. Do `Counters_f_*.raw` rows carry pipeline-to-encoder identity? | Every row joins through a content-bearing label or identifier, not row position. | Pending profiled counter capture. |
 
@@ -94,23 +94,45 @@ JSON was written in each run, so this control completed its workload.
 This is a negative result about the **default log collection path**, not about
 the source calls and not about Xcode External Process.
 
-`[?]` Before concluding anything about the collection path, note what the
-instrument chose. `main.swift:215` opens its log as
-`OSLog(subsystem: "com.tmc.gputrace.parity", category: "trace-generator")` — a
-**custom category**, not the reserved
-`OS_LOG_CATEGORY_POINTS_OF_INTEREST`. Points of Interest is the category
-Instruments and Xcode surface by convention; a custom category is the case
-least likely to be collected without explicit configuration. So the empty
-result may be a property of our own category choice rather than of the log
-path or of Xcode.
+`[V]` The Xcode `Logging` template does capture the custom category. Its
+`os-signpost-interval` table contains all four `Encode` and all four
+`CommitToComplete` intervals, and its `os-signpost` table contains all four
+`Complete` events. Each carries its content-bearing command-buffer label. The
+artifact is
+`/Users/tmc/tmp/gputrace-parity-smoke/xctrace-logging-signpost-control.trace`.
+This refutes the narrower concern that a custom category itself prevents Xcode
+from collecting these calls; it does not make default `log stream` useful.
 
-That is the same shape as the label finding above, where an apparent absence in
-the format turned out to be MLX never calling `setLabel:`. Retest with
-`.pointsOfInterest` before treating the default path as the explanation. It is
-a one-line change and it distinguishes the two.
+That Logging trace has no GPU work. Conversely, the controlled Metal System
+Trace contains labelled GPU command-buffer submissions and GPU intervals, but
+does not retain the custom signposts. These are separate runs and have no
+shared trace clock, so their labels alone do not authorize an External Process
+join. Q3 remains open until one combined collection exposes both the labelled
+signposts and a GPU identity.
 
-Until a capture yields labelled records and an explicit GPU identity join, Q3
-remains open and no External Process lane is emitted.
+## Metal GPU-time control
+
+`[V]` The controlled Metal System Trace preserves the three non-empty
+command-buffer and encoder labels on its GPU intervals. For capture
+`/Users/tmc/tmp/gputrace-parity-smoke/xctrace-metal-system-parity.trace`,
+subtracting the Xcode interval start from the ground-truth
+`MTLCommandBuffer.gpuStartTime` yields the same epoch offset for alpha, bravo,
+and charlie within 42 ns: approximately `166434.5260838` seconds. The Xcode
+GPU interval durations are respectively 9.500 us, 15.166 us, and 30.333 us;
+the ground-truth GPU durations are 9.500 us, 15.208 us, and 30.375 us.
+
+`[D]` The 42 ns residual is not noise: one tick at 24 MHz is 41.667 ns, so both
+non-zero duration deltas are exactly one tick, and the third is zero. That is
+quantization, and it independently corroborates the 24 MHz timebase used in the
+counter-stream analysis above, which was derived from a completely different
+measurement (a mean sample period of 909.2 ticks = 37.883 us). Two unrelated
+routes agreeing on the tick is worth more than either alone.
+
+This establishes a measured mapping between Metal's GPU timestamp API and the
+Xcode Metal System Trace clock for this capture. It does **not** establish the
+missing relationship to profiler-only `APSTimelineData`, cumulative busy
+offsets, or counter timestamps. Q2 remains open until the same check runs on a
+profiled `.gputrace` bundle.
 
 ## Publication rule
 
