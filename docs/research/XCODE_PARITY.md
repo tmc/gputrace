@@ -122,6 +122,20 @@ which of {domain, sign, epoch field} is misidentified.
 Reproduce with `TestStreamDataTimebaseProbe` (`GPUTRACE_PROBE_STREAMDATA`) and
 `TestCounterFileParse` (`GPUTRACE_PROBE_COUNTERS`).
 
+#### Refuted: kick_software_id as the encoder join `[V]`
+
+`kick_software_id` is not the encoder-sequence-ID join, on this capture. All 40
+`Counters_f_*.raw` files were parsed and each reports 0 hits and 11 misses for
+the full streamData encoder set `[1441, 1444, 1447, 1451, 1477, 1512, 1546,
+1583, 1617, 1622, 1626]`.
+
+The all-files scope is the load-bearing part. An earlier run of the same
+experiment against `Counters_f_0.raw` alone also returned zero hits, but that
+file holds roughly 1/40 of the kick population — every one of the 40 files is
+~32.7 MB, 1,314,193,408 bytes total — so a miss there was the expected result
+whether or not the join existed. A partial-shard zero is not a negative
+result. Only the union is.
+
 ### 20 oracle columns have no catalog entry `[V]`
 
 `Execution Cost`, `F32 Limiter`, `FS Last Level Cache Bytes Read`, and 17
@@ -160,6 +174,9 @@ computes, not export noise.
   12706 (two `Profiling_f` files) — and none of them is a discrepancy.
 - A column is `NOT PRODUCED` until it is joined, unit-resolved, and scored. A
   value that is emitted but unvalidated is worse than no value.
+- Search the whole population before recording a negative. `Counters_f_*.raw`
+  is 40 shards; a zero from one of them is not evidence of absence, and this
+  file has already had to retract one verdict reached that way.
 - Record how a number was established, not only what it is.
 
 ## Order of work
