@@ -1,8 +1,7 @@
 commit 07cf8e3 on 2026-08-01
-claude-code: 2.1.220 (Claude Code)
+claude-code: 2.1.220
 model: claude-opus-5[1m]
-tty: not a tty
-none
+tty: none (non-interactive)
 pid: 34415
 ITERM_SESSION_ID: w0t1p20:229B0323-F212-4F67-A87A-A0F41BCDA3E1
 session: 229B0323 (co-reviewed with 0AF8DA98; forwarded to 9B308B3F)
