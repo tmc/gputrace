@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/tmc/gputrace/internal/counter"
 	"github.com/tmc/gputrace/internal/testtrace"
 )
 
@@ -54,6 +55,7 @@ func TestProcessStreamData(t *testing.T) {
 	if summary.DrawCount == 0 {
 		t.Error("draw count = 0, want the dispatches recorded in the capture")
 	}
+	checkCommandOwnership(t, summary, streamPath)
 	t.Logf("draws=%d encoders=%d costs=%d helper=%s",
 		summary.DrawCount, summary.EncoderCount, summary.CostCount, summary.LLVMHelperPath)
 	if os.Getenv("GPUTRACE_MIO_SETUP_DATA_PATH") == "1" {
@@ -224,6 +226,55 @@ func TestProcessStreamData(t *testing.T) {
 			}
 		}
 	}
+}
+
+// checkCommandOwnership verifies the capture-local encoder-to-command ranges
+// Xcode's processed model exposes. It deliberately does not treat a command
+// buffer index as a timing value: this establishes hierarchy only.
+func checkCommandOwnership(t *testing.T, summary ProcessedStreamData, streamPath string) {
+	t.Helper()
+	if len(summary.Encoders) != int(summary.EncoderCount) {
+		t.Fatalf("processed encoders = %d, want %d", len(summary.Encoders), summary.EncoderCount)
+	}
+	if len(summary.GPUCommands) != int(summary.GPUCommandCount) {
+		t.Fatalf("processed GPU commands = %d, want %d", len(summary.GPUCommands), summary.GPUCommandCount)
+	}
+	covered := make([]bool, len(summary.GPUCommands))
+	commandBuffers := make(map[uint32]bool)
+	for _, command := range summary.GPUCommands {
+		commandBuffers[command.CommandBufferIndex] = true
+	}
+	for _, encoder := range summary.Encoders {
+		start := uint64(encoder.GPUCommandStartIndex)
+		end := start + uint64(encoder.NumGPUCommands)
+		if end > uint64(len(summary.GPUCommands)) {
+			t.Fatalf("encoder %d command range %d..%d exceeds %d commands", encoder.Index, start, end, len(summary.GPUCommands))
+		}
+		for index := start; index < end; index++ {
+			if covered[index] {
+				t.Fatalf("GPU command %d belongs to more than one encoder", index)
+			}
+			covered[index] = true
+			command := summary.GPUCommands[index]
+			if command.EncoderInfoIndex != encoder.Index {
+				t.Fatalf("GPU command %d encoder index = %d, want %d", index, command.EncoderInfoIndex, encoder.Index)
+			}
+		}
+	}
+	for index, ok := range covered {
+		if !ok {
+			t.Fatalf("GPU command %d is not covered by an encoder range", index)
+		}
+	}
+	stats, err := counter.ParseStreamData(filepath.Dir(streamPath), nil)
+	if err != nil {
+		t.Fatalf("parse streamData command buffers: %v", err)
+	}
+	if stats.Timeline == nil {
+		t.Fatal("streamData has no command-buffer timeline")
+	}
+	t.Logf("processed command ownership: encoders=%d commands=%d processed_command_buffers=%d archived_command_buffers=%d",
+		len(summary.Encoders), len(summary.GPUCommands), len(commandBuffers), len(stats.Timeline.CommandBufferTimestamps))
 }
 
 // TestLLVMHelperForFramework checks that the helper is resolved by walking up

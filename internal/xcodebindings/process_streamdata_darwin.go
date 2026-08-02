@@ -13,6 +13,7 @@ import (
 	"unsafe"
 
 	"github.com/tmc/apple/objc"
+	"github.com/tmc/apple/private/xcode/gtshaderprofiler"
 )
 
 // ProcessedStreamData reports the shader model Xcode derives from a profiler
@@ -41,10 +42,12 @@ type ProcessedStreamData struct {
 	ShaderBinaryCount uint64 `json:"shader_binary_count"`
 	GPUCommandCount   uint64 `json:"gpu_command_count"`
 
-	Pipelines []PipelineRecord `json:"pipelines,omitempty"`
-	Binaries  BinarySummary    `json:"binaries"`
-	Tracks    TrackSummary     `json:"tracks,omitempty"`
-	USC       USCSummary       `json:"usc,omitempty"`
+	Pipelines   []PipelineRecord   `json:"pipelines,omitempty"`
+	Encoders    []EncoderRecord    `json:"encoders,omitempty"`
+	GPUCommands []GPUCommandRecord `json:"gpu_commands,omitempty"`
+	Binaries    BinarySummary      `json:"binaries"`
+	Tracks      TrackSummary       `json:"tracks,omitempty"`
+	USC         USCSummary         `json:"usc,omitempty"`
 }
 
 // CostModelSummary contains the scalar cost values that GTMioTraceData exposes
@@ -175,6 +178,29 @@ type PipelineRecord struct {
 	MCAHighRegister int32  `json:"mca_high_register,omitempty"`
 	MCAAllocatedGPR int32  `json:"mca_allocated_gpr,omitempty"`
 	MCABinaryCount  uint64 `json:"mca_binary_count,omitempty"`
+}
+
+// EncoderRecord identifies one encoder and its contiguous GPU-command range.
+// It is structural metadata only: these fields do not supply a busy-time
+// interval or establish a command-buffer clock.
+type EncoderRecord struct {
+	Index                uint32 `json:"index"`
+	FunctionIndex        uint64 `json:"function_index"`
+	GPUCommandStartIndex uint32 `json:"gpu_command_start_index"`
+	NumGPUCommands       uint32 `json:"num_gpu_commands"`
+}
+
+// GPUCommandRecord is one processed GPU command and its capture-local
+// ownership identifiers. CommandBufferIndex is an identifier, not a duration
+// or timestamp.
+type GPUCommandRecord struct {
+	Index                 uint32 `json:"index"`
+	CommandBufferIndex    uint32 `json:"command_buffer_index"`
+	EncoderInfoIndex      uint32 `json:"encoder_info_index"`
+	EncoderObjectID       uint64 `json:"encoder_object_id"`
+	FunctionIndex         uint64 `json:"function_index"`
+	PipelineInfoIndex     uint32 `json:"pipeline_info_index"`
+	PipelineStateObjectID uint64 `json:"pipeline_state_object_id"`
 }
 
 // BinarySummary aggregates the compiled shader binaries. HighRegister is the
@@ -753,11 +779,46 @@ func readResult(summary *ProcessedStreamData, processor objc.ID) {
 	}
 	summary.ShaderBinaryCount = collectionCount(result, "shaderBinaries")
 	summary.Binaries = readBinaries(result)
-	summary.GPUCommandCount = collectionCount(result, "gpuCommands")
+	summary.GPUCommands = readGPUCommands(result)
+	summary.GPUCommandCount = uint64(len(summary.GPUCommands))
+	summary.Encoders = readEncoders(result)
 	summary.Pipelines = readPipelines(result)
 	if os.Getenv("GPUTRACE_MIO_MCA") != "" {
 		readMCARegisters(result, summary.Pipelines)
 	}
+}
+
+func readEncoders(result objc.ID) []EncoderRecord {
+	objects := elementsOf(objectFor(result, "encoders"))
+	records := make([]EncoderRecord, 0, len(objects))
+	for _, object := range objects {
+		encoder := gtshaderprofiler.GTMioShaderProfilerEncoderFromID(object)
+		records = append(records, EncoderRecord{
+			Index:                encoder.Index(),
+			FunctionIndex:        encoder.FunctionIndex(),
+			GPUCommandStartIndex: encoder.GpuCommandStartIndex(),
+			NumGPUCommands:       encoder.NumGPUCommands(),
+		})
+	}
+	return records
+}
+
+func readGPUCommands(result objc.ID) []GPUCommandRecord {
+	objects := elementsOf(objectFor(result, "gpuCommands"))
+	records := make([]GPUCommandRecord, 0, len(objects))
+	for _, object := range objects {
+		command := gtshaderprofiler.GTMioShaderProfilerGPUCommandFromID(object)
+		records = append(records, GPUCommandRecord{
+			Index:                 command.Index(),
+			CommandBufferIndex:    command.CommandBufferIndex(),
+			EncoderInfoIndex:      command.EncoderInfoIndex(),
+			EncoderObjectID:       command.EncoderObjectId(),
+			FunctionIndex:         command.FunctionIndex(),
+			PipelineInfoIndex:     command.PipelineInfoIndex(),
+			PipelineStateObjectID: command.PipelineStateObjectId(),
+		})
+	}
+	return records
 }
 
 // shaderProfilerResult reaches the profiler result through the processed-data

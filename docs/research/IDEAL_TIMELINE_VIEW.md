@@ -164,12 +164,13 @@ captures. Xcode obtains the relevant signpost data outside the `.gputrace`
 bundle. A concurrent signpost capture is therefore a higher-value experiment
 than another archive-only parser pass.
 
-`[V]` `GTMioShaderProfilerResult` partitions all 466 GPUCommand records exactly
-once into 11 contiguous `GTMioShaderProfilerEncoder` ranges, and each command's
+`[V]` `GTMioShaderProfilerResult` partitions every GPUCommand record exactly
+once into contiguous `GTMioShaderProfilerEncoder` ranges, and each command's
 independently stored `encoderInfoIndex` equals its owning encoder's `index`.
 The range partition and the per-command index are separate fields, so their
-agreement is a cross-check rather than a restatement. Commands expose 11
-distinct capture-local `commandBufferIndex` values.
+agreement is a cross-check rather than a restatement. Verified on both
+captures: 11 encoders over 466 commands on static-tokens, 23 over 958 on
+staticmask.
 
 `[V]` **The `commandBufferIndex`-to-`APSTimelineData` correspondence is
 refuted as a general rule.** On static-tokens the indexes are exactly `0..10`
@@ -180,9 +181,23 @@ agree, so the two are not the same enumeration.
 
 The static-tokens agreement was never evidence: a dense zero-based index over
 11 items matches a count of 11 whether or not the orders correspond. That is
-why one capture could not settle it and a second one refuted it. Any future
-command-buffer join must use a field both sides carry — an address, a label, a
-duration — never a count both sides happen to satisfy.
+why one capture could not settle it and a second one refuted it.
+
+`[V]` The obvious repair — join on a field both sides carry instead of on a
+count — was tried and there is no such field. `GTMioShaderProfilerGPUCommand`
+exposes `commandBufferIndex`, `encoderObjectId`, `functionIndex`,
+`pipelineStateObjectId`, and `timingInfo`. `APSTimelineData` exposes only
+indexed start and end ticks. The two share no address, label, or object ID.
+
+`[V]` `timingInfo.time` cannot substitute for the missing identifier either: it
+sums to zero for every processed command-buffer group on both captures — all 11
+on static-tokens and all 23 on staticmask — while every `APSTimelineData` wall
+span is nonzero. The processed model carries the identity structure; the
+archive carries the time. Nothing observed so far carries both.
+
+The wall-to-busy join is therefore blocked on missing data rather than on
+undone analysis. Further archive-only parsing passes are not the way through
+it.
 
 That is the *identity* half of a busy-to-wall correlation, and only that half.
 The processed model exposes no timestamps, and `commandBufferIndex` is not yet
