@@ -122,6 +122,9 @@ func Probe() Report {
 			selectors: []Selector{
 				{Name: "name", Kind: "instance"},
 				{Name: "counterIndex", Kind: "instance"},
+				{Name: "dataType", Kind: "instance"},
+				{Name: "maxValue", Kind: "instance"},
+				{Name: "minValue", Kind: "instance"},
 				{Name: "sampleCount", Kind: "instance"},
 				{Name: "sampleInterval", Kind: "instance"},
 				{Name: "scope", Kind: "instance"},
@@ -191,9 +194,9 @@ func Probe() Report {
 		{
 			Metric:    "counter_values",
 			Binding:   "GTMioCounterData.values",
-			Status:    "typed numeric adapter present; exporter integration missing",
-			Next:      "use CounterDataValues in the counter export path",
-			Signature: "generated Values method is not safe for numeric counter storage",
+			Status:    "values is a verified double* and is copied while its owner is live; timestamp bounds, units, scope semantics, and an Xcode-metric join are unproven",
+			Next:      "prove the timestamps-array bound, then validate one named series' clock and ownership against the same capture's Xcode export before publishing it",
+			Signature: "values is ^d and timestamps is ^Q; ValuesSlice deep-copies doubles, while TimestampsSlice remains fail-closed on its unproven bound",
 		},
 	}
 	if !report.Framework {
