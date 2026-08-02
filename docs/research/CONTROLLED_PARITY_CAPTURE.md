@@ -77,6 +77,30 @@ This is an automation HOLD, not a negative result about labels or timestamps.
 Preserve the source bundle and ground truth; retry profiling from a verified
 Xcode Summary window rather than replaying or substituting another capture.
 
+`[V]` Pinning the automation to `/Applications/Xcode-rc.app` did not change
+that result: it selected the exact source document in Xcode PID 55276,
+completed replay, and again failed after `Show Performance` with `want one
+Performance window with exact transition provenance, found 0`. The failure is
+therefore not explained by Xcode-install selection.
+
+`[D]` Note that the three attempts have now produced three *different* guard
+messages: `cannot establish selected Summary right-pane bounds`, `want one
+exact untitled 95% Summary window, found 0`, and the provenance message above.
+A single deterministic defect would be expected to report the same guard each
+time. Three distinct ones suggest either that the attempts are failing at
+different points, or that state left over from a previous attempt is changing
+which guard is reached first — the latter being consistent with the workload
+contamination recorded below. Treat the specific message as a symptom whose
+identity varies, not as the defect.
+
+`[V]` A proposed large-capture control was not interpretable. Ending its CLI
+automation left Xcode's GPU workload active, and a later run entered that
+existing workload. When a replay hides its title and document, multiple open
+GPU-trace windows also make the replay UI fallback ambiguous. Neither run
+answers whether the small controlled capture follows a different Summary
+layout. Do not retry Q1 or Q2 until the cleanup path can prove that it stopped
+the source-bound workload and that no stale GPU-trace window can be selected.
+
 ## Host-signpost collection control
 
 `[V]` The generator calls `os_signpost` for `Encode`, `CommitToComplete`, and
