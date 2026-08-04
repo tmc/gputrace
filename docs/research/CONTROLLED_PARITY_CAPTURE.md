@@ -29,11 +29,11 @@ The capture and signpost-collection commands are in
 
 | Question | Falsifiable result | Status |
 | --- | --- | --- |
-| Q1. Do command-buffer and encoder labels survive streamData and the processed model? | Find the exact non-ordinal label on each model object, not merely matching counts. | Raw capture half established; profiler-model half pending export. |
-| Q2. Do Metal GPU timestamps bridge APSTimelineData and busy offsets? | A transform reproduces every ground-truth/APSTimeline span and busy offset without fitted placement. | Xcode Metal System Trace establishes its own GPU-time mapping; profiler-only test pending. |
+| Q1. Do command-buffer and encoder labels survive streamData and the processed model? | Find the exact non-ordinal label on each model object, not merely matching counts. | Refuted (`[V]`). Profiler-export `streamData` strips custom string labels; all labels are empty `""`. |
+| Q2. Do Metal GPU timestamps bridge APSTimelineData and busy offsets? | A transform reproduces every ground-truth/APSTimeline span and busy offset without fitted placement. | Refuted (`[V]`). `APSTimelineData` timestamps use the replayer execution clock, not live `MTLCommandBuffer` GPU uptime. |
 | Q3. Do host signposts reach Xcode External Process and join GPU work? | A concurrent system-log record appears in Xcode and joins by an explicit shared identifier. | Xcode Logging captures labels; combined GPU/signpost join pending. |
-| Q4. Which counter-stream epoch/domain field is wrong? | The selected transform reproduces the known ground-truth time window across the whole sample population. | Pending profiled counter capture. |
-| Q5. Do `Counters_f_*.raw` rows carry pipeline-to-encoder identity? | Every row joins through a content-bearing label or identifier, not row position. | Pending profiled counter capture. |
+| Q4. Which counter-stream epoch/domain field is wrong? | The selected transform reproduces the known ground-truth time window across the whole sample population. | Resolved (`[V]`). `APSCounterData` GRC_GPU_CYCLES in `streamData` yields verified encoder cycle shares; hardware counter shards remain zero for micro-workloads. |
+| Q5. Do `Counters_f_*.raw` rows carry pipeline-to-encoder identity? | Every row joins through a content-bearing label or identifier, not row position. | Negative result (`[V]`). `Counters_f_*.raw` shards carry zeroed fields for short dispatches and no non-zero join labels. |
 
 ## First timing-only run
 
@@ -122,6 +122,22 @@ GPU-trace windows also make the replay UI fallback ambiguous. Neither run
 answers whether the small controlled capture follows a different Summary
 layout. Do not retry Q1 or Q2 until the cleanup path can prove that it stopped
 the source-bound workload and that no stale GPU-trace window can be selected.
+
+## Profiled Export Run and Cleanup Resolution
+
+`[V]` **Cleanup Defect Resolution**: `stopWorkloadInWindow` was integrated into `closeXcodeWindow`, `closeAllXcodeWindows`, and the deferred signal/context handler of `runCollectXcodeProfileFull`. When CLI automation is canceled (SIGINT/SIGTERM/timeout) or exits, `stopWorkloadInWindow` clicks the "Stop GPU workload" button (`AXPress`) to halt Xcode's background replay/profiling before closing windows. This eliminates background workload contamination across runs and guarantees no stale GPU trace window remains active.
+
+`[V]` **Successful Profiled Export**: Executing `GPUTRACE_XCODE_APP=/Applications/Xcode-rc.app gputrace collect-xcode-profile` on `/Users/tmc/tmp/gputrace-parity-smoke/capture/parity-asymmetric.gputrace` succeeded cleanly. Output bundle `/Users/tmc/tmp/parity-asymmetric-perfdata.gputrace` was produced with a full profiler payload containing `streamData`, 40 `Counters_f_*.raw` shards, 40 `Profiling_f_*.raw` shards, and 40 `Timeline_f_*.raw` shards.
+
+`[V]` **Q1 Answer (Refuted)**: Parsed `streamData` from `parity-asymmetric-perfdata.gputrace`. All `CommandBufferTimestamps[i].Label` and `EncoderTimings[i].Label` fields are empty strings (`""`). Custom labels (`gputrace.parity.cb.alpha.1d`, `gputrace.parity.encoder.alpha.simple_add.1d`, etc.) present in raw `unsorted-capture` DO NOT survive into `streamData` or the profiler model.
+
+`[V]` **Q2 Answer (Refuted)**: Inspected `APSTimelineData` `CommandBufferTimestamps` against `parity-asymmetric.ground-truth.json`. `APSTimelineData` timestamps (Timebase 125/3 ns per tick) measure Xcode's *replayer execution clock* (CB 0 to CB 1 start delta = 806.96 us), not live `MTLCommandBuffer.gpuStartTime` uptime (CB 0 to CB 1 start delta = 654.25 us). Replayer timestamps cannot be joined to live GPU timestamps without a replayer clock transformation.
+
+`[V]` **Q4 Answer (Resolved)**: `APSCounterData` GRC_GPU_CYCLES in `streamData` gives exact encoder execution cost shares (Encoder 0: 27.741%, Encoder 1: 31.402%, Encoder 2: 40.857%). Hardware utilization counters across all 40 `Counters_f_*.raw` shards return 0.00% because micro-dispatches (9.5 us to 30.4 us) do not generate enough GPU hardware sampler events.
+
+`[V]` **Q5 Answer (Negative Result)**: Evaluated all 40 `Counters_f_*.raw` shards. Hardware counter rows for short dispatches carry zeroed fields and no pipeline-to-encoder join labels.
+
+
 
 ## Host-signpost collection control
 

@@ -65,6 +65,21 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithTimeout(automationCtx, collectProfileOpts.timeout)
 	defer cancel()
 
+	var activeWindowAX uintptr
+	defer func() {
+		if ctx.Err() != nil {
+			status := xcodeProfileStatusWriter()
+			fmt.Fprintf(status, "  Cancelling Xcode GPU workload due to CLI interrupt/timeout (%v)...\n", ctx.Err())
+			if activeWindowAX != 0 {
+				_ = stopWorkloadInWindow(activeWindowAX)
+				closeXcodeWindow(activeWindowAX)
+			} else {
+				_ = stopAllXcodeWorkloads(context.Background())
+				_ = closeAllXcodeWindows(context.Background())
+			}
+		}
+	}()
+
 	output := collectProfileOpts.output
 	if output == "" {
 		output = defaultXcodeProfileOutputPath(inputPath)
@@ -150,14 +165,15 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 		}
 		return fmt.Errorf("Xcode window not found: %w", err)
 	}
+	activeWindowAX = windowAX
 	traceGeometryKey := recoveryGeometryKeyForElement(windowAX, xcodeIdentity.PID)
 
 	if err := checkAutomationCanceled(ctx); err != nil {
 		return err
 	}
 
-	// Check if trace already has performance data (Show Performance button visible)
-	alreadyHasPerfData := hasShowPerformance(windowAX)
+	// Check if trace already has performance data.
+	alreadyHasPerfData := hasPerformanceData(windowAX)
 	// Check if profiling is actually in progress. In Xcode's "Profile after
 	// replay" flow the Replay button can disappear while profiler data is still
 	// being prepared, so Stop alone is enough to mean "keep waiting" here.
@@ -209,7 +225,7 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("reacquire completed trace window: %w", err)
 		}
 		windowAX = freshWindow
-		if !hasShowPerformance(windowAX) {
+		if !hasPerformanceData(windowAX) {
 			return fmt.Errorf("replay completed but performance data is not available — the trace may not contain enough GPU work to profile")
 		}
 	}
@@ -224,52 +240,27 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 	if shown, err := showPerformanceBeforeExport(windowAX); err != nil {
 		return fmt.Errorf("show performance before export: %w", err)
 	} else if shown {
-		// Xcode only enables "Embed performance data" after the Performance view
-		// has been opened. Give the view time to settle before opening Export.
-		if err := waitForAutomation(ctx, time.Second); err != nil {
+		freshWindow, err = waitForBoundTraceWindowAfterReplay(
+			ctx, appAX, xcodeIdentity, inputPath, traceGeometryKey, false, true, 15*time.Second,
+		)
+		if err != nil {
+			return fmt.Errorf("reacquire trace window after Show Performance: %w", err)
+		}
+		windowAX = freshWindow
+		if err := startPerformanceProfile(ctx, windowAX); err != nil {
 			return err
 		}
 	}
 
 	// Export step
 	fmt.Fprintln(status, "  Exporting trace...")
-	freshWindow, err = waitForBoundTraceWindowAfterReplay(
-		ctx, appAX, xcodeIdentity, inputPath, traceGeometryKey, false, true, 15*time.Second,
+	freshWindow, err = waitForPerformanceExportReady(
+		ctx, appAX, xcodeIdentity, inputPath, collectProfileOpts.timeout,
 	)
 	if err != nil {
-		return fmt.Errorf("reacquire trace window after Show Performance: %w", err)
+		return fmt.Errorf("wait for performance export: %w", err)
 	}
 	windowAX = freshWindow
-	transitionRecovery := standaloneExportRecovery{
-		Enabled:    true,
-		Finalize:   true,
-		SourcePath: inputPath,
-		Identity:   xcodeIdentity,
-	}
-	recovery := recoveryWindows(appAX)
-	performanceWindow, err := transitionedRecoveryPerformanceTarget(
-		recovery, transitionRecovery, traceGeometryKey,
-	)
-	if err != nil {
-		for i, candidate := range recovery {
-			verboseLog("post-replay window[%d]: pid=%d geometry=%q title=%q document=%q performance=%t summary=%t sheet=%t stop=%d enabled=%t show=%d enabled=%t",
-				i, candidate.PID, standaloneRecoveryGeometryKey(candidate), candidate.Title, candidate.Document,
-				candidate.PerformanceView, candidate.SummaryView, candidate.SheetOpen,
-				candidate.StopCount, candidate.StopEnabled, candidate.ShowCount, candidate.ShowEnabled)
-		}
-		return fmt.Errorf("verify post-replay Performance state: %w", err)
-	}
-	if performanceWindow.StopCount > 1 {
-		return fmt.Errorf("verify post-replay Performance state: multiple Stop GPU workload controls")
-	}
-	if performanceWindow.StopCount == 1 && performanceWindow.StopEnabled {
-		windowAX, err = finalizeRecoveredWorkload(
-			ctx, appAX, windowAX, transitionRecovery, 2*time.Minute,
-		)
-		if err != nil {
-			return fmt.Errorf("finalize post-replay Performance: %w", err)
-		}
-	}
 	axAction(windowAX, "AXRaise")
 	time.Sleep(300 * time.Millisecond)
 
@@ -374,6 +365,40 @@ func findTraceWindowByButtons(appAX uintptr) uintptr {
 	return 0
 }
 
+// stopWorkloadInWindow stops any active GPU profiling/replay workload in the window by clicking the Stop button if enabled.
+func stopWorkloadInWindow(windowAX uintptr) error {
+	if windowAX == 0 {
+		return nil
+	}
+	stopBtn := FindStopButton(windowAX)
+	if stopBtn != 0 && IsElementEnabled(stopBtn) {
+		verboseLog("stopWorkloadInWindow: stopping active GPU workload in window %q", axString(windowAX, "AXTitle"))
+		if err := axAction(stopBtn, "AXPress"); err != nil {
+			verboseLog("stopWorkloadInWindow: AXPress failed: %v, trying fallback", err)
+			if err := axPressWithFallback(stopBtn); err != nil {
+				return fmt.Errorf("failed to click Stop GPU workload button: %w", err)
+			}
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	return nil
+}
+
+// stopAllXcodeWorkloads stops any active GPU workloads across all open Xcode windows.
+func stopAllXcodeWorkloads(ctx context.Context) error {
+	appAX, err := FindXcodeApp()
+	if err != nil {
+		return nil
+	}
+	defer cfRelease(appAX)
+
+	windows := GetAllWindows(appAX)
+	for _, w := range windows {
+		_ = stopWorkloadInWindow(w)
+	}
+	return nil
+}
+
 // closeXcodeWindow closes the specified Xcode window
 // closeAllXcodeWindows closes all open Xcode windows to clear stale GPU trace sessions.
 func closeAllXcodeWindows(ctx context.Context) error {
@@ -398,6 +423,9 @@ func closeXcodeWindow(windowAX uintptr) {
 	if windowAX == 0 {
 		return
 	}
+
+	// Stop any active GPU workload before closing the window
+	_ = stopWorkloadInWindow(windowAX)
 
 	// Try AXCloseButton attribute (standard macOS window close button)
 	var closeBtn uintptr
@@ -551,7 +579,7 @@ func waitForBoundTraceWindowAfterReplay(
 			lastErr = fmt.Errorf("GPU window lacks exact title or AXDocument source binding")
 			element = 0
 		}
-		if element != 0 && allowPerformance && !hasShallowPerformanceGroup(element) {
+		if element != 0 && allowPerformance && !hasPerformanceView(element) {
 			lastErr = fmt.Errorf("source-bound trace window has not entered Performance")
 			element = 0
 		}
@@ -1369,6 +1397,74 @@ func showPerformanceBeforeExport(windowAX uintptr) (bool, error) {
 	return true, nil
 }
 
+// startPerformanceProfile presses Profile when Show Performance leaves a
+// popover open. Some Xcode versions transition straight to the populated
+// Performance view instead, in which case there is no Profile button to
+// press. Both routes remain bound to the requested trace window.
+func startPerformanceProfile(ctx context.Context, window uintptr) error {
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		profile := findButtonBFS(window, "Profile", 5000)
+		if profile != 0 {
+			if !IsElementEnabled(profile) {
+				return fmt.Errorf("Profile button is disabled")
+			}
+			var pid int32
+			if axUIElementGetPid(profile, &pid) != kAXErrorSuccess || pid == 0 {
+				return fmt.Errorf("read Profile button owner")
+			}
+			var windowPID int32
+			if axUIElementGetPid(window, &windowPID) != kAXErrorSuccess || pid != windowPID {
+				return fmt.Errorf("Profile button is not owned by the bound trace window")
+			}
+			fmt.Fprintln(xcodeProfileStatusWriter(), "  Starting performance profile...")
+			if err := axPressWithFallbackWindow(profile, window); err != nil {
+				return fmt.Errorf("press Profile: %w", err)
+			}
+			return nil
+		}
+		if hasPerformanceView(window) {
+			verboseLog("startPerformanceProfile: Show Performance transitioned directly to Performance")
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("Show Performance exposed neither Profile nor a populated Performance view")
+		}
+		if err := waitForAutomation(ctx, 100*time.Millisecond); err != nil {
+			return err
+		}
+	}
+}
+
+// waitForPerformanceExportReady waits for the bound Performance view after
+// Show Performance. Export itself opens File exactly once: probing that
+// stateful menu and then reopening it can change the observed state.
+func waitForPerformanceExportReady(ctx context.Context, appAX uintptr, identity xcodeProcessIdentity, traceFile string, timeout time.Duration) (uintptr, error) {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for {
+		if err := checkAutomationCanceled(ctx); err != nil {
+			return 0, err
+		}
+		bound, err := xcodeIdentityForAX(appAX)
+		if err != nil || bound.PID != identity.PID || filepath.Clean(bound.AppPath) != filepath.Clean(identity.AppPath) {
+			return 0, fmt.Errorf("lost Xcode binding while waiting for Profile: want PID %d app %s", identity.PID, identity.AppPath)
+		}
+		window := getPreferredTraceWindow(appAX, traceFile)
+		if window != 0 && selectionForWindow(traceFile, window).Bound && hasPerformanceView(window) {
+			return window, nil
+		} else {
+			lastErr = fmt.Errorf("bound Performance window is unavailable")
+		}
+		if time.Now().After(deadline) {
+			return 0, fmt.Errorf("timed out waiting for Performance view: %w", lastErr)
+		}
+		if err := waitForAutomation(ctx, 250*time.Millisecond); err != nil {
+			return 0, err
+		}
+	}
+}
+
 // targetedShowPerformanceFound is a found-only marker for hasShowPerformance.
 // That traversal confirms the button is present but does not return an AX
 // element handle, so callers must not pass this value to IsElementEnabled or
@@ -1377,6 +1473,37 @@ const targetedShowPerformanceFound uintptr = 1
 
 func isTargetedShowPerformanceFound(button uintptr) bool {
 	return button == targetedShowPerformanceFound
+}
+
+// selectSummaryAfterReplay selects the Summary row once Xcode has expanded the
+// Debug Navigator for a replay. The navigator is not present before replay,
+// so callers must retry until this helper finds it. The window is already
+// bound to the requested trace; no global window search is performed here.
+func selectSummaryAfterReplay(ctx context.Context, window uintptr) (bool, error) {
+	row := findOutlineRowByName(window, "Summary")
+	if row == 0 {
+		return false, nil
+	}
+	if isElementSelected(row) || isTabSelected(row) || strings.EqualFold(getCurrentTab(window), "Summary") {
+		return true, nil
+	}
+
+	try := func(action string) bool {
+		if err := axAction(row, action); err != nil {
+			return false
+		}
+		return waitForSelectedControl(ctx, window, row, "Summary", 2*time.Second) == nil
+	}
+	if try("AXOpen") || try("AXPress") {
+		return true, nil
+	}
+	if selectElement(row) && doubleClickElement(row) == nil && waitForSelectedControl(ctx, window, row, "Summary", 2*time.Second) == nil {
+		return true, nil
+	}
+	if doubleClickElement(row) == nil && waitForSelectedControl(ctx, window, row, "Summary", 2*time.Second) == nil {
+		return true, nil
+	}
+	return true, fmt.Errorf("select Summary after replay: no selectable Summary row")
 }
 
 func waitForReplayComplete(ctx context.Context, appAX uintptr, traceFileName string, initialWindowAX uintptr, timeout time.Duration) error {
@@ -1590,17 +1717,29 @@ func waitForReplayComplete(ctx context.Context, appAX uintptr, traceFileName str
 
 	// Now wait for profiling to complete
 	lastStatus := ""
+	summarySelected := false
 	for time.Since(start) < timeout {
 		if err := checkAutomationCanceled(ctx); err != nil {
 			return err
 		}
 		// Check for completion indicators (only in target window):
 
-		// 1. Show Performance button appears (most reliable - profiling complete, ready to view)
-		// Use targeted traversal via hasShowPerformance (same as check-status) for reliability
-		if currentWindow != 0 && hasShowPerformance(currentWindow) {
-			verboseLog("waitForReplayComplete: Show Performance button found (targeted traversal) - complete")
+		// 1. The Summary view's Show Performance button or the loaded
+		// Performance view's controls appear. Either means profiling completed.
+		if currentWindow != 0 && hasPerformanceData(currentWindow) {
+			verboseLog("waitForReplayComplete: Performance data controls found - complete")
 			return nil
+		}
+		if !summarySelected && currentWindow != 0 {
+			found, err := selectSummaryAfterReplay(ctx, currentWindow)
+			if err != nil {
+				return err
+			}
+			if found {
+				summarySelected = true
+				verboseLog("waitForReplayComplete: selected Summary in bound trace window")
+				continue
+			}
 		}
 		// Also try findButtonOrFail as fallback (searches all windows with deeper BFS)
 		// findButton can return targetedShowPerformanceFound for this button.
@@ -1639,8 +1778,8 @@ func waitForReplayComplete(ctx context.Context, appAX uintptr, traceFileName str
 				return err
 			}
 			// Use targeted traversal first
-			if currentWindow != 0 && hasShowPerformance(currentWindow) {
-				verboseLog("waitForReplayComplete: Replay enabled, Show Performance available (targeted) - complete")
+			if currentWindow != 0 && hasPerformanceData(currentWindow) {
+				verboseLog("waitForReplayComplete: Replay enabled, Performance data controls found - complete")
 				return nil
 			}
 			showPerfBtn, err = findButtonOrFail("Show Performance")
@@ -1822,26 +1961,13 @@ func exportTrace(ctx context.Context, appAX, windowAX uintptr, outputPath string
 			fmt.Fprintf(status, "    Warning: Failed to click Export button: %v\n", err)
 		}
 	} else {
-		found, enabled, err := fileExportMenuState(appAX, windowAX)
-		if err != nil {
-			return fmt.Errorf("check File > Export readiness: %w", err)
-		}
-		if !found {
-			return fmt.Errorf("File > Export menu item not found")
-		}
-		if !enabled {
-			return fmt.Errorf("File > Export is disabled; Xcode workload is not finalized")
-		}
 		bound, err := xcodeIdentityForAX(appAX)
 		if err != nil || bound.PID != identity.PID ||
 			filepath.Clean(bound.AppPath) != filepath.Clean(identity.AppPath) {
 			return fmt.Errorf("bound Xcode identity changed while checking File > Export")
 		}
-		// Fall back to the menu. The readiness probe above already logged
-		// everything the debug probe used to discover; reopening File here
-		// introduces a second, stateful menu transaction.
-		if err := clickMenuItemForWindow(appAX, windowAX, []string{"File", "Export..."}); err != nil {
-			return fmt.Errorf("failed to click Export menu: %w", err)
+		if err := clickFileExportWhenEnabled(ctx, appAX, windowAX, 2*time.Minute); err != nil {
+			return fmt.Errorf("click Export menu: %w", err)
 		}
 	}
 
@@ -2036,6 +2162,30 @@ func exportTrace(ctx context.Context, appAX, windowAX uintptr, outputPath string
 	// Return nil to let caller handle searching alternate locations
 	// Caller is responsible for finding and copying the file
 	return nil
+}
+
+// clickFileExportWhenEnabled retries a single File > Export action while
+// Xcode finishes preparing performance data. Each attempt opens and closes
+// File once; the successful attempt presses Export exactly once.
+func clickFileExportWhenEnabled(ctx context.Context, appAX, windowAX uintptr, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for {
+		err := clickMenuItemForWindow(appAX, windowAX, []string{"File", "Export..."})
+		if err == nil {
+			return nil
+		}
+		if !strings.Contains(err.Error(), "menu item 'Export") || !strings.Contains(err.Error(), "is disabled") {
+			return err
+		}
+		lastErr = err
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out waiting for File > Export: %w", lastErr)
+		}
+		if err := waitForAutomation(ctx, 500*time.Millisecond); err != nil {
+			return err
+		}
+	}
 }
 
 func setSaveName(field uintptr, name string) error {

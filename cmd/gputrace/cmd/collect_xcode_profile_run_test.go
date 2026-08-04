@@ -505,15 +505,16 @@ func TestGoToFolderNavigationCompleteAfterExactEntry(t *testing.T) {
 
 // TestGoToFolderNativeEntryReleasesCommandBeforePath pins the entry order:
 // select all, delete, wait for System Events to release Command, then type the
-// whole path in one keystroke. An earlier version typed the path body and then
-// moved the cursor back to insert the leading slash; under host load that final
-// insert was dropped and the field committed a relative path such as "tmp".
+// the path as ordinary key events. An earlier version typed the path body and
+// then moved the cursor back to insert the leading slash; under host load that
+// final insert was dropped and the field committed a relative path such as "tmp".
 func TestGoToFolderNativeEntryReleasesCommandBeforePath(t *testing.T) {
+	activateIndex := strings.Index(typeGoToFolderPathScript, `tell application id "com.apple.dt.Xcode" to activate`)
 	selectIndex := strings.Index(typeGoToFolderPathScript, `keystroke "a" using command down`)
 	clearIndex := strings.Index(typeGoToFolderPathScript, "key code 51")
 	delayIndex := strings.Index(typeGoToFolderPathScript, "delay 0.4")
-	typeIndex := strings.Index(typeGoToFolderPathScript, "keystroke (item 1 of argv)")
-	if selectIndex < 0 || clearIndex <= selectIndex || delayIndex <= clearIndex || typeIndex <= delayIndex {
+	typeIndex := strings.Index(typeGoToFolderPathScript, "repeat with pathCharacter in characters of (item 1 of argv)")
+	if activateIndex < 0 || selectIndex <= activateIndex || clearIndex <= selectIndex || delayIndex <= clearIndex || typeIndex <= delayIndex {
 		t.Fatalf("native entry script does not clear and release before typing the path:\n%s",
 			typeGoToFolderPathScript)
 	}
@@ -522,6 +523,9 @@ func TestGoToFolderNativeEntryReleasesCommandBeforePath(t *testing.T) {
 	}
 	if strings.Contains(typeGoToFolderPathScript, `keystroke "/"`) {
 		t.Error("script still types the leading slash separately")
+	}
+	if strings.Contains(typeGoToFolderPathScript, "keystroke (item 1 of argv)") {
+		t.Error("script still types the full path as one truncation-prone event")
 	}
 }
 
@@ -626,5 +630,11 @@ func TestVerifyExportTraceIdentity(t *testing.T) {
 	}
 	if err := verifyExportTraceIdentity(input, writeBundle("wrong", "different")); err == nil {
 		t.Fatal("mismatched identity succeeded")
+	}
+}
+
+func TestStopWorkloadInWindow(t *testing.T) {
+	if err := stopWorkloadInWindow(0); err != nil {
+		t.Fatalf("stopWorkloadInWindow(0) failed: %v", err)
 	}
 }
