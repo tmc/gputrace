@@ -10,11 +10,39 @@ import (
 )
 
 func TestInspectParityExport(t *testing.T) {
-	traceBundle := "/Users/tmc/tmp/parity-asymmetric-perfdata.gputrace"
+	traceBundle := os.Getenv("GPUTRACE_PARITY_PERFDATA_TRACE")
+	if traceBundle == "" {
+		traceBundle = "/Users/tmc/tmp/parity-asymmetric-perfdata.gputrace"
+	}
+	if _, err := os.Stat(traceBundle); os.IsNotExist(err) {
+		t.Skipf("skipping test: trace bundle %s not found", traceBundle)
+	}
+
 	gpuprofilerDir := filepath.Join(traceBundle, "parity-asymmetric.gputrace.gpuprofiler_raw")
+	if _, err := os.Stat(gpuprofilerDir); os.IsNotExist(err) {
+		// Fallback to any *gpuprofiler_raw subdirectory
+		matches, err := filepath.Glob(filepath.Join(traceBundle, "*gpuprofiler_raw"))
+		if err == nil && len(matches) > 0 {
+			gpuprofilerDir = matches[0]
+		} else {
+			t.Skipf("skipping test: profiler dir in %s not found", traceBundle)
+		}
+	}
+
 	stats, err := counter.ParseStreamData(gpuprofilerDir, nil)
 	if err != nil {
 		t.Fatalf("ParseStreamData error: %v", err)
+	}
+
+	// Identity verification assertions against ground truth (3 encoders, 11 dispatches, 3 pipelines)
+	if stats.NumEncoders != 3 {
+		t.Errorf("NumEncoders = %d, want 3", stats.NumEncoders)
+	}
+	if stats.NumGPUCommands != 11 {
+		t.Errorf("NumGPUCommands = %d, want 11", stats.NumGPUCommands)
+	}
+	if stats.NumPipelines != 3 {
+		t.Errorf("NumPipelines = %d, want 3", stats.NumPipelines)
 	}
 
 	t.Log("=== STREAMDATA INSPECTION ===")
