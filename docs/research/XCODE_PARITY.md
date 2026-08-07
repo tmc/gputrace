@@ -130,6 +130,51 @@ which of {domain, sign, epoch field} is misidentified.
 Reproduce with `TestStreamDataTimebaseProbe` (`GPUTRACE_PROBE_STREAMDATA`) and
 `TestCounterFileParse` (`GPUTRACE_PROBE_COUNTERS`).
 
+#### A zero-offset control capture: the windows are disjoint with no transform
+
+`[V]` Measured 2026-08-06 on `~/gputrace-fixtures/parity-asymmetric-perfdata.gputrace`,
+the only surviving bundle with a `.gpuprofiler_raw`. This capture is useful
+precisely because it is degenerate:
+
+    absoluteTime    1219573087880
+    continuousTime  1219573087880
+    offset          0
+
+`[V]` The two epoch fields are **equal**, so every candidate transform built
+from `continuousTime - absoluteTime` is the identity here. Whatever is wrong
+cannot be the offset, the sign, or the choice between those two fields, because
+all three collapse to the same arithmetic on this capture.
+
+`[V]` The windows are still disjoint:
+
+    counter sysTS union   1219561582008 .. 1219562479774   (37.4 ms)
+    command buffers       1219578246670 .. 1219578292956   ( 1.9 ms)
+
+The first command buffer starts 15,766,896 ticks — **656.9 ms** — after the last
+counter sample. Subtracting nothing still leaves them non-overlapping, so the
+42.626 s residual on the qwen capture is not by itself evidence that the
+transform was wrong. Non-overlap reproduces with the transform removed.
+
+`[V]` **Refuted: the 40 shards are a time partition.** All 40 were parsed. Every
+one reports the same `sysTS` start (`1219561582008`) and an end within 2,816
+ticks (117 us) of every other. They partition the *counters*, not the timeline;
+a later shard does not cover a later window. This is the whole population, not
+a sample, because this file has already had to retract one verdict reached from
+a single shard.
+
+`[?]` The reframed question, offered as a hypothesis and not a finding: if the
+counter pass and the timing pass are separate GPU replays, no anchor between
+them exists by construction, and the join would have to be built *within* the
+counter pass rather than across the two. That would explain non-overlap on both
+captures without any field being misidentified.
+
+`[D]` This does not close item 2, and it is not the "no shared anchor exists"
+conclusion this file warns against — that one was reached by comparing two
+series already known to share a clock. This is a measurement showing the
+premise of the search may be wrong. Testing it needs a capture whose counter
+window and CB window can be established independently, which no surviving
+bundle provides.
+
 #### Refuted: kick_software_id as the encoder join `[V]`
 
 `kick_software_id` is not the encoder-sequence-ID join, on this capture. All 40
