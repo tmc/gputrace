@@ -1036,54 +1036,7 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 
 		// Use compute encoders as primary source for encoder info (better labels)
 		if len(computeEncoders) > 0 {
-			avgDuration := timeline.Duration / uint64(len(computeEncoders))
-			if avgDuration == 0 {
-				avgDuration = 1000000 // 1ms default
-			}
-
-			currentTime := timeline.StartTime
-			for i, enc := range computeEncoders {
-				var startTime, endTime, duration uint64
-				if timing, ok := timingByLabel[enc.Label]; ok {
-					startTime = timing.StartTimestamp
-					endTime = timing.EndTimestamp
-					duration = timing.DurationNs
-				} else {
-					startTime = currentTime
-					duration = avgDuration
-					endTime = startTime + duration
-					currentTime = endTime + 10000
-				}
-
-				encoderInfo := EncoderInfo{
-					Index:     i,
-					Label:     enc.Label,
-					Type:      "compute",
-					StartTime: startTime,
-					EndTime:   endTime,
-					Duration:  duration,
-				}
-				timeline.Encoders = append(timeline.Encoders, encoderInfo)
-
-				// Create timeline event for encoder
-				event := TimelineEvent{
-					Name:      enc.Label,
-					Category:  "encoder",
-					Phase:     "X",
-					Timestamp: startTime / 1000, // Convert to microseconds
-					Duration:  duration / 1000,
-					ProcessID: 1,
-					ThreadID:  1,
-					Args: map[string]interface{}{
-						"index":       i,
-						"address":     fmt.Sprintf("0x%x", enc.Address),
-						"duration_ms": float64(duration) / 1e6,
-						"duration_us": float64(duration) / 1e3,
-					},
-				}
-				addTimingMetricsEventArgs(event.Args, metrics)
-				timeline.Events = append(timeline.Events, event)
-			}
+			populateUnprofiledEncoderEvents(timeline, computeEncoders, timingByLabel, metrics)
 		} else {
 			// Fall back to timing metrics if no compute encoders found
 			for i, encoder := range metrics.EncoderTimings {
@@ -1100,15 +1053,14 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 				event := TimelineEvent{
 					Name:      encoder.Label,
 					Category:  "encoder",
-					Phase:     "X",
+					Phase:     "i",
 					Timestamp: encoder.StartTimestamp / 1000,
-					Duration:  encoder.DurationNs / 1000,
+					Duration:  0,
 					ProcessID: 1,
 					ThreadID:  1,
 					Args: map[string]interface{}{
-						"index":       i,
-						"duration_ms": float64(encoder.DurationNs) / 1e6,
-						"duration_us": float64(encoder.DurationNs) / 1e3,
+						"index":         i,
+						"timing_source": "unprofiled (ordering/identity instant)",
 					},
 				}
 				addTimingMetricsEventArgs(event.Args, metrics)
@@ -1325,6 +1277,60 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 
 	timeline.XcodeMetrics = timelineXcodeMetricsArgs(timeline)
 	return timeline, nil
+}
+
+func populateUnprofiledEncoderEvents(timeline *Timeline, computeEncoders []*tracepkg.ComputeEncoder, timingByLabel map[string]*gputrace.EncoderTiming, metrics *gputrace.TimingMetrics) {
+	if timeline == nil || len(computeEncoders) == 0 {
+		return
+	}
+	avgDuration := timeline.Duration / uint64(len(computeEncoders))
+	if avgDuration == 0 {
+		avgDuration = 1000000 // 1ms default
+	}
+
+	currentTime := timeline.StartTime
+	for i, enc := range computeEncoders {
+		var startTime, endTime, duration uint64
+		if timing, ok := timingByLabel[enc.Label]; ok {
+			startTime = timing.StartTimestamp
+			endTime = timing.EndTimestamp
+			duration = timing.DurationNs
+		} else {
+			startTime = currentTime
+			duration = avgDuration
+			endTime = startTime + duration
+			currentTime = endTime + 10000
+		}
+		encoderInfo := EncoderInfo{
+			Index:     i,
+			Label:     enc.Label,
+			Type:      "compute",
+			StartTime: startTime,
+			EndTime:   endTime,
+			Duration:  duration,
+		}
+		timeline.Encoders = append(timeline.Encoders, encoderInfo)
+
+		// Create timeline event for encoder in unprofiled fallback:
+		// Emitted as Phase 'i' zero-duration instant. Synthetic/extracted timestamps
+		// are retained only for ordering.
+		event := TimelineEvent{
+			Name:      enc.Label,
+			Category:  "encoder",
+			Phase:     "i",
+			Timestamp: startTime / 1000, // Convert to microseconds
+			Duration:  0,
+			ProcessID: 1,
+			ThreadID:  1,
+			Args: map[string]interface{}{
+				"index":         i,
+				"address":       fmt.Sprintf("0x%x", enc.Address),
+				"timing_source": "unprofiled (ordering/identity instant)",
+			},
+		}
+		addTimingMetricsEventArgs(event.Args, metrics)
+		timeline.Events = append(timeline.Events, event)
+	}
 }
 
 // generateCounterTracks creates the measured per-encoder counter tracks for
@@ -1915,8 +1921,10 @@ func addEncoderKernelEvents(timeline *Timeline, trace *gputrace.Trace, sourceMap
 	for i, encoder := range timeline.Encoders {
 		args := map[string]interface{}{
 			"encoder_index": encoder.Index,
-			"duration_us":   float64(encoder.Duration) / 1e3,
 			"source":        "encoder span",
+		}
+		if encEvent, ok := timelineEncoderEvent(timeline, encoder.Index); !ok || encEvent.Phase != "i" {
+			args["duration_us"] = float64(encoder.Duration) / 1e3
 		}
 		if len(computeEncoders) > 0 && i < len(computeEncoders) {
 			dispatches := parseEncoderDispatches(trace, computeEncoders, i)
@@ -1962,17 +1970,38 @@ func addEncoderKernelEvents(timeline *Timeline, trace *gputrace.Trace, sourceMap
 		if id, ok := timelineEncoderThreadID(timeline, encoder.Index); ok {
 			threadID = id
 		}
+
+		phase := "X"
+		eventDuration := encoder.Duration / 1000
+		if encEvent, ok := timelineEncoderEvent(timeline, encoder.Index); ok && encEvent.Phase == "i" {
+			phase = "i"
+			eventDuration = 0
+		}
+
 		timeline.Events = append(timeline.Events, TimelineEvent{
 			Name:      encoder.Label,
 			Category:  "kernel",
-			Phase:     "X",
+			Phase:     phase,
 			Timestamp: encoder.StartTime / 1000,
-			Duration:  encoder.Duration / 1000,
+			Duration:  eventDuration,
 			ProcessID: 1,
 			ThreadID:  threadID,
 			Args:      args,
 		})
 	}
+}
+
+func timelineEncoderEvent(timeline *Timeline, index int) (TimelineEvent, bool) {
+	if timeline == nil {
+		return TimelineEvent{}, false
+	}
+	for _, event := range timeline.Events {
+		eventIndex, ok := timelineEventArgInt(event.Args, "index")
+		if event.Category == "encoder" && ok && eventIndex == index {
+			return event, true
+		}
+	}
+	return TimelineEvent{}, false
 }
 
 func traceComputeEncoders(trace *gputrace.Trace) []*tracepkg.ComputeEncoder {

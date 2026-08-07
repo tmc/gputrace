@@ -1495,3 +1495,59 @@ func TestAddDispatchKernelEventsNamesAgreeWithPipelineID(t *testing.T) {
 		}
 	}
 }
+
+func TestUnprofiledRawTraceEmitsPhaseIInstantEvents(t *testing.T) {
+	rawTrace := "/Users/tmc/tmp/mlx-go-fast/verify/verify-dbg.gputrace"
+	if _, err := os.Stat(rawTrace); os.IsNotExist(err) {
+		t.Skipf("raw trace fixture absent: %s", rawTrace)
+	}
+
+	trace, err := gputrace.Open(rawTrace)
+	if err != nil {
+		t.Fatalf("open raw trace: %v", err)
+	}
+
+	timeline, err := generateTimeline(trace)
+	if err != nil {
+		t.Fatalf("build timeline: %v", err)
+	}
+
+	outPath := filepath.Join(t.TempDir(), "unprofiled.json")
+	if err := exportChromeTracing(timeline, outPath); err != nil {
+		t.Fatalf("exportChromeTracing: %v", err)
+	}
+
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read exported timeline: %v", err)
+	}
+
+	var traceDoc struct {
+		TraceEvents []TimelineEvent `json:"traceEvents"`
+	}
+	if err := json.Unmarshal(data, &traceDoc); err != nil {
+		t.Fatalf("unmarshal exported timeline: %v", err)
+	}
+
+	var phaseXCount, phaseICount int
+	for _, event := range traceDoc.TraceEvents {
+		if event.Category == "encoder" || event.Category == "kernel" {
+			if event.Phase == "X" {
+				phaseXCount++
+				t.Errorf("unprofiled event %q category=%q has finite Phase X duration %d", event.Name, event.Category, event.Duration)
+			} else if event.Phase == "i" {
+				phaseICount++
+				if event.Duration != 0 {
+					t.Errorf("unprofiled instant event %q category=%q has non-zero duration %d", event.Name, event.Category, event.Duration)
+				}
+			}
+		}
+	}
+
+	if phaseICount == 0 {
+		t.Fatalf("expected Phase 'i' instant events for unprofiled trace, found 0")
+	}
+	if phaseXCount > 0 {
+		t.Fatalf("found %d finite synthetic Phase 'X' events in unprofiled trace export, want 0", phaseXCount)
+	}
+}
