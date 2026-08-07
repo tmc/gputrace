@@ -149,9 +149,28 @@ reporting 4 command buffers, 3 encoders, 11 dispatches and 3 pipelines.
 
 `[V]` **Refuted:** that the outer bundle name failing to match the inner
 `parity-asymmetric.gputrace.gpuprofiler_raw` prefix defeats `_setupDataPath`.
-Presenting the bundle under the matching name crashes identically. The cause is
-still unidentified; this is recorded so the same hypothesis is not re-tried as
-though it were untested.
+Presenting the bundle under the matching name crashes identically.
+
+`[V]` **Refuted: that this is a bindings defect.** The natural suspect was
+`cmd/extract_xcode_metrics`, which passes `nil` for `llvmHelperPath:` where
+`internal/xcodebindings.ProcessStreamData` resolves a real one — and the
+processor spawns a helper whose protocol is version-matched to the framework,
+so a nil there is exactly the shape of bug that crashes later. It is not the
+cause. The careful path crashes identically on the same capture, with the
+helper path resolved, `responds:` checked for every selector, and the returned
+processor checked non-nil.
+
+Both entry points reach the same bus error inside `processStreamData` itself,
+which is where the framework does its own work.
+
+`[D]` What that does *not* establish is that the bindings are innocent, only
+that the two bindings-shaped hypotheses available to test are refuted. Both
+paths share one `initWithStreamData:llvmHelperPath:` and one `processStreamData`
+declaration, so a defect in either would crash both. The honest limit is that
+this path cannot be demonstrated working *anywhere* right now: it is exercised
+only on captures carrying a `.gpuprofiler_raw`, exactly one of those survives,
+and it is the one that crashes. The successful probe results recorded earlier in
+this file came from captures that no longer exist and cannot be re-run.
 
 `[V]` It is the *only* candidate. Of the surviving fixtures, only
 `parity-asymmetric-perfdata.gputrace` contains a `.gpuprofiler_raw` directory
