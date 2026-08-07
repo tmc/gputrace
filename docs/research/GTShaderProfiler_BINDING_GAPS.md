@@ -82,6 +82,24 @@ The exporter gaps are:
   `GPUCounterGraph.plist` as the ALU Utilization file but its record layout is
   not established, so no offset can be read from it. It is additionally blocked
   by the crash recorded below, which binds independently.
+
+  `[V]` The exporter that *would* publish it is still in the tree and is
+  unreachable. `generateCounterTracksFromPerfData` in
+  `cmd/gputrace/cmd/timeline.go` builds ten tracks including `ALU Utilization`,
+  and no production path calls it: `generateCounterTracks` reaches only
+  `generateCounterTracksFromCounterArchive`, and the only remaining callers are
+  three tests. This is the function that emitted `0.00` for all 23 encoders
+  while Xcode reported 1.59, 1.87, 2.70 and so on, so its disconnection is the
+  fix for that incident rather than an oversight.
+
+  `[D]` Reconnecting it is not the way to close this gap. It reads
+  `EncoderCounterMetrics`, which `PopulateEncoderMetricsFromPerfCounterStats`
+  does populate and which `addDispatchKernelEvents` does consume — so wiring it
+  back would produce tracks again immediately, and they would carry whatever
+  that path yields with no unit resolution, no timestamp-domain proof, and no
+  capture-matched Xcode comparison. That is the exact shape the parity
+  integrity rules forbid: a value emitted but unvalidated is worse than no
+  value.
 - `occupancy_pct`: not archived anywhere in the trace bundle. Xcode's
   Occupancy is a GPU performance counter sampled at capture time; the string
   does not appear anywhere in `.gpuprofiler_raw`. Xcode's separate *max
