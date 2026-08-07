@@ -3,6 +3,8 @@ package parity_test
 import (
 	"bytes"
 	"os"
+	"path"
+	"slices"
 	"strings"
 	"testing"
 
@@ -11,6 +13,21 @@ import (
 
 const oracleDir = "../../testdata/xcode-oracle"
 
+// parityOracleDir returns the oracle TestParity scores against. It defaults to
+// the 23-encoder oracle; GPUTRACE_PARITY_ORACLE selects another, so the
+// 11-encoder oracle is reachable without editing this file.
+//
+// Pointing this at an oracle the trace did not come from is safe to attempt but
+// not safe to believe, and TestParity refuses it: the encoder-count and
+// join-key checks below run before any column is scored, so a mismatched pair
+// fails rather than producing a match rate for two different captures.
+func parityOracleDir() string {
+	if dir := os.Getenv("GPUTRACE_PARITY_ORACLE"); dir != "" {
+		return dir
+	}
+	return oracleDir
+}
+
 func loadOracle(t *testing.T) *parity.Oracle {
 	t.Helper()
 	o, _, err := parity.Load(os.DirFS(oracleDir), ".")
@@ -18,6 +35,45 @@ func loadOracle(t *testing.T) *parity.Oracle {
 		t.Fatalf("Load: %v", err)
 	}
 	return o
+}
+
+// TestBothOraclesLoad checks that every checked-in oracle directory loads, so
+// that TestParity can be pointed at either one.
+//
+// The second oracle did not load at all until the loader stopped assuming every
+// .txt in the directory was an encoder tab. It also holds Xcode's Shaders tab,
+// which is keyed by kernel function and pipeline state rather than by encoder,
+// and the encoder-list comparison reported that as "not from one capture" --
+// naming a cause that was not the cause.
+//
+// The encoder counts are asserted because they are the property that makes the
+// two oracles worth keeping separately: the same Execution Cost method scores
+// 0.911 pp worst-case against one and 2.941 pp against the other.
+func TestBothOraclesLoad(t *testing.T) {
+	for _, test := range []struct {
+		dir      string
+		encoders int
+		skipped  []string
+	}{
+		{dir: "../../testdata/xcode-oracle", encoders: 23},
+		{dir: "../../testdata/xcode-oracle-static-tokens2to3", encoders: 11, skipped: []string{"shaders.txt"}},
+	} {
+		t.Run(path.Base(test.dir), func(t *testing.T) {
+			o, _, err := parity.Load(os.DirFS(test.dir), ".")
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if len(o.Encoders) != test.encoders {
+				t.Errorf("encoders = %d, want %d", len(o.Encoders), test.encoders)
+			}
+			if !slices.Equal(o.Skipped, test.skipped) {
+				t.Errorf("skipped = %v, want %v", o.Skipped, test.skipped)
+			}
+			if len(o.Columns) == 0 {
+				t.Error("no columns loaded")
+			}
+		})
+	}
 }
 
 // TestSourcesReconcile checks the two independent Xcode exports of this capture
@@ -181,9 +237,11 @@ func TestALUUtilizationHasSignal(t *testing.T) {
 func TestParity(t *testing.T) {
 	tracePath := os.Getenv("GPUTRACE_PARITY_TRACE")
 	if tracePath == "" {
-		t.Skip("set GPUTRACE_PARITY_TRACE to a .gputrace bundle matching testdata/xcode-oracle")
+		t.Skip("set GPUTRACE_PARITY_TRACE to a .gputrace bundle matching the oracle in GPUTRACE_PARITY_ORACLE (default testdata/xcode-oracle)")
 	}
-	o, disagreements, err := parity.Load(os.DirFS(oracleDir), ".")
+	dir := parityOracleDir()
+	t.Logf("oracle: %s", dir)
+	o, disagreements, err := parity.Load(os.DirFS(dir), ".")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -192,8 +250,8 @@ func TestParity(t *testing.T) {
 		t.Fatalf("Observe: %v", err)
 	}
 	if len(obs.Encoders) != len(o.Encoders) {
-		t.Fatalf("gputrace sees %d encoders, oracle has %d: the trace does not match the fixture",
-			len(obs.Encoders), len(o.Encoders))
+		t.Fatalf("gputrace sees %d encoders, oracle %s has %d: the trace does not match the oracle",
+			len(obs.Encoders), dir, len(o.Encoders))
 	}
 	for i, enc := range o.Encoders {
 		if got := obs.Encoders[i]; got != enc {

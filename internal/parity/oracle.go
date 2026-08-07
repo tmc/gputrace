@@ -33,6 +33,11 @@ type Oracle struct {
 	Display []string
 	Columns []Column            // metric columns, sorted by name
 	values  map[string][]string // column name -> value per encoder
+	// Skipped names the exports in the directory that are not encoder-keyed
+	// and so contribute no column, such as Xcode's pipeline-keyed Shaders
+	// tab. It is reported rather than dropped: a tab silently missing from
+	// the union would understate the oracle without changing any count.
+	Skipped []string
 }
 
 // DisplayName returns Xcode's full name for an encoder join key.
@@ -120,13 +125,18 @@ func Load(fsys fs.FS, dir string) (*Oracle, []Disagreement, error) {
 	return Merge(tabs, joined)
 }
 
-// LoadOracle reads every .txt export in dir and joins them on encoder name.
+// LoadOracle reads every encoder-keyed .txt export in dir and joins them on
+// encoder name.
 //
-// Every file must list the same encoders in the same order; a file that does
-// not is a sign that the exports came from different captures, and is an error
-// rather than something to reconcile. Files that re-export a tab already seen
-// are checked for agreement and then dropped, which is what makes them evidence
-// that Xcode's export is deterministic.
+// Every encoder-keyed file must list the same encoders in the same order; a
+// file that does not is a sign that the exports came from different captures,
+// and is an error rather than something to reconcile. Files that re-export a
+// tab already seen are checked for agreement and then dropped, which is what
+// makes them evidence that Xcode's export is deterministic.
+//
+// A tab whose rows carry no encoder join key at all is a different row space
+// rather than a disagreement, and is skipped and named in Oracle.Skipped. A tab
+// where only some rows carry one is neither, and is an error.
 func LoadOracle(fsys fs.FS, dir string) (*Oracle, error) {
 	names, err := fs.Glob(fsys, path.Join(dir, "*.txt"))
 	if err != nil {
@@ -152,13 +162,31 @@ func LoadOracle(fsys fs.FS, dir string) (*Oracle, error) {
 			return nil, fmt.Errorf("%s: %w", name, err)
 		}
 		keys := make([]string, len(encoders))
+		withKey := 0
 		for i, e := range encoders {
 			keys[i] = JoinKey(e)
+			if keys[i] != "" {
+				withKey++
+			}
+		}
+		// Not every .txt Xcode writes into a capture directory is an encoder
+		// tab. The Shaders tab is keyed by kernel function and pipeline state,
+		// so its rows carry no leading cumulative-offset number and belong to a
+		// different row space entirely. Comparing its names to the encoder list
+		// reports "not from one capture", which sends the reader hunting for a
+		// capture mixup that did not happen.
+		switch {
+		case withKey == 0:
+			o.Skipped = append(o.Skipped, path.Base(name))
+			continue
+		case withKey != len(keys):
+			return nil, fmt.Errorf("%s: %d of %d rows carry an encoder join key; the tab mixes row spaces",
+				name, withKey, len(keys))
 		}
 		if o.Encoders == nil {
 			o.Encoders, o.Display = keys, encoders
 		} else if !equalStrings(o.Encoders, keys) {
-			return nil, fmt.Errorf("%s: encoder list differs from earlier exports; the files are not from one capture", name)
+			return nil, fmt.Errorf("%s: encoder list differs from earlier encoder-keyed exports; the files are not from one capture", name)
 		}
 
 		for ci, colName := range header {
@@ -191,6 +219,11 @@ func LoadOracle(fsys fs.FS, dir string) (*Oracle, error) {
 			o.values[colName] = vals
 			seenTab[colName] = tab
 		}
+	}
+
+	if o.Encoders == nil {
+		return nil, fmt.Errorf("parity: no encoder-keyed export in %s; skipped %s",
+			dir, strings.Join(o.Skipped, ", "))
 	}
 
 	for name, vals := range o.values {
