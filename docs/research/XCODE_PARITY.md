@@ -25,6 +25,10 @@ GPUTRACE_PARITY_TRACE=~/tmp/gputrace-captures/qwen25-05b-staticmask-warm-tokens2
   go test ./internal/parity/ -run TestParity -v
 ```
 
+`[V]` That bundle no longer exists on this machine, so the command above skips
+rather than scores. See "Capture inventory" below before reading any count in
+this file as a live measurement.
+
 The oracle is not the universe. `GPUCounterGraph.plist` defines 456 counters;
 Xcode's exports expose 234 of them for this capture, and the Timeline's
 Occupancy filter shows at least one more (`SIMD Groups Inflight per Core`) that
@@ -186,16 +190,31 @@ computes, not export noise.
 ## Order of work
 
 1. Establish a capture-backed pipeline-to-encoder identity join for
-   `Counters_f_*.raw` rows. The exporter already withholds these rows; no
-   position-based fallback is permitted.
-2. Resolve the counter-stream timebase. It converts 137 decoded series from
+   `Counters_f_*.raw` rows (`[V]`). Raw series transport works across all 40 shards (`[V]`), but binary parsing produces 18 pipeline rows for 23 encoders (`[V]`). The old exporter path was fail-closed (`f04175b`, `[V]`) because indexing by position could mislabel pipeline data as encoder data (`[D]`). Positional joins are strictly prohibited (`[D]`). Next step: HOLD — requires a non-positional owner join, resolved metric/unit/scope, timestamp-domain proof, and capture-matched Xcode oracle comparison (`[D]`).
+2. Resolve the counter-stream timebase (`[V]`). It converts 137 decoded series from
    unjoinable to scoreable, which is the only path to a large fraction of the
-   83 unproduced columns.
-3. Explain the Execution Cost residual, or label the shipped figure with it.
-4. Find a unit source for the 20 uncatalogued columns.
-5. Score the 11-encoder oracle in CI. `TestParity` currently hardcodes
-   `oracleDir` to `testdata/xcode-oracle`, so the second oracle is only
-   measured by hand.
+   83 unproduced columns (`[V]`).
+3. Execution Cost residual (`[V]`): Current encoder-share estimate disagrees with Xcode on 18 of 23 encoders (0.911 pp worst-case on 23-encoder oracle, 2.941 pp worst-case on 11-encoder oracle) (`[V]`). `Execution Cost` has no `GPUCounterGraph.plist` entry, so its definition is not recoverable from the catalog (`[V]`). Selection views must report the residual rather than claiming exact Xcode parity (`[D]`). Next step: HOLD — definition uncatalogued; preserve explicit residual warning (`[D]`).
+4. Uncatalogued oracle columns (`[V]`): 20 oracle columns (e.g. `Execution Cost`, `F32 Limiter`, `FS Last Level Cache Bytes Read`, `* Bandwidth`) appear in Xcode exports but are absent from `GPUCounterGraph.plist` (`[V]`). Prior catalog selector probes have ruled out catalog-based unit recovery (`[V]`). Next step: HOLD — catalog route probed and ruled out; requires a proven unit source (`[D]`).
+5. Score the 11-encoder oracle in CI — **DONE, and it was not a path problem**
+   (`[V]`). `TestParity` now takes its oracle from `GPUTRACE_PARITY_ORACLE`.
+   The hardcoded `oracleDir` was the smaller half: `LoadOracle` globbed `*.txt`
+   and assumed every match was an encoder tab, so the second oracle directory
+   failed to load at all (`[V]`). It also holds Xcode's Shaders tab, which is
+   keyed by kernel function and pipeline state rather than by encoder, and the
+   encoder-list check rejected the directory with "the files are not from one
+   capture" — a wrong cause, and one that would have sent a reader hunting for
+   a capture mixup that never happened (`[V]`).
+
+   Non-encoder-keyed tabs are now skipped and named in `Oracle.Skipped`; a tab
+   that mixes row spaces, or a directory with no encoder-keyed tab at all,
+   stays an error. `TestBothOraclesLoad` pins both: 23 encoders / 234 columns
+   skipping nothing, and 11 encoders / 230 columns skipping `shaders.txt`
+   (`[V]`). The 23-encoder side is byte-unchanged, so the standing table above
+   is not affected.
+
+   `[D]` Loading is not scoring. Both oracles load, but neither can be scored
+   until a matching capture exists — see "Capture inventory".
 
 ## Capture inventory
 
@@ -205,8 +224,32 @@ computes, not export noise.
 | `...staticmask-warm-tokens2-4-rep1-perfdata2` | 23 | 958 | 9.161 ms | md5-identical inputs to perfdata3 |
 | `qwen25-05b-static_tokens_2_to_3-wperfdata` | 11 | 466 | 5.330 ms | `testdata/xcode-oracle-static-tokens2to3/` |
 
-All live in `~/tmp/gputrace-captures/`. `[V]` A 2026-08-01 note recorded these
-as lost to a reboot and declared the oracle permanently unjoinable; that was
-wrong. The captures were on the persistent volume and the per-encoder join
-succeeds, which is how the standing table above was produced. Captures written
-to `/tmp` do not survive; these were not.
+`[V]` **None of these three bundles still exists.** Checked 2026-08-06:
+`~/tmp/gputrace-captures/` contains only a `.DS_Store`, and no `.gputrace`
+bundle matching either capture name is present anywhere under `~`. Only derived
+artifacts survive — per-probe logs and diff JSON under `~/tmp/`.
+
+The consequence is stated plainly because it applies to every number above:
+**the standing table cannot currently be reproduced or regressed.** `TestParity`
+skips without `GPUTRACE_PARITY_TRACE`, and there is no bundle to point it at.
+The oracle side of the join is safe — `testdata/xcode-oracle/` and
+`testdata/xcode-oracle-static-tokens2to3/` are in git — but the gputrace side
+cannot be recomputed, so the table is a record of a 2026-08-01 measurement
+rather than a check that runs.
+
+This paragraph has now been wrong in both directions. A 2026-08-01 note declared
+the captures lost when they were present, and the correction to that note
+asserted `[V]` that they lived in `~/tmp/gputrace-captures/` — which stayed in
+the file after they stopped doing so. A `[V]` on a claim about the filesystem
+decays; it records that someone looked once, not that the file is there now.
+Re-check presence before relying on any row above, and date the check.
+
+`[D]` Regenerating these is not a re-run of a script. The parity rules forbid
+substituting a different capture, so a replacement needs the same workload, the
+same device, the same capture mode, and a fresh Xcode Counters-tab export to
+serve as its own oracle. Until that exists, treat every count in this file as
+historical.
+
+The surviving bundles under `~/gputrace-fixtures/` — `gputrace-parity-smoke`,
+`parity-asymmetric-perfdata.gputrace`, and `raw-sources/` — have no matching
+Xcode oracle, so they exercise the parity machinery without scoring it.
