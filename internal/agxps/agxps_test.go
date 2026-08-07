@@ -25,8 +25,8 @@ func TestESLCliqueFunctionsAvailable(t *testing.T) {
 	}
 	defer Close()
 
-	if _, err := ESLCliqueTimings(0); err == nil {
-		t.Fatal("ESLCliqueTimings(0) succeeded, want invalid profile data error")
+	if _, err := ESLCliqueReferences(0); err == nil {
+		t.Fatal("ESLCliqueReferences(0) succeeded, want invalid profile data error")
 	}
 
 	if trace := ESLCliqueInstructionTrace(0, 0); trace != 0 {
