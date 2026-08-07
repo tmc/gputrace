@@ -492,7 +492,7 @@ func recoveryWindows(appAX uintptr) []standaloneRecoveryWindow {
 		out = append(out, standaloneRecoveryWindow{
 			xcodeAXWindow:   window,
 			PID:             int(pid),
-			PerformanceView: hasShallowPerformanceGroup(window.Element),
+			PerformanceView: hasPerformanceView(window.Element),
 			SummaryView:     hasShallowNamedGroup(window.Element, "Summary"),
 			NewEditorView:   hasShallowNamedGroup(window.Element, "New Editor"),
 			Finished:        hasShallowFinishedActivity(window.Element),
@@ -508,8 +508,8 @@ func recoveryWindows(appAX uintptr) []standaloneRecoveryWindow {
 	return out
 }
 
-func hasShallowPerformanceGroup(root uintptr) bool {
-	return hasShallowNamedGroup(root, "Performance")
+func hasPerformanceView(root uintptr) bool {
+	return hasShallowNamedGroup(root, "Performance") || hasPerformanceData(root)
 }
 
 func hasShallowNamedGroup(root uintptr, name string) bool {

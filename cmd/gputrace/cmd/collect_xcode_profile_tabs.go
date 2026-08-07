@@ -413,7 +413,7 @@ func findButtonByNameInsensitive(root uintptr, name string) uintptr {
 // are typically AXOutlineRow, AXRow, or AXCell elements.
 func findOutlineRowByName(root uintptr, name string) uintptr {
 	nameLower := strings.ToLower(name)
-	return findElement(root, func(el uintptr) bool {
+	el := findElement(root, func(el uintptr) bool {
 		role := axString(el, "AXRole")
 		// Check various row/cell types used in outline views
 		if role == "AXOutlineRow" || role == "AXRow" || role == "AXCell" || role == "AXStaticText" {
@@ -433,6 +433,16 @@ func findOutlineRowByName(root uintptr, name string) uintptr {
 		}
 		return false
 	})
+	if el == 0 {
+		return 0
+	}
+	role := axString(el, "AXRole")
+	if role == "AXStaticText" || role == "AXCell" {
+		if row := findParentOutlineRow(el); row != 0 {
+			return row
+		}
+	}
+	return el
 }
 
 // findAllTabs finds all tab elements in the tree.

@@ -298,12 +298,10 @@ func getProfilingStatusWithDebug(window uintptr, debug bool) string {
 		return "running"
 	}
 
-	// Now do targeted traversal for "Show Performance"
-	if hasShowPerformanceDebug(window, debug) {
-		return "complete"
-	}
-	// Also check for "Timeline" or "Encoders" which indicate the trace is loaded and interactive
-	if findButtonByNameInsensitive(window, "Timeline") != 0 || findButtonByNameInsensitive(window, "Encoders") != 0 {
+	// "Show Performance" is present while the summary is ready to enter the
+	// Performance view. Once Xcode has already entered that view, the button
+	// is gone and its tabs are the completion signal instead.
+	if hasPerformanceDataDebug(window, debug) {
 		return "complete"
 	}
 
@@ -343,6 +341,28 @@ func getProfilingStatus(window uintptr) string {
 // Path: window > split > editor area > split > Summary > ... > Show Performance
 func hasShowPerformance(window uintptr) bool {
 	return hasShowPerformanceDebug(window, false)
+}
+
+// hasPerformanceData reports whether Xcode has completed profiling the trace.
+// Xcode exposes either the Summary view's Show Performance button or the
+// Performance view's Timeline and Encoders controls. Both states are safe to
+// advance to export, provided the caller has already bound the window to the
+// requested trace.
+func hasPerformanceData(window uintptr) bool {
+	return hasPerformanceDataDebug(window, false)
+}
+
+func hasPerformanceDataDebug(window uintptr, debug bool) bool {
+	showPerformance := hasShowPerformanceDebug(window, debug)
+	performanceControls := findButtonByNameInsensitive(window, "Timeline") != 0 || findButtonByNameInsensitive(window, "Encoders") != 0
+	if performanceControls && debug {
+		fmt.Fprintln(os.Stderr, "[DEBUG] Performance view controls found")
+	}
+	return performanceDataReady(showPerformance, performanceControls)
+}
+
+func performanceDataReady(showPerformance, performanceControls bool) bool {
+	return showPerformance || performanceControls
 }
 
 func hasShowPerformanceDebug(window uintptr, debug bool) bool {

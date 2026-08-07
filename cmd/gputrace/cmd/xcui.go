@@ -970,7 +970,7 @@ func clickMenuItem(app uintptr, path []string, closeMenu func(uintptr) error) (e
 			err = errors.Join(err, closeErr)
 		}
 	}()
-	for _, name := range path {
+	for i, name := range path {
 		// Find child with title == name
 		found := findElement(current, func(el uintptr) bool {
 			return axString(el, "AXTitle") == name
@@ -987,6 +987,9 @@ func clickMenuItem(app uintptr, path []string, closeMenu func(uintptr) error) (e
 
 		if found == 0 {
 			return fmt.Errorf("menu item '%s' not found", name)
+		}
+		if i == len(path)-1 && !IsElementEnabled(found) {
+			return fmt.Errorf("menu item '%s' is disabled", name)
 		}
 
 		if current == menuBar {
@@ -1678,6 +1681,19 @@ func NavigateToFolderInSaveDialog(window uintptr, folderPath string) error {
 	}
 	entryState, ok := waitForGoToFolderConfirmationState(window, folderPath, 2*time.Second)
 	if !ok {
+		// Xcode normally needs native key events, but some cross-Space sheets
+		// accept AXValue only. Try that transport once, then require the same
+		// exact path observation before allowing the export to continue.
+		verboseLog("NavigateToFolderInSaveDialog: native path entry was not visible; trying AXValue")
+		if err := axSetValue(pathField, folderPath); err == nil {
+			if _, exact := waitForGoToFolderConfirmationState(window, folderPath, 2*time.Second); exact {
+				if err := confirmFocusedXcodeField(); err == nil {
+					if _, ok := waitForGoToFolderNavigationStateAfterExactEntry(window, folderPath, 2*time.Second); ok {
+						return nil
+					}
+				}
+			}
+		}
 		return fmt.Errorf("Go to Folder field did not expose exact requested path %q; sheet state: %s",
 			folderPath, formatExportSheetState(entryState))
 	}
@@ -1717,17 +1733,22 @@ func NavigateToFolderInSaveDialog(window uintptr, folderPath string) error {
 
 const typeGoToFolderPathScript = `
 on run argv
+	tell application id "com.apple.dt.Xcode" to activate
+	delay 0.2
 	tell application "System Events"
 		tell process "Xcode"
 			set frontmost to true
 			keystroke "a" using command down
 			delay 0.3
 			-- Clear the field outright, then wait for System Events to release
-			-- Command. Typing the whole path in one go avoids the cursor move
-			-- that previously dropped the leading slash under host load.
+			-- Command. Xcode 26 can truncate a long single keystroke, so enter
+			-- the absolute path as ordinary key events.
 			key code 51
 			delay 0.4
-			keystroke (item 1 of argv)
+			repeat with pathCharacter in characters of (item 1 of argv)
+				keystroke (contents of pathCharacter)
+				delay 0.01
+			end repeat
 		end tell
 	end tell
 end run`
@@ -1751,6 +1772,8 @@ func goToFolderPathBody(path string) (string, error) {
 
 func confirmFocusedXcodeField() error {
 	script := `
+	tell application id "com.apple.dt.Xcode" to activate
+	delay 0.2
 tell application "System Events"
 	tell process "Xcode"
 		set frontmost to true
