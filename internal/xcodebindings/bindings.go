@@ -170,10 +170,11 @@ func Probe() Report {
 	}
 	report.Gaps = []Gap{
 		{
-			Metric:  "high_register",
-			Binding: "GTMioShaderBinaryData.liveRegisterForInstructionAtIndex:",
-			Status:  "parent-validated adapter and private exporter seam present; runtime selector compatibility unresolved",
-			Next:    "obtain a GTMioTraceData-compatible child from streamData before enumerating parent-owned binaries",
+			Metric:    "high_register",
+			Binding:   "GTMioShaderBinaryData.liveRegisterForInstructionAtIndex:",
+			Status:    "stream-parent enumeration is capture-validated; live register counts are available per shader binary, but are not a source-level cost attribution",
+			Next:      "join the owning shader binary to an exported pipeline only where the parent collection supplies a stable identity",
+			Signature: "instructionInfoCount bounds liveRegisterForInstructionAtIndex:; target capture reported 801 binaries, 44,900 instructions, and high register 122",
 		},
 		{
 			Metric:  "occupancy_pct",
@@ -194,9 +195,9 @@ func Probe() Report {
 		{
 			Metric:    "counter_values",
 			Binding:   "GTMioCounterData.values",
-			Status:    "values is a verified double* and is copied while its owner is live; timestamp bounds, units, scope semantics, and an Xcode-metric join are unproven",
-			Next:      "prove the timestamps-array bound, then validate one named series' clock and ownership against the same capture's Xcode export before publishing it",
-			Signature: "values is ^d and timestamps is ^Q; ValuesSlice deep-copies doubles, while TimestampsSlice remains fail-closed on its unproven bound",
+			Status:    "values and timestamps are verified 8-byte arrays and are copied while their owner is live; metric units, scope semantics, clock, ownership, and an Xcode-metric join are unproven",
+			Next:      "validate one named series' clock and ownership against the same capture's Xcode export before publishing it",
+			Signature: "values is ^d and timestamps is ^Q; both slices deep-copy SampleCount elements after capture-backed allocation-extent validation",
 		},
 	}
 	if !report.Framework {

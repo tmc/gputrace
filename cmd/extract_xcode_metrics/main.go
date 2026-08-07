@@ -132,6 +132,7 @@ func main() {
 
 	// Extract timeline counters off nonOverlappingTimeline
 	var summaries []CounterStreamSummary
+	var withheldCounters int
 	nonOverlappingPtr := mID.NonOverlappingTimeline()
 	if nonOverlappingPtr != nil {
 		nonOverlappingID := objc.ID(uintptr(nonOverlappingPtr))
@@ -158,7 +159,12 @@ func main() {
 					// Seed the extremes from the data, not from zero: a series
 					// that never rises above zero would otherwise report a max
 					// of zero regardless of what it holds.
-					vals := cnt.ValuesSlice()
+					vals, err := cnt.ValuesSlice()
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "Withholding %s: %v\n", kStr, err)
+						withheldCounters++
+						continue
+					}
 					var minV, maxV, sumV float64
 					for i, v := range vals {
 						if i == 0 {
@@ -172,7 +178,12 @@ func main() {
 					if len(vals) > 0 {
 						avgV = sumV / float64(len(vals))
 					}
-					stamps := cnt.TimestampsSlice()
+					stamps, err := cnt.TimestampsSlice()
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "Withholding %s: %v\n", kStr, err)
+						withheldCounters++
+						continue
+					}
 					if len(stamps) != len(vals) {
 						fmt.Fprintf(os.Stderr, "Error: %s timestamps=%d values=%d\n", kStr, len(stamps), len(vals))
 						os.Exit(1)
@@ -236,7 +247,7 @@ func main() {
 	fmt.Printf("  Pipeline State Count:         %d\n", mID.PipelineStateCount())
 	fmt.Printf("  GPU Time:                     %.3f ms\n", gpuTimeMS)
 
-	fmt.Printf("\n[2. Memory Timeline Counters (%d Channels Extracted)]\n", len(summaries))
+	fmt.Printf("\n[2. Memory Timeline Counters (%d Channels Extracted, %d Withheld)]\n", len(summaries), withheldCounters)
 	for _, s := range summaries {
 		if s.IsUnread {
 			fmt.Printf("  %-36s -> [Unread / Encoding Unestablished]%s (samples: %d, scope: %d/%d, interval: %d, ticks: %d..%d)\n", s.Name, s.UnreadNote, s.Count, s.Scope, s.ScopeIndex, s.SampleInterval, s.FirstTimestamp, s.LastTimestamp)

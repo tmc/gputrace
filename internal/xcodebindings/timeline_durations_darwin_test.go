@@ -14,6 +14,7 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/ebitengine/purego"
 	"github.com/tmc/gputrace/internal/testtrace"
 
 	puregoobjc "github.com/ebitengine/purego/objc"
@@ -26,13 +27,12 @@ import (
 
 // TestTimelineDrawDurations reads every per-draw duration from Xcode's
 // serialized cost timeline rather than the three the exported summary samples,
-// and checks the total against the profiler's own gpuTime.
+// and reports its total beside the profiler's own GPUTime.
 //
 // The exported TimelineSummary reports the first three durations, which shows
-// the selector answers but says nothing about what the numbers mean. If the
-// 574 draw durations sum to gpuTime then they are per-dispatch GPU time in the
-// same unit the result already reports, which is the difference between a
-// structural count and usable timing. The sweep over data masters is here for
+// the selector answers but says nothing about what the numbers mean. On the
+// reference capture, Data Master 2's sum differs from GPUTime, so these are
+// not published as Xcode GPU Time. The sweep over data masters is here for
 // the same reason: dataMaster 2 was chosen from a working example, not from a
 // documented enumeration.
 func TestTimelineDrawDurations(t *testing.T) {
@@ -171,7 +171,15 @@ func checkTimelineCounters(t *testing.T, timeline objc.ID) {
 	}
 
 	check(timeline, "timelineCounters", reflect.TypeOf(objc.ID(0)))
-	counters := gtshaderprofiler.GTMioTraceTimelineDataFromID(timeline).TimelineCounters()
+	check(timeline, "timestampBegin", reflect.TypeOf(uint64(0)))
+	check(timeline, "timestampEnd", reflect.TypeOf(uint64(0)))
+	timelineModel := gtshaderprofiler.GTMioTraceTimelineDataFromID(timeline)
+	timestampBegin, timestampEnd := timelineModel.TimestampBegin(), timelineModel.TimestampEnd()
+	if timestampEnd < timestampBegin {
+		t.Fatalf("cost timeline timestamp range=%d..%d", timestampBegin, timestampEnd)
+	}
+	t.Logf("cost timeline timestamp range=%d..%d", timestampBegin, timestampEnd)
+	counters := timelineModel.TimelineCounters()
 	if counters.GetID() == 0 {
 		t.Fatal("timelineCounters returned nil")
 	}
@@ -234,6 +242,10 @@ func checkTimelineCounters(t *testing.T, timeline objc.ID) {
 	if !slices.Equal(total.timestamps, alu.timestamps) || !slices.Equal(total.values, alu.values) {
 		t.Fatal("ALU Total Instructions and ALUInstructions differ")
 	}
+	if total.timestamps[0] < timestampBegin || total.timestamps[len(total.timestamps)-1] > timestampEnd {
+		t.Fatalf("ALU Total Instructions timestamp range=%d..%d is outside cost timeline=%d..%d",
+			total.timestamps[0], total.timestamps[len(total.timestamps)-1], timestampBegin, timestampEnd)
+	}
 	t.Log("ALU Total Instructions and ALUInstructions are identical")
 	reportTimestampShape(t, alu.timestamps)
 }
@@ -274,7 +286,20 @@ func readTimelineCounter(t *testing.T, check func(objc.ID, string, reflect.Type,
 	if stampsPointer == nil {
 		t.Fatalf("%s timestamps returned nil", name)
 	}
-	stamps := append([]uint64(nil), unsafe.Slice((*uint64)(stampsPointer), int(count))...)
+	valuesPointer := counter.Values()
+	if valuesPointer == nil {
+		t.Fatalf("%s values returned nil", name)
+	}
+	checkCounterBufferExtent(t, name+" values", valuesPointer, count, unsafe.Sizeof(float64(0)))
+	checkCounterBufferExtent(t, name+" timestamps", stampsPointer, count, unsafe.Sizeof(uint64(0)))
+
+	stamps, err := counter.TimestampsSlice()
+	if err != nil {
+		t.Fatalf("%s timestamps: %v", name, err)
+	}
+	if len(stamps) != int(count) {
+		t.Fatalf("%s timestamps = %d, want %d", name, len(stamps), count)
+	}
 	if stamps[0] == 0 || stamps[len(stamps)-1] == 0 {
 		t.Fatalf("%s timestamps have zero endpoint: first=%d last=%d", name, stamps[0], stamps[len(stamps)-1])
 	}
@@ -285,11 +310,13 @@ func readTimelineCounter(t *testing.T, check func(objc.ID, string, reflect.Type,
 	}
 	t.Logf("%s timestamp range=%d..%d", name, stamps[0], stamps[len(stamps)-1])
 
-	valuesPointer := counter.Values()
-	if valuesPointer == nil {
-		t.Fatalf("%s values returned nil", name)
+	values, err := counter.ValuesSlice()
+	if err != nil {
+		t.Fatalf("%s values: %v", name, err)
 	}
-	values := append([]float64(nil), unsafe.Slice((*float64)(valuesPointer), int(count))...)
+	if len(values) != int(count) {
+		t.Fatalf("%s values = %d, want %d", name, len(values), count)
+	}
 	low, high, sum := math.Inf(1), math.Inf(-1), 0.0
 	for i, value := range values {
 		if math.IsNaN(value) || math.IsInf(value, 0) {
@@ -299,6 +326,12 @@ func readTimelineCounter(t *testing.T, check func(objc.ID, string, reflect.Type,
 		high = math.Max(high, value)
 		sum += value
 	}
+	if got, want := low, counter.MinValue(); math.Abs(got-want) > math.Max(1, math.Abs(want))*1e-12 {
+		t.Fatalf("%s value minimum = %g, want metadata %g", name, got, want)
+	}
+	if got, want := high, counter.MaxValue(); math.Abs(got-want) > math.Max(1, math.Abs(want))*1e-12 {
+		t.Fatalf("%s value maximum = %g, want metadata %g", name, got, want)
+	}
 	if sum == 0 {
 		t.Fatalf("%s values sum to zero", name)
 	}
@@ -306,6 +339,33 @@ func readTimelineCounter(t *testing.T, check func(objc.ID, string, reflect.Type,
 	t.Logf("%s value range=%g..%g sum=%g mean=%g first=%v last=%v",
 		name, low, high, sum, sum/float64(len(values)), values[:edge], values[len(values)-edge:])
 	return timelineCounterSeries{timestamps: stamps, values: values}
+}
+
+// checkCounterBufferExtent records whether malloc can establish that a raw
+// counter pointer has enough backing storage for SampleCount elements. A zero
+// result is not evidence of a short buffer: malloc_size is silent for some
+// valid pointers, so callers must retain any bound gate in that case.
+func checkCounterBufferExtent(t *testing.T, name string, ptr unsafe.Pointer, count uint64, elementSize uintptr) {
+	t.Helper()
+	if count > uint64(^uintptr(0))/uint64(elementSize) {
+		t.Fatalf("%s size overflows uintptr: %d elements of %d bytes", name, count, elementSize)
+	}
+	lib, err := purego.Dlopen("/usr/lib/libSystem.B.dylib", purego.RTLD_LAZY|purego.RTLD_GLOBAL)
+	if err != nil {
+		t.Fatalf("open libSystem for malloc_size: %v", err)
+	}
+	var mallocSize func(unsafe.Pointer) uintptr
+	purego.RegisterLibFunc(&mallocSize, lib, "malloc_size")
+	got := mallocSize(ptr)
+	want := uintptr(count) * elementSize
+	if got == 0 {
+		t.Logf("%s allocation extent unavailable (malloc_size=0, need at least %d bytes)", name, want)
+		return
+	}
+	if got < want {
+		t.Fatalf("%s allocation = %d bytes, need at least %d", name, got, want)
+	}
+	t.Logf("%s allocation = %d bytes, need at least %d", name, got, want)
 }
 
 func reportTimestampShape(t *testing.T, timestamps []uint64) {
