@@ -2200,9 +2200,25 @@ func fileExportProbeDelay(attempt int) time.Duration {
 // other applications. Waiting is not free when the wait is performed by
 // touching the UI, so back off and cap the attempts.
 func clickFileExportWhenEnabled(ctx context.Context, appAX, windowAX uintptr, timeout time.Duration) error {
+	// Xcode's menu bar is only actionable while Xcode is the frontmost
+	// application. Without this the loop probed a menu that could not open,
+	// Export stayed disabled for the whole window, and the wait ended only when
+	// the user focused Xcode by hand -- the automation appeared to be working
+	// and was in fact waiting on a person. Activating is itself a focus change,
+	// so it happens once per backed-off attempt, not on a fast timer.
+	var windowPID int32
+	if axUIElementGetPid(windowAX, &windowPID) != kAXErrorSuccess || windowPID == 0 {
+		return fmt.Errorf("read owning process of the export window")
+	}
+
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 	for attempt := 1; ; attempt++ {
+		if !collectProfileOpts.background {
+			if err := activateProcessPID(windowPID); err != nil {
+				verboseLog("clickFileExportWhenEnabled: activate PID %d: %v", windowPID, err)
+			}
+		}
 		err := clickMenuItemForWindow(appAX, windowAX, []string{"File", "Export..."})
 		if err == nil {
 			return nil
