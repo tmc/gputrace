@@ -278,16 +278,40 @@ computes, not export noise.
    hypothesis that Xcode's own decoder resolves owner, clock and unit together
    — it resolves clock and unit, but the owner was never in the counter data.
 
-   `[V]` **Refuted 2026-08-09: kick ids do not bridge to the GPRWCNTR stream.**
-   `GPRWCNTRSample` carries both `EncoderID` and `KickTraceID`, which makes
-   `Counters_f` `kick_id` → `KickTraceID` → `EncoderID` the obvious candidate.
-   On `parity-asymmetric-perfdata` the whole 927-value `kick_id` population
-   intersects the 49 distinct GPR `KickTraceID`s **zero** times. The packed-pair
-   reading was tested too: all 69 high-32 values against `EncoderID` and all 129
-   low-32 values against `KickTraceID`, both empty. The capture is not
-   signal-free — 3,389 timeline GPRWCNTR samples and 48 attributed
-   CounterArchive rows — so this is a real negative and not an artifact of an
-   unsampled workload.
+   `[V]` **Refuted 2026-08-09: kick ids do not bridge to the GPRWCNTR stream,
+   and cannot.** `GPRWCNTRSample` carries both `EncoderID` and `KickTraceID`,
+   which makes `Counters_f` `kick_id` → `KickTraceID` → `EncoderID` the obvious
+   candidate. It fails twice over on `parity-asymmetric-perfdata`.
+
+   The decisive reason is that `kick_id` is **parser-local, not
+   capture-global**: a fresh parser per shard yields 126 distinct ids, valued
+   0..125 with repeats, across 927 kick records. A small dense counter restarted
+   per parser is an array index, not an identifier, so it cannot be a foreign
+   key into anything regardless of what it is compared against.
+
+   The population check agrees: those 126 ids intersect the 49 distinct GPR
+   `KickTraceID`s zero times, and the packed-pair reading is empty in both
+   halves — 69 high-32 values against `EncoderID`, 129 low-32 against
+   `KickTraceID`. The capture is not signal-free (3,389 timeline GPRWCNTR
+   samples, 48 attributed CounterArchive rows), so this is a real negative and
+   not an artifact of an unsampled workload.
+
+   `[V]` **A retracted intermediate result, kept because the failure mode
+   recurs.** This section first recorded "927 distinct `kick_id`s for 927
+   kicks", read as a promising unique foreign key, and separately "39 of 40
+   shards wrap once", read as invalidating first/last range arithmetic. Both
+   were artifacts of one stateful APS parser being reused across all 40 shards
+   in `TestCounterFileFanout`: the reuse carried the previous shard's boundary
+   into the next, inventing both the descent and the id spread. A fresh parser
+   per shard gives zero descents in 40/40 and sample counts one lower on the 39
+   affected arrays. The reuse was in committed code, not in a scratch probe, and
+   it produced numbers that looked like findings rather than like errors.
+
+   `[V]` What did **not** change under fresh parsing: every shard still starts
+   at system timestamp 1219561582008 and ends within 2,816 ticks (117.3 µs) of
+   the others. The shards are parallel views of one window, not time partitions.
+   That conclusion was reached with the contaminated probe and survives its
+   correction.
 
    `[D]` The refutation is bounded to one capture and must not be generalized
    to the method. That capture's dispatches fall below the sampler threshold,
