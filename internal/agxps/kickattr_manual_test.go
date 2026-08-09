@@ -39,6 +39,7 @@ type kickAPI struct {
 	parserCreate  func(unsafe.Pointer) uintptr
 	parserParse   func(parser uintptr, data unsafe.Pointer, size uint64, flags uint32, errOut *uint32) uintptr
 	parserDestroy func(uintptr)
+	pdDestroy     func(uintptr)
 	kicksNum      func(uintptr) uint64
 	getU64        map[string]func(pd uintptr, out *uint64, first, count uint64) bool
 	getU32        map[string]func(pd uintptr, out *uint32, first, count uint64) bool
@@ -65,6 +66,7 @@ func loadKickAPI(t *testing.T) *kickAPI {
 	purego.RegisterLibFunc(&a.parserCreate, h, "agxps_aps_parser_create")
 	purego.RegisterLibFunc(&a.parserParse, h, "agxps_aps_parser_parse")
 	purego.RegisterLibFunc(&a.parserDestroy, h, "agxps_aps_parser_destroy")
+	purego.RegisterLibFunc(&a.pdDestroy, h, "agxps_aps_profile_data_destroy")
 	purego.RegisterLibFunc(&a.kicksNum, h, "agxps_aps_profile_data_get_kicks_num")
 	for _, n := range []string{"start", "end", "software_id", "telemetry"} {
 		var f func(uintptr, *uint64, uint64, uint64) bool
@@ -144,13 +146,8 @@ func TestKickAttributionFields(t *testing.T) {
 	var pinner runtime.Pinner
 	pinner.Pin(d)
 	defer pinner.Unpin()
-	p := a.parserCreate(unsafe.Pointer(d))
-	if p == 0 {
-		t.Fatal("parser_create returned null")
-	}
-	defer a.parserDestroy(p)
-
 	totalSW := map[uint64]int{}
+	totalID := map[uint32]int{}
 	totalDM := map[uint32]int{}
 	totalSlot := map[uint16]int{}
 	var totalKicks int
@@ -164,15 +161,23 @@ func TestKickAttributionFields(t *testing.T) {
 			t.Logf("%s: empty", filepath.Base(path))
 			continue
 		}
+		p := a.parserCreate(unsafe.Pointer(d))
+		if p == 0 {
+			t.Errorf("%s: parser_create returned null", filepath.Base(path))
+			continue
+		}
 		var perr uint32
 		pd := a.parserParse(p, unsafe.Pointer(&data[0]), uint64(len(data)), 1, &perr)
 		if pd == 0 {
 			t.Logf("%s: parse failed err=%d", filepath.Base(path), perr)
+			a.parserDestroy(p)
 			continue
 		}
 		nk := a.kicksNum(pd)
 		if nk == 0 {
 			t.Logf("%s: %d bytes, 0 kicks (expected for the off half of the 5-on/5-off pattern)", filepath.Base(path), len(data))
+			a.pdDestroy(pd)
+			a.parserDestroy(p)
 			continue
 		}
 		sw := make([]uint64, nk)
@@ -193,6 +198,7 @@ func TestKickAttributionFields(t *testing.T) {
 		t.Logf("%s: %d bytes, kicks=%d err=%d (ok sw=%v tel=%v dm=%v slot=%v miss=%v)",
 			filepath.Base(path), len(data), nk, perr, okSW, okTel, okDM, okSlot, okMiss)
 		t.Logf("  data_master: %s", fmtHist(histogram(dm), func(a, b uint32) bool { return a < b }))
+		t.Logf("  kick_id:     %s", fmtHist(histogram(id), func(a, b uint32) bool { return a < b }))
 		t.Logf("  kick_slot:   %s", fmtHist(histogram(slot), func(a, b uint16) bool { return a < b }))
 		swh := histogram(sw)
 		if len(swh) <= 64 {
@@ -293,6 +299,9 @@ func TestKickAttributionFields(t *testing.T) {
 		for k, v := range swh {
 			totalSW[k] += v
 		}
+		for k, v := range histogram(id) {
+			totalID[k] += v
+		}
 		for k, v := range histogram(dm) {
 			totalDM[k] += v
 		}
@@ -300,9 +309,20 @@ func TestKickAttributionFields(t *testing.T) {
 			totalSlot[k] += v
 		}
 		totalKicks += int(nk)
+		a.pdDestroy(pd)
+		a.parserDestroy(p)
 	}
 	t.Logf("TOTAL kicks=%d", totalKicks)
+	t.Logf("TOTAL kick_id:     %s", fmtHist(totalID, func(a, b uint32) bool { return a < b }))
 	t.Logf("TOTAL data_master: %s", fmtHist(totalDM, func(a, b uint32) bool { return a < b }))
 	t.Logf("TOTAL kick_slot:   %s", fmtHist(totalSlot, func(a, b uint16) bool { return a < b }))
-	t.Logf("TOTAL software_id distinct=%d", len(totalSW))
+	t.Logf("TOTAL software_id: %s", fmtHist(totalSW, func(a, b uint64) bool { return a < b }))
+	softwareIDHigh := make(map[uint32]int)
+	softwareIDLow := make(map[uint32]int)
+	for softwareID, count := range totalSW {
+		softwareIDHigh[uint32(softwareID>>32)] += count
+		softwareIDLow[uint32(softwareID)] += count
+	}
+	t.Logf("TOTAL software_id high32: %s", fmtHist(softwareIDHigh, func(a, b uint32) bool { return a < b }))
+	t.Logf("TOTAL software_id low32:  %s", fmtHist(softwareIDLow, func(a, b uint32) bool { return a < b }))
 }

@@ -16,6 +16,7 @@ package agxps
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"sync"
 	"unsafe"
 
@@ -173,21 +174,18 @@ func (p *Parser) Parse(data []byte) (ProfileData, error) {
 	if len(data) == 0 {
 		return 0, fmt.Errorf("empty data")
 	}
-	var pd gtshaderprofiler.AGXPSProfileData
-	result, err := gtshaderprofiler.Agxps_aps_parser_parse(
-		gtshaderprofiler.AGXPSParserHandle(p.handle),
-		unsafe.Pointer(&data[0]),
-		uint64(len(data)),
-		&pd,
-	)
+	if p == nil || p.handle == 0 {
+		return 0, fmt.Errorf("invalid parser")
+	}
+	a, err := loadCounterShapeAPI()
 	if err != nil {
-		return 0, fmt.Errorf("parse: %w", err)
+		return 0, err
 	}
-	if result != 0 {
-		return 0, fmt.Errorf("parse failed with code %d", result)
-	}
-	if pd == 0 {
-		return 0, fmt.Errorf("parse returned zero profile data")
+	var parseError uint32
+	pd := a.parserParse(uintptr(p.handle), unsafe.Pointer(&data[0]), uint64(len(data)), 1, &parseError)
+	runtime.KeepAlive(data)
+	if pd == 0 || parseError != 0 {
+		return 0, fmt.Errorf("parse failed with code %d", parseError)
 	}
 	return ProfileData(pd), nil
 }

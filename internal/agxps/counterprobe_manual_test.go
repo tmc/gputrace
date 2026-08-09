@@ -513,9 +513,6 @@ func TestCounterFileFanout(t *testing.T) {
 
 	var pin runtime.Pinner
 	defer pin.Unpin()
-	p := counterProbeParser(t, a, &pin, 0)
-	defer a.parserDestroy(p)
-
 	ents, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -527,16 +524,24 @@ func TestCounterFileFanout(t *testing.T) {
 		}
 	}
 	sort.Slice(files, func(i, j int) bool { return fileIndex(files[i]) < fileIndex(files[j]) })
+	var (
+		minSystemTimestamp  uint64
+		maxSystemTimestamp  uint64
+		filesWithTimestamps int
+	)
 	for _, f := range files {
+		p := counterProbeParser(t, a, &pin, 0)
 		data, err := os.ReadFile(dir + "/" + f)
 		if err != nil {
 			t.Errorf("%s: %v", f, err)
+			a.parserDestroy(p)
 			continue
 		}
 		var perr uint32
 		pd := a.parserParse(p, unsafe.Pointer(&data[0]), uint64(len(data)), 1, &perr)
 		if pd == 0 {
 			t.Logf("%-18s %10d bytes: parse null err=%d", f, len(data), perr)
+			a.parserDestroy(p)
 			continue
 		}
 		nc := a.pdCounterNum(pd)
@@ -549,10 +554,51 @@ func TestCounterFileFanout(t *testing.T) {
 				}
 			}
 		}
-		t.Logf("%-18s %10d bytes: err=%d tokens=%d bits=%d chunksFailed=%d parseErrs=%d kicks=%d esl=%d counters=%d samples=%d",
+		var shardMinSystemTimestamp, shardMaxSystemTimestamp uint64
+		var timestampDescents int
+		var distinctSystemTimestamps int
+		nsys := a.pdSysTSNum(pd)
+		if nsys > 0 {
+			timestamps := make([]uint64, nsys)
+			if !a.pdSysTS(pd, &timestamps[0], 0, nsys) {
+				t.Errorf("%s: read %d system timestamps", f, nsys)
+			} else {
+				shardMinSystemTimestamp = timestamps[0]
+				shardMaxSystemTimestamp = timestamps[0]
+				seen := make(map[uint64]struct{})
+				for i, timestamp := range timestamps {
+					seen[timestamp] = struct{}{}
+					if timestamp < shardMinSystemTimestamp {
+						shardMinSystemTimestamp = timestamp
+					}
+					if timestamp > shardMaxSystemTimestamp {
+						shardMaxSystemTimestamp = timestamp
+					}
+					if i > 0 && timestamp < timestamps[i-1] {
+						timestampDescents++
+					}
+				}
+				distinctSystemTimestamps = len(seen)
+				if filesWithTimestamps == 0 || shardMinSystemTimestamp < minSystemTimestamp {
+					minSystemTimestamp = shardMinSystemTimestamp
+				}
+				if filesWithTimestamps == 0 || shardMaxSystemTimestamp > maxSystemTimestamp {
+					maxSystemTimestamp = shardMaxSystemTimestamp
+				}
+				filesWithTimestamps++
+			}
+		}
+		t.Logf("%-18s %10d bytes: err=%d tokens=%d bits=%d chunksFailed=%d parseErrs=%d kicks=%d esl=%d systemTS=%d distinct=%d range=[%d,%d] descents=%d counters=%d samples=%d",
 			f, len(data), perr, a.pdParsedTokens(pd), a.pdParsedBits(pd),
-			a.pdChunksFailed(pd), a.pdParseErrsNum(pd), a.pdKicksNum(pd), a.pdESLNum(pd), nc, samples)
+			a.pdChunksFailed(pd), a.pdParseErrsNum(pd), a.pdKicksNum(pd), a.pdESLNum(pd),
+			nsys, distinctSystemTimestamps, shardMinSystemTimestamp, shardMaxSystemTimestamp,
+			timestampDescents, nc, samples)
 		a.pdDestroy(pd)
+		a.parserDestroy(p)
+	}
+	if filesWithTimestamps > 0 {
+		t.Logf("system timestamp union: files=%d range=[%d,%d] span=%d", filesWithTimestamps,
+			minSystemTimestamp, maxSystemTimestamp, maxSystemTimestamp-minSystemTimestamp)
 	}
 }
 
@@ -574,8 +620,6 @@ func TestCounterAggregate(t *testing.T) {
 	a.initialize()
 	var pin runtime.Pinner
 	defer pin.Unpin()
-	p := counterProbeParser(t, a, &pin, 0)
-	defer a.parserDestroy(p)
 
 	ents, err := os.ReadDir(dir)
 	if err != nil {
@@ -597,21 +641,25 @@ func TestCounterAggregate(t *testing.T) {
 	sums := map[string]*agg{}
 	var order []string
 	for _, f := range files {
+		p := counterProbeParser(t, a, &pin, 0)
 		data, err := os.ReadFile(dir + "/" + f)
 		if err != nil {
 			t.Errorf("%s: %v", f, err)
+			a.parserDestroy(p)
 			continue
 		}
 		var perr uint32
 		pd := a.parserParse(p, unsafe.Pointer(&data[0]), uint64(len(data)), 1, &perr)
 		if pd == 0 {
 			t.Logf("%s: parse null err=%d", f, perr)
+			a.parserDestroy(p)
 			continue
 		}
 		nc := a.pdCounterNum(pd)
 		if nc == 0 {
 			t.Logf("%s: zero counters", f)
 			a.pdDestroy(pd)
+			a.parserDestroy(p)
 			continue
 		}
 		names := make([]uint64, nc)
@@ -642,6 +690,7 @@ func TestCounterAggregate(t *testing.T) {
 		}
 		t.Logf("%-18s %10d bytes: counters=%d err=%d", f, len(data), nc, perr)
 		a.pdDestroy(pd)
+		a.parserDestroy(p)
 	}
 	sort.Strings(order)
 	t.Logf("=== %d distinct counters across %d files ===", len(order), len(files))
