@@ -18,6 +18,10 @@ type CounterDecodeConfig struct {
 	Variant        uint32
 	Revision       uint32
 	UarchBehaviour int32
+	PulsePeriod    uint32
+	EraPeriod      uint32
+	CountPeriod    uint32
+	ParseFlags     uint32
 }
 
 // CounterProfileShape contains only arrays that GTShaderProfiler copies into
@@ -62,9 +66,6 @@ type counterShapeAPI struct {
 	gpuCreate       func(generation, variant, revision, exact uint32) uintptr
 	gpuIsValid      func(uintptr) bool
 	gpuDestroy      func(uintptr)
-	pulsePeriod     func(uintptr, uint64) uint32
-	eraPeriod       func(uintptr, uint64) uint32
-	countPeriod     func(uintptr, uint64) uint32
 	parserCreate    func(unsafe.Pointer) uintptr
 	parserIsValid   func(uintptr) bool
 	parserParse     func(uintptr, unsafe.Pointer, uint64, uint32, *uint32) uintptr
@@ -98,9 +99,6 @@ func loadCounterShapeAPI() (*counterShapeAPI, error) {
 		{"agxps_gpu_create", &a.gpuCreate},
 		{"agxps_gpu_is_valid", &a.gpuIsValid},
 		{"agxps_gpu_destroy", &a.gpuDestroy},
-		{"agxps_aps_get_valid_pulse_period", &a.pulsePeriod},
-		{"agxps_aps_get_valid_era_period", &a.eraPeriod},
-		{"agxps_aps_get_valid_count_period", &a.countPeriod},
 		{"agxps_aps_parser_create", &a.parserCreate},
 		{"agxps_aps_parser_is_valid", &a.parserIsValid},
 		{"agxps_aps_parser_parse", &a.parserParse},
@@ -143,6 +141,12 @@ func DecodeCounterProfileShape(data []byte, config CounterDecodeConfig) (*Counte
 	if config.Generation == 0 {
 		return nil, errors.New("agxps: GPU generation is required")
 	}
+	if config.PulsePeriod == 0 || config.EraPeriod == 0 || config.CountPeriod == 0 {
+		return nil, errors.New("agxps: pulse, era, and count periods are required")
+	}
+	if config.ParseFlags == 0 {
+		return nil, errors.New("agxps: parse flags are required")
+	}
 	a, err := loadCounterShapeAPI()
 	if err != nil {
 		return nil, err
@@ -157,8 +161,8 @@ func DecodeCounterProfileShape(data []byte, config CounterDecodeConfig) (*Counte
 	defer a.gpuDestroy(gpu)
 
 	descriptor := &counterDescriptor{
-		GPU: gpu, PulsePeriod: a.pulsePeriod(gpu, 0), EraPeriod: a.eraPeriod(gpu, 0),
-		CountPeriod: a.countPeriod(gpu, 0), ChunkSize: 0x1000,
+		GPU: gpu, PulsePeriod: config.PulsePeriod, EraPeriod: config.EraPeriod,
+		CountPeriod: config.CountPeriod, ChunkSize: 0x1000,
 		CounterUarchBehaviour: config.UarchBehaviour,
 		MaxTimestamp:          ^uint64(0), MaxParseErrorCount: 50,
 	}
@@ -172,7 +176,7 @@ func DecodeCounterProfileShape(data []byte, config CounterDecodeConfig) (*Counte
 	defer a.parserDestroy(parser)
 
 	var parseError uint32
-	profile := a.parserParse(parser, unsafe.Pointer(&data[0]), uint64(len(data)), 1, &parseError)
+	profile := a.parserParse(parser, unsafe.Pointer(&data[0]), uint64(len(data)), config.ParseFlags, &parseError)
 	runtime.KeepAlive(data)
 	if profile == 0 {
 		return nil, fmt.Errorf("agxps: parse counter shard: code %d", parseError)

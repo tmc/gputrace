@@ -18,7 +18,7 @@ import (
 // Reproduce the parity-asymmetric-perfdata result with:
 //
 //	GPUTRACE_PROBE_COUNTERS_DIR=path/to/.gpuprofiler_raw \
-//	GPUTRACE_PROBE_GPU=16,6,1,0 \
+//	GPUTRACE_PROBE_GPU=16,6,1,0,16,64,128,1 \
 //	go test ./internal/counter -run TestDecodeAPSCounterShardPopulation -v
 func TestDecodeAPSCounterShardPopulation(t *testing.T) {
 	dir := os.Getenv("GPUTRACE_PROBE_COUNTERS_DIR")
@@ -26,9 +26,10 @@ func TestDecodeAPSCounterShardPopulation(t *testing.T) {
 		t.Skip("set GPUTRACE_PROBE_COUNTERS_DIR and GPUTRACE_PROBE_GPU")
 	}
 	var config APSGPUConfig
-	if n, err := fmt.Sscanf(os.Getenv("GPUTRACE_PROBE_GPU"), "%d,%d,%d,%d",
-		&config.Generation, &config.Variant, &config.Revision, &config.CounterUarchBehaviour); err != nil || n != 4 {
-		t.Fatalf("GPUTRACE_PROBE_GPU must be generation,variant,revision,uarch: parsed %d fields: %v", n, err)
+	if n, err := fmt.Sscanf(os.Getenv("GPUTRACE_PROBE_GPU"), "%d,%d,%d,%d,%d,%d,%d,%d",
+		&config.Generation, &config.Variant, &config.Revision, &config.CounterUarchBehaviour,
+		&config.PulsePeriod, &config.EraPeriod, &config.CountPeriod, &config.ParseFlags); err != nil || n != 8 {
+		t.Fatalf("GPUTRACE_PROBE_GPU must be generation,variant,revision,uarch,pulse,era,count,flags: parsed %d fields: %v", n, err)
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {

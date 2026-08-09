@@ -10,7 +10,8 @@ import "github.com/tmc/gputrace/internal/agxps"
 func DecodeAPSCounterShard(data []byte, config APSGPUConfig) (*APSCounterShard, error) {
 	shape, err := agxps.DecodeCounterProfileShape(data, agxps.CounterDecodeConfig{
 		Generation: config.Generation, Variant: config.Variant, Revision: config.Revision,
-		UarchBehaviour: config.CounterUarchBehaviour,
+		UarchBehaviour: config.CounterUarchBehaviour, PulsePeriod: config.PulsePeriod,
+		EraPeriod: config.EraPeriod, CountPeriod: config.CountPeriod, ParseFlags: config.ParseFlags,
 	})
 	if err != nil {
 		return nil, err

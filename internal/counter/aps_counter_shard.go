@@ -18,9 +18,13 @@ var ErrAPSCounterValuesBinding = errors.New("counter: GTShaderProfiler has no sa
 // APSGPUConfig identifies the GPU used to decode an APS counter shard.
 // Values must come from the capture or device; the decoder does not guess them.
 type APSGPUConfig struct {
-	Generation uint32
-	Variant    uint32
-	Revision   uint32
+	Generation  uint32
+	Variant     uint32
+	Revision    uint32
+	PulsePeriod uint32
+	EraPeriod   uint32
+	CountPeriod uint32
+	ParseFlags  uint32
 
 	// CounterUarchBehaviour is passed through to the APS descriptor. [?] Its
 	// selection rule is not established, so callers must provide it explicitly.
