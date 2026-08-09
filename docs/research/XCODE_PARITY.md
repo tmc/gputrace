@@ -268,6 +268,34 @@ computes, not export noise.
    approach)" while the values come from streamData, which is how a wrong
    provenance label kept this in place.
 
+   `[V]` **Refuted 2026-08-09: the framework will not supply the owner.**
+   Disassembly of `agxps_trace_mtl_command_encoder_add_kick` shows it
+   bounds-checks a caller-supplied `(encoderIndex, kickIndex)` pair and stores
+   it. The exported profile-data accessor population carries kick, clique,
+   tile, timestamp and counter accessors and **no encoder or pipeline
+   accessor**. Xcode knows the encoder association because Xcode supplied it at
+   trace-build time; APS decoding does not recover one. This kills the
+   hypothesis that Xcode's own decoder resolves owner, clock and unit together
+   — it resolves clock and unit, but the owner was never in the counter data.
+
+   `[V]` **Refuted 2026-08-09: kick ids do not bridge to the GPRWCNTR stream.**
+   `GPRWCNTRSample` carries both `EncoderID` and `KickTraceID`, which makes
+   `Counters_f` `kick_id` → `KickTraceID` → `EncoderID` the obvious candidate.
+   On `parity-asymmetric-perfdata` the whole 927-value `kick_id` population
+   intersects the 49 distinct GPR `KickTraceID`s **zero** times. The packed-pair
+   reading was tested too: all 69 high-32 values against `EncoderID` and all 129
+   low-32 values against `KickTraceID`, both empty. The capture is not
+   signal-free — 3,389 timeline GPRWCNTR samples and 48 attributed
+   CounterArchive rows — so this is a real negative and not an artifact of an
+   unsampled workload.
+
+   `[D]` The refutation is bounded to one capture and must not be generalized
+   to the method. That capture's dispatches fall below the sampler threshold,
+   and its 927 `kick_id`s against 49 GPR kick ids is a large enough asymmetry to
+   suggest two different id spaces rather than a failed join within one. Two
+   captures are what caught that the Execution Cost residual was 2.941 pp and
+   not the 0.911 pp one trace showed; one capture has never been enough here.
+
    Next step: HOLD — a non-positional owner join, resolved metric/unit/scope,
    timestamp-domain proof, and capture-matched Xcode oracle comparison are all
    still required (`[D]`), but they are the problems that appear *after* a
