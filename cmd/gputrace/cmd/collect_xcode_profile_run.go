@@ -2164,13 +2164,45 @@ func exportTrace(ctx context.Context, appAX, windowAX uintptr, outputPath string
 	return nil
 }
 
+// maxFileExportProbes bounds how many times File is opened while waiting for
+// Export to become enabled, independent of the caller's timeout.
+const maxFileExportProbes = 20
+
+// fileExportProbeDelay returns how long to wait before probe attempt+1, given
+// that attempt has just failed with Export disabled. Attempts are 1-based.
+//
+// The delay doubles from 500ms to a ceiling of 8s. Over a two-minute wait that
+// is 19 probes rather than the 240 a fixed 500ms interval produced.
+func fileExportProbeDelay(attempt int) time.Duration {
+	const (
+		base = 500 * time.Millisecond
+		max  = 8 * time.Second
+	)
+	delay := base
+	for range attempt - 1 {
+		delay *= 2
+		if delay >= max {
+			return max
+		}
+	}
+	return delay
+}
+
 // clickFileExportWhenEnabled retries a single File > Export action while
 // Xcode finishes preparing performance data. Each attempt opens and closes
 // File once; the successful attempt presses Export exactly once.
+//
+// Opening the menu is the only way to read whether Export is enabled, so every
+// probe is also a UI action: the menu bar opens, takes key focus, and closes.
+// This polled at a fixed 500ms, so a large trace that kept Export disabled for
+// the full two-minute window flashed the File menu about 240 times and made the
+// machine unusable -- keystrokes went to the menu instead of to the user's
+// other applications. Waiting is not free when the wait is performed by
+// touching the UI, so back off and cap the attempts.
 func clickFileExportWhenEnabled(ctx context.Context, appAX, windowAX uintptr, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
-	for {
+	for attempt := 1; ; attempt++ {
 		err := clickMenuItemForWindow(appAX, windowAX, []string{"File", "Export..."})
 		if err == nil {
 			return nil
@@ -2179,10 +2211,13 @@ func clickFileExportWhenEnabled(ctx context.Context, appAX, windowAX uintptr, ti
 			return err
 		}
 		lastErr = err
+		if attempt >= maxFileExportProbes {
+			return fmt.Errorf("File > Export still disabled after %d probes: %w", attempt, lastErr)
+		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("timed out waiting for File > Export: %w", lastErr)
 		}
-		if err := waitForAutomation(ctx, 500*time.Millisecond); err != nil {
+		if err := waitForAutomation(ctx, fileExportProbeDelay(attempt)); err != nil {
 			return err
 		}
 	}

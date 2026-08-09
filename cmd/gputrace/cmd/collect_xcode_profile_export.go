@@ -956,6 +956,7 @@ func waitForRestoredRecoverySource(ctx context.Context, appAX uintptr, recovery 
 
 func waitForFinalizedRecoveryPerformance(ctx context.Context, appAX uintptr, recovery standaloneExportRecovery, geometryKey string, deadline time.Time) (uintptr, error) {
 	stable := 0
+	probes := 0
 	var lastKey string
 	var lastErr error
 	for {
@@ -974,17 +975,6 @@ func waitForFinalizedRecoveryPerformance(ctx context.Context, appAX uintptr, rec
 			}
 		}
 		if err == nil {
-			found, enabled, menuErr := fileExportMenuState(appAX, window.Element)
-			switch {
-			case menuErr != nil:
-				err = menuErr
-			case !found:
-				err = fmt.Errorf("File > Export disappeared after Show Performance")
-			case !enabled:
-				err = fmt.Errorf("File > Export remains disabled after Show Performance")
-			}
-		}
-		if err == nil {
 			key := standaloneRecoveryWindowKey(window)
 			if key == lastKey {
 				stable++
@@ -997,8 +987,31 @@ func waitForFinalizedRecoveryPerformance(ctx context.Context, appAX uintptr, rec
 			stable = 0
 			lastErr = err
 		}
+		// The File > Export probe opens the menu bar, so it runs only once the
+		// cheap non-mutating signals above have gone stable. Probing it on every
+		// poll opened and closed the File menu twice a second for the whole
+		// wait, which takes key focus away from whatever else is running.
 		if stable >= 2 {
-			return window.Element, nil
+			if probes >= maxFileExportProbes {
+				return 0, recoveryTimeoutError(
+					fmt.Sprintf("File > Export never became export-ready in %d probes", probes), lastErr)
+			}
+			probes++
+			found, enabled, menuErr := fileExportMenuState(appAX, window.Element)
+			switch {
+			case menuErr != nil:
+				err = menuErr
+			case !found:
+				err = fmt.Errorf("File > Export disappeared after Show Performance")
+			case !enabled:
+				err = fmt.Errorf("File > Export remains disabled after Show Performance")
+			}
+			if err == nil {
+				return window.Element, nil
+			}
+			lastErr = err
+			lastKey = ""
+			stable = 0
 		}
 		if time.Now().After(deadline) {
 			return 0, recoveryTimeoutError("timed out waiting for export-ready Performance after Show Performance", lastErr)
