@@ -118,6 +118,49 @@ The exporter gaps are:
 - effective GPU time: `ReplayerGPUTime` is archived as zero for this trace, so
   gputrace keeps reporting the command-buffer active-time fallback.
 
+## Two APS signatures were wrong, and one wrote to a wild address
+
+`[V]` Established 2026-08-09 by disassembly, independently reproduced by the
+session that maintains the bindings. Commit `1e95552` in this repository
+describes the first of these as "fail-closed by accident". That undersells it;
+the corrected account is here.
+
+- `agxps_aps_parser_parse` takes five parameters and returns the profile
+  pointer in `x0`. It was declared with four and an out-parameter. Two things
+  followed. A successful parse returned a non-null pointer that the caller read
+  as a nonzero error code, so `agxps.Parser.Parse` could never succeed — that
+  part is the accidental fail-closed behaviour. But the null-parser branch does
+  `str w8, [x4]`, and purego never set `x4`, so the error store went to
+  whatever that register happened to hold: **a stray four-byte write to an
+  arbitrary address**, not merely a misread return value.
+
+- `agxps_aps_profile_data_get_counter_values` **does** fill the caller's
+  buffer, with exactly `count` eight-byte words. Every word is a sample
+  vector's `begin()` pointer, loaded from a 24-byte record indexed by counter
+  ordinal; `get_counter_values_num` reads `(end-begin)>>3` from the same
+  record. So the pair is (begin pointer, element count) and the declared bulk
+  copy is a semantic defect rather than an ABI or memory-safety one. This is
+  the more dangerous shape: nothing crashes, nothing is left uninitialised, and
+  a caller asking "did the framework write my buffer" gets yes. The values are
+  addresses.
+
+  `[V]` `get_counter_names` is *not* affected — it copies the counter-ID vector
+  element by element, so its `unsigned long long *out` is correct. Only
+  `get_counter_values` does the record lookup.
+
+`[V]` These are not generator heuristics and nothing was name-derived.
+GTShaderProfiler ships no headers, so its signatures are hand-authored manifest
+data that the generator rendered faithfully. `get_counter_values` even carried
+evidence — "live capture" — which was true of the call shape and silent on the
+meaning. The durable lesson is the manifest's own, extended: shape evidence is
+not width evidence, and is not semantic evidence. Both entries now record the
+disassembly address.
+
+The replacement binding is `CounterValuesSlice(p, counterIndex) ([]uint64,
+error)`: a function rather than a method, since `AGXPSProfileData` aliases
+`uintptr`; bounded against `get_counter_num`; refusing a null begin pointer or
+an over-ceiling count; copying rather than aliasing framework storage.
+
 ## Generated Signature Risks
 
 The generated surface is present, but some signatures need a narrow adapter
