@@ -80,7 +80,7 @@ func fileExportMenuState(app, window uintptr) (found, enabled bool, err error) {
 			if err := axAction(fileMenu, "AXPress"); err != nil {
 				return fmt.Errorf("open File menu: %w", err)
 			}
-			return nil
+			return waitForMenuOpen(fileMenu)
 		},
 		state: func() (bool, bool, error) {
 			var matches []uintptr
@@ -103,6 +103,34 @@ func fileExportMenuState(app, window uintptr) (found, enabled bool, err error) {
 			return closeAXMenuForWindow(app, window, fileMenu)
 		},
 	})
+}
+
+// waitForMenuOpen reports whether the menu actually began tracking.
+//
+// AXPress on a menu bar item returns kAXErrorSuccess whether or not a menu
+// tracking session starts: the press is accepted, `AXExpanded` stays false, and
+// no menu opens. Treating that success as "the menu is open" makes the caller
+// enumerate the children of a menu that never opened and read a stale
+// `AXEnabled` off them, so the export probe concludes Export is disabled and
+// spends its whole attempt budget on an answer it can never revise. That
+// presents as a timeout and never as a failure, which is why it went unnoticed.
+//
+// Establishing the press succeeded is therefore not the check; observing
+// AXExpanded is.
+func waitForMenuOpen(menu uintptr) error {
+	var lastErr error
+	for range 20 {
+		expanded, err := axBoolAttribute(menu, "AXExpanded")
+		if err == nil && expanded {
+			return nil
+		}
+		lastErr = err
+		time.Sleep(25 * time.Millisecond)
+	}
+	if lastErr != nil {
+		return fmt.Errorf("verify File menu opened after AXPress: %w", lastErr)
+	}
+	return fmt.Errorf("File menu did not open after AXPress reported success (menu_open=false)")
 }
 
 // windowGeometryIdentity returns a pid-and-geometry fingerprint for a window,
