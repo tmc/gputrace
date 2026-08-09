@@ -105,10 +105,42 @@ func fileExportMenuState(app, window uintptr) (found, enabled bool, err error) {
 	})
 }
 
+// windowGeometryIdentity returns a pid-and-geometry fingerprint for a window,
+// and reports whether it is usable. A zero-sized window yields no identity: a
+// key built from zeros compares equal to every other such key, which would turn
+// the scoping check below into one that cannot fail.
+func windowGeometryIdentity(window uintptr) (string, bool) {
+	var pid int32
+	if axUIElementGetPid(window, &pid) != kAXErrorSuccess || pid == 0 {
+		return "", false
+	}
+	if width, height := axSize(window); width <= 0 || height <= 0 {
+		return "", false
+	}
+	return recoveryGeometryKeyForElement(window, int(pid)), true
+}
+
+// requireFocusedWindow refuses a File menu action that is not scoped to the
+// selected Xcode window.
+//
+// Identity is normally the window-server id. `_AXUIElementGetWindow` is private
+// and fails on a trace window while Xcode is building the Performance view: the
+// element is live and correct, but its id is briefly unresolvable. Failing the
+// export there is wrong, so fall back to a pid-and-geometry fingerprint.
+//
+// The fallback is deliberately the second choice. Two windows stacked at
+// identical geometry would compare equal, so it is only reached when the strong
+// check is unavailable, and it refuses to run at all on a window with no usable
+// geometry rather than silently admitting everything.
 func requireFocusedWindow(app, window uintptr) error {
-	wantID, err := getWindowID(window)
-	if err != nil {
-		return fmt.Errorf("read selected Xcode window identity: %w", err)
+	wantID, idErr := getWindowID(window)
+	var wantKey string
+	if idErr != nil {
+		key, ok := windowGeometryIdentity(window)
+		if !ok {
+			return fmt.Errorf("read selected Xcode window identity: %w", idErr)
+		}
+		wantKey = key
 	}
 	for _, attr := range []string{"AXFocusedWindow", "AXMainWindow"} {
 		var candidate uintptr
@@ -118,11 +150,21 @@ func requireFocusedWindow(app, window uintptr) error {
 		if ret != kAXErrorSuccess || candidate == 0 {
 			continue
 		}
-		gotID, candidateErr := getWindowID(candidate)
+		var matched bool
+		if idErr == nil {
+			gotID, candidateErr := getWindowID(candidate)
+			matched = candidateErr == nil && gotID == wantID
+		} else if gotKey, ok := windowGeometryIdentity(candidate); ok {
+			matched = gotKey == wantKey
+		}
 		cfRelease(candidate)
-		if candidateErr == nil && gotID == wantID {
+		if matched {
 			return nil
 		}
+	}
+	if idErr != nil {
+		return fmt.Errorf("File menu operation is not scoped to the selected Xcode window "+
+			"(window id unavailable: %v; geometry %s)", idErr, wantKey)
 	}
 	return fmt.Errorf("File menu operation is not scoped to the selected Xcode window %d", wantID)
 }
