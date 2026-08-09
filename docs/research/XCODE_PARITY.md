@@ -234,8 +234,44 @@ computes, not export noise.
 
 ## Order of work
 
-1. Establish a capture-backed pipeline-to-encoder identity join for
-   `Counters_f_*.raw` rows (`[V]`). Raw series transport works across all 40 shards (`[V]`), but binary parsing produces 18 pipeline rows for 23 encoders (`[V]`). The old exporter path was fail-closed (`f04175b`, `[V]`) because indexing by position could mislabel pipeline data as encoder data (`[D]`). Positional joins are strictly prohibited (`[D]`). Next step: HOLD — requires a non-positional owner join, resolved metric/unit/scope, timestamp-domain proof, and capture-matched Xcode oracle comparison (`[D]`).
+1. Decode `Counters_f_*.raw` at all, then establish a capture-backed
+   pipeline-to-encoder identity join for its rows.
+
+   `[V]` Corrected 2026-08-09. This item previously read "binary parsing
+   produces 18 pipeline rows for 23 encoders (`[V]`)" and held pending "a
+   non-positional owner join". Both halves were wrong, and the marker was
+   `[V]` on a claim nobody had traced through the code.
+
+   `[V]` No counter row is decoded. `parseCounterFileWithMetrics`
+   (`internal/counter/counter.go:239`) frames records, validates that at least
+   one parsed, and then returns `nil` for the metrics slice — the parsed
+   records are discarded at the return. `ParsePerfCounters`'s aggregation loop
+   therefore never runs and `ShaderMetrics` is empty.
+
+   `[V]` The 18 rows are not counter rows. `enhanceFromStreamData`
+   (`counter.go:815`) appends `streamData.Pipelines` when the pipeline count
+   exceeds the shader-metric count; since the latter is always zero, that
+   branch is not a fallback but the only path that ever populates
+   `ShaderMetrics`. The 18 is `len(streamData.Pipelines)` — compiler statistics
+   — so it is a fact about where the rows came from, not a clue about raw-row
+   identity. Raw series transport does work across all 40 shards (`[V]`); that
+   is transport, not decode.
+
+   `[V]` The prohibited join is already being performed. `EncoderIndex: i` in
+   `PopulateEncoderMetricsFromPerfCounterStats`
+   (`internal/counter/sampling.go:657`) assigns a pipeline row's slice index as
+   an encoder index. `internal/parity/observe.go` fails closed on exactly this
+   and is why parity never scored these columns, but
+   `cmd/gputrace/cmd/timeline.go:923` and
+   `internal/export/pprof_enhanced.go:485` consume the same function unguarded.
+   The block is commented "From binary parsing (gputrace-44 validated
+   approach)" while the values come from streamData, which is how a wrong
+   provenance label kept this in place.
+
+   Next step: HOLD — a non-positional owner join, resolved metric/unit/scope,
+   timestamp-domain proof, and capture-matched Xcode oracle comparison are all
+   still required (`[D]`), but they are the problems that appear *after* a
+   decode exists. Today there is no decoded row to own, clock, or unit.
 2. Resolve the counter-stream timebase (`[V]`). It converts 137 decoded series from
    unjoinable to scoreable, which is the only path to a large fraction of the
    83 unproduced columns (`[V]`).
