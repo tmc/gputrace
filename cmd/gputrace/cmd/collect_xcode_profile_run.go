@@ -66,17 +66,28 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 	defer cancel()
 
 	var activeWindowAX uintptr
+	var replayCompleted bool
 	defer func() {
-		if ctx.Err() != nil {
-			status := xcodeProfileStatusWriter()
-			fmt.Fprintf(status, "  Cancelling Xcode GPU workload due to CLI interrupt/timeout (%v)...\n", ctx.Err())
-			if activeWindowAX != 0 {
-				_ = stopWorkloadInWindow(activeWindowAX)
-				closeXcodeWindow(activeWindowAX)
-			} else {
-				_ = stopAllXcodeWorkloads(context.Background())
-				_ = closeAllXcodeWindows(context.Background())
-			}
+		if ctx.Err() == nil {
+			return
+		}
+		status := xcodeProfileStatusWriter()
+		// Once the replay has finished, the window holds the profile and is the
+		// only copy of it: a later step timing out is a reason to stop driving
+		// Xcode, not a reason to destroy the result. Closing here discarded a
+		// completed 53s profile when a downstream reacquire failed.
+		if replayCompleted {
+			fmt.Fprintf(status, "  Interrupted after the replay completed (%v); "+
+				"leaving the Xcode window open so the performance data survives.\n", ctx.Err())
+			return
+		}
+		fmt.Fprintf(status, "  Cancelling Xcode GPU workload due to CLI interrupt/timeout (%v)...\n", ctx.Err())
+		if activeWindowAX != 0 {
+			_ = stopWorkloadInWindow(activeWindowAX)
+			closeXcodeWindow(activeWindowAX)
+		} else {
+			_ = stopAllXcodeWorkloads(context.Background())
+			_ = closeAllXcodeWindows(context.Background())
 		}
 	}()
 
@@ -197,6 +208,7 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("replay wait failed: %w", err)
 		}
 		fmt.Fprintln(status, "    Profiling completed")
+		replayCompleted = true
 	} else {
 		// Step 3: Start replay
 		fmt.Fprintln(status, "  Step 3: Starting replay...")
@@ -210,6 +222,7 @@ func runCollectXcodeProfileFull(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("replay wait failed: %w", err)
 		}
 		fmt.Fprintln(status, "    Replay completed")
+		replayCompleted = true
 	}
 
 	if err := checkAutomationCanceled(ctx); err != nil {

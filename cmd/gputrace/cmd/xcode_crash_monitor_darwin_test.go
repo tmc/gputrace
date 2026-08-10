@@ -238,7 +238,12 @@ func TestWaitForXcodeCrashReportGraceExpires(t *testing.T) {
 
 func TestXcodeCrashMonitorCancelsAfterNoReportGrace(t *testing.T) {
 	dir := t.TempDir()
-	scope := crashScopeForTest("/Applications/Xcode.app", 987654)
+	// Not /Applications/Xcode.app: the monitor rebinds a scope whose processes
+	// have all exited onto the sole surviving instance of the same app, so a
+	// real Xcode running on the developer's machine gets adopted here and the
+	// grace never expires. The path only has to be one no live process reports.
+	appPath := filepath.Join(t.TempDir(), "Xcode.app")
+	scope := crashScopeForTest(appPath, 987654)
 	scope.mu.Lock()
 	scope.exitObserved = true
 	scope.exitAt = time.Now().Add(-time.Second)
@@ -261,7 +266,7 @@ func TestXcodeCrashMonitorCancelsAfterNoReportGrace(t *testing.T) {
 		t.Fatalf("cause = %T %v, want xcodeExitWithoutReportError",
 			context.Cause(ctx), context.Cause(ctx))
 	}
-	if exitErr.PID != 987654 || exitErr.AppPath != "/Applications/Xcode.app" {
+	if exitErr.PID != 987654 || exitErr.AppPath != appPath {
 		t.Fatalf("exit error = %+v", exitErr)
 	}
 }
