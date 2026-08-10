@@ -93,9 +93,37 @@ When enabled, traces include a `.gpuprofiler_raw` directory containing:
 | File | Format | Description |
 |------|--------|-------------|
 | `streamData` | NSKeyedArchiver plist | Pipeline metadata, dispatch timing, encoder timing |
-| `Counters_f_*.raw` | Binary | GPU counter samples (464-byte records) |
+| `Counters_f_*.raw` | Binary | Marker-scanned GPU counter data; marker-gap lengths vary and do not establish sample semantics |
 | `Profiling_f_*.raw` | Binary | Statistical profiling samples (Execution Cost) |
 | `Timeline_f_*.raw` | Binary | Timeline visualization event data |
+
+### Retraction: 464-byte sample records
+
+[V] The original 464-byte claim came from one capture: 87 of 262 gaps between
+the byte marker `4e 00 00 00` had length 464, and one file size, 121,104 bytes,
+was divisible by 464. Commits `5cf5616` and `c8ebbe8` promoted those arithmetic
+observations to a record and sample classification without an authenticated
+framing or semantic decode.
+
+[V] Commit `c3c972c` withdrew the classification after scanning the first five
+counter files in
+`qwen25-05b-staticmask-warm-tokens2-4-rep1-perfdata3.gputrace`: among roughly
+30,000 marker-delimited gaps it found no 464-byte gap, with 1742, 612, 671, and
+8192 among the common lengths. That original temporary capture is no longer
+present, so the exact scan cannot be rerun from the current checkout.
+
+[V] A scan using the current `internal/profilerraw.Records` marker algorithm on
+the disposable
+`counter-oracle-source-20260809-1020.gpuprofiler_raw` fixture found 8,783 gaps
+across 40 counter files, including 3,020 gaps of length 464 and 437 distinct
+lengths.
+
+[D] The occurrence and frequency of a 464-byte marker gap are capture-dependent.
+Neither its presence nor its absence proves that the gap is one GPU hardware
+sample, and marker scanning can split on the same byte sequence inside a
+payload. Consumers must not infer record or sample semantics from length alone.
+An authenticated framing definition or capture-matched semantic decode would
+falsify this boundary.
 
 ### streamData
 
