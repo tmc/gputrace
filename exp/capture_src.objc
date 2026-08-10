@@ -1,0 +1,83 @@
+// Copyright © 2026 gputrace authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license.
+
+#import <Foundation/Foundation.h>
+#import <Metal/Metal.h>
+#include <objc/runtime.h>
+#include <objc/message.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <pthread.h>
+
+#define DYLD_INTERPOSE(_replacement,_replacee) \
+   __attribute__((used)) static struct{ const void* replacement; const void* replacee; } _interpose_##_replacee \
+   __attribute__ ((section("__DATA,__interpose"))) = { (const void*)(unsigned long)&_replacement, (const void*)(unsigned long)&_replacee };
+
+static FILE* g_log_file = NULL;
+static pthread_mutex_t g_log_mutex = PTHREAD_MUTEX_INITIALIZER;
+static BOOL g_enabled = YES;
+
+static void gputrace_log_event(const char* event_type, const char* json_body) {
+    if (!g_enabled) return;
+    pthread_mutex_lock(&g_log_mutex);
+    if (!g_log_file) {
+        const char* path = getenv("GPUTRACE_OUTPUT_FILE");
+        if (!path || path[0] == '\0') {
+            path = "gputrace_events.json";
+        }
+        g_log_file = fopen(path, "w");
+        if (g_log_file) {
+            fprintf(g_log_file, "[\n");
+        }
+    }
+    if (g_log_file) {
+        static BOOL first = YES;
+        if (!first) {
+            fprintf(g_log_file, ",\n");
+        }
+        first = NO;
+        fprintf(g_log_file, "  {\"type\":\"%s\", \"pid\":%d, %s}", event_type, getpid(), json_body);
+        fflush(g_log_file);
+    }
+    pthread_mutex_unlock(&g_log_mutex);
+}
+
+__attribute__((constructor))
+static void gputrace_capture_init(void) {
+    const char* env_enabled = getenv("GPUTRACE_CAPTURE_ENABLED");
+    if (env_enabled && strcmp(env_enabled, "0") == 0) {
+        g_enabled = NO;
+    }
+    if (g_enabled) {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "\"timestamp\":%llu", (unsigned long long)time(NULL));
+        gputrace_log_event("init", buf);
+    }
+}
+
+__attribute__((destructor))
+static void gputrace_capture_fini(void) {
+    pthread_mutex_lock(&g_log_mutex);
+    if (g_log_file) {
+        fprintf(g_log_file, "\n]\n");
+        fclose(g_log_file);
+        g_log_file = NULL;
+    }
+    pthread_mutex_unlock(&g_log_mutex);
+}
+
+// Interpose MTLCreateSystemDefaultDevice
+static id (*orig_MTLCreateSystemDefaultDevice)(void) = MTLCreateSystemDefaultDevice;
+
+id my_MTLCreateSystemDefaultDevice(void) {
+    id dev = orig_MTLCreateSystemDefaultDevice();
+    if (dev) {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "\"device_name\":\"%s\"", [[dev name] UTF8String]);
+        gputrace_log_event("device_created", buf);
+    }
+    return dev;
+}
+
+DYLD_INTERPOSE(my_MTLCreateSystemDefaultDevice, MTLCreateSystemDefaultDevice);
