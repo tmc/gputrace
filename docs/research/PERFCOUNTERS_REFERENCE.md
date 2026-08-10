@@ -21,25 +21,62 @@ from `streamData` `pipelinePerformanceStatistics`, not from direct
 binding-gap note records that the likely `GTMioShaderBinaryData` path needs a
 safe adapter before it can be used in export paths.
 
+## Aliasing: the timeline counter dictionary has fewer counters than names
+
+[V] `ALU Total Instructions` and `ALUInstructions` are one measurement under two
+names. On the 413-draw recapture archive, `GTMioTimelineCounters` returns 30
+dictionary entries, and the two names return series that are equal element for
+element across all 108,734 samples, in both values and timestamps. The
+comparison is `slices.Equal` on both arrays, in
+`TestTimelineDrawDurations`/`checkTimelineCounters`.
+
+[V] The names really do select a series, so the identity above is a fact about
+the framework and not an artifact of the lookup. `counterForName:` returns nil
+for a name the dictionary does not hold: `ZZNotACounter` returns 0, and
+`Kernel ALU Instructions` -- a plausible name that is not a runtime counter here
+-- also returns 0. Without that control the identity would be vacuous, because a
+lookup that echoed the query into a wrapper over a default series would also
+pass the `counter.name == query` check that `readTimelineCounter` makes.
+
+[D] So a caller must not treat the 30 dictionary entries as 30 independent
+measurements. Summing over the dictionary double-counts by at least this pair,
+and listing it presents one counter as two. How many other entries alias is not
+established; only this pair has been compared.
+
 ## Retraction: the ÷27.75 Kernel Invocations scale
 
-Everything below that describes a 464-byte "sample record", an unsigned 32-bit
-Kernel Invocations field at offset `0x0064`, or a `÷ 27.75` scale on it, is
-WRONG and has been removed from the code. It is kept here as a record of a
-false lead, not as a description of the format.
+Everything below that assigns sample semantics to a 464-byte marker gap, an
+unsigned 32-bit Kernel Invocations field at offset `0x0064`, or a `÷ 27.75`
+scale on it is retracted and has been removed from the code. It is kept here as
+a record of a false lead, not as a description of the format.
 
 [V] The divisor was never measured. It was back-fitted from exactly one pair:
 raw `28,416` against `1,024` in one Xcode CSV export, and `28,416/1,024 = 27.75`
 exactly. No hardware quantity produces `111/4`, and no second observation of the
 pair was ever recorded, so the "VALIDATED" marks below were unearned.
 
-[V] The record size that gated it does not occur. Over the first five
+[V] In the capture used for the retraction, the record size that gated it did
+not occur. Over the first five
 `Counters_f_*.raw` of
-`/tmp/qwen25-05b-staticmask-warm-tokens2-4-rep1-perfdata3.gputrace` (~30,000
-records) not one record is 464 bytes; the common sizes are 1742, 612, 671 and
-8192. The branch therefore produced no metrics on real archives, and since
+`qwen25-05b-staticmask-warm-tokens2-4-rep1-perfdata3.gputrace` (roughly 30,000
+marker-delimited gaps) not one gap was 464 bytes; the common sizes were 1742,
+612, 671, and 8192. The original temporary capture is no longer present, so the
+exact scan cannot be rerun from the current checkout. The branch therefore
+produced no metrics on that archive, and since
 emission was gated on a non-zero invocation count, nothing downstream of it was
 ever displayed. Removing it changed no user-visible value.
+
+[V] The byte length itself is not absent universally. A scan using the current
+`internal/profilerraw.Records` marker algorithm on the disposable
+`counter-oracle-source-20260809-1020.gpuprofiler_raw` fixture found 8,783 gaps
+across 40 counter files, including 3,020 gaps of length 464 and 437 distinct
+lengths.
+
+[D] The surviving conclusion is semantic, not a universal size claim. A gap
+between occurrences of `4e 00 00 00` is not proven to be one hardware sample;
+the marker may also occur inside payload data. Length alone cannot classify a
+counter record or supply a field layout. An authenticated framing definition or
+capture-matched semantic decode would falsify this boundary.
 
 Real Kernel Invocations ground truth does exist — the Xcode counter-tab exports
 carry per-encoder values such as 8,058 and 11,297 — but no offset in

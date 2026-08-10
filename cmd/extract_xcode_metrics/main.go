@@ -17,6 +17,8 @@ import (
 	"github.com/tmc/apple/objc"
 	"github.com/tmc/apple/objc/objcinspect"
 	"github.com/tmc/apple/private/xcode/gtshaderprofiler"
+
+	"github.com/tmc/gputrace/internal/counter"
 )
 
 func check(id objc.ID, selector string, want reflect.Type, args ...any) {
@@ -159,7 +161,7 @@ func main() {
 					// Seed the extremes from the data, not from zero: a series
 					// that never rises above zero would otherwise report a max
 					// of zero regardless of what it holds.
-					vals, err := cnt.ValuesSlice()
+					vals, stamps, err := counter.CounterSeries(cnt)
 					if err != nil {
 						fmt.Fprintf(os.Stderr, "Withholding %s: %v\n", kStr, err)
 						withheldCounters++
@@ -177,12 +179,6 @@ func main() {
 					avgV := 0.0
 					if len(vals) > 0 {
 						avgV = sumV / float64(len(vals))
-					}
-					stamps, err := cnt.TimestampsSlice()
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "Withholding %s: %v\n", kStr, err)
-						withheldCounters++
-						continue
 					}
 					if len(stamps) != len(vals) {
 						fmt.Fprintf(os.Stderr, "Error: %s timestamps=%d values=%d\n", kStr, len(stamps), len(vals))

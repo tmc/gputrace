@@ -22,6 +22,7 @@ import (
 	"github.com/tmc/apple/objc"
 	"github.com/tmc/apple/objc/objcinspect"
 	"github.com/tmc/apple/private/xcode/gtshaderprofiler"
+	gtcounter "github.com/tmc/gputrace/internal/counter"
 	"github.com/tmc/gputrace/internal/parity"
 )
 
@@ -237,6 +238,18 @@ func checkTimelineCounters(t *testing.T, timeline objc.ID) {
 		reportTimelineCounterMetadata(t, check, counters, names)
 	}
 
+	// counterForName: has to be able to answer "no" before the identity
+	// comparison below means anything. If it echoed the query into a wrapper
+	// over some default series, every name would return a counter, the
+	// counter's own name would match the query, and any two names would
+	// compare equal. Asking for a name the dictionary cannot hold is what
+	// separates a real alias from that.
+	absent := counters.CounterForName(foundation.NewStringWithString("ZZNotACounter"))
+	if absent.GetID() != 0 {
+		t.Fatal("counterForName: returned a counter for a name that is not in the dictionary; " +
+			"names do not select a series and the identity check below is vacuous")
+	}
+
 	total := readTimelineCounter(t, check, counters, "ALU Total Instructions")
 	alu := readTimelineCounter(t, check, counters, "ALUInstructions")
 	if !slices.Equal(total.timestamps, alu.timestamps) || !slices.Equal(total.values, alu.values) {
@@ -293,9 +306,9 @@ func readTimelineCounter(t *testing.T, check func(objc.ID, string, reflect.Type,
 	checkCounterBufferExtent(t, name+" values", valuesPointer, count, unsafe.Sizeof(float64(0)))
 	checkCounterBufferExtent(t, name+" timestamps", stampsPointer, count, unsafe.Sizeof(uint64(0)))
 
-	stamps, err := counter.TimestampsSlice()
+	values, stamps, err := gtcounter.CounterSeries(counter)
 	if err != nil {
-		t.Fatalf("%s timestamps: %v", name, err)
+		t.Fatalf("%s series: %v", name, err)
 	}
 	if len(stamps) != int(count) {
 		t.Fatalf("%s timestamps = %d, want %d", name, len(stamps), count)
@@ -310,10 +323,6 @@ func readTimelineCounter(t *testing.T, check func(objc.ID, string, reflect.Type,
 	}
 	t.Logf("%s timestamp range=%d..%d", name, stamps[0], stamps[len(stamps)-1])
 
-	values, err := counter.ValuesSlice()
-	if err != nil {
-		t.Fatalf("%s values: %v", name, err)
-	}
 	if len(values) != int(count) {
 		t.Fatalf("%s values = %d, want %d", name, len(values), count)
 	}
