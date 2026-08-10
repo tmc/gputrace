@@ -34,6 +34,10 @@ func FormatTimingMetrics(metrics *TimingMetrics) string {
 // LowSampleMarker follows a row measured from a single dispatch.
 const LowSampleMarker = timing.LowSampleMarker
 
+// TimingSourceUnavailable marks a trace that carries no timing measurement at
+// all, as distinct from one measured approximately.
+const TimingSourceUnavailable = timing.TimingSourceUnavailable
+
 // LowSampleFootnote explains LowSampleMarker, or returns "" when unused.
 func LowSampleFootnote(timings []*KernelTiming) string {
 	return timing.LowSampleFootnote(timings)

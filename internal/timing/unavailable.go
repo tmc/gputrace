@@ -25,12 +25,13 @@ const TimingSourceUnavailable TimingSource = "unavailable"
 
 const unavailableTimingNote = "This trace carries no profiler payload and no capture-derived encoder\n" +
 	"timing, so per-function spans, call counts and shares are unavailable.\n" +
-	"The dispatches happened; this trace cannot say how long they took.\n" +
-	"\n" +
-	"Capture with --profile, or open a .gpuprofiler_raw export, to get timing.\n"
+	"The dispatches happened; this trace cannot say how long they took.\n"
 
 // UnavailableTimingNote explains an empty timing table. It is what the table
 // is replaced by, not a caption printed above one.
+//
+// It names no remedy. Which one applies depends on what the trace already holds
+// and on what is installed, so the caller that can see both says how to fix it.
 func UnavailableTimingNote() string {
 	return unavailableTimingNote
 }

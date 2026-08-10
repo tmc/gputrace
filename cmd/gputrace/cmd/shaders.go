@@ -134,6 +134,7 @@ func checkUnsortedCapture(tracePath string) bool {
 
 // runShadersNoCost shows shader names without cost percentages (no profiler data).
 func runShadersNoCost(tracePath string, opts *shadersOptions) error {
+	fmt.Fprint(os.Stderr, profileReplayHint(tracePath))
 	trace, err := gputrace.Open(tracePath)
 	if err != nil {
 		return fmt.Errorf("open trace: %w", err)
@@ -383,8 +384,7 @@ func runShadersFromProfiler(tracePath string, opts *shadersOptions) error {
 	profilerDir := profilerraw.FindDir(tracePath)
 
 	if profilerDir == "" {
-		fmt.Fprintf(os.Stderr, "Hint: To generate performance data, run:\n")
-		fmt.Fprintf(os.Stderr, "  gputrace xcode-profile run %s\n\n", tracePath)
+		fmt.Fprint(os.Stderr, profileReplayHint(tracePath))
 		return fmt.Errorf("no .gpuprofiler_raw directory found in %s (and unsorted-capture is missing)", tracePath)
 	}
 

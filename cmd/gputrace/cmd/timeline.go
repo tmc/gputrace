@@ -173,6 +173,7 @@ func runTimeline(cmd *cobra.Command, args []string, opts *timelineOptions) error
 	// Warn if trace timing data is missing or approximate
 	if timeline.Timing == nil || timeline.Timing.EncoderTimingApproximate || timeline.Timing.TimingSource == "" || timeline.Timing.TimingSource == "unavailable" {
 		fmt.Fprintf(cmd.ErrOrStderr(), "Warning: trace lacks precise hardware timing data; encoder/dispatch durations are estimated.\n")
+		fmt.Fprint(cmd.ErrOrStderr(), profileReplayHint(tracePath))
 	}
 
 	outputPath := timelineOutputPath(opts.format, opts.output)
@@ -3494,8 +3495,7 @@ func runTimelineFromProfiler(tracePath string, opts *timelineOptions) error {
 	profilerDir := profilerraw.FindDir(tracePath)
 
 	if profilerDir == "" {
-		fmt.Fprintf(os.Stderr, "Hint: To generate performance data, run:\n")
-		fmt.Fprintf(os.Stderr, "  gputrace xcode-profile run %s\n\n", tracePath)
+		fmt.Fprint(os.Stderr, profileReplayHint(tracePath))
 		return fmt.Errorf("no .gpuprofiler_raw directory found in %s (and unsorted-capture is missing)", tracePath)
 	}
 

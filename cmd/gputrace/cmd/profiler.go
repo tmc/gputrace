@@ -95,8 +95,6 @@ func runProfiler(cmd *cobra.Command, args []string, opts *profilerOptions) error
 
 	profilerDir, stats, err := loadProfilerStats(tracePath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Hint: To generate performance data, run:\n")
-		fmt.Fprintf(os.Stderr, "  gputrace xcode-profile run %s\n\n", tracePath)
 		return err
 	}
 	// Parse execution cost from Profiling_f_*.raw files

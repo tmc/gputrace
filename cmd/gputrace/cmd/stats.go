@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
 
@@ -196,6 +197,7 @@ func runStats(cmd *cobra.Command, args []string, opts *statsOptions) error {
 		fmt.Printf("  Encoder Span:     %s\n", FormatDuration(gpuTimeUs))
 	} else {
 		fmt.Printf("  Encoder Span:     (no profiler data)\n")
+		defer fmt.Fprint(os.Stderr, profileReplayHint(tracePath))
 	}
 	if hasProfilerData && profilerDir != "" {
 		if streamStats, err := counter.ParseStreamData(profilerDir, nil); err == nil {

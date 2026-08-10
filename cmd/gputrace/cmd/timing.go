@@ -149,6 +149,9 @@ func runTiming(cmd *cobra.Command, args []string, opts *timingOptions) error {
 		shown, note := tableMetrics(metrics, opts.minCalls)
 		fmt.Fprintln(timingReportWriter(opts), gputrace.FormatTimingMetrics(shown)+note)
 	}
+	if metrics.TimingSource == gputrace.TimingSourceUnavailable {
+		fmt.Fprint(os.Stderr, profileReplayHint(tracePath))
+	}
 
 	// Export JSON if requested
 	if opts.json != "" {
