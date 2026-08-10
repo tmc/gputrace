@@ -50,6 +50,8 @@ Visualization & Export:
   insights         - Diagnostic performance hypotheses
 
 Capture & Automation:
+  capture          - Run a Metal workload under the capture interposer
+  profile-replay   - Replay a capture under the profiler to add timing
   xcode-profile    - Xcode GPU profiler automation
   xcode-bindings   - Inspect private Xcode GTShaderProfiler bindings
   xcode-parity     - Audit Xcode metric parity for a trace

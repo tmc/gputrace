@@ -66,7 +66,9 @@ not invent a mapping between these domains.
 | | `tree` | Execution tree view |
 | | `diff` | Compare two traces |
 | | `insights` | Actionable performance insights |
-| **Capture** | `xcode-profile` | Xcode GPU profiler automation |
+| **Capture** | `capture` | Run a Metal workload under the capture interposer |
+| | `profile-replay` | Replay a capture under the profiler to add timing |
+| | `xcode-profile` | Xcode GPU profiler automation |
 | | `xcode-bindings` | Inspect private Xcode GTShaderProfiler bindings |
 | | `xcode-parity` | Audit Xcode metric parity for a trace |
 | **Utilities** | `mtlb` | Metal Library Binary inspection |
@@ -74,6 +76,29 @@ not invent a mapping between these domains.
 | | `version` | Print build version |
 
 Run `gputrace [command] --help` for details on any command.
+
+## Headless timing
+
+A capture records what a Metal workload did and carries no timing. `profile-replay`
+replays it on the GPU under Apple's MTLReplayer with the profiler attached, which
+takes seconds and opens no window:
+
+```
+gputrace capture -o run.gputrace -- python3 bench.py
+gputrace profile-replay run.gputrace          # writes run-perfdata.gputrace
+gputrace profiler run-perfdata.gputrace
+```
+
+The output holds the profiler payload, which is what `profiler`, `timing`,
+`timeline` and `pprof` read. Add `--embed` to copy the capture stream in as well,
+for the commands that need it — `kernels`, buffer bindings, grid and threadgroup
+sizes — at the cost of a bundle roughly the size of both.
+
+This produces no derived counters. Utilization, limiter and occupancy values are
+unavailable on recent GPU generations; see `docs/research/` for why.
+
+Commands that need performance data say so on stderr when a trace lacks it,
+and name the command that would add it.
 
 ## Trace Diff
 
