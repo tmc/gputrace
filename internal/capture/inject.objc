@@ -1,0 +1,141 @@
+// Injected into a Metal target to start a capture the target never asks for.
+//
+// Starting in a constructor is incorrect for interpreter launchers: an exec
+// loads this image again, so the launcher creates the output bundle and the
+// process that submits Metal work then loses a race with that stale bundle.
+// Interpose device creation instead. The process that first asks for a Metal
+// device atomically claims GT_CAPTURE_LOCK and starts the capture before the
+// device is returned to its caller.
+#import <Metal/Metal.h>
+#import <Foundation/Foundation.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <mach-o/dyld.h>
+#include <stdatomic.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+static _Atomic int gputrace_attempted;
+static int gputrace_capturing;
+
+static void gputrace_stop(void) {
+	if (gputrace_capturing) {
+		[[MTLCaptureManager sharedCaptureManager] stopCapture];
+	}
+}
+
+static int gputrace_elect(void) {
+	char fallback[4096];
+	const char *lock = getenv("GT_CAPTURE_LOCK");
+	if (lock == NULL) {
+		const char *out = getenv("GT_TRACE_OUT");
+		int n = out == NULL ? -1 :
+		    snprintf(fallback, sizeof fallback, "%s.capture-lock", out);
+		if (n < 0 || (size_t)n >= sizeof fallback) {
+			fprintf(stderr, "gputrace: capture lock path unavailable\n");
+			return 0;
+		}
+		lock = fallback;
+	}
+	int fd = open(lock, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+	if (fd < 0) {
+		if (errno != EEXIST) {
+			fprintf(stderr, "gputrace: create capture lock: %s\n",
+			        strerror(errno));
+		}
+		return 0;
+	}
+
+	char exe[4096];
+	uint32_t size = sizeof exe;
+	if (_NSGetExecutablePath(exe, &size) == 0) {
+		dprintf(fd, "%d\t%s\n", getpid(), exe);
+	} else {
+		dprintf(fd, "%d\n", getpid());
+	}
+	close(fd);
+	return 1;
+}
+
+static void gputrace_start(id<MTLDevice> dev) {
+	int expected = 0;
+	if (dev == nil || !atomic_compare_exchange_strong(&gputrace_attempted,
+	                                                  &expected, 1)) {
+		return;
+	}
+	if (!gputrace_elect()) {
+		return;
+	}
+
+	@autoreleasepool {
+		const char *out = getenv("GT_TRACE_OUT");
+		if (out == NULL) {
+			return;
+		}
+		MTLCaptureManager *cm = [MTLCaptureManager sharedCaptureManager];
+		if (![cm supportsDestination:MTLCaptureDestinationGPUTraceDocument]) {
+			fprintf(stderr, "gputrace: GPU trace documents unsupported; "
+			                "is MTL_CAPTURE_ENABLED set?\n");
+			return;
+		}
+		MTLCaptureDescriptor *d = [MTLCaptureDescriptor new];
+		d.captureObject = dev;
+		d.destination = MTLCaptureDestinationGPUTraceDocument;
+		d.outputURL = [NSURL fileURLWithPath:@(out)];
+
+		NSError *err = nil;
+		if (![cm startCaptureWithDescriptor:d error:&err]) {
+			fprintf(stderr, "gputrace: startCapture: %s\n",
+			        err.localizedDescription.UTF8String);
+			return;
+		}
+		gputrace_capturing = 1;
+		atexit(gputrace_stop);
+		fprintf(stderr, "gputrace: capture started in pid %d\n", getpid());
+	}
+}
+
+static id<MTLDevice> gputrace_create_system_default_device(void)
+    NS_RETURNS_RETAINED;
+static id<MTLDevice> gputrace_create_system_default_device(void) {
+	id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
+	gputrace_start(dev);
+	return dev;
+}
+
+static NSArray<id<MTLDevice>> *gputrace_copy_all_devices(void)
+    NS_RETURNS_RETAINED;
+static NSArray<id<MTLDevice>> *gputrace_copy_all_devices(void) {
+	NSArray<id<MTLDevice>> *devices = MTLCopyAllDevices();
+	gputrace_start(devices.firstObject);
+	return devices;
+}
+
+static NSArray<id<MTLDevice>> *gputrace_copy_all_devices_with_observer(
+    id<NSObject> __strong *observer, MTLDeviceNotificationHandler handler)
+    NS_RETURNS_RETAINED;
+static NSArray<id<MTLDevice>> *gputrace_copy_all_devices_with_observer(
+    id<NSObject> __strong *observer, MTLDeviceNotificationHandler handler) {
+	NSArray<id<MTLDevice>> *devices =
+	    MTLCopyAllDevicesWithObserver(observer, handler);
+	gputrace_start(devices.firstObject);
+	return devices;
+}
+
+#define DYLD_INTERPOSE(replacement, replacee)                              \
+	__attribute__((used)) static struct {                                \
+		const void *replacement;                                       \
+		const void *replacee;                                          \
+	} interpose_##replacee __attribute__((section("__DATA,__interpose"))) = { \
+		(const void *)(uintptr_t)&replacement,                         \
+		(const void *)(uintptr_t)&replacee,                            \
+	}
+
+DYLD_INTERPOSE(gputrace_create_system_default_device,
+               MTLCreateSystemDefaultDevice);
+DYLD_INTERPOSE(gputrace_copy_all_devices, MTLCopyAllDevices);
+DYLD_INTERPOSE(gputrace_copy_all_devices_with_observer,
+               MTLCopyAllDevicesWithObserver);
