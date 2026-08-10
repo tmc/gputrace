@@ -62,8 +62,29 @@ type counterDescriptor struct {
 }
 
 type counterShapeAPI struct {
-	initialize      func() int32
-	gpuCreate       func(generation, variant, revision, exact uint32) uintptr
+	// agxps_initialize takes FOUR arguments, not zero. [V] 0x4ac908 saves all
+	// of x0..x3 (`stp x3,x0,[sp]`, `mov x22,x2`, `str x1,[sp,#0x10]`) and later
+	// walks TWO (pointer, count) pairs: x2/x3 at 0x4acbf8 and x0/x1 at
+	// 0x4acc18. Each loop is guarded by cbz on both the pointer and the count,
+	// so all-zero is the safe no-op input and the only one we can supply
+	// deliberately. A zero-argument declaration leaves four caller-saved
+	// registers at whatever the trampoline last held; if x0 or x2 happens to be
+	// a non-null non-pointer with a non-zero count beside it, the loop
+	// dereferences it. Passing explicit zeros removes that dependence on luck.
+	initialize func(list0 uintptr, count0 uint64, list1 uintptr, count1 uint64) int32
+	// agxps_gpu_create takes FOUR arguments. [V] 0x49b528 keeps x3 in x23 and
+	// tests it with `tbnz w23, #0x0`, so it is a bool; when set, the revision
+	// fallback at 0x49b5b8 is skipped. The generated three-argument binding
+	// leaves x3 undeclared. See docs/research/agxps-signatures.yaml.
+	gpuCreate func(generation, variant, revision, exact uint32) uintptr
+	// agxps_aps_gpu_is_supported takes the TRIPLE, not a handle. [V] 0x4eb35c
+	// packs w0|w1<<32 and w2 into a 12-byte key and looks it up in a set.
+	gpuIsSupported func(generation, variant, revision uint32) bool
+	// agxps_gpu_get_rev_with_aps_fallback reads +0xc, the effective revision
+	// the fallback may have corrected, where agxps_gpu_get_rev reads +0x8, the
+	// revision that was requested. [V] 0x49b6c8 and 0x49b6d0 are two-
+	// instruction loads at those offsets.
+	gpuEffectiveRev func(uintptr) uint32
 	gpuIsValid      func(uintptr) bool
 	gpuDestroy      func(uintptr)
 	parserCreate    func(unsafe.Pointer) uintptr
@@ -97,6 +118,8 @@ func loadCounterShapeAPI() (*counterShapeAPI, error) {
 	}{
 		{"agxps_initialize", &a.initialize},
 		{"agxps_gpu_create", &a.gpuCreate},
+		{"agxps_aps_gpu_is_supported", &a.gpuIsSupported},
+		{"agxps_gpu_get_rev_with_aps_fallback", &a.gpuEffectiveRev},
 		{"agxps_gpu_is_valid", &a.gpuIsValid},
 		{"agxps_gpu_destroy", &a.gpuDestroy},
 		{"agxps_aps_parser_create", &a.parserCreate},
@@ -151,7 +174,7 @@ func DecodeCounterProfileShape(data []byte, config CounterDecodeConfig) (*Counte
 	if err != nil {
 		return nil, err
 	}
-	if a.initialize() == 0 {
+	if a.initialize(0, 0, 0, 0) == 0 {
 		return nil, errors.New("agxps: initialize counter tables")
 	}
 	gpu := a.gpuCreate(config.Generation, config.Variant, config.Revision, 0)

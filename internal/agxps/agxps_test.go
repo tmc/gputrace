@@ -4,7 +4,49 @@ package agxps
 
 import (
 	"testing"
+
+	"github.com/ebitengine/purego"
 )
+
+// TestSymbolsResolveByDlsym refutes, for this binary, the claim that the
+// agxps_* symbols are absent from GTShaderProfiler's export trie and must be
+// reached through a UUID-pinned image offset.
+//
+// It matters which is true. An offset resolver that does not verify the binary
+// UUID keeps working after an OS update by calling whatever now lives at that
+// address, and returns plausible numbers from the wrong function. dlsym cannot
+// do that: it either finds the name or fails. This asserts the names resolve,
+// so the offset question stays closed and nobody reintroduces an offset table.
+func TestSymbolsResolveByDlsym(t *testing.T) {
+	if err := Init(); err != nil {
+		t.Skipf("Skipping test - GTShaderProfiler not available: %v", err)
+	}
+	handle, err := purego.Dlopen(gtShaderProfilerPath, purego.RTLD_NOW|purego.RTLD_GLOBAL)
+	if err != nil {
+		t.Fatalf("dlopen: %v", err)
+	}
+	for _, name := range []string{
+		"agxps_initialize",
+		"agxps_gpu_create",
+		"agxps_gpu_get_rev",
+		"agxps_gpu_get_rev_with_aps_fallback",
+		"agxps_aps_gpu_is_supported",
+		"agxps_aps_parser_create",
+		"agxps_aps_parser_parse",
+		"agxps_aps_profile_data_get_counter_names",
+		"agxps_aps_profile_data_get_kick_id",
+	} {
+		sym, err := purego.Dlsym(handle, name)
+		if err != nil || sym == 0 {
+			t.Errorf("dlsym %s: sym=%#x err=%v", name, sym, err)
+		}
+	}
+	// loadCounterShapeAPI resolves every symbol this package calls and returns
+	// an error naming the first that is missing.
+	if _, err := loadCounterShapeAPI(); err != nil {
+		t.Fatalf("loadCounterShapeAPI: %v", err)
+	}
+}
 
 func TestInit(t *testing.T) {
 	err := Init()
@@ -18,37 +60,29 @@ func TestInit(t *testing.T) {
 	}
 }
 
-func TestESLCliqueFunctionsAvailable(t *testing.T) {
-	err := Init()
-	if err != nil {
+func TestESLCliqueReferencesRejectsZeroHandle(t *testing.T) {
+	if err := Init(); err != nil {
 		t.Skipf("Skipping test - GTShaderProfiler not available: %v", err)
 	}
 	defer Close()
 
-	if _, err := ESLCliqueReferences(0); err == nil {
-		t.Fatal("ESLCliqueReferences(0) succeeded, want invalid profile data error")
+	if _, err := eslCliqueReferences(0); err == nil {
+		t.Fatal("eslCliqueReferences(0) succeeded, want invalid profile data error")
 	}
-
-	if trace := ESLCliqueInstructionTrace(0, 0); trace != 0 {
-		t.Fatalf("ESLCliqueInstructionTrace(0, 0) = %#x, want 0", trace)
-	}
-
-	stats := TraceInstructionStats(0)
-	if stats != (InstructionTraceStats{}) {
-		t.Fatalf("TraceInstructionStats(0) = %+v, want zero stats", stats)
+	if _, err := kickReferences(0); err == nil {
+		t.Fatal("kickReferences(0) succeeded, want invalid profile data error")
 	}
 }
 
 func TestParserFunctionsAvailable(t *testing.T) {
-	err := Init()
-	if err != nil {
+	if err := Init(); err != nil {
 		t.Skipf("Skipping test - GTShaderProfiler not available: %v", err)
 	}
 	defer Close()
 
-	p := &Parser{}
+	p := &parser{}
 	if p.IsValid() {
-		t.Fatal("zero Parser reported valid")
+		t.Fatal("zero parser reported valid")
 	}
 
 	if _, err := p.Parse(nil); err == nil {
@@ -56,84 +90,124 @@ func TestParserFunctionsAvailable(t *testing.T) {
 	}
 }
 
-func TestGPUCreation(t *testing.T) {
-	err := Init()
-	if err != nil {
+// TestGPUSupportedTripleCount pins agxps_aps_gpu_is_supported to the three
+// uint32 scalars it actually takes.
+//
+// The count is the check. A brute-force scan of the triple space finds exactly
+// 53 supported triples, matching the length of the static initializer array
+// that populates the set (docs/research/agxps-signatures.yaml,
+// agxps_aps_gpu_is_supported, comparator at 0x4eeee0). The single-handle
+// declaration the generated binding uses puts a pointer in the generation
+// register and leaves the variant and revision registers unset, which makes the
+// lookup miss for every input and yields 0. Any other wrong shape moves the
+// count off 53 as well, so this fails loudly where a spot check on one triple
+// would not: "supported" answers are individually plausible either way.
+func TestGPUSupportedTripleCount(t *testing.T) {
+	if err := Init(); err != nil {
 		t.Skipf("Skipping test - GTShaderProfiler not available: %v", err)
 	}
-	defer Close()
-
-	// Test GPU creation for various generations
-	gpuGens := []struct {
-		name    string
-		gen     uint32
-		variant uint32
-		rev     uint32
-	}{
-		{"M1", 13, 0, 0},
-		{"M2", 14, 0, 0},
-		{"M3", 15, 0, 0},
-		{"A17", 16, 0, 0},
-	}
-
-	t.Log("Testing GPU creation...")
-	for _, g := range gpuGens {
-		gpu, err := NewGPU(g.gen, g.variant, g.rev)
-		if err != nil {
-			t.Logf("  %s (gen=%d): failed - %v", g.name, g.gen, err)
-			continue
-		}
-		defer gpu.Destroy()
-
-		// A handle here is not a working GPU. gpu_create returns one that
-		// reports valid=true for an unsupported triple, with no backing GPU
-		// description, and every parser_create against it returns NULL. Say
-		// "handle" rather than "created!", which read as a success.
-		t.Logf("  %s (gen=%d): handle name=%q valid=%v (validity does not imply usable)",
-			g.name, g.gen, gpu.Name(), gpu.IsValid())
-	}
-}
-
-func TestParserWithGPU(t *testing.T) {
-	err := Init()
-	if err != nil {
-		t.Skipf("Skipping test - GTShaderProfiler not available: %v", err)
-	}
-	defer Close()
-
-	// agxps_initialize returns 1 for SUCCESS. This used to read the 1 as an
-	// errno and explain it away as "expected outside Xcode", which is how a
-	// working call spent months looking like a broken one.
 	if err := Initialize(); err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
-
-	// Create GPU for M2 (gen=14) which we know works
-	gpu, err := NewGPU(14, 0, 0)
+	a, err := loadCounterShapeAPI()
 	if err != nil {
-		t.Skipf("Failed to create GPU: %v", err)
+		t.Fatalf("loadCounterShapeAPI: %v", err)
 	}
-	defer gpu.Destroy()
-	t.Logf("Created GPU: gen=%d name=%q", gpu.Gen(), gpu.Name())
+	// The comparator table is indexed gen*42+variant*6+rev, so gen<64,
+	// variant<16, rev<16 covers it with room to spare.
+	got := 0
+	for gen := uint32(0); gen < 64; gen++ {
+		for variant := uint32(0); variant < 16; variant++ {
+			for rev := uint32(0); rev < 16; rev++ {
+				if a.gpuIsSupported(gen, variant, rev) {
+					got++
+				}
+			}
+		}
+	}
+	if want := 53; got != want {
+		t.Fatalf("supported triples = %d, want %d; agxps_aps_gpu_is_supported is being called with the wrong argument shape", got, want)
+	}
+}
 
-	// Parser creation is skipped here, but not for the reason this test used to
-	// give. The old comment blamed a missing Metal device context for three
-	// symptoms that all have concrete causes, recorded in
-	// docs/research/agxps-signatures.yaml:
-	//
-	//   - "agxps_initialize returns error 1 outside Xcode" -- 1 is success.
-	//   - "descriptor_create crashes (SIGSEGV at 0x28)" -- it returns a
-	//     104-byte struct by value through x8, which purego cannot set, so the
-	//     first store (stur q0, [x8, #0x28]) faults at 0x28. It also takes no
-	//     arguments, and this package passes it one. A caller can skip it
-	//     entirely: it only installs defaults.
-	//   - "period queries return 0" -- parser_create returns NULL for a
-	//     descriptor with zero pulse/era/count periods, which is exactly what
-	//     descriptor_create leaves. Real periods come from
-	//     agxps_aps_get_valid_*_period.
-	//
-	// A working parse of a 58 MB Profiling_f_*.raw runs in
-	// rawprobe_manual_test.go with no Xcode process involved, which is what
-	// disproves the Metal-context story.
-	t.Log("parser creation exercised in rawprobe_manual_test.go, not here")
+// TestGPUCreateExactFlagIsLoadBearing pins the fourth argument of
+// agxps_gpu_create.
+//
+// The generated binding declares three arguments, which leaves x3 holding
+// whatever the trampoline last did. x3 is a bool tested with `tbnz w23, #0x0`
+// at 0x49b5a8: when set, the revision fallback at 0x49b5b8 is skipped and the
+// effective revision at +0xc keeps the requested value. This asserts that the
+// flag changes the result for at least one triple, so a future regeneration
+// that drops the parameter again cannot pass. It would fail if the flag were
+// inert, which is exactly the claim being made.
+func TestGPUCreateExactFlagIsLoadBearing(t *testing.T) {
+	if err := Init(); err != nil {
+		t.Skipf("Skipping test - GTShaderProfiler not available: %v", err)
+	}
+	if err := Initialize(); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	a, err := loadCounterShapeAPI()
+	if err != nil {
+		t.Fatalf("loadCounterShapeAPI: %v", err)
+	}
+	differed := 0
+	for gen := uint32(0); gen < 42; gen++ {
+		for variant := uint32(0); variant < 6; variant++ {
+			for rev := uint32(0); rev < 6; rev++ {
+				lenient := a.gpuCreate(gen, variant, rev, 0)
+				if lenient == 0 {
+					continue
+				}
+				strict := a.gpuCreate(gen, variant, rev, 1)
+				if strict != 0 && a.gpuEffectiveRev(lenient) != a.gpuEffectiveRev(strict) {
+					differed++
+				}
+				a.gpuDestroy(lenient)
+				if strict != 0 {
+					a.gpuDestroy(strict)
+				}
+			}
+		}
+	}
+	if differed == 0 {
+		t.Fatal("agxps_gpu_create produced the same effective revision for exact=0 and exact=1 on every triple; the fourth argument is not reaching the callee")
+	}
+	t.Logf("exact flag changed the effective revision for %d triples", differed)
+}
+
+// TestGPUNameIsNotADeviceName records that GPU.Name identifies nothing.
+//
+// agxps_gpu_format_name picks between two string literals on a NULL test and
+// passes no part of the triple to the formatter, so every non-nil handle
+// formats to the same constant. The test exists so that a reader who sees
+// name="AppleGPU" logged next to a gen/variant/rev does not read it as the
+// framework confirming the triple.
+func TestGPUNameIsNotADeviceName(t *testing.T) {
+	if err := Init(); err != nil {
+		t.Skipf("Skipping test - GTShaderProfiler not available: %v", err)
+	}
+	triples := [][3]uint32{{13, 0, 0}, {14, 0, 0}, {15, 0, 0}, {16, 0, 0}}
+	names := map[string][][3]uint32{}
+	for _, tr := range triples {
+		gpu, err := NewGPU(tr[0], tr[1], tr[2], false)
+		if err != nil {
+			t.Logf("gen=%d variant=%d rev=%d: %v", tr[0], tr[1], tr[2], err)
+			continue
+		}
+		names[gpu.Name()] = append(names[gpu.Name()], tr)
+		t.Logf("gen=%d variant=%d rev=%d: name=%q supported=%v", tr[0], tr[1], tr[2], gpu.Name(), gpu.IsSupported())
+		gpu.Destroy()
+	}
+	if len(names) == 0 {
+		t.Skip("no GPU handles could be created")
+	}
+	if len(names) != 1 {
+		t.Fatalf("agxps_gpu_format_name produced %d distinct names %v; it was established to produce exactly one", len(names), names)
+	}
+	for name := range names {
+		if name != "AppleGPU" {
+			t.Fatalf("agxps_gpu_format_name = %q, want the constant %q", name, "AppleGPU")
+		}
+	}
 }

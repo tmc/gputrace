@@ -43,7 +43,7 @@ type rawDescriptor struct {
 type rangeGet func(pd uintptr, out *uint64, first, count uint64) bool
 
 type rawAPI struct {
-	initialize          func() int32
+	initialize          func(list0 uintptr, count0 uint64, list1 uintptr, count1 uint64) int32
 	gpuCreate           func(gen, variant, rev uint32, exact uint32) uintptr
 	gpuIsValid          func(uintptr) bool
 	gpuGetGen           func(uintptr) uint32
@@ -138,7 +138,7 @@ func loadRawAPI(t *testing.T) *rawAPI {
 
 func TestRawProbeGPUDetails(t *testing.T) {
 	a := loadRawAPI(t)
-	a.initialize()
+	a.initialize(0, 0, 0, 0)
 	for gen := uint32(14); gen <= 20; gen++ {
 		for variant := uint32(0); variant < 8; variant++ {
 			g := a.gpuCreate(gen, variant, 1, 1)
@@ -166,7 +166,7 @@ func cstr(b []byte) string {
 
 func TestRawProbeSupportedGPUs(t *testing.T) {
 	a := loadRawAPI(t)
-	t.Logf("agxps_initialize() = %d", a.initialize())
+	t.Logf("agxps_initialize() = %d", a.initialize(0, 0, 0, 0))
 
 	var probeRev uint32
 	t.Logf("find_supported_revision(0,0,0) = %v out=%d", a.apsFindSupportedRev(0, 0, 0, &probeRev), probeRev)
@@ -202,7 +202,7 @@ func TestRawProbeSupportedGPUs(t *testing.T) {
 
 func TestRawProbeParserCreate(t *testing.T) {
 	a := loadRawAPI(t)
-	a.initialize()
+	a.initialize(0, 0, 0, 0)
 
 	genS := os.Getenv("GPUTRACE_PROBE_GEN")
 	varS := os.Getenv("GPUTRACE_PROBE_VARIANT")

@@ -31,7 +31,7 @@ import (
 // in agxps-signatures.yaml, which is the cross-check that the disassembly is
 // being read correctly.
 type kickAPI struct {
-	initialize    func() int32
+	initialize    func(list0 uintptr, count0 uint64, list1 uintptr, count1 uint64) int32
 	gpuCreate     func(gen, variant, rev uint32, exact uint32) uintptr
 	pulsePeriod   func(uintptr, uint64) uint32
 	eraPeriod     func(uintptr, uint64) uint32
@@ -129,7 +129,7 @@ func TestKickAttributionFields(t *testing.T) {
 	}
 
 	a := loadKickAPI(t)
-	a.initialize()
+	a.initialize(0, 0, 0, 0)
 	gpu := a.gpuCreate(16, 6, 1, 0)
 	if gpu == 0 {
 		t.Fatal("gpu_create(16,6,1) returned null")

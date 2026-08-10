@@ -22,7 +22,7 @@ func TestGeneratedBindingsCounterFile(t *testing.T) {
 	}
 
 	a := loadCounterAPI(t)
-	a.initialize()
+	a.initialize(0, 0, 0, 0)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -139,6 +139,8 @@ func TestGeneratedBindingsCounterFile(t *testing.T) {
 		must("kick starts", ok, err)
 		ok, err = gtshaderprofiler.AgxpsApsProfileDataGetKickEnd(profileData, &ends[0], 0, nk)
 		must("kick ends", ok, err)
+		// The binding takes *uint32, matching the 4-byte elements the
+		// framework writes. See KickReferences.
 		ok, err = gtshaderprofiler.AgxpsApsProfileDataGetKickID(profileData, &ids[0], 0, nk)
 		must("kick IDs", ok, err)
 		for _, series := range []struct {

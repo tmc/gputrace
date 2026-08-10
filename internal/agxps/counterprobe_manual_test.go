@@ -41,7 +41,7 @@ import (
 // begin pointer out of a 0x18-byte record at pd+0x30f48, and values_num copies
 // (end-begin)>>3 of that same record.
 type counterAPI struct {
-	initialize      func() int32
+	initialize      func(list0 uintptr, count0 uint64, list1 uintptr, count1 uint64) int32
 	gpuCreate       func(gen, variant, rev uint32, exact uint32) uintptr
 	gpuIsValid      func(uintptr) bool
 	parserCreate    func(unsafe.Pointer) uintptr
@@ -188,7 +188,7 @@ func loadCounterAPI(t *testing.T) *counterAPI {
 // trusting it.
 func TestCounterTableEnumerate(t *testing.T) {
 	a := loadCounterAPI(t)
-	a.initialize()
+	a.initialize(0, 0, 0, 0)
 
 	const wayPastAnyTable = 1 << 20
 
@@ -293,7 +293,7 @@ func TestCounterFileParse(t *testing.T) {
 		t.Skip("set GPUTRACE_PROBE_COUNTERS to a Counters_f_*.raw path")
 	}
 	a := loadCounterAPI(t)
-	a.initialize()
+	a.initialize(0, 0, 0, 0)
 
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -509,7 +509,7 @@ func TestCounterFileFanout(t *testing.T) {
 		t.Skip("set GPUTRACE_TEST_TRACE to a .gputrace bundle, or GPUTRACE_PROBE_COUNTERS_DIR to a .gpuprofiler_raw directory")
 	}
 	a := loadCounterAPI(t)
-	a.initialize()
+	a.initialize(0, 0, 0, 0)
 
 	var pin runtime.Pinner
 	defer pin.Unpin()
@@ -617,7 +617,7 @@ func TestCounterAggregate(t *testing.T) {
 		t.Skip("set GPUTRACE_TEST_TRACE to a .gputrace bundle, or GPUTRACE_PROBE_COUNTERS_DIR to a .gpuprofiler_raw directory")
 	}
 	a := loadCounterAPI(t)
-	a.initialize()
+	a.initialize(0, 0, 0, 0)
 	var pin runtime.Pinner
 	defer pin.Unpin()
 
@@ -725,7 +725,7 @@ func TestCounterKickIdentity(t *testing.T) {
 		t.Skip("set GPUTRACE_PROBE_COUNTERS to a raw file")
 	}
 	a := loadCounterAPI(t)
-	a.initialize()
+	a.initialize(0, 0, 0, 0)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
