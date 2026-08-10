@@ -161,11 +161,23 @@ type CounterSamplingResult struct {
 	RawData          map[string][]byte // Resolved bytes by counter set, undecoded
 }
 
-// EncoderCounterMetrics contains aggregated counter metrics for a single encoder.
+// CounterAttribution describes how counter metrics were joined to an encoder.
+type CounterAttribution string
+
+const (
+	// CounterAttributionUnknown means no capture-backed encoder join exists.
+	CounterAttributionUnknown CounterAttribution = "unknown"
+	// CounterAttributionEncoder means EncoderIndex names the measured encoder.
+	CounterAttributionEncoder CounterAttribution = "encoder"
+)
+
+// EncoderCounterMetrics contains counter metrics with their attribution.
+// EncoderIndex is -1 unless Attribution is CounterAttributionEncoder.
 type EncoderCounterMetrics struct {
 	EncoderIndex int
 	EncoderLabel string
 	EncoderType  string // "compute", "render", "blit"
+	Attribution  CounterAttribution
 
 	// Timing
 	StartTimestamp uint64 // GPU timestamp at encoder start
@@ -641,8 +653,8 @@ func PopulateEncoderMetricsFromBinaryParsing(t *trace.Trace) ([]EncoderCounterMe
 	return PopulateEncoderMetricsFromPerfCounterStats(stats)
 }
 
-// PopulateEncoderMetricsFromPerfCounterStats converts parsed performance counter
-// data into encoder-level counter metrics.
+// PopulateEncoderMetricsFromPerfCounterStats converts parsed pipeline counter
+// rows without claiming an encoder attribution the input does not establish.
 func PopulateEncoderMetricsFromPerfCounterStats(stats *PerfCounterStats) ([]EncoderCounterMetrics, error) {
 	if stats == nil {
 		return nil, fmt.Errorf("nil performance counter stats")
@@ -650,13 +662,15 @@ func PopulateEncoderMetricsFromPerfCounterStats(stats *PerfCounterStats) ([]Enco
 
 	metrics := make([]EncoderCounterMetrics, 0, len(stats.ShaderMetrics))
 
-	// Convert ShaderHardwareMetrics to EncoderCounterMetrics
-	for i, shaderMetric := range stats.ShaderMetrics {
+	// ShaderMetrics rows are pipeline-scoped. No field in PerfCounterStats
+	// establishes which encoder, if any, owns a row.
+	for _, shaderMetric := range stats.ShaderMetrics {
 		// Start with base metrics from Counters files
 		metric := EncoderCounterMetrics{
-			EncoderIndex: i,
+			EncoderIndex: -1,
 			EncoderLabel: shaderMetric.ShaderName,
 			EncoderType:  "compute", // Most traces are compute-heavy
+			Attribution:  CounterAttributionUnknown,
 
 			// From binary parsing (gputrace-44 validated approach)
 			ALUUtilization:  shaderMetric.ALUUtilization,

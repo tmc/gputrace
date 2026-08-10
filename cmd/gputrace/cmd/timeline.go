@@ -792,22 +792,23 @@ func timelineEventArgInt(args map[string]interface{}, key string) (int, bool) {
 
 // Timeline represents the complete timeline data.
 type Timeline struct {
-	TracePath          string          `json:"trace_path,omitempty"`
-	ClockDomain        string          `json:"clock_domain,omitempty"`
-	RawProfilerSamples bool            `json:"raw_profiler_samples,omitempty"`
-	StartTime          uint64          `json:"start_time"`
-	EndTime            uint64          `json:"end_time"`
-	Duration           uint64          `json:"duration"`
-	Events             []TimelineEvent `json:"events"`
-	Encoders           []EncoderInfo   `json:"encoders"`
-	Kernels            []KernelInfo    `json:"kernels"`
-	APICallseq         []APICall       `json:"api_callseq"`
-	CounterTracks      []CounterTrack  `json:"counter_tracks,omitempty"`
-	Timing             *TimelineTiming `json:"timing,omitempty"`
-	XcodeMetrics       map[string]any  `json:"xcode_metrics,omitempty"`
-	AbsoluteTime       uint64          `json:"absolute_time"`
-	TimebaseNumer      uint64          `json:"timebase_numer"`
-	TimebaseDenom      uint64          `json:"timebase_denom"`
+	TracePath            string                      `json:"trace_path,omitempty"`
+	ClockDomain          string                      `json:"clock_domain,omitempty"`
+	RawProfilerSamples   bool                        `json:"raw_profiler_samples,omitempty"`
+	StartTime            uint64                      `json:"start_time"`
+	EndTime              uint64                      `json:"end_time"`
+	Duration             uint64                      `json:"duration"`
+	Events               []TimelineEvent             `json:"events"`
+	Encoders             []EncoderInfo               `json:"encoders"`
+	Kernels              []KernelInfo                `json:"kernels"`
+	APICallseq           []APICall                   `json:"api_callseq"`
+	CounterTracks        []CounterTrack              `json:"counter_tracks,omitempty"`
+	UnattributedCounters []UnattributedCounterMetric `json:"unattributed_counters,omitempty"`
+	Timing               *TimelineTiming             `json:"timing,omitempty"`
+	XcodeMetrics         map[string]any              `json:"xcode_metrics,omitempty"`
+	AbsoluteTime         uint64                      `json:"absolute_time"`
+	TimebaseNumer        uint64                      `json:"timebase_numer"`
+	TimebaseDenom        uint64                      `json:"timebase_denom"`
 }
 
 // TimelineTiming summarizes the timing sources that Xcode and gputrace expose.
@@ -878,6 +879,15 @@ type CounterTrack struct {
 	AvgValue         float64         `json:"avg_value"`
 }
 
+// UnattributedCounterMetric is a pipeline-scoped counter row for which no
+// capture-backed encoder identity exists.
+type UnattributedCounterMetric struct {
+	Label       string                 `json:"label,omitempty"`
+	Attribution string                 `json:"attribution"`
+	Source      string                 `json:"source"`
+	Values      map[string]interface{} `json:"values,omitempty"`
+}
+
 // CounterSample represents a single counter measurement at a point in time.
 type CounterSample struct {
 	Timestamp uint64  `json:"ts"` // Timestamp in nanoseconds
@@ -920,7 +930,12 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 	}
 	var encoderMetrics []counter.EncoderCounterMetrics
 	if perfStats != nil {
-		encoderMetrics, _ = counter.PopulateEncoderMetricsFromPerfCounterStats(perfStats)
+		var err error
+		encoderMetrics, err = counter.PopulateEncoderMetricsFromPerfCounterStats(perfStats)
+		if err != nil {
+			return nil, fmt.Errorf("populate counter attribution: %w", err)
+		}
+		recordUnattributedCounterMetrics(timeline, encoderMetrics)
 	}
 	var shaderReport *gputrace.ShaderMetricsReport
 	if profilerDir != "" {
@@ -1353,6 +1368,48 @@ func generateCounterTracks(trace *gputrace.Trace, timeline *Timeline) []CounterT
 	return applyXcodeCounterMetadata(tracks)
 }
 
+func recordUnattributedCounterMetrics(timeline *Timeline, metrics []counter.EncoderCounterMetrics) {
+	if timeline == nil {
+		return
+	}
+	for _, metric := range metrics {
+		if metric.Attribution == counter.CounterAttributionEncoder && metric.EncoderIndex >= 0 {
+			continue
+		}
+		values := make(map[string]interface{})
+		if metric.ALUUtilization != 0 {
+			values["alu_utilization_pct"] = metric.ALUUtilization
+		}
+		if metric.MemoryBandwidth != 0 {
+			values["memory_bandwidth_bytes"] = metric.MemoryBandwidth
+		}
+		if metric.DeviceMemoryBandwidthGBps != 0 {
+			values["device_memory_bandwidth_gbps"] = metric.DeviceMemoryBandwidthGBps
+		}
+		if metric.BytesReadFromDeviceMemory != 0 {
+			values["device_memory_read_bytes"] = metric.BytesReadFromDeviceMemory
+		}
+		if metric.BytesWrittenToDeviceMemory != 0 {
+			values["device_memory_write_bytes"] = metric.BytesWrittenToDeviceMemory
+		}
+		if metric.InstructionThroughputUtil != 0 {
+			values["instruction_throughput_utilization_pct"] = metric.InstructionThroughputUtil
+		}
+		if metric.ComputeShaderLaunchLimiter != 0 {
+			values["compute_shader_launch_limiter_pct"] = metric.ComputeShaderLaunchLimiter
+		}
+		if metric.BufferL1MissRate != 0 {
+			values["buffer_l1_miss_rate_pct"] = metric.BufferL1MissRate
+		}
+		timeline.UnattributedCounters = append(timeline.UnattributedCounters, UnattributedCounterMetric{
+			Label:       metric.EncoderLabel,
+			Attribution: string(counter.CounterAttributionUnknown),
+			Source:      "PerfCounterStats pipeline row",
+			Values:      values,
+		})
+	}
+}
+
 // generateCounterTracksFromCounterArchive records measured per-encoder GPU
 // cycles and their archive-derived execution-cost share.
 func generateCounterTracksFromCounterArchive(archive *counter.CounterArchive, timeline *Timeline) []CounterTrack {
@@ -1399,7 +1456,7 @@ func generateCounterTracksFromCounterArchive(archive *counter.CounterArchive, ti
 }
 
 // generateCounterTracksFromPerfData creates counter tracks from real performance counter data.
-func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, streamStats *gputrace.StreamDataStats, encoderMetrics []counter.EncoderCounterMetrics, timeline *Timeline) []CounterTrack {
+func generateCounterTracksFromPerfData(streamStats *gputrace.StreamDataStats, encoderMetrics []counter.EncoderCounterMetrics, timeline *Timeline) []CounterTrack {
 	tracks := make([]CounterTrack, 0)
 
 	// Initialize counter tracks
@@ -1433,18 +1490,13 @@ func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, str
 		Samples: make([]CounterSample, 0),
 	}
 
-	// Create a map of shader name to hardware metrics
-	shaderMetricsMap := make(map[string]*gputrace.ShaderHardwareMetrics)
-	for i := range perfStats.ShaderMetrics {
-		metric := &perfStats.ShaderMetrics[i]
-		if metric.ShaderName != "" {
-			shaderMetricsMap[metric.ShaderName] = metric
-		}
-	}
 	encoderMetricsByIndex := make(map[int]*counter.EncoderCounterMetrics)
 	encoderMetricsByLabel := make(map[string]*counter.EncoderCounterMetrics)
 	for i := range encoderMetrics {
 		m := &encoderMetrics[i]
+		if m.Attribution != counter.CounterAttributionEncoder || m.EncoderIndex < 0 {
+			continue
+		}
 		encoderMetricsByIndex[m.EncoderIndex] = m
 		if m.EncoderLabel != "" {
 			encoderMetricsByLabel[m.EncoderLabel] = m
@@ -1466,11 +1518,6 @@ func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, str
 
 	// Generate samples for each encoder period using actual hardware metrics
 	for _, encoder := range timeline.Encoders {
-		// Look up hardware metrics for this encoder
-		var metrics *gputrace.ShaderHardwareMetrics
-		if m, exists := shaderMetricsMap[encoder.Label]; exists {
-			metrics = m
-		}
 		var encoderMetric *counter.EncoderCounterMetrics
 		if m, exists := encoderMetricsByLabel[encoder.Label]; exists {
 			encoderMetric = m
@@ -1485,17 +1532,6 @@ func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, str
 		var throughput float64
 		var shaderLaunchLimiter float64
 
-		if metrics != nil {
-			// Use real hardware metrics
-			aluUtil = metrics.ALUUtilization
-
-			// Calculate bandwidth from memory bandwidth counter (convert bytes to GB/s)
-			if metrics.MemoryBandwidth > 0 && encoder.Duration > 0 {
-				durationSec := float64(encoder.Duration) / 1e9
-				bandwidth = float64(metrics.MemoryBandwidth) / 1e9 / durationSec
-			}
-
-		}
 		if encoderMetric != nil {
 			if aluUtil == 0 {
 				aluUtil = encoderMetric.ALUUtilization
@@ -1516,7 +1552,7 @@ func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, str
 				shaderLaunchLimiter = encoderMetric.ComputeShaderLaunchLimiter
 			}
 		}
-		if metrics == nil && encoderMetric == nil {
+		if encoderMetric == nil {
 			// No real data for this encoder - skip it (no synthetic data)
 			continue
 		}
@@ -1573,14 +1609,13 @@ func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, str
 
 	// Generate samples for new tracks - only for encoders with real data
 	for _, encoder := range timeline.Encoders {
-		metrics := shaderMetricsMap[encoder.Label]
 		var encoderMetric *counter.EncoderCounterMetrics
 		if m, exists := encoderMetricsByLabel[encoder.Label]; exists {
 			encoderMetric = m
 		} else if m, exists := encoderMetricsByIndex[encoder.Index]; exists {
 			encoderMetric = m
 		}
-		if metrics == nil && encoderMetric == nil {
+		if encoderMetric == nil {
 			// No real data for this encoder - skip it (no synthetic data)
 			continue
 		}
@@ -1589,16 +1624,6 @@ func generateCounterTracksFromPerfData(perfStats *gputrace.PerfCounterStats, str
 		var memRead, memWrite float64
 		var compLimit, memLimit float64
 
-		if metrics != nil {
-			l1Miss = metrics.BufferL1MissRate
-			durationSec := float64(encoder.Duration) / 1e9
-			if durationSec > 0 {
-				memRead = float64(metrics.BytesReadFromDeviceMemory) / 1e9 / durationSec
-				memWrite = float64(metrics.BytesWrittenToDeviceMemory) / 1e9 / durationSec
-			}
-			compLimit = metrics.ComputeShaderLaunchLimiter
-			memLimit = metrics.L1CacheLimiter + metrics.LastLevelCacheLimiter + metrics.TextureReadLimiter
-		}
 		if encoderMetric != nil {
 			if l1Miss == 0 {
 				l1Miss = encoderMetric.BufferL1MissRate
@@ -2045,7 +2070,10 @@ func addDispatchKernelEvents(timeline *Timeline, stats *counter.StreamDataStats,
 	shaderMetrics := timelineShaderReportLookup(shaderReport)
 	encoderMetricByIndex := make(map[int]*counter.EncoderCounterMetrics)
 	for i := range encoderMetrics {
-		encoderMetricByIndex[encoderMetrics[i].EncoderIndex] = &encoderMetrics[i]
+		metric := &encoderMetrics[i]
+		if metric.Attribution == counter.CounterAttributionEncoder && metric.EncoderIndex >= 0 {
+			encoderMetricByIndex[metric.EncoderIndex] = metric
+		}
 	}
 	encoderOffsets := make(map[int]uint64)
 	var fallbackStartNs uint64
@@ -2658,6 +2686,28 @@ func exportChromeTracingForClock(timeline *Timeline, outputPath string, clock ti
 			Args:      timelineCoverageArgs(timeline, clock),
 		},
 	)
+	for _, metric := range timeline.UnattributedCounters {
+		label := metric.Label
+		if label == "" {
+			label = "(pipeline unknown)"
+		}
+		args := make(map[string]interface{}, len(metric.Values)+4)
+		for key, value := range metric.Values {
+			args[key] = value
+		}
+		args["attribution"] = metric.Attribution
+		args["metric_scope"] = "pipeline"
+		args["pipeline_label"] = label
+		args["source"] = metric.Source
+		metadataEvents = append(metadataEvents, TimelineEvent{
+			Name:      "Unattributed counter metrics: " + label,
+			Category:  "counter_attribution",
+			Phase:     "i",
+			ProcessID: 1,
+			ThreadID:  15,
+			Args:      args,
+		})
+	}
 
 	if timeline.Timing != nil {
 		metadataEvents = append(metadataEvents,
@@ -2941,6 +2991,19 @@ func timelineXcodeMetricsArgs(timeline *Timeline) map[string]interface{} {
 	args["binding_candidates"] = xcodeMetricBindingCandidates(absent)
 	args["counter_tracks"] = tracks
 	args["empty_counter_tracks"] = emptyTracks
+	if len(timeline.UnattributedCounters) > 0 {
+		labels := make([]string, 0, len(timeline.UnattributedCounters))
+		for _, metric := range timeline.UnattributedCounters {
+			if metric.Label != "" {
+				labels = append(labels, metric.Label)
+			}
+		}
+		sort.Strings(labels)
+		args["counter_attribution"] = string(counter.CounterAttributionUnknown)
+		args["unattributed_counter_rows"] = len(timeline.UnattributedCounters)
+		args["unattributed_counter_labels"] = labels
+		args["counter_attribution_reason"] = "no capture-backed encoder identity"
+	}
 	if timeline.Timing != nil {
 		args["display_duration_source"] = timeline.Timing.DisplayDurationSource
 		args["timing_source"] = timeline.Timing.TimingSource

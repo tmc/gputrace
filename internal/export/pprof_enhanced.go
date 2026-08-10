@@ -96,10 +96,11 @@ func profileBasisPoints(v float64) int64 {
 }
 
 const (
-	pprofValueCount       = 36
-	pprofExecutionCostIdx = 33
-	pprofProfilerCountIdx = 34
-	pprofUniformRegsIdx   = 35
+	pprofValueCount          = 37
+	pprofExecutionCostIdx    = 33
+	pprofProfilerCountIdx    = 34
+	pprofUniformRegsIdx      = 35
+	pprofUnattributedRowsIdx = 36
 )
 
 func applyEncoderCounterMetrics(values []int64, m *counter.EncoderCounterMetrics) {
@@ -164,6 +165,72 @@ func applyEncoderCounterMetrics(values []int64, m *counter.EncoderCounterMetrics
 	if values[24] == 0 {
 		values[24] = int64(m.BufferL1WriteBandwidth * 1000)
 	}
+}
+
+func appendUnattributedCounterSamples(prof *profile.Profile, metrics []counter.EncoderCounterMetrics, nextID uint64, parents ...*profile.Location) uint64 {
+	if prof == nil || len(metrics) == 0 {
+		return nextID
+	}
+	groupFn := &profile.Function{
+		ID:         nextID,
+		Name:       "Unattributed counter metrics",
+		SystemName: "unattributed_counter_metrics",
+		Filename:   "gpu_counter",
+	}
+	nextID++
+	groupLoc := &profile.Location{ID: nextID, Line: []profile.Line{{Function: groupFn}}}
+	nextID++
+	prof.Function = append(prof.Function, groupFn)
+	prof.Location = append(prof.Location, groupLoc)
+
+	for _, metric := range metrics {
+		label := metric.EncoderLabel
+		if label == "" {
+			label = "(pipeline unknown)"
+		}
+		rowFn := &profile.Function{
+			ID:         nextID,
+			Name:       "[unattributed] " + label,
+			SystemName: "unattributed_pipeline_counter",
+			Filename:   "gpu_counter",
+		}
+		nextID++
+		rowLoc := &profile.Location{ID: nextID, Line: []profile.Line{{Function: rowFn}}}
+		nextID++
+		prof.Function = append(prof.Function, rowFn)
+		prof.Location = append(prof.Location, rowLoc)
+
+		values := make([]int64, pprofValueCount)
+		applyEncoderCounterMetrics(values, &metric)
+		values[pprofUnattributedRowsIdx] = 1
+		locations := []*profile.Location{rowLoc, groupLoc}
+		locations = append(locations, parents...)
+		prof.Sample = append(prof.Sample, &profile.Sample{
+			Location: locations,
+			Value:    values,
+			Label: map[string][]string{
+				"attribution":    {string(counter.CounterAttributionUnknown)},
+				"counter_source": {"PerfCounterStats pipeline row"},
+				"metric_scope":   {"pipeline"},
+				"pipeline_label": {label},
+			},
+		})
+	}
+	return nextID
+}
+
+func splitEncoderCounterMetrics(metrics []counter.EncoderCounterMetrics) (map[int]*counter.EncoderCounterMetrics, []counter.EncoderCounterMetrics) {
+	attributed := make(map[int]*counter.EncoderCounterMetrics)
+	var unattributed []counter.EncoderCounterMetrics
+	for i := range metrics {
+		metric := &metrics[i]
+		if metric.Attribution == counter.CounterAttributionEncoder && metric.EncoderIndex >= 0 {
+			attributed[metric.EncoderIndex] = metric
+			continue
+		}
+		unattributed = append(unattributed, *metric)
+	}
+	return attributed, unattributed
 }
 
 func dispatchSIMDGroupsByIndex(t *trace.Trace, stats *counter.StreamDataStats) []int64 {
@@ -291,7 +358,7 @@ func appendXcodeMetricCoverageComments(prof *profile.Profile) {
 	if len(totals) == 0 {
 		return
 	}
-	counterSource := pprofHasLabel(prof, "counter_source")
+	counterSource := pprofHasLabelValue(prof, "counter_source", "Counters_f_*.raw/Profiling_f_*.raw")
 	for _, name := range []string{
 		"simd_groups",
 		"execution_cost",
@@ -307,6 +374,7 @@ func appendXcodeMetricCoverageComments(prof *profile.Profile) {
 		"device_bandwidth",
 		"instructions",
 		"profiler_samples",
+		"unattributed_counter_rows",
 	} {
 		prof.Comments = append(prof.Comments, fmt.Sprintf("gputrace xcode_metric_total %s: %d", name, totals[name]))
 	}
@@ -330,13 +398,15 @@ func appendXcodeMetricCoverageComments(prof *profile.Profile) {
 	}
 }
 
-func pprofHasLabel(prof *profile.Profile, key string) bool {
+func pprofHasLabelValue(prof *profile.Profile, key, value string) bool {
 	if prof == nil {
 		return false
 	}
 	for _, sample := range prof.Sample {
-		if len(sample.Label[key]) > 0 {
-			return true
+		for _, got := range sample.Label[key] {
+			if got == value {
+				return true
+			}
 		}
 	}
 	return false
@@ -449,6 +519,9 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 
 			// Register footprint from streamData pipeline stats (index 36)
 			{Type: "uniform_regs", Unit: "count"}, // Uniform registers
+
+			// Rows whose raw source carries no encoder identity (index 37)
+			{Type: "unattributed_counter_rows", Unit: "count"},
 		},
 		PeriodType: &profile.ValueType{
 			Type: "gpu",
@@ -482,13 +555,24 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 		)
 	}
 	dispatchExecutionCosts := dispatchExecutionCostValues(streamStats, executionCosts)
-	encoderCounters, _ := counter.PopulateEncoderMetricsFromPerfCounterStats(stats)
-	encoderCounterByIndex := make(map[int]*counter.EncoderCounterMetrics)
-	for i := range encoderCounters {
-		encoderCounterByIndex[encoderCounters[i].EncoderIndex] = &encoderCounters[i]
+	var encoderCounters []counter.EncoderCounterMetrics
+	if stats != nil {
+		var err error
+		encoderCounters, err = counter.PopulateEncoderMetricsFromPerfCounterStats(stats)
+		if err != nil {
+			return nil, fmt.Errorf("populate counter attribution: %w", err)
+		}
 	}
-	if len(encoderCounters) > 0 {
-		prof.Comments = append(prof.Comments, "gputrace encoder_counters_source: Counters_f_*.raw and Profiling_f_*.raw")
+	encoderCounterByIndex, unattributedCounters := splitEncoderCounterMetrics(encoderCounters)
+	if len(encoderCounterByIndex) > 0 {
+		prof.Comments = append(prof.Comments, "gputrace encoder_counters_source: explicitly attributed counter metrics")
+	}
+	if len(unattributedCounters) > 0 {
+		prof.Comments = append(prof.Comments,
+			"gputrace counter_attribution: unknown",
+			fmt.Sprintf("gputrace unattributed_counter_rows: %d", len(unattributedCounters)),
+			"gputrace counter_attribution_reason: no capture-backed encoder identity",
+		)
 	}
 
 	// Create root node
@@ -522,6 +606,7 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 	prof.Location = []*profile.Location{gpuTraceLoc, queueLoc}
 
 	nextID := uint64(3)
+	nextID = appendUnattributedCounterSamples(prof, unattributedCounters, nextID, queueLoc, gpuTraceLoc)
 
 	// Map to track created locations/functions to avoid duplicates
 	// Key: "cbIndex" -> *profile.Location
@@ -601,16 +686,7 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 	// Parse all dispatches once? No, simpler to parse per region or we need to map them.
 	// Since we need to associate dispatches with specific encoders, parsing per region [enc.Offset, nextEnc.Offset] is safer.
 
-	// Pre-calculate metrics map for O(1) lookup
-	metricsMap := make(map[uint64]*counter.ShaderHardwareMetrics)
-	if stats != nil {
-		fmt.Fprintf(os.Stderr, "Building metrics map from %d stats entries\n", len(stats.ShaderMetrics))
-		for i := range stats.ShaderMetrics {
-			m := &stats.ShaderMetrics[i]
-			metricsMap[m.PipelineState] = m
-		}
-		fmt.Fprintf(os.Stderr, "Metrics map built with %d entries\n", len(metricsMap))
-	} else {
+	if stats == nil {
 		fmt.Fprintln(os.Stderr, "No stats provided to ToPprofWithMetrics")
 	}
 
@@ -785,61 +861,6 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 		numLabels := make(map[string][]int64)
 		counterSource := false
 
-		// Use 1-based index to match counters sequential ID
-		lookupKey := uint64(i + 1)
-		if m, ok := metricsMap[lookupKey]; ok {
-			if !useDispatchTiming {
-				// Hardware metrics matching Xcode's view (indices 3-6)
-				// Calculate SIMD groups from kernel invocations if not set
-				// SIMD width on Apple Silicon is 32 threads
-				simdGroups := m.SIMDGroups
-				if simdGroups == 0 && m.ExecutionCount > 0 {
-					simdGroups = m.ExecutionCount / 32
-				}
-				values[3] = int64(simdGroups)      // simd_groups - Xcode "Cost" is based on this
-				values[4] = int64(m.AllocatedRegs) // alloc_regs
-				values[5] = int64(m.HighRegister)  // high_reg
-				values[6] = int64(m.SpilledBytes)  // spilled_bytes
-
-				// Utilization percentages (scale by 100 for 2 decimal precision)
-				values[7] = profileBasisPoints(m.ALUUtilization)            // alu_util
-				values[8] = profileBasisPoints(m.ComputeShaderUtilization)  // compute_util
-				values[9] = profileBasisPoints(m.FragmentShaderUtilization) // fragment_util
-				values[10] = profileBasisPoints(m.VertexShaderUtilization)  // vertex_util
-				values[11] = profileBasisPoints(m.F32Utilization)           // f32_util
-
-				// Limiter percentages (scale by 100)
-				values[12] = profileBasisPoints(m.F32Limiter)                   // f32_limiter
-				values[13] = profileBasisPoints(m.L1CacheLimiter)               // l1_limiter
-				values[14] = profileBasisPoints(m.LastLevelCacheLimiter)        // llc_limiter
-				values[15] = profileBasisPoints(m.ControlFlowLimiter)           // control_flow_limiter
-				values[16] = profileBasisPoints(m.BufferL1MissRate)             // buffer_l1_miss
-				values[17] = profileBasisPoints(m.InstructionThroughputLimiter) // instruction_throughput
-
-				// Byte metrics
-				values[18] = int64(m.BytesReadFromDeviceMemory)      // read_bytes
-				values[19] = int64(m.BytesWrittenToDeviceMemory)     // write_bytes
-				values[20] = int64(m.BufferDeviceMemoryBytesRead)    // buffer_read_bytes
-				values[21] = int64(m.BufferDeviceMemoryBytesWritten) // buffer_write_bytes
-
-				// Bandwidth metrics (scale by 1000 to preserve 3 decimal places, GB/s -> MB/s * 1000)
-				values[22] = int64(m.DeviceMemoryBandwidthGBps * 1000) // device_bandwidth
-				values[23] = int64(m.BufferL1ReadBandwidth * 1000)     // buffer_l1_read_bw
-				values[24] = int64(m.BufferL1WriteBandwidth * 1000)    // buffer_l1_write_bw
-
-				// Instruction counts from PipelineStats/streamData (indices 26-33)
-				values[25] = int64(m.InstructionCount)       // instructions
-				values[26] = int64(m.ALUInstructionCount)    // alu_instructions
-				values[27] = int64(m.FP32InstructionCount)   // fp32_instructions
-				values[28] = int64(m.FP16InstructionCount)   // fp16_instructions
-				values[29] = int64(m.INT32InstructionCount)  // int32_instructions
-				values[30] = int64(m.INT16InstructionCount)  // int16_instructions
-				values[31] = int64(m.BranchInstructionCount) // branch_instructions
-				values[32] = int64(m.ThreadgroupMemory)      // threadgroup_mem
-			}
-
-			matches++
-		}
 		if m := encoderCounterByIndex[i]; m != nil {
 			applyEncoderCounterMetrics(values, m)
 			counterSource = true

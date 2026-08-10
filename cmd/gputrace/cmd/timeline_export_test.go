@@ -902,6 +902,7 @@ func TestAddDispatchKernelEventsUsesEncoderCounterFallback(t *testing.T) {
 	}
 	encoderMetrics := []counter.EncoderCounterMetrics{{
 		EncoderIndex:       0,
+		Attribution:        counter.CounterAttributionEncoder,
 		ALUUtilization:     71.25,
 		ComputeUtilization: 80,
 	}}
@@ -919,6 +920,74 @@ func TestAddDispatchKernelEventsUsesEncoderCounterFallback(t *testing.T) {
 	if got, want := args["alu_utilization_source"], "encoder counter fallback"; got != want {
 		t.Fatalf("alu_utilization_source = %#v, want %#v", got, want)
 	}
+}
+
+func TestPerfettoRendersUnknownCounterMetricsAsUnattributed(t *testing.T) {
+	timeline := &Timeline{Encoders: []EncoderInfo{{
+		Index:     0,
+		Label:     "encoder0",
+		Type:      "compute",
+		StartTime: 1000,
+		EndTime:   21000,
+		Duration:  20000,
+	}}}
+	stats := &counter.StreamDataStats{
+		Pipelines: []counter.PipelineStats{{PipelineID: 42}},
+		Dispatches: []counter.DispatchInfo{{
+			Index:        0,
+			PipelineID:   42,
+			EncoderIndex: 0,
+			DurationUs:   5,
+		}},
+	}
+	metrics := []counter.EncoderCounterMetrics{{
+		EncoderIndex:   0, // A stale/default index must not override attribution.
+		EncoderLabel:   "pipeline0",
+		Attribution:    counter.CounterAttributionUnknown,
+		ALUUtilization: 71.25,
+	}}
+
+	recordUnattributedCounterMetrics(timeline, metrics)
+	if !addDispatchKernelEvents(timeline, stats, timelineDispatchSIMDStats{}, nil, nil, metrics, nil) {
+		t.Fatal("addDispatchKernelEvents returned false")
+	}
+	if got, ok := timeline.Events[0].Args["alu_utilization_pct"]; ok {
+		t.Fatalf("dispatch received unknown counter value %#v", got)
+	}
+
+	out := filepath.Join(t.TempDir(), "timeline.json")
+	if err := exportChromeTracing(timeline, out); err != nil {
+		t.Fatalf("exportChromeTracing: %v", err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		TraceEvents []TimelineEvent `json:"traceEvents"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range doc.TraceEvents {
+		if event.Category != "counter_attribution" {
+			continue
+		}
+		if got, want := event.Args["attribution"], "unknown"; got != want {
+			t.Fatalf("attribution = %#v, want %#v", got, want)
+		}
+		if got, want := event.Args["pipeline_label"], "pipeline0"; got != want {
+			t.Fatalf("pipeline_label = %#v, want %#v", got, want)
+		}
+		if got, want := event.Args["alu_utilization_pct"], 71.25; got != want {
+			t.Fatalf("alu_utilization_pct = %#v, want %#v", got, want)
+		}
+		if _, ok := event.Args["encoder_index"]; ok {
+			t.Fatal("unattributed event contains encoder_index")
+		}
+		return
+	}
+	t.Fatal("missing counter_attribution event")
 }
 
 func TestAddDispatchKernelEventsMarksBoundaryDispatch(t *testing.T) {
@@ -1173,6 +1242,7 @@ func TestGenerateCounterTracksFromPerfDataUsesEncoderCounters(t *testing.T) {
 	encoderMetrics := []counter.EncoderCounterMetrics{{
 		EncoderIndex:               1,
 		EncoderLabel:               "kernel0",
+		Attribution:                counter.CounterAttributionEncoder,
 		ALUUtilization:             3.25,
 		DeviceMemoryBandwidthGBps:  12.5,
 		BytesReadFromDeviceMemory:  500,
@@ -1196,7 +1266,7 @@ func TestGenerateCounterTracksFromPerfDataUsesEncoderCounters(t *testing.T) {
 		}},
 	}
 
-	tracks := generateCounterTracksFromPerfData(&gputrace.PerfCounterStats{}, streamStats, encoderMetrics, timeline)
+	tracks := generateCounterTracksFromPerfData(streamStats, encoderMetrics, timeline)
 	alu := findCounterTrackForTest(t, tracks, "ALU Utilization")
 	if len(alu.Samples) != 2 || alu.Samples[0].Value != 3.25 {
 		t.Fatalf("ALU samples = %+v, want two samples at 3.25", alu.Samples)
@@ -1295,12 +1365,7 @@ func TestGenerateCounterTracksDoesNotEstimateShaderLaunchLimiter(t *testing.T) {
 		EndTime:   200,
 		Duration:  100,
 	}}}
-	perfStats := &gputrace.PerfCounterStats{ShaderMetrics: []gputrace.ShaderHardwareMetrics{{
-		ShaderName:    "kernel0",
-		AllocatedRegs: 128,
-	}}}
-
-	tracks := generateCounterTracksFromPerfData(perfStats, nil, nil, timeline)
+	tracks := generateCounterTracksFromPerfData(nil, nil, timeline)
 	limiter := findCounterTrackForTest(t, tracks, "Shader Launch Limiter")
 	if counterTrackHasSignal(limiter) {
 		t.Fatalf("shader launch limiter = %+v, want no signal without a measured limiter", limiter.Samples)
@@ -1321,9 +1386,10 @@ func TestGenerateCounterTracksFromPerfDataKeepsSourceBackedZeroValues(t *testing
 	encoderMetrics := []counter.EncoderCounterMetrics{{
 		EncoderIndex: 0,
 		EncoderLabel: "kernel0",
+		Attribution:  counter.CounterAttributionEncoder,
 	}}
 
-	tracks := generateCounterTracksFromPerfData(&gputrace.PerfCounterStats{}, nil, encoderMetrics, timeline)
+	tracks := generateCounterTracksFromPerfData(nil, encoderMetrics, timeline)
 	alu := findCounterTrackForTest(t, tracks, "ALU Utilization")
 	if len(alu.Samples) != 2 {
 		t.Fatalf("ALU samples = %d, want 2", len(alu.Samples))

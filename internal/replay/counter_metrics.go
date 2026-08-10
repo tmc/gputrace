@@ -27,6 +27,7 @@ func aggregateReplayEncoderCounterSamples(plan *ReplayPlan, samples []counter.Co
 			EncoderIndex:        encoder.Index,
 			EncoderLabel:        encoder.Label,
 			EncoderType:         encoder.Type,
+			Attribution:         counter.CounterAttributionEncoder,
 			StartTimestamp:      startTimestamp,
 			EndTimestamp:        endTimestamp,
 			DurationCycles:      durationCycles,

@@ -277,8 +277,8 @@ func TestPopulateEncoderMetricsFromPerfCounterStats(t *testing.T) {
 		t.Fatalf("len(metrics) = %d, want 1", len(got))
 	}
 	m := got[0]
-	if m.EncoderIndex != 0 || m.EncoderLabel != "kernel0" || m.EncoderType != "compute" {
-		t.Fatalf("encoder identity = (%d, %q, %q), want (0, kernel0, compute)", m.EncoderIndex, m.EncoderLabel, m.EncoderType)
+	if m.EncoderIndex != -1 || m.EncoderLabel != "kernel0" || m.EncoderType != "compute" || m.Attribution != CounterAttributionUnknown {
+		t.Fatalf("counter attribution = (%d, %q, %q, %q), want (-1, kernel0, compute, unknown)", m.EncoderIndex, m.EncoderLabel, m.EncoderType, m.Attribution)
 	}
 	if m.ALUUtilization != 3.25 {
 		t.Fatalf("ALUUtilization = %v, want 3.25", m.ALUUtilization)
