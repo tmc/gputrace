@@ -275,4 +275,13 @@ func TestParity(t *testing.T) {
 			t.Fatalf("write report: %v", err)
 		}
 	}
+
+	// The report above is printed whatever happens, and four of the five
+	// statuses are reached without looking at a gputrace value. So a run that
+	// compared nothing still prints a full table and, until this check, still
+	// passed. That is the failure this package exists to prevent, appearing in
+	// the package's own test.
+	if err := rep.CheckScored(); err != nil {
+		t.Fatal(err)
+	}
 }

@@ -77,13 +77,17 @@ type CellDiff struct {
 
 // Report is the full per-column standing.
 type Report struct {
-	Trace        string
-	Results      []ColumnResult
-	Encoders     int
-	OracleTabs   int
-	CatalogPath  string
-	Unresolved   []string // oracle columns with no GPUCounterGraph entry
-	Extra        []string // columns gputrace produces that the oracle does not have
+	Trace       string
+	Results     []ColumnResult
+	Encoders    int
+	OracleTabs  int
+	CatalogPath string
+	Unresolved  []string // oracle columns with no GPUCounterGraph entry
+	// Extra are columns gputrace produces for which the *loaded* oracle has no
+	// column. That is a statement about the exports that were loaded, not about
+	// what Xcode measures: load only Counters.csv and Execution Cost lands here,
+	// even though Xcode's Counters tab shows it on every sub-tab.
+	Extra        []string
 	ObserveNotes []string
 	// Disagreements are cells on which Xcode's two exports of this capture do
 	// not agree beyond rounding.
@@ -244,6 +248,36 @@ func (r *Report) Counts() map[Status]int {
 	return m
 }
 
+// Scored returns how many columns the comparison actually decided: the ones
+// gputrace produced and the oracle could check.
+//
+// It is the only number that says whether a run compared anything. The other
+// four statuses are reached without looking at a gputrace value at all, so a
+// report can fill a screen with rows, carry no failure, and still have compared
+// nothing -- which is what a Counters.csv-only oracle produces.
+func (r *Report) Scored() int {
+	c := r.Counts()
+	return c[Match] + c[Mismatch]
+}
+
+// CheckScored returns an error when the comparison decided no column.
+//
+// A caller that only prints the report cannot tell that case apart from a clean
+// run: the table is full either way and no row carries a failure. The error
+// names the produced columns the oracle had nothing to check, because the way
+// this state is reached in practice is a partial oracle rather than a gputrace
+// that produces nothing.
+func (r *Report) CheckScored() error {
+	if r.Scored() > 0 {
+		return nil
+	}
+	return fmt.Errorf("compared nothing: 0 of %d oracle columns were decided; "+
+		"%d columns gputrace produces have no column in this oracle (%s). "+
+		"Xcode's Counters.csv omits %s, and Execution Cost is the only one of those gputrace produces, "+
+		"so an oracle loaded from Counters.csv alone reaches exactly this state",
+		len(r.Results), len(r.Extra), strings.Join(r.Extra, "; "), strings.Join(CountersCSVOmits, ", "))
+}
+
 // Write renders the full report. Every column appears; nothing is truncated,
 // and every disagreeing cell of every mismatched column is listed.
 func (r *Report) Write(w io.Writer) {
@@ -266,6 +300,11 @@ func (r *Report) Write(w io.Writer) {
 	fmt.Fprintln(w, "standing")
 	for _, s := range []Status{Match, Mismatch, NotProduced, OracleSuspect, NoSignal} {
 		fmt.Fprintf(w, "  %-15s %4d\n", s, counts[s])
+	}
+	fmt.Fprintf(w, "  %-15s %4d  (MATCH+MISMATCH: the columns this run actually decided)\n", "SCORED", r.Scored())
+	if r.Scored() == 0 {
+		fmt.Fprintf(w, "\nThis run decided nothing. Every row below was classified without comparing a\n"+
+			"gputrace value to an Xcode one. Read it as a coverage inventory, not as a result.\n")
 	}
 	fmt.Fprintln(w)
 
@@ -309,7 +348,9 @@ func (r *Report) Write(w io.Writer) {
 	}
 
 	if len(r.Extra) > 0 {
-		fmt.Fprintf(w, "\nper-encoder values gputrace produces that Xcode's Counters tab does not have a column for (%d)\n", len(r.Extra))
+		fmt.Fprintf(w, "\nper-encoder values gputrace produces that the loaded oracle has no column for (%d)\n"+
+			"  This says the loaded exports lack the column, not that Xcode does. Counters.csv\n"+
+			"  omits Execution Cost, so loading it alone files our one comparable column here.\n", len(r.Extra))
 		for _, n := range r.Extra {
 			fmt.Fprintf(w, "  %s\n", n)
 		}

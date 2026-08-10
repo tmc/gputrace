@@ -102,6 +102,28 @@ func (o *Oracle) Column(name string) (Column, bool) {
 // CountersCSVName is the Counters.csv export inside the oracle directory.
 const CountersCSVName = "xcode-counters-export.csv"
 
+// CountersCSVOmits names the oracle columns Xcode's Counters.csv export does
+// not carry but its Counters sub-tab exports do.
+//
+// It is why a Counters.csv on its own is not an oracle. "Execution Cost" is the
+// only Xcode column [Observe] publishes on the captures measured so far, and it
+// is in this list, so a comparison against a CSV-only oracle decides nothing --
+// it does not decide less, it decides nothing at all, while still printing a
+// full table of NOT PRODUCED and NO SIGNAL rows that reads like a result.
+//
+// The list is measured from testdata/xcode-oracle rather than asserted;
+// TestCountersCSVOmitsIsMeasured rederives it from the fixture.
+var CountersCSVOmits = []string{
+	"Execution Cost",
+	"Primitives Culled",
+	"RT Scratch L1 Read Bandwidth",
+	"RT Scratch L1 Write Bandwidth",
+	"Register L1 Read Bandwidth",
+	"Register L1 Write Bandwidth",
+	"Unclassified L1 Read Bandwidth",
+	"Unclassified L1 Write Bandwidth",
+}
+
 // Load reads every Xcode export in dir and merges them into one oracle.
 //
 // Two independent exports of the same capture cover overlapping but different
@@ -112,6 +134,11 @@ const CountersCSVName = "xcode-counters-export.csv"
 func Load(fsys fs.FS, dir string) (*Oracle, []Disagreement, error) {
 	tabs, err := LoadOracle(fsys, dir)
 	if err != nil {
+		if _, statErr := fs.Stat(fsys, path.Join(dir, CountersCSVName)); statErr == nil {
+			return nil, nil, fmt.Errorf("%w: %s is present, but Counters.csv alone is not an oracle -- it omits %s, "+
+				"and Execution Cost is the only one of those gputrace produces, so scoring against it would decide no column at all",
+				err, CountersCSVName, strings.Join(CountersCSVOmits, ", "))
+		}
 		return nil, nil, err
 	}
 	csvPath := path.Join(dir, CountersCSVName)
