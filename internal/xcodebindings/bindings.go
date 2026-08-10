@@ -13,6 +13,7 @@ import (
 	"github.com/ebitengine/purego"
 	"github.com/tmc/apple/objc"
 	"github.com/tmc/apple/objectivec"
+	"github.com/tmc/gputrace/internal/xcodepath"
 )
 
 const defaultFrameworkPath = "/Applications/Xcode.app/Contents/PlugIns/GPUDebugger.ideplugin/Contents/Frameworks/GTShaderProfiler.framework/Versions/A/GTShaderProfiler"
@@ -229,6 +230,12 @@ func frameworkCandidates() []string {
 	if developerDir := os.Getenv("GPUTRACE_XCODE_DEVELOPER_DIR"); developerDir != "" {
 		candidates = append(candidates, frameworkPathForDeveloperDir(developerDir))
 	}
+	// GPUTRACE_XCODE_APP pins the bundle the counter catalog is read from.
+	// Honouring it here too is what stops this package from loading one
+	// release's framework while internal/parity names its counters from
+	// another. GPUTRACE_XCODE_DEVELOPER_DIR still wins: it is the more
+	// specific of the two, and it names a framework directly.
+	candidates = append(candidates, xcodepath.FrameworkPaths()...)
 	// Keep the historically selected Xcode.app first when no explicit override
 	// is supplied; its generated bindings are the version validated by this
 	// module. xcode-select remains a fallback for hosts with only one Xcode.

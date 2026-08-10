@@ -18,16 +18,22 @@ import (
 )
 
 // AppEnv names the environment variable that pins the bundle. It is the same
-// variable the capture commands already use, so one setting selects the Xcode
-// that both drives a capture and explains its counters.
+// variable the capture commands already use, and it now also selects the
+// GTShaderProfiler that [FrameworkPath] returns, so one setting selects the
+// Xcode that drives a capture, loads the framework, and explains its counters.
 const AppEnv = "GPUTRACE_XCODE_APP"
 
 // candidateApps are the bundles searched when AppEnv is unset, in preference
-// order. A release candidate sorts first: it is the newer data, and it is the
-// build whose GTShaderProfiler internal/agxps loads.
+// order.
+//
+// Xcode.app sorts first because it is the bundle the generated bindings dlopen
+// at package initialization, and the catalog has to follow the framework rather
+// than lead it: names read from a release candidate would describe a build that
+// is not the one measuring. A release candidate is newer data, but newer data
+// about a different binary is the defect this package exists to prevent.
 var candidateApps = []string{
-	"/Applications/Xcode-rc.app",
 	"/Applications/Xcode.app",
+	"/Applications/Xcode-rc.app",
 	"/Applications/Xcode-beta.app",
 }
 
@@ -62,6 +68,40 @@ func CounterGraphPaths() []string {
 		}
 	}
 	return paths
+}
+
+// frameworkRelative is where GTShaderProfiler lives within a bundle.
+const frameworkRelative = "Contents/PlugIns/GPUDebugger.ideplugin/Contents/Frameworks/GTShaderProfiler.framework/Versions/A/GTShaderProfiler"
+
+// FrameworkPaths returns every GTShaderProfiler to try, in preference order,
+// from the same bundles [CounterGraphPaths] reads. Resolving the framework and
+// the catalog from one list is what keeps a capture's numbers and its counter
+// names in the same release.
+func FrameworkPaths() []string {
+	apps := Apps()
+	paths := make([]string, 0, len(apps))
+	for _, app := range apps {
+		paths = append(paths, filepath.Join(app, frameworkRelative))
+	}
+	return paths
+}
+
+// FrameworkPath returns the first GTShaderProfiler that exists, or "" when none
+// does. Callers that must pass some path to a loader should treat "" as "let
+// the loader report it", not substitute a bundle of their own.
+//
+// Note that the generated gtshaderprofiler bindings dlopen /Applications/Xcode.app
+// themselves at package initialization. Pinning AppEnv to another bundle
+// changes what this returns but does not unload theirs, so a pinned run can
+// still have that framework resident. Reading a resolved path back from a
+// loaded class is the only way to know which one answered.
+func FrameworkPath() string {
+	for _, p := range FrameworkPaths() {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return ""
 }
 
 // CounterGraphPath returns the first GPUCounterGraph.plist that exists, or ""

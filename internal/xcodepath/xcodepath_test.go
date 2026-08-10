@@ -18,15 +18,41 @@ func TestAppsPinIsExclusive(t *testing.T) {
 	}
 }
 
-func TestAppsUnsetPrefersReleaseCandidate(t *testing.T) {
+// TestAppsUnsetPrefersTheLoadedFramework pins the order to the bundle whose
+// framework is actually mapped, which is Xcode.app: the generated
+// gtshaderprofiler bindings dlopen it by an absolute path at package
+// initialization.
+//
+// This assertion used to be the opposite, on the stated grounds that a release
+// candidate "ships the newer dictionary and its GTShaderProfiler is the one
+// internal/agxps loads". The second half was false, and it is what made the
+// default split: names came from the release candidate while the numbers came
+// from Xcode.app. Newer names describing a binary that is not measuring is the
+// defect, not the fix.
+func TestAppsUnsetPrefersTheLoadedFramework(t *testing.T) {
 	t.Setenv(AppEnv, "")
 	apps := Apps()
 	if len(apps) < 2 {
 		t.Fatalf("Apps() = %v, want several candidates", apps)
 	}
-	if !strings.Contains(apps[0], "Xcode-rc.app") {
-		t.Errorf("Apps()[0] = %q, want the release candidate first: it ships the newer "+
-			"dictionary and its GTShaderProfiler is the one internal/agxps loads", apps[0])
+	if apps[0] != "/Applications/Xcode.app" {
+		t.Errorf("Apps()[0] = %q, want /Applications/Xcode.app: it is the bundle the "+
+			"generated bindings dlopen, and the catalog has to follow the framework", apps[0])
+	}
+}
+
+// TestFrameworkAndCatalogAgree is the invariant the split-brain violated: one
+// setting has to move both halves. Before this, the catalog followed
+// GPUTRACE_XCODE_APP and the framework was a hardcoded constant, so a pin moved
+// the counter names without moving the binary that produced the counters.
+func TestFrameworkAndCatalogAgree(t *testing.T) {
+	for _, app := range []string{"/tmp/Fake.app", "/Applications/Xcode-rc.app"} {
+		t.Setenv(AppEnv, app)
+		for _, p := range append(FrameworkPaths(), CounterGraphPaths()...) {
+			if !strings.HasPrefix(p, app+"/") {
+				t.Errorf("with %s=%s, resolved %q from another bundle", AppEnv, app, p)
+			}
+		}
 	}
 }
 
