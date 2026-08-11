@@ -105,7 +105,8 @@ func TestLockHolderDistinguishesLiveFromStale(t *testing.T) {
 		body string
 		want string
 	}{
-		{"live", fmt.Sprintf("%d\t/usr/bin/live\n", os.Getpid()), "still running"},
+		{"live", fmt.Sprintf("%d\t%s\n", os.Getpid(), os.Args[0]), "still running"},
+		{"recycled", fmt.Sprintf("%d\t/usr/bin/some-other-program\n", os.Getpid()), "was reused by another program"},
 		{"stale", "999999\t/usr/bin/dead\n", "is gone; remove it"},
 		{"truncated", "\n", "names no process"},
 	}

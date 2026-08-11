@@ -187,7 +187,27 @@ func lockHolder(lock string) string {
 	if err := syscall.Kill(n, 0); errors.Is(err, syscall.ESRCH) {
 		return fmt.Sprintf("pid %d (%s) is gone; remove it", n, exe)
 	}
+	// Existence alone is not enough: pids are recycled, and reporting an
+	// unrelated process as the holder sends the caller to wait on a lock that
+	// nothing will ever release. The lock records the executable, so require
+	// the live process to be running it.
+	if exe != "" && !runningAs(n, exe) {
+		return fmt.Sprintf("pid %d was reused by another program; %s is gone, remove it", n, exe)
+	}
 	return fmt.Sprintf("pid %d (%s) is still running", n, exe)
+}
+
+// runningAs reports whether pid is currently executing exe. A ps failure
+// answers false: an unverifiable holder is treated as stale, since the caller
+// can always retry, while waiting on a lock nobody holds never ends.
+func runningAs(pid int, exe string) bool {
+	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "comm=").Output()
+	if err != nil {
+		return false
+	}
+	// comm= is the executable path, truncated by ps on long paths, so compare
+	// on the base name rather than requiring the whole path to survive.
+	return filepath.Base(strings.TrimSpace(string(out))) == filepath.Base(exe)
 }
 
 func env(output, lock, dylib string) []string {

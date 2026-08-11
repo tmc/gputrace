@@ -80,10 +80,18 @@ func Execute() error {
 	// MTLReplayer it started behind: LaunchServices, not gputrace, is that
 	// process's parent, so nothing else reaps it.
 	//
-	// A second interrupt restores the default behavior and kills gputrace
-	// outright, so a wedged cleanup can still be escaped.
+	// Unregistering on the first signal is what keeps a second interrupt able
+	// to kill gputrace outright. NotifyContext on its own leaves the handler
+	// installed after it fires, so every later interrupt is swallowed too, and
+	// a command that does not watch its context becomes unkillable by Ctrl+C --
+	// worse than the leak this exists to fix. Verified both ways with a
+	// sleeping test binary.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
 	return rootCmd.ExecuteContext(ctx)
 }
 
