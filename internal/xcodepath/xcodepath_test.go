@@ -95,3 +95,45 @@ func TestCounterGraphPathEmptyWhenAbsent(t *testing.T) {
 		t.Errorf("CounterGraphPath() = %q, want empty for a bundle with no plist", got)
 	}
 }
+
+// TestCounterGraphFollowsFrameworkBundle pins the cross-bundle half of the
+// split-brain. TestFrameworkAndCatalogAgree covers a pinned AppEnv, where only
+// one bundle is a candidate; this covers the unpinned case, where the two
+// halves used to be resolved by independent scans. Two installed Xcodes, the
+// first missing only the catalog, made the catalog come from the second while
+// the framework came from the first: real numbers under names from another
+// release, with nothing in the output to show it.
+func TestCounterGraphFollowsFrameworkBundle(t *testing.T) {
+	root := t.TempDir()
+	first := filepath.Join(root, "Xcode.app")
+	second := filepath.Join(root, "Xcode-rc.app")
+
+	// first has the framework but no catalog; second has both.
+	write := func(path string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(first, frameworkRelative))
+	write(filepath.Join(second, frameworkRelative))
+	write(filepath.Join(second, counterGraphRelative[0]))
+
+	saved := candidateApps
+	candidateApps = []string{first, second}
+	t.Cleanup(func() { candidateApps = saved })
+	t.Setenv(AppEnv, "")
+
+	fw := FrameworkPath()
+	if fw != filepath.Join(first, frameworkRelative) {
+		t.Fatalf("FrameworkPath() = %q, want the framework in %s", fw, first)
+	}
+	if got := CounterGraphPath(); got != "" {
+		t.Errorf("CounterGraphPath() = %q, want \"\": the framework resolved to %s, "+
+			"which has no catalog, so naming counters from %s would mix releases",
+			got, first, second)
+	}
+}

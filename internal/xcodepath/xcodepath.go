@@ -104,13 +104,43 @@ func FrameworkPath() string {
 	return ""
 }
 
-// CounterGraphPath returns the first GPUCounterGraph.plist that exists, or ""
-// when none does. An empty result is not an error: the counter dictionary is
-// enrichment, and callers work without it.
+// CounterGraphPath returns the GPUCounterGraph.plist belonging to the same
+// bundle [FrameworkPath] resolved to, or "" when that bundle has none. An empty
+// result is not an error: the counter dictionary is enrichment, and callers
+// work without it.
+//
+// Scanning every bundle independently, as this used to, resolves the two halves
+// separately: with more than one Xcode installed, a bundle missing the plist
+// would take the framework from one release and the counter names from another.
+// That mismatch is invisible in the output -- the numbers are real and the
+// labels are plausible, they just describe different releases. Following the
+// framework keeps a capture's numbers and its counter names together.
+// When no candidate bundle has the framework there is nothing to stay in sync
+// with, so the search widens to every bundle again.
 func CounterGraphPath() string {
+	if app := frameworkApp(); app != "" {
+		for _, rel := range counterGraphRelative {
+			p := filepath.Join(app, rel)
+			if _, err := os.Stat(p); err == nil {
+				return p
+			}
+		}
+		return ""
+	}
 	for _, p := range CounterGraphPaths() {
 		if _, err := os.Stat(p); err == nil {
 			return p
+		}
+	}
+	return ""
+}
+
+// frameworkApp returns the bundle holding the GTShaderProfiler that
+// [FrameworkPath] resolves to, or "" when no candidate has one.
+func frameworkApp() string {
+	for _, app := range Apps() {
+		if _, err := os.Stat(filepath.Join(app, frameworkRelative)); err == nil {
+			return app
 		}
 	}
 	return ""
