@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 
 	"github.com/spf13/cobra"
 
@@ -73,11 +74,19 @@ Examples:
 }
 
 func runCaptureCheck(cmd *cobra.Command, target string) error {
+	// Resolve through PATH exactly as capture.Run does. Handing the bare argv[0]
+	// to codesign checks a file of that name in the working directory instead,
+	// so the verdict would describe a different binary than the one a capture
+	// would launch.
+	target, err := exec.LookPath(target)
+	if err != nil {
+		return fmt.Errorf("capture: %w", err)
+	}
 	if err := capture.Eligible(target); err != nil {
 		if errors.Is(err, capture.ErrNotInterposable) {
 			// An ineligible target is a verdict, not a malfunction: report it on
 			// stdout and exit non-zero, without restating it on stderr.
-			fmt.Fprintf(cmd.OutOrStdout(), "not capturable: %v\n", err)
+			fmt.Fprintf(cmd.OutOrStdout(), "not capturable: %s: %v\n", target, err)
 			return reportedCaptureError{err}
 		}
 		return err
