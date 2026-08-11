@@ -2,6 +2,7 @@ package capture
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -93,4 +94,33 @@ func homebrewPython() string {
 		}
 	}
 	return ""
+}
+
+func TestLockHolderDistinguishesLiveFromStale(t *testing.T) {
+	// A leftover lock and a live one need opposite responses, so the message
+	// has to tell them apart rather than just reporting that a file exists.
+	dir := t.TempDir()
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"live", fmt.Sprintf("%d\t/usr/bin/live\n", os.Getpid()), "still running"},
+		{"stale", "999999\t/usr/bin/dead\n", "is gone; remove it"},
+		{"truncated", "\n", "names no process"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lock := filepath.Join(dir, tt.name+".capture-lock")
+			if err := os.WriteFile(lock, []byte(tt.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if got := lockHolder(lock); !strings.Contains(got, tt.want) {
+				t.Errorf("lockHolder(%q) = %q, want it to contain %q", tt.body, got, tt.want)
+			}
+		})
+	}
+	if got := lockHolder(filepath.Join(dir, "absent")); !strings.Contains(got, "cannot read it") {
+		t.Errorf("lockHolder(missing) = %q, want a read error", got)
+	}
 }

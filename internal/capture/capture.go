@@ -18,7 +18,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 )
 
 // Options configure a capture run.
@@ -99,7 +101,13 @@ func Run(ctx context.Context, opts Options, argv ...string) (string, error) {
 	}
 	lock := opts.Output + ".capture-lock"
 	if _, err := os.Stat(lock); err == nil {
-		return "", fmt.Errorf("capture: election lock %s already exists", lock)
+		// The interposer creates this file and Run removes it, so a leftover
+		// means either a capture is running now or one was killed before it
+		// could clean up. Those need opposite responses, and only the caller
+		// can tell them apart, so say what the file is and who wrote it.
+		return "", fmt.Errorf("capture: election lock %s already exists: "+
+			"another capture is running, or one was killed; %s", lock,
+			lockHolder(lock))
 	}
 	defer os.Remove(lock)
 	dylib, err := injector()
@@ -160,6 +168,28 @@ func recorded(bundle string) error {
 // layer; Metal's own error text names it when a capture is attempted without
 // it. Do not also set METAL_DEVICE_WRAPPER_TYPE: it substitutes an
 // MTLDebugDevice that has no -traceStream, and startCapture then throws.
+// lockHolder describes the process recorded in an election lock, so the caller
+// can tell a live capture from a leftover. gputrace_elect writes "pid\texe"; a
+// truncated or unreadable file means the writer died mid-write, which is itself
+// the answer.
+func lockHolder(lock string) string {
+	data, err := os.ReadFile(lock)
+	if err != nil {
+		return "cannot read it: " + err.Error()
+	}
+	pid, exe, _ := strings.Cut(strings.TrimSpace(string(data)), "\t")
+	n, err := strconv.Atoi(pid)
+	if err != nil {
+		return "it names no process; remove it"
+	}
+	// Signal 0 tests for existence without delivering anything. ESRCH means no
+	// such process; EPERM means it exists and is not ours, which still counts.
+	if err := syscall.Kill(n, 0); errors.Is(err, syscall.ESRCH) {
+		return fmt.Sprintf("pid %d (%s) is gone; remove it", n, exe)
+	}
+	return fmt.Sprintf("pid %d (%s) is still running", n, exe)
+}
+
 func env(output, lock, dylib string) []string {
 	return append(os.Environ(),
 		"MTL_CAPTURE_ENABLED=1",
