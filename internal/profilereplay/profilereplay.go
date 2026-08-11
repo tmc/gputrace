@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/tmc/gputrace/internal/profilerraw"
@@ -160,6 +161,19 @@ func Profile(ctx context.Context, in string, opts Options) (string, error) {
 func run(ctx context.Context, in, out string) error {
 	cmd := exec.CommandContext(ctx, "open", "-W", "-n", "-a", AppPath, "--args",
 		"-CLI", in, "-profileTrace", "-collectProfilerData", "-outputPath", out)
+
+	// LaunchServices, not this process, is MTLReplayer's parent, so killing open
+	// on cancellation leaves the replayer running: a GPU-heavy orphan that
+	// outlives the command that started it. Verified by interrupting a replay
+	// and finding both open and MTLReplayer still alive. Match on the output
+	// path, which is unique to this run, so a concurrent replay is not killed
+	// too. The pattern must not start with "-": pkill parses a leading dash as
+	// a flag and exits 2 having killed nothing, which looks like success here.
+	cmd.Cancel = func() error {
+		_ = exec.Command("/usr/bin/pkill", "-f", regexp.QuoteMeta(out)).Run()
+		return cmd.Process.Kill()
+	}
+
 	combined, err := cmd.CombinedOutput()
 
 	// open exits 0 having done nothing when it cannot attach to the application

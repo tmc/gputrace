@@ -2,9 +2,12 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/spf13/cobra"
 )
@@ -71,7 +74,17 @@ For more information about a specific command:
 
 // Execute runs the root command.
 func Execute() error {
-	return rootCmd.Execute()
+	// Cancel the command context on interrupt so commands that launch external
+	// processes can tear them down. Without this, Go's default SIGINT handling
+	// ends the process before any Go code runs, and profile-replay leaves the
+	// MTLReplayer it started behind: LaunchServices, not gputrace, is that
+	// process's parent, so nothing else reaps it.
+	//
+	// A second interrupt restores the default behavior and kills gputrace
+	// outright, so a wedged cleanup can still be escaped.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return rootCmd.ExecuteContext(ctx)
 }
 
 type alreadyReportedError interface {
