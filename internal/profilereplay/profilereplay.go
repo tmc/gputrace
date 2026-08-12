@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 
 	"github.com/tmc/gputrace/internal/profilerraw"
 )
@@ -36,6 +37,9 @@ var (
 
 	// ErrNoProfilerData reports that a replay wrote no profiler payload.
 	ErrNoProfilerData = errors.New("replay wrote no profiler data")
+
+	// ErrReplayerBusy reports that another MTLReplayer process is currently active.
+	ErrReplayerBusy = errors.New("MTLReplayer is currently running another capture replay")
 )
 
 // Available reports whether MTLReplayer can be run on this machine.
@@ -92,6 +96,12 @@ type Options struct {
 
 // Profile replays in under the profiler and returns the path it wrote.
 func Profile(ctx context.Context, in string, opts Options) (string, error) {
+	unlock, err := acquireLock(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+
 	if opts.Output == "" {
 		opts.Output = DefaultOutput(in)
 	}
@@ -208,3 +218,28 @@ func embed(in, out, payload string) error {
 	}
 	return nil
 }
+
+// acquireLock ensures exclusive MTLReplayer execution across processes.
+func acquireLock(ctx context.Context) (func(), error) {
+	if err := exec.CommandContext(ctx, "/usr/bin/pgrep", "-x", "MTLReplayer").Run(); err == nil {
+		return nil, fmt.Errorf("%w: MTLReplayer process is active", ErrReplayerBusy)
+	}
+
+	lockPath := filepath.Join(os.TempDir(), "gputrace-mtlreplayer.lock")
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, fmt.Errorf("create replayer lock: %w", err)
+	}
+
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("%w: %s", ErrReplayerBusy, lockPath)
+	}
+
+	unlock := func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		_ = f.Close()
+	}
+	return unlock, nil
+}
+
