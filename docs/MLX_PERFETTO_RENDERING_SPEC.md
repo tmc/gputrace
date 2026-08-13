@@ -897,8 +897,8 @@ Every export carries a manifest containing at least:
 ```text
 schema and exporter version
 input UUID and content digest when already verified for a strict sidecar;
-otherwise explicit digest unavailability (ordinary export does not hash a
-multi-gigabyte bundle merely to render it)
+otherwise explicit digest unavailability (ordinary export does not hash the
+whole multi-gigabyte capture bundle merely to render it)
 input path for diagnostics only
 device and OS/Xcode identity when available
 capture and replay mode
@@ -915,6 +915,16 @@ environment schema, retrieval provenance, and queried-family catalog
 resource policy and loss receipt
 retained raw-artifact identities and digests
 ```
+
+Native Perfetto and timeline JSON exports content-identify every regular file
+directly beneath the resolved `.gpuprofiler_raw` directory. Each untimed
+artifact row contains only its basename, recognized family, optional file
+index, byte size, and SHA-256; host directory paths and symlink targets are not
+retained. The manifest records the artifact count, aggregate bytes, digest
+algorithm, scope, and a deterministic SHA-256 over the sorted artifact
+inventory. This hashes the profiler evidence directory, not the entire
+multi-gigabyte capture bundle. A read failure makes the artifact identity
+unavailable rather than publishing a partial inventory.
 
 When capture mode, replay mode, a counter catalog or decoder, or a separate raw
 artifact identity cannot be proved from the input, the manifest records that

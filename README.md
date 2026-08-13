@@ -177,6 +177,12 @@ Pipeline counter rows that lack a capture-backed encoder identity remain
 untimed and appear in `gputrace_unattributed_counter`; arbitrary metric values
 remain available through `gputrace_unattributed_counter_arg`. Evidence families
 that cannot be placed on the selected clock appear in `gputrace_evidence_gap`.
+Native Perfetto and timeline JSON exports also content-identify regular files
+in the resolved profiler directory. `gputrace_raw_profiler_artifact` exposes
+the basename, family, optional numeric index, byte size, and SHA-256 as untimed
+evidence; `gputrace_capture` carries the deterministic inventory digest and
+aggregate size. The exporter does not retain host directory paths or follow
+symlinks. Hashing a large profiler directory may add several seconds to export.
 
 `diff` fails closed when workload, device/driver, runtime, capture mode, or
 timing-source gates differ or are unavailable. The explicit
