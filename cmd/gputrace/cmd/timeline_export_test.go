@@ -307,10 +307,11 @@ func TestExportChromeTracingStdoutWritesCleanJSON(t *testing.T) {
 
 func TestExportPerfettoWritesNativeProtobuf(t *testing.T) {
 	timeline := &Timeline{
-		ClockDomain:   "busy",
-		AbsoluteTime:  465068216775,
-		TimebaseNumer: 125,
-		TimebaseDenom: 3,
+		ClockDomain:    "busy",
+		AbsoluteTime:   465068216775,
+		ContinuousTime: 123456,
+		TimebaseNumer:  125,
+		TimebaseDenom:  3,
 		Timing: &TimelineTiming{
 			EncoderSpanNs:         20_000,
 			DispatchSpanNs:        5_000,
@@ -395,6 +396,7 @@ func TestExportPerfettoWritesNativeProtobuf(t *testing.T) {
 		"encoder_span_ns", "dispatch_span_ns", "command_buffer_active_time_ns",
 		"display_duration_source", "encoder_timing_source",
 		"clock_conversion_availability", "absolute_time", "timebase_numer", "timebase_denom",
+		"continuous_time", "continuous_time_availability",
 	} {
 		if !bytes.Contains(data, []byte(want)) {
 			t.Fatalf("native trace missing manifest value %q", want)
@@ -404,14 +406,16 @@ func TestExportPerfettoWritesNativeProtobuf(t *testing.T) {
 
 func TestPerfettoClockConversionArgs(t *testing.T) {
 	tests := []struct {
-		name      string
-		timeline  *Timeline
-		available bool
+		name       string
+		timeline   *Timeline
+		available  bool
+		continuous bool
 	}{
 		{name: "nil"},
 		{name: "missing absolute time", timeline: &Timeline{TimebaseNumer: 125, TimebaseDenom: 3}},
 		{name: "missing denominator", timeline: &Timeline{AbsoluteTime: 7, TimebaseNumer: 125}},
 		{name: "available", timeline: &Timeline{AbsoluteTime: 465068216775, TimebaseNumer: 125, TimebaseDenom: 3}, available: true},
+		{name: "continuous only", timeline: &Timeline{ContinuousTime: 99}, continuous: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -422,6 +426,13 @@ func TestPerfettoClockConversionArgs(t *testing.T) {
 			}
 			if got["clock_conversion_domain"] != "wall" || got["clock_conversion_availability"] == "" {
 				t.Fatalf("clock conversion receipt = %#v", got)
+			}
+			_, hasContinuous := got["continuous_time"]
+			if hasContinuous != test.continuous {
+				t.Fatalf("continuous_time present = %v, want %v: %#v", hasContinuous, test.continuous, got)
+			}
+			if got["continuous_time_availability"] == "" {
+				t.Fatalf("continuous time receipt = %#v", got)
 			}
 			if test.available {
 				if got["timebase_numer"] != uint64(125) || got["timebase_denom"] != uint64(3) {

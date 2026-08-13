@@ -949,6 +949,7 @@ type Timeline struct {
 	Timing               *TimelineTiming             `json:"timing,omitempty"`
 	XcodeMetrics         map[string]any              `json:"xcode_metrics,omitempty"`
 	AbsoluteTime         uint64                      `json:"absolute_time"`
+	ContinuousTime       uint64                      `json:"continuous_time,omitempty"`
 	TimebaseNumer        uint64                      `json:"timebase_numer"`
 	TimebaseDenom        uint64                      `json:"timebase_denom"`
 	MLXSemantics         *mlxsemantic.Sidecar        `json:"mlx_semantics,omitempty"`
@@ -1168,6 +1169,7 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 			timeline.Timing = timelineTimingFromStats(streamStats)
 			if streamStats.Timeline != nil {
 				timeline.AbsoluteTime = streamStats.Timeline.AbsoluteTime
+				timeline.ContinuousTime = streamStats.Timeline.ContinuousTime
 				timeline.TimebaseNumer = streamStats.Timeline.TimebaseNumer
 				timeline.TimebaseDenom = streamStats.Timeline.TimebaseDenom
 			}
@@ -1292,6 +1294,7 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 		// Use real CB timing from APSTimelineData
 		ti := streamStats.Timeline
 		timeline.AbsoluteTime = ti.AbsoluteTime
+		timeline.ContinuousTime = ti.ContinuousTime
 		timeline.TimebaseNumer = ti.TimebaseNumer
 		timeline.TimebaseDenom = ti.TimebaseDenom
 
@@ -2742,6 +2745,12 @@ func perfettoClockConversionArgs(timeline *Timeline) map[string]any {
 	args := map[string]any{
 		"clock_conversion_domain":       "wall",
 		"clock_conversion_availability": "unavailable: APSTimelineData absolute time and timebase are incomplete",
+		"continuous_time_availability":  "unavailable: APSTimelineData Continuous Time is absent or zero",
+	}
+	if timeline != nil && timeline.ContinuousTime != 0 {
+		args["continuous_time"] = timeline.ContinuousTime
+		args["continuous_time_domain"] = "raw APSTimelineData field; relationship to exported clocks is unverified"
+		args["continuous_time_availability"] = "available: retained without conversion or clock mapping"
 	}
 	if timeline == nil || timeline.AbsoluteTime == 0 || timeline.TimebaseNumer == 0 || timeline.TimebaseDenom == 0 {
 		return args
@@ -4255,6 +4264,7 @@ func buildTimelineFromProfilerData(tracePath string, stats *counter.StreamDataSt
 		timebaseNumer = stats.Timeline.TimebaseNumer
 		timebaseDenom = stats.Timeline.TimebaseDenom
 		absoluteTime = stats.Timeline.AbsoluteTime
+		timeline.ContinuousTime = stats.Timeline.ContinuousTime
 	}
 
 	timeline.TimebaseNumer = timebaseNumer

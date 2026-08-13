@@ -102,6 +102,8 @@ func TestModuleProjectsRecordedDispatchesAndCompilerFacts(t *testing.T) {
 		"debug.absolute_time",
 		"debug.timebase_numer",
 		"debug.timebase_denom",
+		"debug.continuous_time",
+		"continuous_time_availability",
 		"pipeline_address",
 		"pipeline_identity_source",
 		"pipeline_identity_scope",
