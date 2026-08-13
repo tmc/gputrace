@@ -95,6 +95,34 @@ func TestParseStreamDataMetadataPreservesZeroAndFalse(t *testing.T) {
 	}
 }
 
+func TestDecodedStreamDataFamiliesCountsOnlyNSData(t *testing.T) {
+	objects := []any{
+		"$null",
+		map[string]any{"NS.data": []byte("one")},
+		map[string]any{"NS.data": []byte("two")},
+		map[string]any{"not-data": true},
+		map[string]any{"NS.objects": []any{plist.UID(1), plist.UID(2), plist.UID(3), "not-a-uid", plist.UID(99)}},
+		map[string]any{"NS.objects": []any{}},
+	}
+	got := decodedStreamDataFamilies(objects, map[string]any{
+		"APSData":         plist.UID(4),
+		"APSTimelineData": plist.UID(5),
+		"APSCounterData":  plist.UID(3),
+	})
+	if got.APSData == nil || *got.APSData != 2 {
+		t.Fatalf("APSData decoded blobs = %#v, want 2", got.APSData)
+	}
+	if got.APSTimelineData == nil || *got.APSTimelineData != 0 {
+		t.Fatalf("APSTimelineData decoded blobs = %#v, want recorded zero", got.APSTimelineData)
+	}
+	if got.APSCounterData != nil {
+		t.Fatalf("malformed APSCounterData = %#v, want nil", got.APSCounterData)
+	}
+	if got.ShaderProfilerData != nil {
+		t.Fatalf("absent shaderProfilerData = %#v, want nil", got.ShaderProfilerData)
+	}
+}
+
 func TestParseStreamDataIntegration(t *testing.T) {
 	gpuprofDir := integrationPathFromEnv(t, streamDataIntegrationDirEnv)
 	stats, err := ParseStreamData(gpuprofDir, nil)

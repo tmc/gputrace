@@ -433,7 +433,8 @@ func TestApplyStreamIdentity(t *testing.T) {
 			Tables: counter.StreamDataTables{CommandBuffers: &counter.StreamDataTable{
 				Bytes: 1184, RecordSize: &recordSize, RecordCount: &recordCount, RemainderBytes: &remainder,
 			}},
-			Families: counter.StreamDataFamilies{APSData: &twoEntries, ShaderProfilerData: &zeroEntries},
+			Families:        counter.StreamDataFamilies{APSData: &twoEntries, ShaderProfilerData: &zeroEntries},
+			DecodedFamilies: counter.StreamDataDecodedFamilies{APSData: &twoEntries, ShaderProfilerData: &zeroEntries},
 		},
 	})
 	if timeline.GPUGeneration == nil || *timeline.GPUGeneration != 2 || timeline.MetalDeviceName != "Apple M4 Max" || timeline.MetalPluginName != "AGXMetalG16X" {
@@ -454,6 +455,9 @@ func TestApplyStreamIdentity(t *testing.T) {
 	if timeline.StreamMetadata.Families.APSData == &twoEntries || timeline.StreamMetadata.Families.ShaderProfilerData == &zeroEntries {
 		t.Fatal("stream family counts retained source pointers")
 	}
+	if timeline.StreamMetadata.DecodedFamilies.APSData == &twoEntries || timeline.StreamMetadata.DecodedFamilies.ShaderProfilerData == &zeroEntries {
+		t.Fatal("decoded stream family counts retained source pointers")
+	}
 }
 
 func TestPerfettoStreamMetadataArgsPreservesZeroAndFalse(t *testing.T) {
@@ -471,7 +475,8 @@ func TestPerfettoStreamMetadataArgsPreservesZeroAndFalse(t *testing.T) {
 		Tables: counter.StreamDataTables{Encoders: &counter.StreamDataTable{
 			Bytes: 10, RecordSize: &recordSize, RecordCount: &recordCount, RemainderBytes: &remainder,
 		}},
-		Families: counter.StreamDataFamilies{APSData: &twoEntries, ShaderProfilerData: &zeroEntries},
+		Families:        counter.StreamDataFamilies{APSData: &twoEntries, ShaderProfilerData: &zeroEntries},
+		DecodedFamilies: counter.StreamDataDecodedFamilies{APSData: &zeroEntries, ShaderProfilerData: &zeroEntries},
 	})
 	for _, key := range []string{"stream_data_profiled_execution_mode", "stream_data_has_unused_resources", "stream_data_num_blit_calls"} {
 		if _, ok := args[key]; !ok {
@@ -496,8 +501,29 @@ func TestPerfettoStreamMetadataArgsPreservesZeroAndFalse(t *testing.T) {
 	if got := args["stream_data_shader_profiler_data_entry_count"]; got != int64(0) {
 		t.Fatalf("shader profiler entry count = %#v, want recorded zero", got)
 	}
+	if got := args["stream_data_aps_data_decoded_blob_count"]; got != int64(0) {
+		t.Fatalf("APSData decoded blob count = %#v, want recorded zero", got)
+	}
+	if got := args["stream_data_aps_data_non_blob_entry_count"]; got != int64(2) {
+		t.Fatalf("APSData non-blob entry count = %#v, want 2", got)
+	}
+	if got := args["stream_data_aps_timeline_data_decode_availability"]; got != "unavailable: archive array key is absent or malformed" {
+		t.Fatalf("APSTimelineData decode availability = %#v", got)
+	}
 	if got := args["stream_data_gpu_timeline_data_availability"]; got != "unavailable: archive array key is absent or malformed" {
 		t.Fatalf("GPU timeline availability = %#v", got)
+	}
+}
+
+func TestAppendDecodedStreamDataFamilyArgsRejectsImpossibleCount(t *testing.T) {
+	entries, blobs := int64(1), int64(2)
+	args := make(map[string]any)
+	appendDecodedStreamDataFamilyArgs(args, "aps_data", &entries, &blobs)
+	if got := args["stream_data_aps_data_decode_availability"]; got != "inconsistent: decoded blob count exceeds archive entry count" {
+		t.Fatalf("decode availability = %#v", got)
+	}
+	if _, ok := args["stream_data_aps_data_non_blob_entry_count"]; ok {
+		t.Fatalf("impossible non-blob count was exported: %#v", args)
 	}
 }
 

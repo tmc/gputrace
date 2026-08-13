@@ -183,24 +183,36 @@ type StreamDataStats struct {
 // root. Enum and capture-range meanings are private and remain uninterpreted.
 // Pointer fields distinguish a recorded zero or false from an absent key.
 type StreamDataMetadata struct {
-	Version                      *int64             `json:"version,omitempty"`
-	UnixTimestamp                *int64             `json:"unix_timestamp,omitempty"`
-	TraceName                    string             `json:"trace_name,omitempty"`
-	ProfiledExecutionMode        *int64             `json:"profiled_execution_mode,omitempty"`
-	ProfiledPerformanceState     *int64             `json:"profiled_performance_state,omitempty"`
-	ProfiledProfilerMode         *int64             `json:"profiled_profiler_mode,omitempty"`
-	CaptureRangeLocation         *int64             `json:"capture_range_location,omitempty"`
-	CaptureRangeLength           *int64             `json:"capture_range_length,omitempty"`
-	DataSourceHasUnusedResources *bool              `json:"data_source_has_unused_resources,omitempty"`
-	SupportsSeparateAPSData      *bool              `json:"supports_separate_aps_data,omitempty"`
-	NumBlitCalls                 *int64             `json:"num_blit_calls,omitempty"`
-	Tables                       StreamDataTables   `json:"tables"`
-	Families                     StreamDataFamilies `json:"families"`
+	Version                      *int64                    `json:"version,omitempty"`
+	UnixTimestamp                *int64                    `json:"unix_timestamp,omitempty"`
+	TraceName                    string                    `json:"trace_name,omitempty"`
+	ProfiledExecutionMode        *int64                    `json:"profiled_execution_mode,omitempty"`
+	ProfiledPerformanceState     *int64                    `json:"profiled_performance_state,omitempty"`
+	ProfiledProfilerMode         *int64                    `json:"profiled_profiler_mode,omitempty"`
+	CaptureRangeLocation         *int64                    `json:"capture_range_location,omitempty"`
+	CaptureRangeLength           *int64                    `json:"capture_range_length,omitempty"`
+	DataSourceHasUnusedResources *bool                     `json:"data_source_has_unused_resources,omitempty"`
+	SupportsSeparateAPSData      *bool                     `json:"supports_separate_aps_data,omitempty"`
+	NumBlitCalls                 *int64                    `json:"num_blit_calls,omitempty"`
+	Tables                       StreamDataTables          `json:"tables"`
+	Families                     StreamDataFamilies        `json:"families"`
+	DecodedFamilies              StreamDataDecodedFamilies `json:"decoded_families"`
 }
 
 // StreamDataFamilies reports top-level archive array entry counts. Counts are
 // inventory only; one array entry is not necessarily one decoded sample.
 type StreamDataFamilies struct {
+	APSData                     *int64 `json:"aps_data,omitempty"`
+	APSTimelineData             *int64 `json:"aps_timeline_data,omitempty"`
+	APSCounterData              *int64 `json:"aps_counter_data,omitempty"`
+	ShaderProfilerData          *int64 `json:"shader_profiler_data,omitempty"`
+	GPUTimelineData             *int64 `json:"gpu_timeline_data,omitempty"`
+	BatchIDFilteredCountersData *int64 `json:"batch_id_filtered_counters_data,omitempty"`
+}
+
+// StreamDataDecodedFamilies reports NSData payload blob counts recovered from
+// top-level archive arrays. A blob may contain many records or samples.
+type StreamDataDecodedFamilies struct {
 	APSData                     *int64 `json:"aps_data,omitempty"`
 	APSTimelineData             *int64 `json:"aps_timeline_data,omitempty"`
 	APSCounterData              *int64 `json:"aps_counter_data,omitempty"`
@@ -263,6 +275,7 @@ func ParseStreamData(gpuprofilerDir string, addressToName map[uint64]string) (*S
 			stats.MetalDeviceName = archivedString(objects, obj1["metalDeviceName"])
 			stats.MetalPluginName = archivedString(objects, obj1["metalPluginName"])
 			stats.Metadata = parseStreamDataMetadata(objects, obj1)
+			stats.Metadata.DecodedFamilies = decodedStreamDataFamilies(objects, obj1)
 
 			// Extract function names from strings array
 			stats.FunctionNames = extractFunctionNames(objects, obj1)
@@ -332,6 +345,28 @@ func ParseStreamData(gpuprofilerDir string, addressToName map[uint64]string) (*S
 
 	stats.setTimingSource()
 	return stats, nil
+}
+
+// decodedStreamDataFamilies reports NSData payloads that can be recovered
+// from each top-level family. These are blob counts, not records or samples.
+func decodedStreamDataFamilies(objects []any, root map[string]any) StreamDataDecodedFamilies {
+	return StreamDataDecodedFamilies{
+		APSData:                     archivedDataBlobCount(objects, root, "APSData"),
+		APSTimelineData:             archivedDataBlobCount(objects, root, "APSTimelineData"),
+		APSCounterData:              archivedDataBlobCount(objects, root, "APSCounterData"),
+		ShaderProfilerData:          archivedDataBlobCount(objects, root, "shaderProfilerData"),
+		GPUTimelineData:             archivedDataBlobCount(objects, root, "gpuTimelineData"),
+		BatchIDFilteredCountersData: archivedDataBlobCount(objects, root, "batchIdFilteredCountersData"),
+	}
+}
+
+func archivedDataBlobCount(objects []any, root map[string]any, key string) *int64 {
+	entries := archivedArrayCount(objects, root, key)
+	if entries == nil {
+		return nil
+	}
+	count := int64(len(extractDataArray(objects, root, key)))
+	return &count
 }
 
 func parseStreamDataMetadata(objects []any, root map[string]any) StreamDataMetadata {

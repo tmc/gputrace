@@ -1532,7 +1532,8 @@ func streamDataMetadataPresent(metadata counter.StreamDataMetadata) bool {
 		metadata.ProfiledProfilerMode != nil || metadata.CaptureRangeLocation != nil ||
 		metadata.CaptureRangeLength != nil || metadata.DataSourceHasUnusedResources != nil ||
 		metadata.SupportsSeparateAPSData != nil || metadata.NumBlitCalls != nil ||
-		streamDataTablesPresent(metadata.Tables) || streamDataFamiliesPresent(metadata.Families)
+		streamDataTablesPresent(metadata.Tables) || streamDataFamiliesPresent(metadata.Families) ||
+		streamDataDecodedFamiliesPresent(metadata.DecodedFamilies)
 }
 
 func streamDataTablesPresent(tables counter.StreamDataTables) bool {
@@ -1541,6 +1542,12 @@ func streamDataTablesPresent(tables counter.StreamDataTables) bool {
 }
 
 func streamDataFamiliesPresent(families counter.StreamDataFamilies) bool {
+	return families.APSData != nil || families.APSTimelineData != nil || families.APSCounterData != nil ||
+		families.ShaderProfilerData != nil || families.GPUTimelineData != nil ||
+		families.BatchIDFilteredCountersData != nil
+}
+
+func streamDataDecodedFamiliesPresent(families counter.StreamDataDecodedFamilies) bool {
 	return families.APSData != nil || families.APSTimelineData != nil || families.APSCounterData != nil ||
 		families.ShaderProfilerData != nil || families.GPUTimelineData != nil ||
 		families.BatchIDFilteredCountersData != nil
@@ -1569,6 +1576,12 @@ func cloneStreamDataMetadata(metadata counter.StreamDataMetadata) counter.Stream
 	result.Families.ShaderProfilerData = cloneInt64(metadata.Families.ShaderProfilerData)
 	result.Families.GPUTimelineData = cloneInt64(metadata.Families.GPUTimelineData)
 	result.Families.BatchIDFilteredCountersData = cloneInt64(metadata.Families.BatchIDFilteredCountersData)
+	result.DecodedFamilies.APSData = cloneInt64(metadata.DecodedFamilies.APSData)
+	result.DecodedFamilies.APSTimelineData = cloneInt64(metadata.DecodedFamilies.APSTimelineData)
+	result.DecodedFamilies.APSCounterData = cloneInt64(metadata.DecodedFamilies.APSCounterData)
+	result.DecodedFamilies.ShaderProfilerData = cloneInt64(metadata.DecodedFamilies.ShaderProfilerData)
+	result.DecodedFamilies.GPUTimelineData = cloneInt64(metadata.DecodedFamilies.GPUTimelineData)
+	result.DecodedFamilies.BatchIDFilteredCountersData = cloneInt64(metadata.DecodedFamilies.BatchIDFilteredCountersData)
 	return result
 }
 
@@ -2980,7 +2993,29 @@ func perfettoStreamMetadataArgs(metadata *counter.StreamDataMetadata) map[string
 	appendStreamDataFamilyArgs(args, "shader_profiler_data", metadata.Families.ShaderProfilerData)
 	appendStreamDataFamilyArgs(args, "gpu_timeline_data", metadata.Families.GPUTimelineData)
 	appendStreamDataFamilyArgs(args, "batch_id_filtered_counters_data", metadata.Families.BatchIDFilteredCountersData)
+	args["stream_data_decoded_family_count_semantics"] = "NSData payload blobs recovered from top-level archive arrays; not records or samples"
+	appendDecodedStreamDataFamilyArgs(args, "aps_data", metadata.Families.APSData, metadata.DecodedFamilies.APSData)
+	appendDecodedStreamDataFamilyArgs(args, "aps_timeline_data", metadata.Families.APSTimelineData, metadata.DecodedFamilies.APSTimelineData)
+	appendDecodedStreamDataFamilyArgs(args, "aps_counter_data", metadata.Families.APSCounterData, metadata.DecodedFamilies.APSCounterData)
+	appendDecodedStreamDataFamilyArgs(args, "shader_profiler_data", metadata.Families.ShaderProfilerData, metadata.DecodedFamilies.ShaderProfilerData)
+	appendDecodedStreamDataFamilyArgs(args, "gpu_timeline_data", metadata.Families.GPUTimelineData, metadata.DecodedFamilies.GPUTimelineData)
+	appendDecodedStreamDataFamilyArgs(args, "batch_id_filtered_counters_data", metadata.Families.BatchIDFilteredCountersData, metadata.DecodedFamilies.BatchIDFilteredCountersData)
 	return args
+}
+
+func appendDecodedStreamDataFamilyArgs(args map[string]any, name string, entries, blobs *int64) {
+	prefix := "stream_data_" + name + "_"
+	if entries == nil || blobs == nil {
+		args[prefix+"decode_availability"] = "unavailable: archive array key is absent or malformed"
+		return
+	}
+	args[prefix+"decoded_blob_count"] = *blobs
+	if *blobs > *entries {
+		args[prefix+"decode_availability"] = "inconsistent: decoded blob count exceeds archive entry count"
+		return
+	}
+	args[prefix+"non_blob_entry_count"] = *entries - *blobs
+	args[prefix+"decode_availability"] = "available"
 }
 
 func appendStreamDataFamilyArgs(args map[string]any, name string, count *int64) {
