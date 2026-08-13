@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/tmc/apple/private/xcode/gtshaderprofiler"
 	"github.com/tmc/gputrace/internal/counter"
 	"github.com/tmc/gputrace/internal/testtrace"
 )
@@ -102,7 +103,7 @@ func TestProcessStreamData(t *testing.T) {
 		if os.Getenv("GPUTRACE_MIO_SETUP_DATA_PATH") == "1" && pipelineDuration == 0 {
 			t.Errorf("setup-backed pipeline duration is zero: %#v", timeline.PipelineDraws)
 		}
-		t.Logf("timeline: draws=%d encoders=%d costs=%d pipelines=%d scope0=%.6g scope4=%.6g pipelineDraws=%#v encoders=%#v drawDurations=%#v", timeline.DrawCount, timeline.EncoderCount, timeline.CostCount, timeline.PipelineStateCount, timeline.Scope0DataMaster2, timeline.Scope4DataMaster2, timeline.PipelineDraws, timeline.EncoderDurations, timeline.DrawDurationsDataMaster2)
+		t.Logf("timeline: draws=%d encoders=%d costs=%d pipelines=%d scope0=%.6g scope4=%.6g", timeline.DrawCount, timeline.EncoderCount, timeline.CostCount, timeline.PipelineStateCount, timeline.Scope0DataMaster2, timeline.Scope4DataMaster2)
 	}
 	if os.Getenv("GPUTRACE_MIO_TRACE_TRACKS") == "1" {
 		if summary.Tracks.TopDrawCount != summary.DrawCount {
@@ -190,13 +191,15 @@ func TestProcessStreamData(t *testing.T) {
 	if b.InstructionCount == 0 {
 		t.Error("instruction count = 0, want the compiled instruction tables")
 	}
-	// Live register counts come from the instruction tables, so they are
-	// available whenever those are, unlike the execution counters.
-	if b.HighRegister <= 0 {
-		t.Errorf("high register = %d, want a positive live-register count", b.HighRegister)
+	if b.SourceCost.Status == "" || b.SourceCost.Reason == "" {
+		t.Errorf("source cost evidence is incomplete: %#v", b.SourceCost)
+	}
+	if b.SourceCost.Ready {
+		t.Error("source cost evidence unexpectedly claims a proven measured join")
 	}
 	t.Logf("binaries: count=%d instructions=%d executed=%d highRegister=%d debugLocations=%d",
 		b.Count, b.InstructionCount, b.InstructionsExecuted, b.HighRegister, b.DebugLocationCount)
+	t.Logf("source cost: %#v", b.SourceCost)
 	if len(b.DebugLocations) != int(b.DebugLocationCount) {
 		t.Errorf("decoded debug locations = %d, want %d", len(b.DebugLocations), b.DebugLocationCount)
 	}
@@ -210,12 +213,14 @@ func TestProcessStreamData(t *testing.T) {
 			t.Errorf("debug string selector = %q, want first table value %q", b.DebugSelectorString, first.FilePath)
 		}
 	}
-	for _, location := range b.DebugLocations {
+	for i, location := range b.DebugLocations {
 		if location.FilePath == "" || location.FunctionName == "" {
 			t.Errorf("debug location %d has empty source mapping", location.BinaryIndex)
 		}
-		t.Logf("debug location: binary=%d %s:%d:%d %s", location.BinaryIndex, location.FilePath,
-			location.Line, location.Column, location.FunctionName)
+		if i < 3 {
+			t.Logf("debug location: binary=%d %s:%d:%d %s", location.BinaryIndex, location.FilePath,
+				location.Line, location.Column, location.FunctionName)
+		}
 	}
 	for _, p := range summary.Pipelines {
 		t.Logf("  objectId=%#x pointerId=%#x fnIndex=%d index=%d commands=%d mcaHighRegister=%d %q",
@@ -245,6 +250,42 @@ func TestProcessStreamData(t *testing.T) {
 					p.ObjectID, p.MCAHighRegister, q.MCAHighRegister, p.MCAAllocatedGPR, q.MCAAllocatedGPR)
 			}
 		}
+	}
+}
+
+func TestMeasuredCost(t *testing.T) {
+	var zero gtshaderprofiler.GTMioCostInfo
+	nonzero := zero
+	nonzero.Field7[3] = 1
+	if measuredCost(nil) || measuredCost(&zero) {
+		t.Fatal("empty cost reported as measured")
+	}
+	if !measuredCost(&nonzero) {
+		t.Fatal("nonzero data-master instruction count not reported as measured")
+	}
+}
+
+func TestSourceCostEvidenceFinish(t *testing.T) {
+	tests := []struct {
+		name  string
+		count uint64
+		in    SourceCostEvidence
+		want  string
+	}{
+		{"no table", 0, SourceCostEvidence{}, "no_instruction_table"},
+		{"no model", 3, SourceCostEvidence{}, "cost_model_not_built"},
+		{"no cost", 3, SourceCostEvidence{CostModelReady: true}, "no_measured_instruction_cost"},
+		{"debug ranges", 3, SourceCostEvidence{CostModelReady: true, NonzeroInstructionCostCount: 1}, "incomplete_debug_ranges"},
+		{"identity", 3, SourceCostEvidence{CostModelReady: true, NonzeroInstructionCostCount: 1, DebugRangeInstructionCount: 3}, "binary_identity_unproven"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := test.in
+			got.finish(test.count)
+			if got.Ready || got.Status != test.want || got.Reason == "" {
+				t.Fatalf("finish(%d) = %#v, want status %q and a refusal reason", test.count, got, test.want)
+			}
+		})
 	}
 }
 

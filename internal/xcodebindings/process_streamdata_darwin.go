@@ -229,9 +229,25 @@ type BinarySummary struct {
 	HighRegister          int32                  `json:"high_register"`
 	DebugLocationCount    uint64                 `json:"debug_location_count"`
 	DebugLocations        []ShaderSourceLocation `json:"debug_locations,omitempty"`
+	SourceCost            SourceCostEvidence     `json:"source_cost"`
 	DebugSelectorFile     string                 `json:"-"`
 	DebugSelectorFunction string                 `json:"-"`
 	DebugSelectorString   string                 `json:"-"`
+}
+
+// SourceCostEvidence reports whether the processed model contains the inputs
+// needed for measured source-line attribution. Ready is false unless every
+// edge in that join has been established; callers must not infer readiness
+// from a non-nil private-framework pointer.
+type SourceCostEvidence struct {
+	Ready                          bool   `json:"ready"`
+	CostModelReady                 bool   `json:"cost_model_ready"`
+	Status                         string `json:"status"`
+	Reason                         string `json:"reason"`
+	NonzeroInstructionAddressCount uint64 `json:"nonzero_instruction_address_count"`
+	DebugRangeInstructionCount     uint64 `json:"debug_range_instruction_count"`
+	NonzeroInstructionCostCount    uint64 `json:"nonzero_instruction_cost_count"`
+	CostBearingBinaryCount         uint64 `json:"cost_bearing_binary_count"`
 }
 
 // ShaderSourceLocation maps a compiler-reported shader location to its source
@@ -486,7 +502,7 @@ func processStreamData(summary *ProcessedStreamData, requireDataPath bool) error
 	if os.Getenv("GPUTRACE_MIO_SETUP_DATA_PATH") == "1" {
 		summary.CostModel = readCostModel(mio)
 	}
-	readResult(summary, processor)
+	readResult(summary, processor, setupDataPath)
 	if os.Getenv("GPUTRACE_MIO_TIMELINE_DATA") == "1" {
 		summary.Timeline = readSerializedTimeline(mio, stream, summary.Pipelines)
 	}
@@ -827,7 +843,7 @@ func locateTimelineDrawLayout(raw []byte, count int, want map[uint64]uint64) (in
 // readResult fills the device metadata and pipeline records from the profiler
 // result. Failures are left as zero values: the result surface varies by Xcode
 // version, and the counts above are useful without it.
-func readResult(summary *ProcessedStreamData, processor objc.ID) {
+func readResult(summary *ProcessedStreamData, processor objc.ID, costModelReady bool) {
 	result := shaderProfilerResult(processor)
 	if result == 0 {
 		return
@@ -845,7 +861,7 @@ func readResult(summary *ProcessedStreamData, processor objc.ID) {
 		}
 	}
 	summary.ShaderBinaryCount = collectionCount(result, "shaderBinaries")
-	summary.Binaries = readBinaries(result)
+	summary.Binaries = readBinaries(result, costModelReady)
 	summary.GPUCommands = readGPUCommands(result)
 	summary.GPUCommandCount = uint64(len(summary.GPUCommands))
 	summary.Encoders = readEncoders(result)
@@ -992,8 +1008,9 @@ func newMCABinaryList(cls objc.Class, result objc.ID, pipelineStateID uint64, pr
 // -enumerateBinariesForPipelineState:enumerator:. Both reach the same objects,
 // but the collection needs no block bridging, and a pipeline-keyed enumeration
 // would double-count binaries shared between pipelines.
-func readBinaries(result objc.ID) BinarySummary {
+func readBinaries(result objc.ID, costModelReady bool) BinarySummary {
 	var summary BinarySummary
+	summary.SourceCost.CostModelReady = costModelReady
 	summary.HighRegister = -1
 	for _, binary := range elementsOf(objectFor(result, "shaderBinaries")) {
 		if !objc.RespondsToSelector(binary, objc.Sel("instructionInfoCount")) {
@@ -1023,11 +1040,80 @@ func readBinaries(result objc.ID) BinarySummary {
 		if high := highestLiveRegister(binary, instructions); high > summary.HighRegister {
 			summary.HighRegister = high
 		}
+		readSourceCostEvidence(&summary.SourceCost, binary, instructions, costModelReady)
 	}
 	if summary.HighRegister < 0 {
 		summary.HighRegister = 0
 	}
+	summary.SourceCost.finish(summary.InstructionCount)
 	return summary
+}
+
+func readSourceCostEvidence(evidence *SourceCostEvidence, id objc.ID, count uint64, costModelReady bool) {
+	if count == 0 || count > uint64(^uint(0)>>1) {
+		return
+	}
+	binary := gtshaderprofiler.GTMioShaderBinaryDataFromID(id)
+	var binaryHasCost bool
+	costs := binary.InstructionCosts()
+	if costModelReady && costs != nil {
+		values := unsafe.Slice(costs, int(count))
+		for i := range values {
+			if measuredCost(&values[i]) {
+				evidence.NonzeroInstructionCostCount++
+				binaryHasCost = true
+			}
+		}
+	}
+	if binaryHasCost {
+		evidence.CostBearingBinaryCount++
+	}
+	for i := uint64(0); i < count && i <= uint64(^uint32(0)); i++ {
+		index := uint32(i)
+		if binary.AddressForInstructionAtIndex(index) != 0 {
+			evidence.NonzeroInstructionAddressCount++
+		}
+		if binary.DebugRangeForInstructionAtIndex(index) != nil {
+			evidence.DebugRangeInstructionCount++
+		}
+	}
+}
+
+func measuredCost(cost *gtshaderprofiler.GTMioCostInfo) bool {
+	if cost == nil {
+		return false
+	}
+	if cost.Field2 != 0 || cost.Field4 != 0 || cost.Field6 != 0 ||
+		cost.Field8 != 0 || cost.Field9 != 0 || cost.Field10 != 0 {
+		return true
+	}
+	for i := range cost.Field3 {
+		if cost.Field3[i] != 0 || cost.Field5[i] != 0 || cost.Field7[i] != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *SourceCostEvidence) finish(instructionCount uint64) {
+	e.Ready = false
+	switch {
+	case instructionCount == 0:
+		e.Status = "no_instruction_table"
+		e.Reason = "processed model has no shader instruction table"
+	case !e.CostModelReady:
+		e.Status = "cost_model_not_built"
+		e.Reason = "Xcode data-path setup was not requested"
+	case e.NonzeroInstructionCostCount == 0:
+		e.Status = "no_measured_instruction_cost"
+		e.Reason = "processed model has no nonzero instruction cost payload"
+	case e.DebugRangeInstructionCount != instructionCount:
+		e.Status = "incomplete_debug_ranges"
+		e.Reason = "not every instruction maps to a debug range"
+	default:
+		e.Status = "binary_identity_unproven"
+		e.Reason = "processed model does not establish exact binary-to-pipeline and metallib identity"
+	}
 }
 
 // decodeDebugLocations resolves the location array through its per-binary
