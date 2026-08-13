@@ -2,7 +2,6 @@
 package perfetto
 
 import (
-	"bytes"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -198,8 +197,15 @@ func WriteWithOptions(w io.Writer, trace *Trace, options WriteOptions) (Receipt,
 	required = append(required, manifest)
 
 	packets := flattenGroups(selected)
-	var output bytes.Buffer
-	writer := traceWriter{w: &output}
+	logicalBytes := framedSize(required)
+	for _, packet := range packets {
+		logicalBytes += framedSize([][]byte{packet.data})
+	}
+	if options.MaxBytes > 0 && logicalBytes > options.MaxBytes {
+		return Receipt{}, fmt.Errorf("write perfetto trace: loss receipt exceeded reserved output budget")
+	}
+	receipt.LogicalBytes = logicalBytes
+	writer := traceWriter{w: w}
 	for _, packet := range required {
 		if err := writer.packet(packet); err != nil {
 			return Receipt{}, err
@@ -209,13 +215,6 @@ func WriteWithOptions(w io.Writer, trace *Trace, options WriteOptions) (Receipt,
 		if err := writer.packet(packet.data); err != nil {
 			return Receipt{}, err
 		}
-	}
-	if options.MaxBytes > 0 && int64(output.Len()) > options.MaxBytes {
-		return Receipt{}, fmt.Errorf("write perfetto trace: loss receipt exceeded reserved output budget")
-	}
-	receipt.LogicalBytes = int64(output.Len())
-	if _, err := io.Copy(w, &output); err != nil {
-		return Receipt{}, fmt.Errorf("write perfetto trace: %w", err)
 	}
 	return receipt, nil
 }

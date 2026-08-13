@@ -2,6 +2,7 @@ package perfetto
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -91,5 +92,42 @@ func TestWriteWithBudgetRejectsMissingSkeletonSpace(t *testing.T) {
 	errTrace := &Trace{ClockDomain: "busy", Tracks: []Track{{UUID: 1, Name: "track"}}}
 	if _, err := WriteWithOptions(&bytes.Buffer{}, errTrace, WriteOptions{MaxBytes: 10}); err == nil || !strings.Contains(err.Error(), "required descriptors") {
 		t.Fatalf("WriteWithOptions error = %v", err)
+	}
+}
+
+type boundedWriteRecorder struct {
+	max    int
+	writes int
+	bytes  int
+}
+
+func (w *boundedWriteRecorder) Write(p []byte) (int, error) {
+	if len(p) > w.max {
+		return 0, fmt.Errorf("write of %d bytes exceeds packet bound %d", len(p), w.max)
+	}
+	w.writes++
+	w.bytes += len(p)
+	return len(p), nil
+}
+
+func TestWriteStreamsPackets(t *testing.T) {
+	track := TrackUUID("test", "stream")
+	trace := &Trace{Identity: "capture", ClockDomain: "busy", Tracks: []Track{{UUID: track, Name: "events"}}}
+	for i := 0; i < 1000; i++ {
+		trace.Events = append(trace.Events, Event{
+			ID: uint64(i + 1), TrackUUID: track, Name: "event", Kind: EventInstant,
+			StartNS: uint64(i), Args: map[string]any{"index": i},
+		})
+	}
+	w := &boundedWriteRecorder{max: 512}
+	receipt, err := WriteWithOptions(w, trace, WriteOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.writes < 1000 {
+		t.Fatalf("writes = %d, want packet-by-packet output", w.writes)
+	}
+	if int64(w.bytes) != receipt.LogicalBytes {
+		t.Fatalf("written bytes = %d, receipt = %d", w.bytes, receipt.LogicalBytes)
 	}
 }

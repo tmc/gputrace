@@ -481,15 +481,18 @@ exports.
 ### Packet sequences and interning
 
 One writer owns each Perfetto packet sequence. Interned strings and descriptors
-are scoped to that sequence and are referenced only after definition. A writer
-reset emits the required incremental-state reset before reusing intern ids.
-Sequence ids and intern ids use checked allocation; wrap cannot silently reuse
-live state.
+are scoped to that sequence and are referenced only after definition. The
+current writer uses one sequence, emits its incremental-state-cleared flag and
+interned values before events, and never resets or reuses intern ids. A future
+writer that resets must emit the required incremental-state reset before
+reusing intern ids. Sequence ids and intern ids use checked allocation; wrap
+cannot silently reuse live state.
 
-The writer flushes according to bounded buffered bytes and maximum latency,
-not an event count. Different events have very different encoded sizes, so an
-event-count threshold is not a memory bound. Packet boundaries and flush
-timing must not change event identity or ordering.
+Offline export preflights the exact framed byte count and writes one packet at
+a time, so it buffers no complete trace and needs no latency flush policy.
+Different events have very different encoded sizes, so an event-count
+threshold would not be a memory bound. Packet boundaries and write timing must
+not change event identity or ordering.
 
 ## Resource budgets and loss
 
@@ -817,8 +820,8 @@ The rendering design is implemented when all of the following hold:
 - every retained reference resolves after constrained-budget export;
 - constrained output reserves and emits a stock-Perfetto-visible loss summary
   and a machine-readable receipt within the declared logical byte boundary;
-- repeated packet flushing and incremental-state reset preserve all interned
-  references and deterministic event ordering;
+- repeated packet writes preserve all interned references and deterministic
+  event ordering; any future incremental-state reset has the same gate;
 - standard Perfetto GPU queries and exporter-owned SQL views return expected
   fixture counts;
 - static pipeline facts do not appear as measured counter series;
