@@ -1,7 +1,6 @@
 package shader
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"os"
@@ -16,6 +15,12 @@ type ShaderSourceAttribution struct {
 	// Shader identification
 	ShaderName string
 	SourceFile string
+
+	// AttributionLevel is "declaration" until instruction-addressed cost and
+	// an exact debug-line mapping are both available.
+	AttributionLevel string
+	// AttributionGranularity describes how the shader cost is placed.
+	AttributionGranularity string
 
 	// Overall shader metrics
 	Metrics *ShaderMetrics
@@ -108,15 +113,13 @@ func ExtractShaderSourceAttributionWithMapper(t *trace.Trace, shaderName string,
 		return nil, fmt.Errorf("analyze source: %w", err)
 	}
 
-	// Identify hot spots (top 20% by cost)
-	hotSpots := identifyHotSpots(lines, 0.2)
-
 	attribution := &ShaderSourceAttribution{
-		ShaderName: shaderName,
-		SourceFile: sourceFile,
-		Metrics:    shaderMetrics,
-		Lines:      lines,
-		HotSpots:   hotSpots,
+		ShaderName:             shaderName,
+		SourceFile:             sourceFile,
+		AttributionLevel:       "declaration",
+		AttributionGranularity: "kernel_total_at_declaration",
+		Metrics:                shaderMetrics,
+		Lines:                  lines,
 	}
 
 	return attribution, nil
@@ -132,67 +135,19 @@ func analyzeShaderSource(sourceFile string, startLine int, metrics *ShaderMetric
 }
 
 func analyzeShaderText(source string, startLine int, metrics *ShaderMetrics) ([]SourceLineAttribution, error) {
-	var lines []SourceLineAttribution
-	scanner := bufio.NewScanner(strings.NewReader(source))
-	lineNum := 0
-	inFunction := false
-	braceDepth := 0
-	instructionCount := 0
-
-	for scanner.Scan() {
-		lineNum++
-		line := scanner.Text()
-		trimmed := strings.TrimSpace(line)
-
-		// Track when we enter the kernel function
-		if lineNum == startLine {
-			inFunction = true
-		}
-
-		// Track braces to know when we exit the function
-		if inFunction {
-			braceDepth += strings.Count(line, "{") - strings.Count(line, "}")
-			if braceDepth < 0 {
-				inFunction = false
-			}
-		}
-
-		// Only analyze lines within the kernel function
-		if !inFunction {
-			continue
-		}
-
-		// Analyze the line
-		attr := SourceLineAttribution{
-			LineNumber: lineNum,
-			SourceCode: line,
-		}
-
-		// Classify instruction type and estimate cost
-		attr.InstructionType, attr.Complexity = classifyInstruction(trimmed)
-
-		// Estimate relative cost (this is a heuristic)
-		attr.EstimatedCost = estimateLineCost(trimmed, attr.InstructionType, attr.Complexity)
-
-		// Count as instruction if not empty or comment
-		if trimmed != "" && !strings.HasPrefix(trimmed, "//") {
-			instructionCount++
-		}
-
-		lines = append(lines, attr)
+	if startLine <= 0 {
+		return nil, fmt.Errorf("invalid declaration line %d", startLine)
 	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, err
+	lines := strings.Split(source, "\n")
+	if startLine > len(lines) {
+		return nil, fmt.Errorf("declaration line %d exceeds %d source lines", startLine, len(lines))
 	}
-
-	// Distribute shader metrics across lines based on estimated cost
-	distributeMetrics(lines, metrics, instructionCount)
-
-	// Add optimization hints
-	addOptimizationHints(lines)
-
-	return lines, nil
+	return []SourceLineAttribution{{
+		LineNumber:      startLine,
+		SourceCode:      lines[startLine-1],
+		GPUTimePercent:  100,
+		InstructionType: "declaration",
+	}}, nil
 }
 
 // classifyInstruction classifies the type and complexity of a Metal shader instruction.
@@ -443,6 +398,9 @@ func WriteShaderSourceAttribution(w io.Writer, attr *ShaderSourceAttribution, sh
 	if _, err := fmt.Fprintf(w, "Source: %s\n", attr.SourceFile); err != nil {
 		return err
 	}
+	if _, err := fmt.Fprintf(w, "Attribution: %s (%s)\n", attr.AttributionLevel, attr.AttributionGranularity); err != nil {
+		return err
+	}
 
 	if attr.Metrics != nil {
 		if _, err := fmt.Fprintf(w, "Total GPU Time: %.2f ms\n", float64(attr.Metrics.TotalDurationNs)/1e6); err != nil {
@@ -487,7 +445,7 @@ func WriteShaderSourceAttribution(w io.Writer, attr *ShaderSourceAttribution, sh
 
 	for _, line := range attr.Lines {
 		// Skip lines with zero cost
-		if line.EstimatedCost == 0 {
+		if line.EstimatedCost == 0 && line.GPUTimePercent == 0 {
 			continue
 		}
 
@@ -605,6 +563,7 @@ h1 {
 	html += fmt.Sprintf("<h1>Shader Source Attribution: %s</h1>\n", attr.ShaderName)
 	html += fmt.Sprintf("<div class='summary'>\n")
 	html += fmt.Sprintf("<strong>Source:</strong> %s<br>\n", attr.SourceFile)
+	html += fmt.Sprintf("<strong>Attribution:</strong> %s (%s)<br>\n", attr.AttributionLevel, attr.AttributionGranularity)
 
 	if attr.Metrics != nil {
 		html += fmt.Sprintf("<strong>Total GPU Time:</strong> %.2f ms<br>\n",
@@ -630,7 +589,7 @@ h1 {
 	// Annotated source
 	html += "<div class='source'>\n"
 	for _, line := range attr.Lines {
-		if line.EstimatedCost == 0 {
+		if line.EstimatedCost == 0 && line.GPUTimePercent == 0 {
 			continue
 		}
 
