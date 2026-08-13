@@ -53,6 +53,31 @@ func TestParseMTLB(t *testing.T) {
 	}
 }
 
+func TestParseSectionOffsets(t *testing.T) {
+	data := make([]byte, 120)
+	copy(data, "MTLB")
+	binary.LittleEndian.PutUint64(data[16:24], uint64(len(data)))
+	values := []uint64{0x58, 0x1160c, 0x116aa, 0x1ffa, 0x136a4, 0x167a2, 0x29e46, 0x47d550, 0x4a7396, 0x24388, 0x4cb71e, 0x99a2e}
+	for i, value := range values {
+		binary.LittleEndian.PutUint64(data[24+i*8:32+i*8], value)
+	}
+	lib, err := Parse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := []uint64{
+		lib.Header.FunctionTable, lib.Header.FunctionTableSize,
+		lib.Header.PublicMetadata, lib.Header.PublicMetadataSize,
+		lib.Header.PrivateMetadata, lib.Header.PrivateMetadataSize,
+		lib.Header.ModuleList, lib.Header.ModuleListSize,
+		lib.Header.Sources, lib.Header.SourcesSize,
+		lib.Header.ReflectionList, lib.Header.ReflectionListSize,
+	}
+	if !reflect.DeepEqual(got, values) {
+		t.Fatalf("section values = %#x, want %#x", got, values)
+	}
+}
+
 func TestListFunctionMetadataTaggedTable(t *testing.T) {
 	data := buildTaggedMTLBForTest(
 		taggedFunctionForTest("tiny_add", 0, 4096, 0),

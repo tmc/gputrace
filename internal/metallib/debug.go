@@ -21,6 +21,9 @@ func (m *File) ListDebugRecords() []DebugRecord {
 		return nil
 	}
 	data := m.Data
+	if section, ok := metallibSection(data, m.Header.PrivateMetadata, m.Header.PrivateMetadataSize); ok {
+		data = section
+	}
 	var records []DebugRecord
 	for at := 0; at < len(data); {
 		i := bytes.Index(data[at:], []byte("DEBI"))

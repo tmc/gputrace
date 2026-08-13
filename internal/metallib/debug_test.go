@@ -26,6 +26,23 @@ func TestListDebugRecordsRefusesUnterminatedSource(t *testing.T) {
 	}
 }
 
+func TestListDebugRecordsUsesDeclaredPrivateMetadata(t *testing.T) {
+	decoy := debugRecordForTest("decoy.metal", 1, "decoy.air")
+	wantRecord := debugRecordForTest("real.metal", 2, "real.air")
+	data := append(append([]byte{}, decoy...), wantRecord...)
+	lib := &File{
+		Data: data,
+		Header: Header{
+			PrivateMetadata:     uint64(len(decoy)),
+			PrivateMetadataSize: uint64(len(wantRecord)),
+		},
+	}
+	want := []DebugRecord{{Source: "real.metal", Line: 2, Dependency: "real.air"}}
+	if got := lib.ListDebugRecords(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("ListDebugRecords = %#v, want %#v", got, want)
+	}
+}
+
 func debugRecordForTest(source string, line uint32, dependency string) []byte {
 	sourcePayload := make([]byte, 4, 5+len(source))
 	binary.LittleEndian.PutUint32(sourcePayload, line)

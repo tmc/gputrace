@@ -29,7 +29,7 @@ func (m *File) EmbeddedSources() ([]SourceFile, error) {
 	if m == nil {
 		return nil, ErrNoSourceArchive
 	}
-	rangeData, err := sourceArchiveRange(m.Data)
+	rangeData, err := sourceArchiveRange(m)
 	if err != nil {
 		return nil, err
 	}
@@ -40,7 +40,11 @@ func (m *File) EmbeddedSources() ([]SourceFile, error) {
 	return readSourceArchive(bzip2.NewReader(bytes.NewReader(rangeData[start:])))
 }
 
-func sourceArchiveRange(data []byte) ([]byte, error) {
+func sourceArchiveRange(m *File) ([]byte, error) {
+	data := m.Data
+	if section, ok := metallibSection(data, m.Header.Sources, m.Header.SourcesSize); ok {
+		return section, nil
+	}
 	const recordSize = 4 + 2 + 16
 	for at := 0; ; {
 		i := bytes.Index(data[at:], []byte("HSRD"))
@@ -57,6 +61,13 @@ func sourceArchiveRange(data []byte) ([]byte, error) {
 		}
 		at = i + 4
 	}
+}
+
+func metallibSection(data []byte, off, size uint64) ([]byte, bool) {
+	if size == 0 || off > uint64(len(data)) || size > uint64(len(data))-off {
+		return nil, false
+	}
+	return data[off : off+size], true
 }
 
 func littleUint64(p []byte) uint64 {

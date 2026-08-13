@@ -48,6 +48,28 @@ func TestEmbeddedSourcesRefusesInvalidRange(t *testing.T) {
 	}
 }
 
+func TestEmbeddedSourcesUsesDeclaredSection(t *testing.T) {
+	compressed, err := base64.StdEncoding.DecodeString(testSourceArchive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := append([]byte("HSRD\x10\x00not a valid range"), compressed...)
+	off := len(data) - len(compressed)
+	files, err := (&File{
+		Data: data,
+		Header: Header{
+			Sources:     uint64(off),
+			SourcesSize: uint64(len(compressed)),
+		},
+	}).EmbeddedSources()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || files[0].Name != "kernels/test.metal" {
+		t.Fatalf("files = %#v", files)
+	}
+}
+
 func TestEmbeddedSourcesFromFile(t *testing.T) {
 	name := os.Getenv("GPUTRACE_TEST_METALLIB")
 	if name == "" {
