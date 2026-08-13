@@ -85,6 +85,7 @@ func readSourceArchive(r io.Reader) ([]SourceFile, error) {
 	limited := &io.LimitedReader{R: r, N: maxSourceArchiveSize + 1}
 	tr := tar.NewReader(limited)
 	var files []SourceFile
+	names := make(map[string]bool)
 	for {
 		h, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -99,6 +100,10 @@ func readSourceArchive(r io.Reader) ([]SourceFile, error) {
 		if !validSourceName(h.Name) {
 			return nil, fmt.Errorf("metallib: invalid source name %q", h.Name)
 		}
+		if names[h.Name] {
+			return nil, fmt.Errorf("metallib: duplicate source name %q", h.Name)
+		}
+		names[h.Name] = true
 		if h.Size < 0 || h.Size > maxSourceArchiveSize || h.Size > limited.N {
 			return nil, errors.New("metallib: source archive exceeds size limit")
 		}

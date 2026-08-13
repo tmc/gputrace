@@ -1,6 +1,7 @@
 package metallib
 
 import (
+	"archive/tar"
 	"bytes"
 	"encoding/base64"
 	"errors"
@@ -67,6 +68,25 @@ func TestEmbeddedSourcesUsesDeclaredSection(t *testing.T) {
 	}
 	if len(files) != 1 || files[0].Name != "kernels/test.metal" {
 		t.Fatalf("files = %#v", files)
+	}
+}
+
+func TestReadSourceArchiveRefusesDuplicateNames(t *testing.T) {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	for range 2 {
+		if err := tw.WriteHeader(&tar.Header{Name: "same.metal", Mode: 0644, Size: 1}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte("x")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readSourceArchive(&buf); err == nil {
+		t.Fatal("readSourceArchive accepted duplicate names")
 	}
 }
 

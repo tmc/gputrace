@@ -57,6 +57,11 @@ func ExtractShaderSourceAttribution(t *trace.Trace, shaderName string) (*ShaderS
 		if err := mapper.IndexTraceBundleSources(t.Path); err != nil {
 			return nil, fmt.Errorf("index trace shader sources: %w", err)
 		}
+		for _, lib := range t.MTLBLibraries {
+			if _, _, err := mapper.IndexMetallib(lib); err != nil {
+				return nil, fmt.Errorf("index metallib shader sources: %w", err)
+			}
+		}
 	}
 	return ExtractShaderSourceAttributionWithMapper(t, shaderName, mapper)
 }
@@ -93,7 +98,12 @@ func ExtractShaderSourceAttributionWithMapper(t *trace.Trace, shaderName string,
 	}
 
 	// Read and analyze source file
-	lines, err := analyzeShaderSource(sourceFile, startLine, shaderMetrics)
+	var lines []SourceLineAttribution
+	if source, ok := mapper.SourceText(sourceFile); ok {
+		lines, err = analyzeShaderText(source, startLine, shaderMetrics)
+	} else {
+		lines, err = analyzeShaderSource(sourceFile, startLine, shaderMetrics)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("analyze source: %w", err)
 	}
@@ -114,14 +124,16 @@ func ExtractShaderSourceAttributionWithMapper(t *trace.Trace, shaderName string,
 
 // analyzeShaderSource reads the shader source and attributes performance to each line.
 func analyzeShaderSource(sourceFile string, startLine int, metrics *ShaderMetrics) ([]SourceLineAttribution, error) {
-	f, err := os.Open(sourceFile)
+	data, err := os.ReadFile(sourceFile)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	return analyzeShaderText(string(data), startLine, metrics)
+}
 
+func analyzeShaderText(source string, startLine int, metrics *ShaderMetrics) ([]SourceLineAttribution, error) {
 	var lines []SourceLineAttribution
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(strings.NewReader(source))
 	lineNum := 0
 	inFunction := false
 	braceDepth := 0

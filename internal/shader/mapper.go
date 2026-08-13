@@ -3,6 +3,7 @@ package shader
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +11,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/tmc/gputrace/internal/metallib"
 )
 
 // ShaderSourceMapper helps map kernel names to Metal shader source files.
@@ -20,6 +23,8 @@ type ShaderSourceMapper struct {
 	kernelToLine map[string]int
 	// Search paths for .metal files
 	searchPaths []string
+	// Source text decoded from a content-identified metallib.
+	sourceText map[string]string
 }
 
 // NewShaderSourceMapper creates a new source mapper with default search paths.
@@ -28,6 +33,7 @@ func NewShaderSourceMapper(searchPaths ...string) *ShaderSourceMapper {
 		kernelToFile: make(map[string]string),
 		kernelToLine: make(map[string]int),
 		searchPaths:  searchPaths,
+		sourceText:   make(map[string]string),
 	}
 
 	// Add default search paths if none provided
@@ -101,7 +107,57 @@ func (m *ShaderSourceMapper) IndexSource(path, source string) error {
 	if !looksLikeMetalSource([]byte(source)) {
 		return fmt.Errorf("shader: source is not Metal")
 	}
-	return m.indexMetalText(path, source)
+	if err := m.indexMetalText(path, source); err != nil {
+		return err
+	}
+	m.sourceText[path] = source
+	return nil
+}
+
+// IndexMetallib indexes exact function-to-source declarations whose source
+// bytes are retained in the same metallib. It returns matched and unmatched
+// function counts.
+func (m *ShaderSourceMapper) IndexMetallib(lib *metallib.File) (matched, unmatched int, err error) {
+	files, err := lib.EmbeddedSources()
+	if err != nil {
+		if errors.Is(err, metallib.ErrNoSourceArchive) {
+			functions, functionErr := lib.ListFunctionMetadata()
+			if functionErr != nil {
+				return 0, 0, functionErr
+			}
+			return 0, len(functions), nil
+		}
+		return 0, 0, err
+	}
+	sources := make(map[string]string, len(files))
+	for _, file := range files {
+		sources[file.Name] = string(file.Data)
+	}
+	pairs, err := lib.ListFunctionDebug()
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, pair := range pairs {
+		source, ok := sources[pair.Debug.Source]
+		if !ok || pair.Debug.Line == 0 {
+			unmatched++
+			continue
+		}
+		if old, ok := m.kernelToFile[pair.Function.Name]; ok && old != pair.Debug.Source {
+			return matched, unmatched, fmt.Errorf("shader: ambiguous source for %q", pair.Function.Name)
+		}
+		m.kernelToFile[pair.Function.Name] = pair.Debug.Source
+		m.kernelToLine[pair.Function.Name] = int(pair.Debug.Line)
+		m.sourceText[pair.Debug.Source] = source
+		matched++
+	}
+	return matched, unmatched, nil
+}
+
+// SourceText returns source text retained by the mapper.
+func (m *ShaderSourceMapper) SourceText(path string) (string, bool) {
+	source, ok := m.sourceText[path]
+	return source, ok
 }
 
 func skipTraceSidecarSource(name string) bool {
