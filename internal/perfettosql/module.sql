@@ -120,6 +120,42 @@ SELECT
 FROM slice
 WHERE category = 'encoder';
 
+CREATE PERFETTO VIEW gputrace_command_buffer AS
+SELECT
+  id,
+  ts,
+  dur,
+  name,
+  cast(extract_arg(arg_set_id, 'debug.index') AS INT) AS command_buffer_id,
+  CASE
+    WHEN extract_arg(arg_set_id, 'debug.timing_quality') = 'measured' THEN ts
+  END AS measured_wall_start_ns,
+  CASE
+    WHEN extract_arg(arg_set_id, 'debug.timing_quality') = 'measured' THEN dur
+  END AS measured_wall_duration_ns,
+  cast(extract_arg(arg_set_id, 'debug.offset') AS INT) AS capture_offset,
+  cast(extract_arg(arg_set_id, 'debug.start_ticks') AS INT) AS source_start_ticks,
+  cast(extract_arg(arg_set_id, 'debug.end_ticks') AS INT) AS source_end_ticks,
+  cast(extract_arg(arg_set_id, 'debug.raw_start_offset_ns') AS INT) AS source_wall_offset_ns,
+  extract_arg(arg_set_id, 'debug.coordinate_source') AS coordinate_source,
+  extract_arg(arg_set_id, 'debug.clock_domain') AS clock_domain,
+  extract_arg(arg_set_id, 'debug.timing_source') AS timing_source,
+  extract_arg(arg_set_id, 'debug.timing_quality') AS timing_quality,
+  cast(extract_arg(arg_set_id, 'debug.real_timing') AS INT) AS real_timing,
+  CASE
+    WHEN extract_arg(arg_set_id, 'debug.timing_quality') = 'measured'
+      THEN 'measured_wall_span'
+    ELSE 'recorded_command_buffer'
+  END AS evidence_kind,
+  CASE
+    WHEN extract_arg(arg_set_id, 'debug.timing_quality') = 'measured'
+      THEN 'wall clock only; no mapping to cumulative GPU-busy time'
+    ELSE 'capture record order only; wall timing unavailable'
+  END AS clock_relation,
+  arg_set_id
+FROM slice
+WHERE category = 'command_buffer';
+
 CREATE PERFETTO VIEW gputrace_function AS
 SELECT
   evidence_kind,
