@@ -79,6 +79,9 @@ Dispatch details and the `gputrace_pipeline` SQL view include every static
 compiler statistic carried by the attributed pipeline record, including
 register, spill, instruction-family, threadgroup, and compilation-time facts.
 The `metrics_source` argument identifies the backing trace section.
+The `gputrace_dispatch` view normalizes timing provenance, attribution,
+geometry, source location, and profiler-sample coverage across measured GPU
+events and capture-only launch records; unavailable fields remain `NULL`.
 gputrace does not invent a mapping between these domains.
 
 See [MLX GPU Trace Rendering in Perfetto](docs/MLX_PERFETTO_RENDERING_SPEC.md)
