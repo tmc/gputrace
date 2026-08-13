@@ -2,6 +2,7 @@
 package perfetto
 
 import (
+	"bytes"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -64,6 +65,7 @@ type CounterSample struct {
 
 // Trace is a deterministic projection of one measured clock domain.
 type Trace struct {
+	Identity    string
 	ClockDomain string
 	GPUName     string
 	GPUModel    string
@@ -71,6 +73,24 @@ type Trace struct {
 	Events      []Event
 	Counters    []Counter
 	Metadata    map[string]any
+}
+
+// WriteOptions controls optional lossy export. A zero MaxBytes writes every
+// packet. MaxBytes counts logical, uncompressed protobuf bytes.
+type WriteOptions struct {
+	MaxBytes int64
+}
+
+// Receipt reports deterministic retention under an explicit output budget.
+type Receipt struct {
+	Policy            string
+	LogicalBytes      int64
+	EventsConsidered  int
+	EventsRetained    int
+	EventsDropped     int
+	SamplesConsidered int
+	SamplesRetained   int
+	SamplesDropped    int
 }
 
 // TrackUUID returns a deterministic non-zero track UUID for a namespace and
@@ -89,53 +109,105 @@ func TrackUUID(namespace, identity string) uint64 {
 
 // Write writes trace as a binary perfetto.protos.Trace message.
 func Write(w io.Writer, trace *Trace) error {
+	_, err := WriteWithOptions(w, trace, WriteOptions{})
+	return err
+}
+
+// WriteWithOptions writes trace and returns its retention receipt.
+func WriteWithOptions(w io.Writer, trace *Trace, options WriteOptions) (Receipt, error) {
 	if trace == nil {
-		return fmt.Errorf("write perfetto trace: nil trace")
+		return Receipt{}, fmt.Errorf("write perfetto trace: nil trace")
 	}
 	if trace.ClockDomain == "" {
-		return fmt.Errorf("write perfetto trace: clock domain is required")
+		return Receipt{}, fmt.Errorf("write perfetto trace: clock domain is required")
 	}
 	if err := validate(trace); err != nil {
-		return err
+		return Receipt{}, err
+	}
+	receipt := Receipt{Policy: "complete", EventsConsidered: len(trace.Events)}
+	for _, counter := range trace.Counters {
+		receipt.SamplesConsidered += len(counter.Samples)
 	}
 
-	writer := traceWriter{w: w}
-	if err := writer.packet(initialPacket(trace)); err != nil {
-		return err
-	}
+	var required [][]byte
+	required = append(required, initialPacket(trace))
 
 	tracks := append([]Track(nil), trace.Tracks...)
 	sort.Slice(tracks, func(i, j int) bool { return tracks[i].UUID < tracks[j].UUID })
 	for _, track := range tracks {
-		if err := writer.packet(trackDescriptorPacket(track)); err != nil {
-			return err
-		}
+		required = append(required, trackDescriptorPacket(track))
 	}
-
-	if len(trace.Metadata) > 0 {
-		root := TrackUUID("gputrace", trace.ClockDomain+":manifest")
-		if err := writer.packet(trackDescriptorPacket(Track{UUID: root, Name: "gputrace evidence manifest"})); err != nil {
-			return err
-		}
-		event := Event{TrackUUID: root, Name: "gputrace evidence manifest", Category: "gputrace", Kind: EventInstant, Args: trace.Metadata}
-		if err := writer.packet(trackEventPacket(event, false)); err != nil {
-			return err
-		}
-	}
-
+	root := TrackUUID("gputrace", trace.ClockDomain+":manifest")
+	required = append(required, trackDescriptorPacket(Track{UUID: root, Name: "gputrace evidence manifest"}))
 	if len(trace.Counters) > 0 {
-		if err := writer.packet(counterDescriptorPacket(trace.Counters)); err != nil {
-			return err
-		}
+		required = append(required, counterDescriptorPacket(trace.Counters))
 	}
 
-	packets := eventPackets(trace.Events, trace.Counters)
+	groups := eventPacketGroups(trace.Identity, trace.Events, trace.Counters)
+	selected := make([]packetGroup, 0, len(groups))
+	if options.MaxBytes == 0 {
+		selected = groups
+	} else {
+		const receiptReserve = int64(2048)
+		used := framedSize(required)
+		if used+receiptReserve > options.MaxBytes {
+			return Receipt{}, fmt.Errorf("write perfetto trace: max output bytes %d cannot hold required descriptors and loss receipt", options.MaxBytes)
+		}
+		sort.SliceStable(groups, func(i, j int) bool { return groups[i].hash < groups[j].hash })
+		for _, group := range groups {
+			size := framedTimedSize(group.packets)
+			if used+size+receiptReserve > options.MaxBytes {
+				continue
+			}
+			selected = append(selected, group)
+			used += size
+		}
+		receipt.Policy = "stable-identity-hash/v1"
+	}
+	for _, group := range selected {
+		if group.class == "event" {
+			receipt.EventsRetained++
+		} else {
+			receipt.SamplesRetained++
+		}
+	}
+	receipt.EventsDropped = receipt.EventsConsidered - receipt.EventsRetained
+	receipt.SamplesDropped = receipt.SamplesConsidered - receipt.SamplesRetained
+
+	metadata := cloneMap(trace.Metadata)
+	metadata["resource_policy"] = receipt.Policy
+	metadata["logical_byte_boundary"] = options.MaxBytes
+	metadata["events_considered"] = receipt.EventsConsidered
+	metadata["events_retained"] = receipt.EventsRetained
+	metadata["events_dropped"] = receipt.EventsDropped
+	metadata["counter_samples_considered"] = receipt.SamplesConsidered
+	metadata["counter_samples_retained"] = receipt.SamplesRetained
+	metadata["counter_samples_dropped"] = receipt.SamplesDropped
+	metadata["output_complete"] = receipt.EventsDropped == 0 && receipt.SamplesDropped == 0
+	manifest := trackEventPacket(Event{TrackUUID: root, Name: "gputrace evidence manifest", Category: "gputrace", Kind: EventInstant, Args: metadata}, false)
+	required = append(required, manifest)
+
+	packets := flattenGroups(selected)
+	var output bytes.Buffer
+	writer := traceWriter{w: &output}
+	for _, packet := range required {
+		if err := writer.packet(packet); err != nil {
+			return Receipt{}, err
+		}
+	}
 	for _, packet := range packets {
 		if err := writer.packet(packet.data); err != nil {
-			return err
+			return Receipt{}, err
 		}
 	}
-	return nil
+	if options.MaxBytes > 0 && int64(output.Len()) > options.MaxBytes {
+		return Receipt{}, fmt.Errorf("write perfetto trace: loss receipt exceeded reserved output budget")
+	}
+	receipt.LogicalBytes = int64(output.Len())
+	if _, err := io.Copy(w, &output); err != nil {
+		return Receipt{}, fmt.Errorf("write perfetto trace: %w", err)
+	}
+	return receipt, nil
 }
 
 func validate(trace *Trace) error {
@@ -252,25 +324,45 @@ type timedPacket struct {
 	data      []byte
 }
 
-func eventPackets(events []Event, counters []Counter) []timedPacket {
-	packets := make([]timedPacket, 0, len(events)*2)
+type packetGroup struct {
+	class   string
+	hash    uint64
+	packets []timedPacket
+}
+
+func eventPacketGroups(identity string, events []Event, counters []Counter) []packetGroup {
+	groups := make([]packetGroup, 0, len(events))
 	for _, event := range events {
+		group := packetGroup{class: "event", hash: identityHash(identity, "event", strconv.FormatUint(event.ID, 10), event.Name)}
 		switch event.Kind {
 		case EventGPUCompute:
-			packets = append(packets, timedPacket{event.StartNS, 1, gpuEventPacket(event)})
+			group.packets = append(group.packets, timedPacket{event.StartNS, 1, gpuEventPacket(event)})
 		case EventInstant:
-			packets = append(packets, timedPacket{event.StartNS, 1, trackEventPacket(event, false)})
+			group.packets = append(group.packets, timedPacket{event.StartNS, 1, trackEventPacket(event, false)})
 		case EventSlice:
-			packets = append(packets, timedPacket{event.StartNS, 1, trackEventPacket(event, false)})
+			group.packets = append(group.packets, timedPacket{event.StartNS, 1, trackEventPacket(event, false)})
 			end := event
 			end.StartNS += event.DurationNS
-			packets = append(packets, timedPacket{end.StartNS, 0, trackEventPacket(end, true)})
+			group.packets = append(group.packets, timedPacket{end.StartNS, 0, trackEventPacket(end, true)})
 		}
+		groups = append(groups, group)
 	}
 	for _, counter := range counters {
-		for _, sample := range counter.Samples {
-			packets = append(packets, timedPacket{sample.TimestampNS, 2, counterSamplePacket(counter.ID, sample)})
+		for index, sample := range counter.Samples {
+			groups = append(groups, packetGroup{
+				class:   "sample",
+				hash:    identityHash(identity, "counter", strconv.FormatUint(uint64(counter.ID), 10), strconv.Itoa(index)),
+				packets: []timedPacket{{sample.TimestampNS, 2, counterSamplePacket(counter.ID, sample)}},
+			})
 		}
+	}
+	return groups
+}
+
+func flattenGroups(groups []packetGroup) []timedPacket {
+	var packets []timedPacket
+	for _, group := range groups {
+		packets = append(packets, group.packets...)
 	}
 	sort.SliceStable(packets, func(i, j int) bool {
 		if packets[i].timestamp != packets[j].timestamp {
@@ -279,6 +371,43 @@ func eventPackets(events []Event, counters []Counter) []timedPacket {
 		return packets[i].order < packets[j].order
 	})
 	return packets
+}
+
+func identityHash(parts ...string) uint64 {
+	h := fnv.New64a()
+	for _, part := range parts {
+		_, _ = io.WriteString(h, part)
+		_, _ = io.WriteString(h, "\x00")
+	}
+	return h.Sum64()
+}
+
+func framedSize(packets [][]byte) int64 {
+	var size int64
+	for _, packet := range packets {
+		var framed []byte
+		framed = appendBytes(framed, 1, packet)
+		size += int64(len(framed))
+	}
+	return size
+}
+
+func framedTimedSize(packets []timedPacket) int64 {
+	var size int64
+	for _, packet := range packets {
+		var framed []byte
+		framed = appendBytes(framed, 1, packet.data)
+		size += int64(len(framed))
+	}
+	return size
+}
+
+func cloneMap(values map[string]any) map[string]any {
+	clone := make(map[string]any, len(values)+8)
+	for key, value := range values {
+		clone[key] = value
+	}
+	return clone
 }
 
 func gpuEventPacket(event Event) []byte {

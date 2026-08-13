@@ -16,6 +16,12 @@ import (
 )
 
 func validateTimelineViewerOptions(opts *timelineOptions, output string) error {
+	if opts.maxOutputBytes < 0 {
+		return fmt.Errorf("--max-output-bytes must not be negative")
+	}
+	if opts.maxOutputBytes > 0 && opts.format != "perfetto" {
+		return fmt.Errorf("--max-output-bytes requires --format perfetto")
+	}
 	if !opts.openViewer && !opts.serveViewer {
 		if opts.uiDir != "" || opts.remoteUI || opts.listen != "127.0.0.1:0" {
 			return fmt.Errorf("--ui-dir, --remote-ui, and --listen require --open or --serve")

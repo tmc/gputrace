@@ -9,8 +9,9 @@ current output.
 `gputrace timeline --format perfetto` now writes native Perfetto protobuf with
 GPU compute slices, generic hierarchy tracks, measured counter packets, and an
 evidence-manifest event. `--format chrome` retains Chrome Trace JSON. Strict
-MLX semantics, resource budgets, and the local viewer remain proposed. The
-viewer is specified separately in
+MLX sidecars, dependency-closed logical-byte budgets, and the local viewer are
+implemented. Rolling windows, richer environment capture, and the MLX plugin
+remain proposed. The viewer is specified separately in
 [PERFETTO_VIEWER_SPEC.md](PERFETTO_VIEWER_SPEC.md).
 
 Confidence markers used in this document are:
@@ -467,8 +468,10 @@ timing must not change event identity or ordering.
 ## Resource budgets and loss
 
 Offline conversion of a finite `.gputrace` is lossless by default. A caller may
-set an explicit output budget, and a future continuous recorder may use a
-rolling retention window, but neither mode may silently discard evidence.
+set an explicit output budget; the current writer reports deterministic
+identity-hash retention through the evidence-manifest event. A future
+continuous recorder may use a rolling retention window. Neither mode may
+silently discard evidence.
 
 ### Output budgets
 

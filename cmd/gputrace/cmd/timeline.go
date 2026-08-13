@@ -36,6 +36,7 @@ type timelineOptions struct {
 	uiDir              string
 	remoteUI           bool
 	listen             string
+	maxOutputBytes     int64
 }
 
 // timelineClock selects one measured timestamp domain. The profiler records
@@ -122,6 +123,7 @@ Examples:
 	cmd.Flags().StringVar(&opts.uiDir, "ui-dir", opts.uiDir, "Pinned local Perfetto UI directory (with --open or --serve)")
 	cmd.Flags().BoolVar(&opts.remoteUI, "remote-ui", opts.remoteUI, "Embed https://ui.perfetto.dev (with --open or --serve)")
 	cmd.Flags().StringVar(&opts.listen, "listen", "127.0.0.1:0", "Loopback viewer listen address")
+	cmd.Flags().Int64Var(&opts.maxOutputBytes, "max-output-bytes", opts.maxOutputBytes, "Maximum logical native protobuf bytes; zero is lossless")
 	return cmd
 }
 
@@ -226,7 +228,7 @@ func runTimeline(cmd *cobra.Command, args []string, opts *timelineOptions) error
 			return fmt.Errorf("failed to export Chrome tracing: %w", err)
 		}
 	case "perfetto":
-		if err := exportPerfettoForClock(timeline, outputPath, opts.clock); err != nil {
+		if err := exportPerfettoForClockWithBudget(timeline, outputPath, opts.clock, opts.maxOutputBytes); err != nil {
 			return fmt.Errorf("failed to export Perfetto tracing: %w", err)
 		}
 	case "html":
@@ -2581,6 +2583,10 @@ func timelineEventAt(timeline *Timeline, category string, index int) (TimelineEv
 // exportPerfettoForClock writes one measured clock domain as native Perfetto
 // protobuf. Chrome JSON remains available through --format chrome.
 func exportPerfettoForClock(timeline *Timeline, outputPath string, clock timelineClock) error {
+	return exportPerfettoForClockWithBudget(timeline, outputPath, clock, 0)
+}
+
+func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clock timelineClock, maxBytes int64) error {
 	if timeline == nil {
 		return fmt.Errorf("write perfetto trace: nil timeline")
 	}
@@ -2593,6 +2599,7 @@ func exportPerfettoForClock(timeline *Timeline, outputPath string, clock timelin
 	}
 
 	trace := &perfetto.Trace{
+		Identity:    timeline.TraceUUID,
 		ClockDomain: string(clock),
 		GPUName:     "Apple GPU",
 		Metadata: map[string]any{
@@ -2714,7 +2721,16 @@ func exportPerfettoForClock(timeline *Timeline, outputPath string, clock timelin
 		trace.Counters = append(trace.Counters, counter)
 	}
 
-	return perfetto.Write(w, trace)
+	receipt, err := perfetto.WriteWithOptions(w, trace, perfetto.WriteOptions{MaxBytes: maxBytes})
+	if err != nil {
+		return err
+	}
+	if receipt.EventsDropped > 0 || receipt.SamplesDropped > 0 {
+		fmt.Fprintf(os.Stderr, "Perfetto output sampled: retained %d/%d events and %d/%d counter samples within %d logical bytes\n",
+			receipt.EventsRetained, receipt.EventsConsidered,
+			receipt.SamplesRetained, receipt.SamplesConsidered, receipt.LogicalBytes)
+	}
+	return nil
 }
 
 func appendMLXSemanticEvents(trace *perfetto.Trace, timeline *Timeline) {
@@ -3833,7 +3849,7 @@ func runTimelineFromProfiler(cmd *cobra.Command, tracePath string, opts *timelin
 			return fmt.Errorf("failed to export Chrome tracing: %w", err)
 		}
 	case "perfetto":
-		if err := exportPerfettoForClock(timeline, outputPath, opts.clock); err != nil {
+		if err := exportPerfettoForClockWithBudget(timeline, outputPath, opts.clock, opts.maxOutputBytes); err != nil {
 			return fmt.Errorf("failed to export Perfetto tracing: %w", err)
 		}
 	case "html":

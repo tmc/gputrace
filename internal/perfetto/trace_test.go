@@ -51,3 +51,44 @@ func TestTrackUUID(t *testing.T) {
 		t.Fatalf("TrackUUID = %d, %d, %d", a, b, c)
 	}
 }
+
+func TestWriteWithBudget(t *testing.T) {
+	track := TrackUUID("test", "events")
+	trace := &Trace{Identity: "capture", ClockDomain: "busy", Tracks: []Track{{UUID: track, Name: "events"}}}
+	for i := 0; i < 100; i++ {
+		trace.Events = append(trace.Events, Event{
+			ID: uint64(i + 1), TrackUUID: track, Name: "event", Kind: EventSlice,
+			StartNS: uint64(i * 10), DurationNS: 5, Args: map[string]any{"index": i},
+		})
+	}
+	var full bytes.Buffer
+	if err := Write(&full, trace); err != nil {
+		t.Fatal(err)
+	}
+	limit := int64(full.Len() - 1000)
+	var first, second bytes.Buffer
+	receipt, err := WriteWithOptions(&first, trace, WriteOptions{MaxBytes: limit})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondReceipt, err := WriteWithOptions(&second, trace, WriteOptions{MaxBytes: limit})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if int64(first.Len()) > limit {
+		t.Fatalf("output bytes = %d, limit %d", first.Len(), limit)
+	}
+	if receipt.EventsDropped == 0 || receipt.EventsRetained == 0 {
+		t.Fatalf("receipt = %+v, want partial retention", receipt)
+	}
+	if receipt != secondReceipt || !bytes.Equal(first.Bytes(), second.Bytes()) {
+		t.Fatal("budgeted export is not deterministic")
+	}
+}
+
+func TestWriteWithBudgetRejectsMissingSkeletonSpace(t *testing.T) {
+	errTrace := &Trace{ClockDomain: "busy", Tracks: []Track{{UUID: 1, Name: "track"}}}
+	if _, err := WriteWithOptions(&bytes.Buffer{}, errTrace, WriteOptions{MaxBytes: 10}); err == nil || !strings.Contains(err.Error(), "required descriptors") {
+		t.Fatalf("WriteWithOptions error = %v", err)
+	}
+}
