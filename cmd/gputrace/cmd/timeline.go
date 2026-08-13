@@ -2489,6 +2489,9 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 		trace.Metadata["cs_label_semantics"] = "observed capture annotations; not dispatch or encoder instances"
 		trace.Metadata["command_buffer_count"] = timelineEventCount(timeline, "command_buffer")
 		if timeline.Timing != nil {
+			for key, value := range perfettoTimingSummaryArgs(timeline.Timing) {
+				trace.Metadata[key] = value
+			}
 			trace.Metadata["timing_source"] = timeline.Timing.TimingSource
 			trace.Metadata["timing_approximate"] = timeline.Timing.EncoderTimingApproximate
 			if timeline.Timing.EncoderTimingApproximate {
@@ -3614,6 +3617,40 @@ func timelineTimingArgs(timing *TimelineTiming) map[string]interface{} {
 	}
 	if timing.EffectiveGPUTimeNs != nil {
 		args["effective_gpu_time_ns"] = *timing.EffectiveGPUTimeNs
+	}
+	return args
+}
+
+func perfettoTimingSummaryArgs(timing *TimelineTiming) map[string]interface{} {
+	args := make(map[string]interface{})
+	if timing == nil {
+		return args
+	}
+	for key, value := range map[string]uint64{
+		"encoder_span_ns":               timing.EncoderSpanNs,
+		"dispatch_span_ns":              timing.DispatchSpanNs,
+		"command_buffer_active_time_ns": timing.CommandBufferActiveNs,
+		"command_buffer_wall_time_ns":   timing.CommandBufferWallNs,
+		"restore_active_time_ns":        timing.RestoreActiveNs,
+		"restore_wall_time_ns":          timing.RestoreWallNs,
+		"display_duration_ns":           timing.DisplayDurationNs,
+	} {
+		if value != 0 {
+			args[key] = value
+		}
+	}
+	if timing.EffectiveGPUTimeNs != nil {
+		args["effective_gpu_time_ns"] = *timing.EffectiveGPUTimeNs
+	}
+	if timing.DisplayDurationSource != "" {
+		args["display_duration_source"] = timing.DisplayDurationSource
+	}
+	if timing.TimingSource != "" {
+		args["timing_source"] = timing.TimingSource
+	}
+	if timing.EncoderTimingSource != "" {
+		args["encoder_timing_source"] = timing.EncoderTimingSource
+		args["encoder_timing_approximate"] = timing.EncoderTimingApproximate
 	}
 	return args
 }

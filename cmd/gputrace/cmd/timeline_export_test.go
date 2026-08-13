@@ -309,7 +309,16 @@ func TestExportPerfettoWritesNativeProtobuf(t *testing.T) {
 	timeline := &Timeline{
 		ClockDomain: "busy",
 		Timing: &TimelineTiming{
-			TimingSource: "APSTimelineData",
+			EncoderSpanNs:         20_000,
+			DispatchSpanNs:        5_000,
+			CommandBufferActiveNs: 30_000,
+			CommandBufferWallNs:   50_000,
+			RestoreActiveNs:       31_000,
+			RestoreWallNs:         51_000,
+			DisplayDurationNs:     30_000,
+			DisplayDurationSource: "APSTimelineData command buffer active time",
+			TimingSource:          "APSTimelineData",
+			EncoderTimingSource:   "profiler",
 		},
 		Events: []TimelineEvent{
 			{
@@ -380,6 +389,8 @@ func TestExportPerfettoWritesNativeProtobuf(t *testing.T) {
 		"untimed_dispatch_count",
 		"Unattributed counter metrics: kernel0", "alu_utilization_pct",
 		"Unavailable evidence: APSCounterData time series",
+		"encoder_span_ns", "dispatch_span_ns", "command_buffer_active_time_ns",
+		"display_duration_source", "encoder_timing_source",
 	} {
 		if !bytes.Contains(data, []byte(want)) {
 			t.Fatalf("native trace missing manifest value %q", want)
@@ -396,6 +407,27 @@ func TestTimelineUntimedDispatchCount(t *testing.T) {
 	}}
 	if got, want := timelineUntimedDispatchCount(timeline), 2; got != want {
 		t.Fatalf("untimed dispatch count = %d, want %d", got, want)
+	}
+}
+
+func TestPerfettoTimingSummaryArgsOmitsUnavailableZero(t *testing.T) {
+	args := perfettoTimingSummaryArgs(&TimelineTiming{EncoderTimingSource: "unavailable", EncoderTimingApproximate: true})
+	for _, key := range []string{"encoder_span_ns", "dispatch_span_ns", "command_buffer_active_time_ns", "display_duration_ns", "effective_gpu_time_ns"} {
+		if _, ok := args[key]; ok {
+			t.Errorf("%s is present for unavailable zero timing", key)
+		}
+	}
+	if got := args["encoder_timing_source"]; got != "unavailable" {
+		t.Fatalf("encoder_timing_source = %v, want unavailable", got)
+	}
+	if got := args["encoder_timing_approximate"]; got != true {
+		t.Fatalf("encoder_timing_approximate = %v, want true", got)
+	}
+
+	zero := uint64(0)
+	args = perfettoTimingSummaryArgs(&TimelineTiming{EffectiveGPUTimeNs: &zero})
+	if got, ok := args["effective_gpu_time_ns"]; !ok || got != uint64(0) {
+		t.Fatalf("effective_gpu_time_ns = %v, %v, want measured zero", got, ok)
 	}
 }
 
