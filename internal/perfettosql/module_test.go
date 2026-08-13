@@ -9,6 +9,7 @@ import (
 func TestModuleDefinesStableViews(t *testing.T) {
 	for _, name := range []string{
 		"gputrace_capture",
+		"gputrace_manifest_arg",
 		"gputrace_command_buffer",
 		"gputrace_semantic_node",
 		"gputrace_semantic_link",
@@ -62,6 +63,11 @@ func TestModuleProjectsRecordedDispatchesAndCompilerFacts(t *testing.T) {
 		"counter_clock_relation",
 		"measured_wall_start_ns",
 		"recorded_command_buffer",
+		"input_uuid_availability",
+		"environment_device_availability",
+		"dependency_skeletons_retained",
+		"presentation_dispatch_accounting",
+		"a.display_value",
 	} {
 		if !strings.Contains(Module, want) {
 			t.Errorf("module missing %q", want)

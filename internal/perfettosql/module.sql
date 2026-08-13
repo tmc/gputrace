@@ -5,14 +5,83 @@ CREATE PERFETTO VIEW gputrace_capture AS
 SELECT
   id,
   extract_arg(arg_set_id, 'debug.schema') AS schema,
+  extract_arg(arg_set_id, 'debug.exporter_version') AS exporter_version,
+  extract_arg(arg_set_id, 'debug.exporter_commit') AS exporter_commit,
+  extract_arg(arg_set_id, 'debug.exporter_build_date') AS exporter_build_date,
+  extract_arg(arg_set_id, 'debug.perfetto_schema_revision') AS perfetto_schema_revision,
+  extract_arg(arg_set_id, 'debug.input_uuid') AS input_uuid,
+  extract_arg(arg_set_id, 'debug.input_uuid_availability') AS input_uuid_availability,
+  extract_arg(arg_set_id, 'debug.input_content_digest') AS input_content_digest,
+  extract_arg(arg_set_id, 'debug.input_content_digest_availability') AS input_content_digest_availability,
   extract_arg(arg_set_id, 'debug.clock_domain') AS clock_domain,
+  extract_arg(arg_set_id, 'debug.clock_mapping') AS clock_mapping,
   extract_arg(arg_set_id, 'debug.timing_source') AS timing_source,
   extract_arg(arg_set_id, 'debug.timing_quality') AS timing_quality,
-  extract_arg(arg_set_id, 'debug.dispatch_count') AS dispatch_count,
-  extract_arg(arg_set_id, 'debug.encoder_count') AS encoder_count,
-  extract_arg(arg_set_id, 'debug.output_complete') AS output_complete
+  cast(extract_arg(arg_set_id, 'debug.timing_approximate') AS INT) AS timing_approximate,
+  cast(extract_arg(arg_set_id, 'debug.command_buffer_count') AS INT) AS command_buffer_count,
+  cast(extract_arg(arg_set_id, 'debug.encoder_count') AS INT) AS encoder_count,
+  cast(extract_arg(arg_set_id, 'debug.dispatch_count') AS INT) AS dispatch_count,
+  cast(extract_arg(arg_set_id, 'debug.untimed_dispatch_count') AS INT) AS untimed_dispatch_count,
+  cast(extract_arg(arg_set_id, 'debug.observed_cs_label_count') AS INT) AS observed_cs_label_count,
+  cast(extract_arg(arg_set_id, 'debug.unique_cs_label_count') AS INT) AS unique_cs_label_count,
+  extract_arg(arg_set_id, 'debug.cs_label_semantics') AS cs_label_semantics,
+  cast(extract_arg(arg_set_id, 'debug.raw_profiler_samples') AS INT) AS raw_profiler_samples,
+  extract_arg(arg_set_id, 'debug.environment_schema') AS environment_schema,
+  extract_arg(arg_set_id, 'debug.environment_os') AS environment_os,
+  extract_arg(arg_set_id, 'debug.environment_arch') AS environment_arch,
+  extract_arg(arg_set_id, 'debug.environment_exporter_runtime') AS environment_exporter_runtime,
+  cast(extract_arg(arg_set_id, 'debug.environment_device_id') AS INT) AS environment_device_id,
+  extract_arg(arg_set_id, 'debug.environment_device_availability') AS environment_device_availability,
+  extract_arg(arg_set_id, 'debug.environment_driver_availability') AS environment_driver_availability,
+  extract_arg(arg_set_id, 'debug.environment_mlx_runtime_availability') AS environment_mlx_runtime_availability,
+  extract_arg(arg_set_id, 'debug.environment_workload_availability') AS environment_workload_availability,
+  extract_arg(arg_set_id, 'debug.environment_capability_catalog_availability') AS environment_capability_catalog_availability,
+  extract_arg(arg_set_id, 'debug.capture_mode_availability') AS capture_mode_availability,
+  extract_arg(arg_set_id, 'debug.replay_mode_availability') AS replay_mode_availability,
+  extract_arg(arg_set_id, 'debug.counter_catalog_availability') AS counter_catalog_availability,
+  extract_arg(arg_set_id, 'debug.counter_decoder_availability') AS counter_decoder_availability,
+  extract_arg(arg_set_id, 'debug.raw_counter_artifact_availability') AS raw_counter_artifact_availability,
+  cast(extract_arg(arg_set_id, 'debug.packet_family_gpu_info') AS INT) AS packet_family_gpu_info,
+  cast(extract_arg(arg_set_id, 'debug.packet_family_gpu_render_stage_event') AS INT) AS packet_family_gpu_render_stage_event,
+  cast(extract_arg(arg_set_id, 'debug.packet_family_track_event') AS INT) AS packet_family_track_event,
+  cast(extract_arg(arg_set_id, 'debug.packet_family_gpu_counter_event') AS INT) AS packet_family_gpu_counter_event,
+  extract_arg(arg_set_id, 'debug.resource_policy') AS resource_policy,
+  cast(extract_arg(arg_set_id, 'debug.logical_byte_boundary') AS INT) AS logical_byte_boundary,
+  cast(extract_arg(arg_set_id, 'debug.events_considered') AS INT) AS events_considered,
+  cast(extract_arg(arg_set_id, 'debug.events_retained') AS INT) AS events_retained,
+  cast(extract_arg(arg_set_id, 'debug.events_dropped') AS INT) AS events_dropped,
+  cast(extract_arg(arg_set_id, 'debug.counter_samples_considered') AS INT) AS counter_samples_considered,
+  cast(extract_arg(arg_set_id, 'debug.counter_samples_retained') AS INT) AS counter_samples_retained,
+  cast(extract_arg(arg_set_id, 'debug.counter_samples_dropped') AS INT) AS counter_samples_dropped,
+  cast(extract_arg(arg_set_id, 'debug.dependency_skeletons_retained') AS INT) AS dependency_skeletons_retained,
+  extract_arg(arg_set_id, 'debug.first_dropped_identity') AS first_dropped_identity,
+  extract_arg(arg_set_id, 'debug.last_dropped_identity') AS last_dropped_identity,
+  cast(extract_arg(arg_set_id, 'debug.output_complete') AS INT) AS output_complete,
+  cast(extract_arg(arg_set_id, 'debug.presentation_dispatch_tracks') AS INT) AS presentation_dispatch_tracks,
+  cast(extract_arg(arg_set_id, 'debug.presentation_dispatch_events') AS INT) AS presentation_dispatch_events,
+  extract_arg(arg_set_id, 'debug.presentation_dispatch_accounting') AS presentation_dispatch_accounting,
+  cast(extract_arg(arg_set_id, 'debug.unavailable_evidence_count') AS INT) AS unavailable_evidence_count,
+  arg_set_id
 FROM slice
 WHERE name = 'gputrace evidence manifest';
+
+-- gputrace_manifest_arg is the lossless manifest projection. Typed columns in
+-- gputrace_capture cover common queries; this view keeps new and per-class
+-- receipt fields queryable without waiting for a module schema change.
+CREATE PERFETTO VIEW gputrace_manifest_arg AS
+SELECT
+  s.id AS capture_id,
+  substr(a.key, 7) AS key,
+  substr(a.flat_key, 7) AS flat_key,
+  a.value_type,
+  a.int_value,
+  a.real_value,
+  a.string_value,
+  a.display_value
+FROM slice AS s
+JOIN args AS a USING (arg_set_id)
+WHERE s.name = 'gputrace evidence manifest'
+  AND a.key GLOB 'debug.*';
 
 CREATE PERFETTO VIEW gputrace_dispatch AS
 SELECT
