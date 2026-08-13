@@ -94,6 +94,7 @@ func runKernels(cmd *cobra.Command, args []string, opts *kernelsOptions) error {
 		source = "profiler streamData dispatches"
 		stats = make(map[string]*gputrace.KernelStat)
 		timingStats = make(map[string]*gputrace.TimingStat)
+		captureLabels := trace.ParseComputeEncoders()
 		for _, dispatch := range profilerStats.Dispatches {
 			name := dispatch.FunctionName
 			if name == "" {
@@ -109,6 +110,16 @@ func runKernels(cmd *cobra.Command, args []string, opts *kernelsOptions) error {
 				stats[name] = k
 			}
 			k.DispatchCount++
+			label := ""
+			if dispatch.EncoderIndex >= 0 && dispatch.EncoderIndex < len(profilerStats.EncoderTimings) {
+				label = profilerStats.EncoderTimings[dispatch.EncoderIndex].Label
+			}
+			if label == "" && dispatch.EncoderIndex >= 0 && dispatch.EncoderIndex < len(captureLabels) {
+				label = captureLabels[dispatch.EncoderIndex].Label
+			}
+			if label != "" && label != name {
+				k.EncoderLabels[label]++
+			}
 			s := timingStats[name]
 			if s == nil {
 				s = &gputrace.TimingStat{}
