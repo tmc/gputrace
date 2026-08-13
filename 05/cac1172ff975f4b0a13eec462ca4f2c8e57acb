@@ -1,0 +1,10 @@
+commit: 05cac11
+date: 2026-08-13T11:00:03-07:00
+agent: codex
+version: codex-cli 0.147.0
+model: gpt-5.6
+reasoning: high
+tty: not a tty
+not-a-tty
+pid: 44450
+ITERM_SESSION_ID: w0t1p24:33BC7BAC-CC1C-4160-85A7-2F1B4421EC45
