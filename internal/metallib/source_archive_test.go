@@ -74,6 +74,30 @@ func TestEmbeddedSourcesFromFile(t *testing.T) {
 	t.Fatalf("decoded %d files without Metal source", len(files))
 }
 
+func TestDebugRecordsFromFile(t *testing.T) {
+	name := os.Getenv("GPUTRACE_TEST_METALLIB")
+	if name == "" {
+		t.Skip("GPUTRACE_TEST_METALLIB is not set")
+	}
+	data, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lib, err := Parse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	functions, err := lib.ListFunctionMetadata()
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := lib.ListDebugRecords()
+	if len(records) == 0 {
+		t.Fatal("no debug records")
+	}
+	t.Logf("decoded %d functions and %d unbound debug records", len(functions), len(records))
+}
+
 func putUint64(p []byte, v uint64) {
 	for i := range 8 {
 		p[i] = byte(v >> (8 * i))
