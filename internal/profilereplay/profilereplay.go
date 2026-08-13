@@ -21,6 +21,7 @@ import (
 	"regexp"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/tmc/gputrace/internal/profilerraw"
 )
@@ -92,11 +93,15 @@ type Options struct {
 	// is enough for profiler, timing, timeline and pprof. The capture-dependent
 	// commands — kernels, buffer bindings, grid sizes — need the copy.
 	Embed bool
+
+	// Wait waits for another MTLReplayer run to finish instead of returning
+	// ErrReplayerBusy. Replays remain non-overlapping across processes.
+	Wait bool
 }
 
 // Profile replays in under the profiler and returns the path it wrote.
 func Profile(ctx context.Context, in string, opts Options) (string, error) {
-	unlock, err := acquireLock(ctx)
+	unlock, err := acquireLock(ctx, opts.Wait)
 	if err != nil {
 		return "", err
 	}
@@ -220,20 +225,29 @@ func embed(in, out, payload string) error {
 }
 
 // acquireLock ensures exclusive MTLReplayer execution across processes.
-func acquireLock(ctx context.Context) (func(), error) {
-	if err := exec.CommandContext(ctx, "/usr/bin/pgrep", "-x", "MTLReplayer").Run(); err == nil {
-		return nil, fmt.Errorf("%w: MTLReplayer process is active", ErrReplayerBusy)
-	}
-
+func acquireLock(ctx context.Context, wait bool) (func(), error) {
 	lockPath := filepath.Join(os.TempDir(), "gputrace-mtlreplayer.lock")
 	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return nil, fmt.Errorf("create replayer lock: %w", err)
 	}
-
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := flock(ctx, f, wait); err != nil {
 		_ = f.Close()
-		return nil, fmt.Errorf("%w: %s", ErrReplayerBusy, lockPath)
+		return nil, err
+	}
+	for mtlReplayerRunning(ctx) {
+		if !wait {
+			_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+			_ = f.Close()
+			return nil, fmt.Errorf("%w: MTLReplayer process is active", ErrReplayerBusy)
+		}
+		select {
+		case <-ctx.Done():
+			_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+			_ = f.Close()
+			return nil, ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
 
 	unlock := func() {
@@ -243,3 +257,23 @@ func acquireLock(ctx context.Context) (func(), error) {
 	return unlock, nil
 }
 
+func flock(ctx context.Context, f *os.File, wait bool) error {
+	for {
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return nil
+		}
+		if !wait {
+			return fmt.Errorf("%w: %s", ErrReplayerBusy, f.Name())
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+func mtlReplayerRunning(ctx context.Context) bool {
+	return exec.CommandContext(ctx, "/usr/bin/pgrep", "-x", "MTLReplayer").Run() == nil
+}

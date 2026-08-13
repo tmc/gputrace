@@ -9,12 +9,12 @@
 package capture
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	_ "embed"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,7 +36,7 @@ type Options struct {
 	Env []string
 
 	// Stdout and Stderr receive the target's output. Nil discards it.
-	Stdout, Stderr *bytes.Buffer
+	Stdout, Stderr io.Writer
 }
 
 // ErrNotInterposable reports that dyld will not load the interposer into the

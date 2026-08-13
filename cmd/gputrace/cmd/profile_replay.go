@@ -13,6 +13,7 @@ var profileReplayCmd = newProfileReplayCommand(&profileReplayOptions{})
 type profileReplayOptions struct {
 	output string
 	embed  bool
+	wait   bool
 }
 
 func newProfileReplayCommand(opts *profileReplayOptions) *cobra.Command {
@@ -46,6 +47,7 @@ Examples:
 			out, err := profilereplay.Profile(cmd.Context(), args[0], profilereplay.Options{
 				Output: opts.output,
 				Embed:  opts.embed,
+				Wait:   opts.wait,
 			})
 			if err != nil {
 				return err
@@ -57,6 +59,7 @@ Examples:
 	f := cmd.Flags()
 	f.StringVarP(&opts.output, "output", "o", "", "path of the bundle to write (default <trace>-perfdata.gputrace)")
 	f.BoolVar(&opts.embed, "embed", false, "copy the capture stream in too, for a self-contained trace")
+	f.BoolVar(&opts.wait, "wait", false, "wait for another replay instead of reporting that MTLReplayer is busy")
 	return cmd
 }
 

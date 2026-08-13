@@ -89,6 +89,11 @@ gputrace profile-replay run.gputrace          # writes run-perfdata.gputrace
 gputrace profiler run-perfdata.gputrace
 ```
 
+Replay processes are exclusive. A second invocation normally returns a busy
+error; pass `--wait` to queue it and guarantee non-overlapping replay. Go
+programs can use `github.com/tmc/gputrace/capture` and
+`github.com/tmc/gputrace/profilereplay` for the same operations.
+
 The output holds the profiler payload, which is what `profiler`, `timing`,
 `timeline` and `pprof` read. Add `--embed` to copy the capture stream in as well,
 for the commands that need it — `kernels`, buffer bindings, grid and threadgroup
