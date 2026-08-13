@@ -481,7 +481,9 @@ gputrace_semantic_node
 gputrace_semantic_link
 gputrace_semantic_arg
 gputrace_dispatch
+gputrace_dispatch_arg
 gputrace_encoder
+gputrace_encoder_arg
 gputrace_function
 gputrace_pipeline
 gputrace_profiler_stream
@@ -505,6 +507,13 @@ clock, coverage, and retention queries. `gputrace_manifest_arg` is the
 lossless key/value projection of the same manifest. It keeps dynamic
 per-evidence-class loss receipts and future manifest fields queryable without
 silently dropping them from an older typed view.
+
+`gputrace_dispatch` exposes Xcode's source-backed workload type and view
+classifications as typed columns. `gputrace_dispatch_arg` and
+`gputrace_encoder_arg` retain every native event argument as key/value rows,
+including typed fields. This is the forward-compatible extension surface for
+uncommon or newly added evidence; users do not need to join Perfetto's generic
+argument table or wait for a typed schema revision.
 
 The opt-in wall export retains GPRWCNTR records in
 `gputrace_raw_profiler_sample`, including their original mach-absolute tick,

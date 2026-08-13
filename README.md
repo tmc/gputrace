@@ -107,7 +107,7 @@ for the native Perfetto roadmap and proposed MLX semantic view.
 `--format perfetto` writes binary protobuf; `--format chrome` retains Chrome
 Trace JSON compatibility.
 The optional SQL file defines `gputrace_capture`, `gputrace_command_buffer`, `gputrace_dispatch`,
-`gputrace_encoder`, `gputrace_function`, `gputrace_pipeline`, `gputrace_semantic_node`, `gputrace_semantic_link`,
+`gputrace_dispatch_arg`, `gputrace_encoder`, `gputrace_encoder_arg`, `gputrace_function`, `gputrace_pipeline`, `gputrace_semantic_node`, `gputrace_semantic_link`,
 `gputrace_counter_series`, `gputrace_unattributed_counter`, `gputrace_evidence_gap`, and
 `gputrace_unmatched` views over the native trace.
 `gputrace_capture` provides typed trace identity, environment, clock, coverage,
@@ -128,6 +128,9 @@ MLX semantic nodes expose parent identity, and links expose their sidecar link
 id and exact target index. `gputrace_semantic_arg` retains arbitrary node
 attributes such as dtype and shape as key/value rows; filter `event_kind` to
 distinguish untimed declarations from timed target projections.
+`gputrace_dispatch` includes Xcode's workload type and view classifications.
+`gputrace_dispatch_arg` and `gputrace_encoder_arg` expose every event argument
+as key/value rows, including fields also available through typed columns.
 Pipeline counter rows that lack a capture-backed encoder identity remain
 untimed and appear in `gputrace_unattributed_counter`; arbitrary metric values
 remain available through `gputrace_unattributed_counter_arg`. Evidence families
