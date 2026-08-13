@@ -132,7 +132,7 @@ should not inherit gputrace's parser and private-framework dependencies. It has
 no module requirements and invokes a configured `gputrace` executable:
 
 ```go
-client := gpubench.Client{Path: "/path/to/gputrace"}
+client := gpubench.Client{Executable: "/path/to/gputrace"}
 report, err := client.Analyze(ctx, profiled, gpubench.AnalyzeOptions{
 	Work: &gpubench.Work{Count: 32, Unit: "token"},
 })
