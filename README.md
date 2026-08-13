@@ -87,6 +87,9 @@ mach-absolute tick bounds; they are not presented as measured dispatch timing.
 It also exposes capture command-buffer membership and byte offset as structural
 identity. Those fields do not imply that wall-clock command-buffer spans
 contain busy-clock dispatch intervals.
+Per-launch SIMD groups remain dispatch facts. The `gputrace_function` view
+holds one row per function for aggregate duration, total SIMD work, and work
+share, avoiding repeated aggregates that produce misleading sums.
 gputrace does not invent a mapping between these domains.
 
 See [MLX GPU Trace Rendering in Perfetto](docs/MLX_PERFETTO_RENDERING_SPEC.md)
@@ -94,7 +97,7 @@ for the native Perfetto roadmap and proposed MLX semantic view.
 `--format perfetto` writes binary protobuf; `--format chrome` retains Chrome
 Trace JSON compatibility.
 The optional SQL file defines `gputrace_capture`, `gputrace_dispatch`,
-`gputrace_pipeline`, `gputrace_semantic_node`, `gputrace_semantic_link`,
+`gputrace_function`, `gputrace_pipeline`, `gputrace_semantic_node`, `gputrace_semantic_link`,
 `gputrace_counter_series`, and
 `gputrace_unmatched` views over the native trace.
 
