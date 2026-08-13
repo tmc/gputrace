@@ -121,7 +121,10 @@ as a key/value row, including per-class loss fields added by constrained
 exports and fields introduced by newer exporters.
 With `--clock wall --include-raw-samples`, `gputrace_profiler_stream` exposes
 raw stream aggregates and `gputrace_raw_profiler_sample` exposes GPRWCNTR
-record headers and original mach-absolute ticks. These are raw profiler input,
+record headers, source record ordinals, and original mach-absolute ticks.
+`gputrace_track_event_arg` retains every argument for low-volume generic events
+such as command buffers and profiler streams; its `event_id` is a trace-local
+join key, not a persistent source identity. These are raw profiler input,
 not decoded counter values or GPU encoder intervals. They are never joined to
 busy-domain dispatches by comparing their displayed timestamps.
 Original-execution timing attached with `--clock live --live-timing` appears in

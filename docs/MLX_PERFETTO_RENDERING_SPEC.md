@@ -488,6 +488,7 @@ gputrace_function
 gputrace_pipeline
 gputrace_profiler_stream
 gputrace_raw_profiler_sample
+gputrace_track_event_arg
 gputrace_live_command_buffer
 gputrace_host_signpost
 gputrace_counter_series
@@ -525,7 +526,11 @@ argument table or wait for a typed schema revision.
 
 The opt-in wall export retains GPRWCNTR records in
 `gputrace_raw_profiler_sample`, including their original mach-absolute tick,
-stream index, raw header fields, coordinate basis, and decode status.
+source record ordinal, stream index, raw header fields, coordinate basis, and
+decode status. `gputrace_track_event_arg` is the lossless key/value extension
+surface for low-volume generic track events, including command buffers and
+profiler streams. Its `event_id` joins within one loaded trace only and is not
+a source or cross-trace identity.
 `gputrace_profiler_stream` contains source-backed aggregate stream spans. Both
 views explicitly distinguish raw profiler input from decoded counters and GPU
 encoder intervals. Busy-domain dispatches do not receive direct sample counts
