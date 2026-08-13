@@ -20,6 +20,7 @@ var rootCmd = &cobra.Command{
 Command Groups:
 
 Trace Overview:
+  summary          - One-screen structure, timing, and evidence report
   stats            - Capture structure, resources, and profiler availability
   api-calls        - API call sequences
   dump             - Raw API call dump
