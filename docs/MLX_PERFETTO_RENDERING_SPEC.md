@@ -485,6 +485,8 @@ gputrace_function
 gputrace_pipeline
 gputrace_profiler_stream
 gputrace_raw_profiler_sample
+gputrace_live_command_buffer
+gputrace_host_signpost
 gputrace_counter_series
 gputrace_unmatched
 ```
@@ -515,6 +517,14 @@ capture parser's attribution basis. `gputrace_function` keeps summed
 per-launch SIMD work separate from a source-reported function aggregate. The
 latter uses one repeated source fact per function, never a sum across dispatch
 rows, and remains `NULL` when the trace carries no such aggregate.
+
+`gputrace_live_command_buffer` retains exact nanosecond intervals reported by
+`MTLCommandBuffer.GPUStartTime/GPUEndTime` during the original execution. Its
+trace-identified sidecar receipt, clock-sample count, projected count, and
+unmatched count are typed capture fields. `gputrace_host_signpost` retains only
+events admitted by the strict host-correlation receipt and exposes its join
+basis, both artifact digests, clock domains, bridge digest, and maximum error.
+Neither view weakens the identity or clock gates enforced before export.
 
 Each semantic node is emitted as an explicitly untimed declaration on its
 hierarchical track. Target links are separate events and inherit timing only

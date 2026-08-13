@@ -119,6 +119,11 @@ raw stream aggregates and `gputrace_raw_profiler_sample` exposes GPRWCNTR
 record headers and original mach-absolute ticks. These are raw profiler input,
 not decoded counter values or GPU encoder intervals. They are never joined to
 busy-domain dispatches by comparing their displayed timestamps.
+Original-execution timing attached with `--clock live --live-timing` appears in
+`gputrace_live_command_buffer`; its run, sidecar digest, and match counts are
+also in `gputrace_capture`. Verified `--host-correlation` events appear in
+`gputrace_host_signpost` with both artifact digests, clocks, bridge identity,
+and declared maximum error.
 
 `diff` fails closed when workload, device/driver, runtime, capture mode, or
 timing-source gates differ or are unavailable. The explicit
