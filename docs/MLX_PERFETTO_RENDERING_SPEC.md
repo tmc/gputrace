@@ -548,6 +548,16 @@ including typed fields. This is the forward-compatible extension surface for
 uncommon or newly added evidence; users do not need to join Perfetto's generic
 argument table or wait for a typed schema revision.
 
+Pipeline identity is explicitly capture-local. Profiled dispatches use the
+pipeline ID and address from `streamData` `pipelineStateInfoData`; capture-only
+dispatches retain the address from their capture record and leave the absent
+pipeline ID `NULL`. The typed dispatch and pipeline views expose the numeric
+address, identity source, and scope. `gputrace_pipeline` also reconciles total,
+measured, and recorded-only dispatch counts and sums duration only for measured
+GPU execution. It does not treat an address or pipeline ID as a cross-trace
+identity, and it does not synthesize private Xcode function or library object
+IDs that normal export never observed.
+
 The opt-in wall export retains GPRWCNTR records in
 `gputrace_raw_profiler_sample`, including their original mach-absolute tick,
 source record ordinal, stream index, raw header fields, coordinate basis, and

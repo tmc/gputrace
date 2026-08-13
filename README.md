@@ -144,6 +144,10 @@ distinguish untimed declarations from timed target projections.
 `gputrace_dispatch` includes Xcode's workload type and view classifications.
 `gputrace_dispatch_arg` and `gputrace_encoder_arg` expose every event argument
 as key/value rows, including fields also available through typed columns.
+Pipeline identity includes a numeric address, its capture-local scope, and the
+archive record that supplied it. `gputrace_pipeline` groups by that identity
+and reports total, measured, and recorded-only dispatch counts plus measured
+duration. Pipeline addresses and IDs are not stable cross-trace identifiers.
 Pipeline counter rows that lack a capture-backed encoder identity remain
 untimed and appear in `gputrace_unattributed_counter`; arbitrary metric values
 remain available through `gputrace_unattributed_counter_arg`. Evidence families
