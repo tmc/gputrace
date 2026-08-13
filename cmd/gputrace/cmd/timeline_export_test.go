@@ -414,17 +414,51 @@ func TestExportPerfettoWritesNativeProtobuf(t *testing.T) {
 
 func TestApplyStreamIdentity(t *testing.T) {
 	gpuGeneration := uint32(2)
+	version := int64(5)
+	zero := int64(0)
 	timeline := &Timeline{}
 	applyStreamIdentity(timeline, &counter.StreamDataStats{
 		GPUGeneration:   &gpuGeneration,
 		MetalDeviceName: "Apple M4 Max",
 		MetalPluginName: "AGXMetalG16X",
+		Metadata: counter.StreamDataMetadata{
+			Version:               &version,
+			ProfiledExecutionMode: &zero,
+			TraceName:             "trace.gputrace",
+		},
 	})
 	if timeline.GPUGeneration == nil || *timeline.GPUGeneration != 2 || timeline.MetalDeviceName != "Apple M4 Max" || timeline.MetalPluginName != "AGXMetalG16X" {
 		t.Fatalf("stream identity = %#v", timeline)
 	}
 	if timeline.GPUGeneration == &gpuGeneration {
 		t.Fatal("stream identity retained the source pointer")
+	}
+	if timeline.StreamMetadata == nil || timeline.StreamMetadata.Version == nil || *timeline.StreamMetadata.Version != 5 || timeline.StreamMetadata.ProfiledExecutionMode == nil || *timeline.StreamMetadata.ProfiledExecutionMode != 0 {
+		t.Fatalf("stream metadata = %#v", timeline.StreamMetadata)
+	}
+	if timeline.StreamMetadata.Version == &version || timeline.StreamMetadata.ProfiledExecutionMode == &zero {
+		t.Fatal("stream metadata retained source pointers")
+	}
+}
+
+func TestPerfettoStreamMetadataArgsPreservesZeroAndFalse(t *testing.T) {
+	zero := int64(0)
+	falseValue := false
+	args := perfettoStreamMetadataArgs(&counter.StreamDataMetadata{
+		ProfiledExecutionMode:        &zero,
+		DataSourceHasUnusedResources: &falseValue,
+		NumBlitCalls:                 &zero,
+	})
+	for _, key := range []string{"stream_data_profiled_execution_mode", "stream_data_has_unused_resources", "stream_data_num_blit_calls"} {
+		if _, ok := args[key]; !ok {
+			t.Fatalf("%s absent from %#v", key, args)
+		}
+	}
+	if got := args["stream_data_profile_mode_semantics"]; got == "" {
+		t.Fatalf("profile mode semantics = %#v", got)
+	}
+	if got := perfettoStreamMetadataArgs(nil)["stream_data_metadata_availability"]; got == "" {
+		t.Fatalf("missing metadata availability = %#v", got)
 	}
 }
 

@@ -37,6 +37,36 @@ func TestArchivedString(t *testing.T) {
 	}
 }
 
+func TestParseStreamDataMetadataPreservesZeroAndFalse(t *testing.T) {
+	objects := []any{"$null", int64(0), int64(5), "trace.gputrace", true}
+	metadata := parseStreamDataMetadata(objects, map[string]any{
+		"version":                      plist.UID(2),
+		"traceName":                    plist.UID(3),
+		"profiledExecutionMode":        plist.UID(1),
+		"dataSourceHasUnusedResources": false,
+		"supportsSeparateAPSData":      plist.UID(4),
+		"numBlitCalls":                 int64(0),
+	})
+	if metadata.Version == nil || *metadata.Version != 5 || metadata.TraceName != "trace.gputrace" {
+		t.Fatalf("identity metadata = %#v", metadata)
+	}
+	if metadata.ProfiledExecutionMode == nil || *metadata.ProfiledExecutionMode != 0 {
+		t.Fatalf("profiled execution mode = %#v, want recorded zero", metadata.ProfiledExecutionMode)
+	}
+	if metadata.DataSourceHasUnusedResources == nil || *metadata.DataSourceHasUnusedResources {
+		t.Fatalf("unused resources = %#v, want recorded false", metadata.DataSourceHasUnusedResources)
+	}
+	if metadata.SupportsSeparateAPSData == nil || !*metadata.SupportsSeparateAPSData {
+		t.Fatalf("supports separate APS data = %#v, want true", metadata.SupportsSeparateAPSData)
+	}
+	if metadata.NumBlitCalls == nil || *metadata.NumBlitCalls != 0 {
+		t.Fatalf("num blit calls = %#v, want recorded zero", metadata.NumBlitCalls)
+	}
+	if metadata.ProfiledProfilerMode != nil {
+		t.Fatalf("absent profiled profiler mode = %#v, want nil", metadata.ProfiledProfilerMode)
+	}
+}
+
 func TestParseStreamDataIntegration(t *testing.T) {
 	gpuprofDir := integrationPathFromEnv(t, streamDataIntegrationDirEnv)
 	stats, err := ParseStreamData(gpuprofDir, nil)

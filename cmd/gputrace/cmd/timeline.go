@@ -963,6 +963,7 @@ type Timeline struct {
 	GPUGeneration        *uint32                     `json:"gpu_generation,omitempty"`
 	MetalDeviceName      string                      `json:"metal_device_name,omitempty"`
 	MetalPluginName      string                      `json:"metal_plugin_name,omitempty"`
+	StreamMetadata       *counter.StreamDataMetadata `json:"stream_metadata,omitempty"`
 	ObservedCSLabels     int                         `json:"observed_cs_labels,omitempty"`
 	UniqueCSLabels       int                         `json:"unique_cs_labels,omitempty"`
 	EvidenceInventory    *TimelineEvidenceInventory  `json:"evidence_inventory,omitempty"`
@@ -1519,6 +1520,49 @@ func applyStreamIdentity(timeline *Timeline, stats *counter.StreamDataStats) {
 	}
 	timeline.MetalDeviceName = stats.MetalDeviceName
 	timeline.MetalPluginName = stats.MetalPluginName
+	if streamDataMetadataPresent(stats.Metadata) {
+		metadata := cloneStreamDataMetadata(stats.Metadata)
+		timeline.StreamMetadata = &metadata
+	}
+}
+
+func streamDataMetadataPresent(metadata counter.StreamDataMetadata) bool {
+	return metadata.Version != nil || metadata.UnixTimestamp != nil || metadata.TraceName != "" ||
+		metadata.ProfiledExecutionMode != nil || metadata.ProfiledPerformanceState != nil ||
+		metadata.ProfiledProfilerMode != nil || metadata.CaptureRangeLocation != nil ||
+		metadata.CaptureRangeLength != nil || metadata.DataSourceHasUnusedResources != nil ||
+		metadata.SupportsSeparateAPSData != nil || metadata.NumBlitCalls != nil
+}
+
+func cloneStreamDataMetadata(metadata counter.StreamDataMetadata) counter.StreamDataMetadata {
+	result := metadata
+	result.Version = cloneInt64(metadata.Version)
+	result.UnixTimestamp = cloneInt64(metadata.UnixTimestamp)
+	result.ProfiledExecutionMode = cloneInt64(metadata.ProfiledExecutionMode)
+	result.ProfiledPerformanceState = cloneInt64(metadata.ProfiledPerformanceState)
+	result.ProfiledProfilerMode = cloneInt64(metadata.ProfiledProfilerMode)
+	result.CaptureRangeLocation = cloneInt64(metadata.CaptureRangeLocation)
+	result.CaptureRangeLength = cloneInt64(metadata.CaptureRangeLength)
+	result.DataSourceHasUnusedResources = cloneBool(metadata.DataSourceHasUnusedResources)
+	result.SupportsSeparateAPSData = cloneBool(metadata.SupportsSeparateAPSData)
+	result.NumBlitCalls = cloneInt64(metadata.NumBlitCalls)
+	return result
+}
+
+func cloneInt64(value *int64) *int64 {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
+}
+
+func cloneBool(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
 }
 
 func populateUnprofiledEncoderEvents(timeline *Timeline, computeEncoders []*tracepkg.ComputeEncoder, timingByLabel map[string]*gputrace.EncoderTiming, metrics *gputrace.TimingMetrics) {
@@ -2617,6 +2661,9 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 	} else {
 		trace.Metadata["environment_gpu_generation_availability"] = "unavailable: streamData gpuGeneration is absent"
 	}
+	for key, value := range perfettoStreamMetadataArgs(timeline.StreamMetadata) {
+		trace.Metadata[key] = value
+	}
 	if timeline != nil {
 		for key, value := range perfettoClockConversionArgs(timeline) {
 			trace.Metadata[key] = value
@@ -2841,6 +2888,53 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 			receipt.SamplesRetained, receipt.SamplesConsidered, receipt.LogicalBytes)
 	}
 	return nil
+}
+
+func perfettoStreamMetadataArgs(metadata *counter.StreamDataMetadata) map[string]any {
+	args := map[string]any{
+		"stream_data_metadata_availability": "unavailable: streamData archive metadata is absent",
+	}
+	if metadata == nil {
+		return args
+	}
+	args["stream_data_metadata_availability"] = "available: raw streamData archive root fields"
+	args["stream_data_metadata_source"] = "streamData keyed archive root"
+	args["stream_data_profile_mode_semantics"] = "raw private enum values; meanings unverified"
+	args["stream_data_capture_range_semantics"] = "raw private scalar values; units and relationship unverified"
+	if metadata.Version != nil {
+		args["stream_data_version"] = *metadata.Version
+	}
+	if metadata.UnixTimestamp != nil {
+		args["stream_data_unix_timestamp"] = *metadata.UnixTimestamp
+	}
+	if metadata.TraceName != "" {
+		args["stream_data_trace_name"] = metadata.TraceName
+	}
+	if metadata.ProfiledExecutionMode != nil {
+		args["stream_data_profiled_execution_mode"] = *metadata.ProfiledExecutionMode
+	}
+	if metadata.ProfiledPerformanceState != nil {
+		args["stream_data_profiled_performance_state"] = *metadata.ProfiledPerformanceState
+	}
+	if metadata.ProfiledProfilerMode != nil {
+		args["stream_data_profiled_profiler_mode"] = *metadata.ProfiledProfilerMode
+	}
+	if metadata.CaptureRangeLocation != nil {
+		args["stream_data_capture_range_location"] = *metadata.CaptureRangeLocation
+	}
+	if metadata.CaptureRangeLength != nil {
+		args["stream_data_capture_range_length"] = *metadata.CaptureRangeLength
+	}
+	if metadata.DataSourceHasUnusedResources != nil {
+		args["stream_data_has_unused_resources"] = *metadata.DataSourceHasUnusedResources
+	}
+	if metadata.SupportsSeparateAPSData != nil {
+		args["stream_data_supports_separate_aps_data"] = *metadata.SupportsSeparateAPSData
+	}
+	if metadata.NumBlitCalls != nil {
+		args["stream_data_num_blit_calls"] = *metadata.NumBlitCalls
+	}
+	return args
 }
 
 func perfettoClockConversionArgs(timeline *Timeline) map[string]any {

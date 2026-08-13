@@ -157,6 +157,7 @@ type StreamDataStats struct {
 	GPUGeneration         *uint32             `json:"gpu_generation,omitempty"`
 	MetalDeviceName       string              `json:"metal_device_name,omitempty"`
 	MetalPluginName       string              `json:"metal_plugin_name,omitempty"`
+	Metadata              StreamDataMetadata  `json:"metadata"`
 	Pipelines             []PipelineStats     `json:"pipelines"`
 	Dispatches            []DispatchInfo      `json:"dispatches"`     // Per-dispatch timing and metadata
 	FunctionNames         []string            `json:"function_names"` // Unique function names from strings array
@@ -176,6 +177,23 @@ type StreamDataStats struct {
 	CommandBufferActiveNs uint64              `json:"command_buffer_active_time_ns,omitempty"`
 	CommandBufferWallNs   uint64              `json:"command_buffer_wall_time_ns,omitempty"`
 	TimingSource          string              `json:"timing_source"`
+}
+
+// StreamDataMetadata retains scalar provenance from the streamData archive
+// root. Enum and capture-range meanings are private and remain uninterpreted.
+// Pointer fields distinguish a recorded zero or false from an absent key.
+type StreamDataMetadata struct {
+	Version                      *int64 `json:"version,omitempty"`
+	UnixTimestamp                *int64 `json:"unix_timestamp,omitempty"`
+	TraceName                    string `json:"trace_name,omitempty"`
+	ProfiledExecutionMode        *int64 `json:"profiled_execution_mode,omitempty"`
+	ProfiledPerformanceState     *int64 `json:"profiled_performance_state,omitempty"`
+	ProfiledProfilerMode         *int64 `json:"profiled_profiler_mode,omitempty"`
+	CaptureRangeLocation         *int64 `json:"capture_range_location,omitempty"`
+	CaptureRangeLength           *int64 `json:"capture_range_length,omitempty"`
+	DataSourceHasUnusedResources *bool  `json:"data_source_has_unused_resources,omitempty"`
+	SupportsSeparateAPSData      *bool  `json:"supports_separate_aps_data,omitempty"`
+	NumBlitCalls                 *int64 `json:"num_blit_calls,omitempty"`
 }
 
 // ParseStreamData parses the streamData plist from a .gpuprofiler_raw directory.
@@ -212,6 +230,7 @@ func ParseStreamData(gpuprofilerDir string, addressToName map[uint64]string) (*S
 			}
 			stats.MetalDeviceName = archivedString(objects, obj1["metalDeviceName"])
 			stats.MetalPluginName = archivedString(objects, obj1["metalPluginName"])
+			stats.Metadata = parseStreamDataMetadata(objects, obj1)
 
 			// Extract function names from strings array
 			stats.FunctionNames = extractFunctionNames(objects, obj1)
@@ -281,6 +300,75 @@ func ParseStreamData(gpuprofilerDir string, addressToName map[uint64]string) (*S
 
 	stats.setTimingSource()
 	return stats, nil
+}
+
+func parseStreamDataMetadata(objects []any, root map[string]any) StreamDataMetadata {
+	return StreamDataMetadata{
+		Version:                      archivedInt64(objects, root, "version"),
+		UnixTimestamp:                archivedInt64(objects, root, "unixTimestamp"),
+		TraceName:                    archivedString(objects, root["traceName"]),
+		ProfiledExecutionMode:        archivedInt64(objects, root, "profiledExecutionMode"),
+		ProfiledPerformanceState:     archivedInt64(objects, root, "profiledPerformanceState"),
+		ProfiledProfilerMode:         archivedInt64(objects, root, "profiledProfilerMode"),
+		CaptureRangeLocation:         archivedInt64(objects, root, "captureRangeLocation"),
+		CaptureRangeLength:           archivedInt64(objects, root, "captureRangeLength"),
+		DataSourceHasUnusedResources: archivedBool(objects, root, "dataSourceHasUnusedResources"),
+		SupportsSeparateAPSData:      archivedBool(objects, root, "supportsSeparateAPSData"),
+		NumBlitCalls:                 archivedInt64(objects, root, "numBlitCalls"),
+	}
+}
+
+func archivedInt64(objects []any, root map[string]any, key string) *int64 {
+	value, ok := root[key]
+	if !ok {
+		return nil
+	}
+	value = archivedValue(objects, value)
+	var result int64
+	switch v := value.(type) {
+	case int:
+		result = int64(v)
+	case int32:
+		result = int64(v)
+	case int64:
+		result = v
+	case uint32:
+		result = int64(v)
+	case uint64:
+		if v > uint64(^uint64(0)>>1) {
+			return nil
+		}
+		result = int64(v)
+	default:
+		return nil
+	}
+	return &result
+}
+
+func archivedBool(objects []any, root map[string]any, key string) *bool {
+	value, ok := root[key]
+	if !ok {
+		return nil
+	}
+	result, ok := archivedValue(objects, value).(bool)
+	if !ok {
+		return nil
+	}
+	return &result
+}
+
+func archivedValue(objects []any, value any) any {
+	for depth := 0; depth < 4; depth++ {
+		uid, ok := value.(plist.UID)
+		if !ok {
+			return value
+		}
+		if int(uid) >= len(objects) {
+			return nil
+		}
+		value = objects[int(uid)]
+	}
+	return nil
 }
 
 func archivedString(objects []any, value any) string {
