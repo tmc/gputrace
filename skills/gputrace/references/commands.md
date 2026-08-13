@@ -59,14 +59,20 @@ go tool pprof -top ~/tmp/gputrace-task/trace.pprof
 
 gputrace timeline trace.gputrace --format text
 gputrace timeline trace.gputrace --format perfetto \
-  -o ~/tmp/gputrace-task/timeline.json
+  -o ~/tmp/gputrace-task/timeline.pftrace \
+  --sql-out ~/tmp/gputrace-task/gputrace.sql
+gputrace timeline trace.gputrace --format perfetto --open --remote-ui \
+  --kernel rmsbfloat16 --kernel-occurrence 0
 gputrace timeline trace.gputrace --format html \
   -o ~/tmp/gputrace-task/timeline.html
 ```
 
-Use Perfetto or Chrome trace output to inspect ordering and overlap. Submission
-order alone does not prove GPU execution overlap; identify the timing source and
-visible dependency behavior.
+Native Perfetto output keeps cumulative GPU-busy and command-buffer wall clocks
+separate. Per-encoder APS cycle and cost aggregates are event details, not
+sampled counter tracks, until their clock is joined. `--sidecar` requires exact
+trace identity and explicit occurrence links; an MLX runtime receipt alone is
+not attachable. Use `--sql-out` for the stable capture, dispatch, pipeline,
+semantic, counter, and unmatched views.
 
 ## Buffer analysis
 
@@ -102,6 +108,8 @@ gputrace diff baseline.gputrace candidate.gputrace \
   --md-out ~/tmp/gputrace-task/report.md
 gputrace diff baseline.gputrace candidate.gputrace \
   --perfetto-out ~/tmp/gputrace-task/diff-perfetto.json
+gputrace diff baseline.gputrace candidate.gputrace \
+  --allow-cross-environment --json > ~/tmp/gputrace-task/descriptive.json
 ```
 
 For benchmark directories:
@@ -115,6 +123,10 @@ gputrace diff --bench-dir ~/bench-traces \
 Prefer explicit paths for reproducible work. Review total time, top function and
 encoder deltas, dispatch outliers, spike windows, unnamed work, and
 matched/unmatched counts together.
+
+`diff` fails closed when exact environment gates differ or are unavailable.
+Use `--allow-cross-environment` only for descriptive deltas; the report remains
+labeled `cross-environment, not causally attributable`.
 
 `brief` produces a compact JSON or Markdown comparison payload:
 

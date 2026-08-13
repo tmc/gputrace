@@ -42,6 +42,21 @@ from approximate fallback timing.
 Read [references/commands.md](references/commands.md) for command selection,
 examples, and output guidance.
 
+For native Perfetto, keep the viewer and exporter on `timeline`:
+
+```bash
+gputrace timeline trace.gputrace --format perfetto -o timeline.pftrace \
+  --sql-out gputrace.sql
+gputrace timeline trace.gputrace --format perfetto --open --remote-ui \
+  --kernel rmsbfloat16 --kernel-occurrence 0
+```
+
+Use `--clock busy` for encoders and dispatches and `--clock wall` for command
+buffers. Do not place APS cycle aggregates on either axis as sampled counters;
+the CLI keeps them in encoder details until a counter-clock mapping is proven.
+`--sidecar` accepts only the strict trace-identified schema, not a semantic
+runtime receipt without explicit GPU target links.
+
 ## Analyze a single trace
 
 Begin broad, then narrow:
@@ -72,6 +87,9 @@ gputrace diff baseline.gputrace candidate.gputrace \
 Use explicit `--left` and `--right` paths when auto-discovery could be
 ambiguous. Use `--json`, `--csv`, or `--md-out` for durable results. Examine
 unmatched dispatches and unnamed work before attributing a delta to a kernel.
+If exact environment evidence differs or is unavailable, `diff` fails closed.
+`--allow-cross-environment` permits descriptive deltas but keeps the result
+labeled `cross-environment, not causally attributable`.
 
 ## Report evidence honestly
 
