@@ -507,6 +507,10 @@ clock, coverage, timing-summary, and retention queries. Encoder and dispatch
 spans, command-buffer active time and wall span, restore timing, display
 duration, and Xcode Effective GPU Time are separate columns with their source
 fields. Effective GPU Time remains `NULL` when Xcode did not report it.
+Source and projected counts are also separate: source counts inventory the
+pre-filtered capture, while projected counts inventory only events placed on
+the selected clock. Clock filtering never changes source counts or copies
+cross-domain events onto the selected axis.
 `gputrace_manifest_arg` is the
 lossless key/value projection of the same manifest. It keeps dynamic
 per-evidence-class loss receipts and future manifest fields queryable without

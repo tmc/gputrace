@@ -114,6 +114,8 @@ The optional SQL file defines `gputrace_capture`, `gputrace_command_buffer`, `gp
 timing-summary, and loss-receipt columns. Timing columns keep encoder span,
 dispatch span, command-buffer active time, command-buffer wall span, restore
 timing, display duration, and optional Xcode Effective GPU Time distinct.
+Source inventory counts remain stable across clock selection; separate
+projected counts report what was placed on the selected axis.
 `gputrace_manifest_arg` exposes every manifest field
 as a key/value row, including per-class loss fields added by constrained
 exports and fields introduced by newer exporters.
