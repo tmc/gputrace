@@ -475,13 +475,21 @@ and also provide an exporter-owned SQL module with a stable logical view:
 
 ```sql
 gputrace_capture
+gputrace_command_buffer
 gputrace_semantic_node
 gputrace_semantic_link
 gputrace_dispatch
+gputrace_encoder
+gputrace_function
 gputrace_pipeline
 gputrace_counter_series
 gputrace_unmatched
 ```
+
+`gputrace_command_buffer` is a wall-domain projection. Profiled traces expose
+measured APSTimelineData spans and their source ticks. Capture-only traces
+expose command-buffer record identity and byte offset with unavailable timing.
+It does not join either representation to cumulative GPU-busy dispatch time.
 
 Each semantic node is emitted as an explicitly untimed declaration on its
 hierarchical track. Target links are separate events and inherit timing only
