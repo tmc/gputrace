@@ -545,6 +545,16 @@ The manifest also inventories top-level `APSData`, `APSTimelineData`,
 counter arrays. Counts describe archive entries only, not decoded samples. A
 present empty array is retained as zero; an absent or malformed key is `NULL`
 with an availability reason.
+
+For each family, the manifest separately reports the number of recoverable
+`NSData` payload blobs and the number of top-level entries that were not data
+blobs. These are decoding-integrity counts, not record or sample counts. On the
+matched wavefront fixtures, every nonempty family entry is a recoverable blob:
+the debug trace reports `46/46` APS, `70/70` timeline, and `79/79` counter
+entries/blobs; the release trace reports `48/48`, `77/77`, and `83/83`.
+The capture-only fixture reports `NULL` for both entry and blob counts because
+it has no streamData archive. A malformed family also remains unavailable;
+the exporter does not turn it into an empty family.
 Source and projected counts are also separate: source counts inventory the
 pre-filtered capture, while projected counts inventory only events placed on
 the selected clock. Clock filtering never changes source counts or copies

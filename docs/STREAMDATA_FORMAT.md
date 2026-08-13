@@ -67,7 +67,18 @@ The plist uses Apple's NSKeyedArchiver format with a `$objects` array containing
 | `functionInfoSize` | uint64 | Record size (typically 48 bytes) |
 | `encoderInfoData` | UID | Binary data with encoder timing |
 | `encoderInfoSize` | uint64 | Record size (typically 40 bytes) |
+| `APSData` | UID | Array of archived APS payload blobs |
 | `APSTimelineData` | UID | Nested timeline data with ReplayerGPUTime, command-buffer timestamps, and GPRWCNTR encoder profile blobs |
+| `APSCounterData` | UID | Array of archived counter payload blobs |
+| `shaderProfilerData` | UID | Array of shader-profiler payload blobs |
+| `gpuTimelineData` | UID | Array of GPU-timeline payload blobs |
+| `batchIdFilteredCountersData` | UID | Array of batch-filtered counter payload blobs |
+
+The Perfetto evidence manifest reports two counts for each array: its exact
+top-level entry count and the number of entries decoded as `NSData` blobs. The
+difference is reported as non-blob entries. These counts describe archive
+structure only; one blob may contain many records or samples. Missing or
+malformed arrays remain unavailable instead of appearing as empty arrays.
 
 ## Binary Data Structures
 
