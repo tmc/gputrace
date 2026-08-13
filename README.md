@@ -128,6 +128,10 @@ The APSTimelineData `pstate` value is likewise retained as a raw replay
 performance-state scalar. Its unit and operating-point mapping are not assumed;
 the nullable representation preserves a recorded zero without mistaking it for
 missing evidence.
+Wall-clock exports retain each APSTimelineData `Restore Timestamps` range on a
+separate replay-restore track. These intervals describe replay restore
+activity, not GPU execution, and are queryable through the
+`gputrace_restore_interval` PerfettoSQL view.
 `gputrace_manifest_arg` exposes every manifest field
 as a key/value row, including per-class loss fields added by constrained
 exports and fields introduced by newer exporters.

@@ -546,6 +546,12 @@ availability are explicit, using a nullable integer so a recorded zero remains
 distinguishable from absence. The exporter does not label it as
 frequency, voltage, or a stable operating-point identifier without further
 evidence.
+APSTimelineData `Restore Timestamps` ranges are retained as measured wall-clock
+intervals on a separate replay-restore track. They do not contribute to GPU
+execution totals and are not joined to the cumulative GPU-busy axis. The
+manifest reports source and projected interval counts, and
+`gputrace_restore_interval` exposes raw ticks, converted wall offsets,
+durations, and provenance.
 `gputrace_manifest_arg` is the
 lossless key/value projection of the same manifest. It keeps dynamic
 per-evidence-class loss receipts and future manifest fields queryable without
