@@ -1805,15 +1805,13 @@ func addCaptureDispatchEvents(timeline *Timeline, trace *gputrace.Trace, sourceM
 			"command_buffer_index": dispatch.CommandBuffer,
 			"capture_offset":       dispatch.CaptureOffset,
 			"pipeline_address":     fmt.Sprintf("0x%x", dispatch.PipelineAddr),
-			"grid_size":            fmt.Sprintf("%d,%d,%d", dispatch.ThreadsX, dispatch.ThreadsY, dispatch.ThreadsZ),
-			"threadgroup_size":     fmt.Sprintf("%d,%d,%d", dispatch.ThreadsPerGroupX, dispatch.ThreadsPerGroupY, dispatch.ThreadsPerGroupZ),
-			"simd_groups":          dispatch.SIMDGroups(),
 			"source":               "capture dispatch record; dispatch geometry",
 			"coordinate_source":    "capture record order",
 			"timing_source":        "unavailable",
 			"function_attribution": dispatch.AttributionBasis,
 			"encoder_attribution":  "unavailable",
 		}
+		addDispatchGeometryArgs(args, dispatch.DispatchThreads)
 		if dispatch.FunctionName != "" {
 			addPipelineCompilerArgs(args, storeStats.PipelineForLabel(dispatch.FunctionName), "capture bundle store sections")
 			if sourceMapper != nil {
@@ -1900,7 +1898,7 @@ func addDispatchKernelEvents(timeline *Timeline, stats *counter.StreamDataStats,
 	encoderOffsets := make(map[int]uint64)
 	var fallbackStartNs uint64
 
-	for _, d := range stats.Dispatches {
+	for dispatchOrdinal, d := range stats.Dispatches {
 		name := d.FunctionName
 		if name == "" {
 			name = fmt.Sprintf("(pipeline_%d)", d.PipelineID)
@@ -1921,8 +1919,12 @@ func addDispatchKernelEvents(timeline *Timeline, stats *counter.StreamDataStats,
 		metric := metrics.find(name, pipeline)
 		shaderMetric := shaderMetrics.find(name, pipeline)
 		encoderMetric := encoderMetricByIndex[d.EncoderIndex]
-		simdGroups, simdGroupSharePct := simd.cost(name, d.Index)
+		simdGroups, simdGroupSharePct := simd.cost(name, dispatchOrdinal)
 		args := dispatchKernelArgs(d, pipeline, simdGroups, simdGroupSharePct, shaderMetric, metric, encoderMetric, sourceMapper)
+		if geometry, ok := simd.geometry(dispatchOrdinal); ok {
+			addDispatchGeometryArgs(args, geometry)
+			args["geometry_source"] = "capture dispatch record matched by dispatch order after exact count check"
+		}
 
 		info := KernelInfo{
 			Name:      name,
@@ -2073,9 +2075,10 @@ func dispatchKernelArgs(d counter.DispatchInfo, p *counter.PipelineStats, simdGr
 }
 
 type timelineDispatchSIMDStats struct {
-	byIndex []uint64
-	byName  map[string]uint64
-	total   uint64
+	byIndex    []uint64
+	dispatches []tracepkg.DispatchThreads
+	byName     map[string]uint64
+	total      uint64
 }
 
 func timelineDispatchSIMDGroups(t *gputrace.Trace, stats *counter.StreamDataStats) timelineDispatchSIMDStats {
@@ -2088,6 +2091,7 @@ func timelineDispatchSIMDGroups(t *gputrace.Trace, stats *counter.StreamDataStat
 		return out
 	}
 	out.byIndex = make([]uint64, len(dispatches))
+	out.dispatches = dispatches
 	for i, d := range dispatches {
 		groups := d.SIMDGroups()
 		out.byIndex[i] = groups
@@ -2099,6 +2103,21 @@ func timelineDispatchSIMDGroups(t *gputrace.Trace, stats *counter.StreamDataStat
 		out.byName[name] += groups
 	}
 	return out
+}
+
+func (s timelineDispatchSIMDStats) geometry(index int) (tracepkg.DispatchThreads, bool) {
+	if index < 0 || index >= len(s.dispatches) {
+		return tracepkg.DispatchThreads{}, false
+	}
+	return s.dispatches[index], true
+}
+
+func addDispatchGeometryArgs(args map[string]interface{}, dispatch tracepkg.DispatchThreads) {
+	args["grid_size"] = fmt.Sprintf("%d,%d,%d", dispatch.ThreadsX, dispatch.ThreadsY, dispatch.ThreadsZ)
+	args["threadgroup_size"] = fmt.Sprintf("%d,%d,%d", dispatch.ThreadsPerGroupX, dispatch.ThreadsPerGroupY, dispatch.ThreadsPerGroupZ)
+	if _, ok := args["simd_groups"]; !ok {
+		args["simd_groups"] = dispatch.SIMDGroups()
+	}
 }
 
 func (s timelineDispatchSIMDStats) cost(name string, index int) (uint64, float64) {

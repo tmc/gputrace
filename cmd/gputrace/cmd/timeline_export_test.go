@@ -1104,8 +1104,9 @@ func TestAddDispatchKernelEventsIncludesXcodeShaderArgs(t *testing.T) {
 		}},
 	}
 	simd := timelineDispatchSIMDStats{
-		byName: map[string]uint64{"kernel0": 4096},
-		total:  4096,
+		byName:     map[string]uint64{"kernel0": 4096},
+		total:      4096,
+		dispatches: []tracepkg.DispatchThreads{{ThreadsX: 64, ThreadsY: 2, ThreadsZ: 1, ThreadsPerGroupX: 32, ThreadsPerGroupY: 1, ThreadsPerGroupZ: 1}},
 	}
 
 	if !addDispatchKernelEvents(timeline, stats, simd, shaderReport, perfStats, nil, nil) {
@@ -1140,6 +1141,9 @@ func TestAddDispatchKernelEventsIncludesXcodeShaderArgs(t *testing.T) {
 	checkArg("profiling_sample_share_estimate_pct", 85.25)
 	checkArg("pipeline_state", "0xabc")
 	checkArg("simd_groups", uint64(4096))
+	checkArg("grid_size", "64,2,1")
+	checkArg("threadgroup_size", "32,1,1")
+	checkArg("geometry_source", "capture dispatch record matched by dispatch order after exact count check")
 	checkArg("allocated_registers", 17)
 	checkArg("high_register", 19)
 	checkArg("spilled_bytes", 16)
