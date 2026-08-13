@@ -540,6 +540,11 @@ Command-buffer, encoder, GPU-command, pipeline, and function tables additionally
 report their exact byte length, declared record size, computed record count,
 trailing remainder bytes, availability, and integrity. A nonzero remainder is
 reported as incomplete evidence rather than silently truncating the table.
+The manifest also inventories top-level `APSData`, `APSTimelineData`,
+`APSCounterData`, `shaderProfilerData`, `gpuTimelineData`, and batch-filtered
+counter arrays. Counts describe archive entries only, not decoded samples. A
+present empty array is retained as zero; an absent or malformed key is `NULL`
+with an availability reason.
 Source and projected counts are also separate: source counts inventory the
 pre-filtered capture, while projected counts inventory only events placed on
 the selected clock. Clock filtering never changes source counts or copies

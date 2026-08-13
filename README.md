@@ -125,6 +125,9 @@ uninterpreted; recorded zero and false values remain distinct from absence.
 For each fixed-record streamData table, the manifest and SQL expose byte
 length, declared record size, computed record count, trailing remainder, and an
 integrity status. This makes truncation and record-layout mismatches visible.
+Archive-family inventory separately reports top-level APS, timeline, counter,
+shader-profiler, GPU-timeline, and batch-filtered array entry counts. These are
+presence counts, not decoded samples; an explicit zero differs from absence.
 Source inventory counts remain stable across clock selection; separate
 projected counts report what was placed on the selected axis.
 When APSTimelineData supplies them, the same view exposes `absolute_time`,
