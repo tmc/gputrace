@@ -124,6 +124,10 @@ Original-execution timing attached with `--clock live --live-timing` appears in
 also in `gputrace_capture`. Verified `--host-correlation` events appear in
 `gputrace_host_signpost` with both artifact digests, clocks, bridge identity,
 and declared maximum error.
+MLX semantic nodes expose parent identity, and links expose their sidecar link
+id and exact target index. `gputrace_semantic_arg` retains arbitrary node
+attributes such as dtype and shape as key/value rows; filter `event_kind` to
+distinguish untimed declarations from timed target projections.
 
 `diff` fails closed when workload, device/driver, runtime, capture mode, or
 timing-source gates differ or are unavailable. The explicit

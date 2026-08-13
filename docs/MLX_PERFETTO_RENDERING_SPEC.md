@@ -479,6 +479,7 @@ gputrace_manifest_arg
 gputrace_command_buffer
 gputrace_semantic_node
 gputrace_semantic_link
+gputrace_semantic_arg
 gputrace_dispatch
 gputrace_encoder
 gputrace_function
@@ -525,6 +526,13 @@ unmatched count are typed capture fields. `gputrace_host_signpost` retains only
 events admitted by the strict host-correlation receipt and exposes its join
 basis, both artifact digests, clock domains, bridge digest, and maximum error.
 Neither view weakens the identity or clock gates enforced before export.
+
+Semantic node rows include their semantic parent id. Semantic link rows retain
+the sidecar link id and exact target kind/index, so consumers can reconstruct
+the validated join without interpreting names. `gputrace_semantic_arg` keeps
+arbitrary sidecar attributes as key/value rows. Attributes deliberately appear
+on both the untimed declaration and any timed projection for useful selection
+details; consumers distinguish them with `event_kind` rather than summing both.
 
 Each semantic node is emitted as an explicitly untimed declaration on its
 hierarchical track. Target links are separate events and inherit timing only
