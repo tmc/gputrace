@@ -33,6 +33,9 @@ func TestProjectLiveTimingBindsCaptureLabelsAndNanoseconds(t *testing.T) {
 	if !timelineHasMeasuredClock(timeline, timelineClockLive) {
 		t.Fatal("live clock not admitted")
 	}
+	if got := perfettoEventArgs(timeline, event, timelineClockLive)["timing_quality"]; got != "measured" {
+		t.Fatalf("timing quality = %v, want measured", got)
+	}
 }
 
 func TestExportLiveTimingRetainsReceiptAndEventEvidence(t *testing.T) {

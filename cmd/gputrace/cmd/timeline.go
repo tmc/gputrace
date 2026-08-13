@@ -2800,11 +2800,18 @@ func perfettoEventArgs(timeline *Timeline, event TimelineEvent, clock timelineCl
 		args[key] = value
 	}
 	args["clock_domain"] = string(clock)
-	args["timing_quality"] = perfettoTimingQuality(timeline)
+	args["timing_quality"] = perfettoTimingQualityForClock(timeline, clock)
 	if _, ok := args["timing_source"]; !ok && timeline != nil && timeline.Timing != nil && timeline.Timing.TimingSource != "" {
 		args["timing_source"] = timeline.Timing.TimingSource
 	}
 	return args
+}
+
+func perfettoTimingQualityForClock(timeline *Timeline, clock timelineClock) string {
+	if clock == timelineClockLive && timelineHasMeasuredClock(timeline, clock) {
+		return "measured"
+	}
+	return perfettoTimingQuality(timeline)
 }
 
 func perfettoTimingQuality(timeline *Timeline) string {
