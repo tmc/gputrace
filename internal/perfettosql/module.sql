@@ -23,6 +23,7 @@ SELECT
   cast(extract_arg(arg_set_id, 'dispatch_index') AS INT) AS dispatch_id,
   cast(extract_arg(arg_set_id, 'encoder_index') AS INT) AS encoder_id,
   cast(extract_arg(arg_set_id, 'pipeline_id') AS INT) AS pipeline_id,
+  cast(extract_arg(arg_set_id, 'pipeline_idx') AS INT) AS pipeline_index,
   extract_arg(arg_set_id, 'pipeline_state') AS pipeline_state,
   cast(extract_arg(arg_set_id, 'command_buffer_index') AS INT) AS command_buffer_id,
   cast(extract_arg(arg_set_id, 'capture_offset') AS INT) AS capture_offset,
@@ -33,9 +34,11 @@ SELECT
   extract_arg(arg_set_id, 'encoder_containment') AS parent_basis,
   NULL AS function_attribution,
   NULL AS coordinate_source,
+  cast(extract_arg(arg_set_id, 'cumulative_us') AS INT) AS source_cumulative_us,
   cast(extract_arg(arg_set_id, 'simd_groups') AS INT) AS simd_groups,
   extract_arg(arg_set_id, 'grid_size') AS grid_size,
   extract_arg(arg_set_id, 'threadgroup_size') AS threadgroup_size,
+  extract_arg(arg_set_id, 'geometry_source') AS geometry_source,
   extract_arg(arg_set_id, 'source_file') AS source_file,
   cast(extract_arg(arg_set_id, 'source_line') AS INT) AS source_line,
   cast(extract_arg(arg_set_id, 'gprwcntr_sample_count') AS INT) AS sample_count,
@@ -58,6 +61,7 @@ SELECT
   cast(extract_arg(arg_set_id, 'debug.dispatch_index') AS INT) AS dispatch_id,
   cast(extract_arg(arg_set_id, 'debug.encoder_index') AS INT) AS encoder_id,
   cast(extract_arg(arg_set_id, 'debug.pipeline_id') AS INT) AS pipeline_id,
+  NULL AS pipeline_index,
   coalesce(
     extract_arg(arg_set_id, 'debug.pipeline_state'),
     extract_arg(arg_set_id, 'debug.pipeline_address')
@@ -71,9 +75,11 @@ SELECT
   extract_arg(arg_set_id, 'debug.encoder_attribution') AS parent_basis,
   extract_arg(arg_set_id, 'debug.function_attribution') AS function_attribution,
   extract_arg(arg_set_id, 'debug.coordinate_source') AS coordinate_source,
+  NULL AS source_cumulative_us,
   cast(extract_arg(arg_set_id, 'debug.simd_groups') AS INT) AS simd_groups,
   extract_arg(arg_set_id, 'debug.grid_size') AS grid_size,
   extract_arg(arg_set_id, 'debug.threadgroup_size') AS threadgroup_size,
+  'capture dispatch record' AS geometry_source,
   extract_arg(arg_set_id, 'debug.source_file') AS source_file,
   cast(extract_arg(arg_set_id, 'debug.source_line') AS INT) AS source_line,
   NULL AS sample_count,
@@ -88,6 +94,32 @@ SELECT
   arg_set_id
 FROM slice
 WHERE category = 'dispatch';
+
+CREATE PERFETTO VIEW gputrace_function AS
+SELECT
+  evidence_kind,
+  name AS function_name,
+  count(*) AS dispatch_count,
+  sum(CASE WHEN evidence_kind = 'measured_gpu_execution' THEN dur END) AS measured_duration_ns,
+  sum(simd_groups) AS total_simd_groups,
+  max(cast(coalesce(
+    extract_arg(arg_set_id, 'shader_duration_ns'),
+    extract_arg(arg_set_id, 'debug.shader_duration_ns')
+  ) AS INT)) AS source_aggregate_duration_ns,
+  max(cast(coalesce(
+    extract_arg(arg_set_id, 'simd_group_share_pct'),
+    extract_arg(arg_set_id, 'shader_share_pct'),
+    extract_arg(arg_set_id, 'debug.simd_group_share_pct'),
+    extract_arg(arg_set_id, 'debug.shader_share_pct')
+  ) AS REAL)) AS work_share_pct,
+  max(coalesce(
+    extract_arg(arg_set_id, 'simd_group_share_source'),
+    extract_arg(arg_set_id, 'shader_share_source'),
+    extract_arg(arg_set_id, 'debug.simd_group_share_source'),
+    extract_arg(arg_set_id, 'debug.shader_share_source')
+  )) AS work_share_basis
+FROM gputrace_dispatch
+GROUP BY evidence_kind, function_name;
 
 CREATE PERFETTO VIEW gputrace_pipeline AS
 SELECT

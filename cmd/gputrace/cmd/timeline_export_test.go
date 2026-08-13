@@ -1104,8 +1104,8 @@ func TestAddDispatchKernelEventsIncludesXcodeShaderArgs(t *testing.T) {
 		}},
 	}
 	simd := timelineDispatchCaptureStats{
-		byName:     map[string]uint64{"kernel0": 4096},
-		total:      4096,
+		byName:     map[string]uint64{"kernel0": 4},
+		total:      4,
 		dispatches: []tracepkg.AttributedDispatch{{CommandBuffer: 3, CaptureOffset: 4096, DispatchThreads: tracepkg.DispatchThreads{ThreadsX: 64, ThreadsY: 2, ThreadsZ: 1, ThreadsPerGroupX: 32, ThreadsPerGroupY: 1, ThreadsPerGroupZ: 1}}},
 	}
 
@@ -1140,7 +1140,7 @@ func TestAddDispatchKernelEventsIncludesXcodeShaderArgs(t *testing.T) {
 	checkArg("simd_group_share_pct", 100.0)
 	checkArg("profiling_sample_share_estimate_pct", 85.25)
 	checkArg("pipeline_state", "0xabc")
-	checkArg("simd_groups", uint64(4096))
+	checkArg("simd_groups", uint64(4))
 	checkArg("grid_size", "64,2,1")
 	checkArg("threadgroup_size", "32,1,1")
 	checkArg("geometry_source", "capture dispatch record matched by dispatch order after exact count check")

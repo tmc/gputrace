@@ -1919,7 +1919,7 @@ func addDispatchKernelEvents(timeline *Timeline, stats *counter.StreamDataStats,
 		metric := metrics.find(name, pipeline)
 		shaderMetric := shaderMetrics.find(name, pipeline)
 		encoderMetric := encoderMetricByIndex[d.EncoderIndex]
-		simdGroups, simdGroupSharePct := capture.cost(name, dispatchOrdinal)
+		simdGroups, simdGroupSharePct := capture.work(name, dispatchOrdinal)
 		args := dispatchKernelArgs(d, pipeline, simdGroups, simdGroupSharePct, shaderMetric, metric, encoderMetric, sourceMapper)
 		if recorded, ok := capture.dispatch(dispatchOrdinal); ok {
 			addDispatchGeometryArgs(args, recorded.DispatchThreads)
@@ -2043,16 +2043,18 @@ func dispatchKernelArgs(d counter.DispatchInfo, p *counter.PipelineStats, simdGr
 			args["shader_share_pct"] = shader.PercentOfTotal
 			args["shader_share_source"] = "shader report"
 		}
-		if shader.TotalThreadgroups > 0 && args["simd_groups"] == nil {
-			args["simd_groups"] = shader.TotalThreadgroups
+		if shader.TotalThreadgroups > 0 {
+			args["function_simd_groups"] = shader.TotalThreadgroups
+			args["function_simd_groups_source"] = "shader report"
 		}
 		if shader.TotalDurationNs > 0 {
 			args["shader_duration_ns"] = shader.TotalDurationNs
 		}
 	}
 	if hardware != nil {
-		if hardware.SIMDGroups > 0 && args["simd_groups"] == nil {
-			args["simd_groups"] = hardware.SIMDGroups
+		if hardware.SIMDGroups > 0 && args["function_simd_groups"] == nil {
+			args["function_simd_groups"] = hardware.SIMDGroups
+			args["function_simd_groups_source"] = "shader hardware metrics"
 		}
 		if hardware.AllocatedRegs > 0 {
 			args["allocated_registers"] = hardware.AllocatedRegs
@@ -2129,15 +2131,16 @@ func addDispatchGeometryArgs(args map[string]interface{}, dispatch tracepkg.Disp
 	}
 }
 
-func (s timelineDispatchCaptureStats) cost(name string, index int) (uint64, float64) {
-	groups := s.byName[name]
-	if groups == 0 && index >= 0 && index < len(s.byIndex) {
-		groups = s.byIndex[index]
+func (s timelineDispatchCaptureStats) work(name string, index int) (uint64, float64) {
+	var dispatchGroups uint64
+	if index >= 0 && index < len(s.byIndex) {
+		dispatchGroups = s.byIndex[index]
 	}
-	if groups == 0 || s.total == 0 {
-		return groups, 0
+	functionGroups := s.byName[name]
+	if functionGroups == 0 || s.total == 0 {
+		return dispatchGroups, 0
 	}
-	return groups, float64(groups) / float64(s.total) * 100
+	return dispatchGroups, float64(functionGroups) / float64(s.total) * 100
 }
 
 type timelineShaderReport struct {
