@@ -72,7 +72,7 @@ fi
 	if _, err := client.Capture(ctx, CaptureOptions{Output: filepath.Join(dir, "run.gputrace"), Dir: dir}, "workload", "arg"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.Profile(ctx, "run.gputrace", ProfileOptions{Output: filepath.Join(dir, "profiled.gputrace"), Embed: true, Wait: true}); err != nil {
+	if _, err := client.Profile(ctx, "run.gputrace", ProfileOptions{Output: filepath.Join(dir, "profiled.gpuprofiler_raw"), ProfilerOnly: true, Wait: true}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := client.Report(ctx, "profiled.gputrace", ReportOptions{Work: &Work{Count: 2, Unit: "op"}}); err != nil {
@@ -85,7 +85,7 @@ fi
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	want := []string{
 		"capture --output " + filepath.Join(dir, "run.gputrace") + " --dir " + dir + " -- workload arg",
-		"profile-replay run.gputrace --output " + filepath.Join(dir, "profiled.gputrace") + " --embed --wait",
+		"profile-replay run.gputrace --output " + filepath.Join(dir, "profiled.gpuprofiler_raw") + " --profiler-only --wait",
 		"bench profiled.gputrace --format json --bench-work 2 --bench-work-unit op",
 	}
 	if !reflect.DeepEqual(lines, want) {

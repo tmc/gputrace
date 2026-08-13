@@ -99,10 +99,11 @@ encoders inside a captured workload to execute without overlap. The replay is
 headless: MTLReplayer is an agent process, no Xcode window opens, and the
 frontmost application does not change.
 
-The output holds the profiler payload, which is what `profiler`, `timing`,
-`timeline` and `pprof` read. Add `--embed` to copy the capture stream in as well,
-for the commands that need it — `kernels`, buffer bindings, grid and threadgroup
-sizes — at the cost of a bundle roughly the size of both.
+The default output is self-contained: it preserves the capture and adds the
+profiler payload, so Xcode and capture-dependent commands can open it. Use
+`--profiler-only` to write the smaller `.gpuprofiler_raw` payload when only
+`profiler`, `timing`, `timeline`, or `pprof` is needed. Profiler-only output
+cannot be opened by Xcode.
 
 This produces no derived counters. Utilization, limiter and occupancy values are
 unavailable on recent GPU generations; see `docs/research/` for why.

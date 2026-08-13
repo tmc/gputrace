@@ -29,8 +29,9 @@ type Options struct {
 	// Output is the destination bundle. Empty uses DefaultOutput.
 	Output string
 
-	// Embed copies the original capture stream into the profiler output.
-	Embed bool
+	// ProfilerOnly writes only a .gpuprofiler_raw payload. The default returns
+	// a self-contained .gputrace containing the original capture and resources.
+	ProfilerOnly bool
 
 	// Wait queues behind another replay. The default reports ErrReplayerBusy.
 	Wait bool
@@ -45,11 +46,14 @@ func Replayable(path string) error { return internal.Replayable(path) }
 // DefaultOutput returns the default profiler output path for in.
 func DefaultOutput(in string) string { return internal.DefaultOutput(in) }
 
+// DefaultProfilerOutput returns the default profiler-only path for in.
+func DefaultProfilerOutput(in string) string { return internal.DefaultProfilerOutput(in) }
+
 // Profile replays in under the profiler and returns the path it wrote.
 func Profile(ctx context.Context, in string, opts Options) (string, error) {
 	return internal.Profile(ctx, in, internal.Options{
-		Output: opts.Output,
-		Embed:  opts.Embed,
-		Wait:   opts.Wait,
+		Output:       opts.Output,
+		ProfilerOnly: opts.ProfilerOnly,
+		Wait:         opts.Wait,
 	})
 }

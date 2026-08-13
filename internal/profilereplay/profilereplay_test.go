@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -24,6 +25,80 @@ func TestDefaultOutput(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := DefaultOutput(tt.input); got != tt.want {
 				t.Fatalf("DefaultOutput(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDefaultProfilerOutput(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"run.gputrace", "run-perfdata.gpuprofiler_raw"},
+		{"/traces/run.gputrace", "/traces/run-perfdata.gpuprofiler_raw"},
+		{"run", "run-perfdata.gpuprofiler_raw"},
+	}
+	for _, test := range tests {
+		if got := DefaultProfilerOutput(test.input); got != test.want {
+			t.Errorf("DefaultProfilerOutput(%q) = %q, want %q", test.input, got, test.want)
+		}
+	}
+}
+
+func TestProfileRejectsMisleadingProfilerOnlySuffix(t *testing.T) {
+	dir := t.TempDir()
+	in := filepath.Join(dir, "trace.gputrace")
+	if err := os.Mkdir(in, 0755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Profile(context.Background(), in, Options{
+		Output:       filepath.Join(dir, "profile.gputrace"),
+		ProfilerOnly: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), ".gpuprofiler_raw") {
+		t.Fatalf("Profile error = %v, want .gpuprofiler_raw suffix refusal", err)
+	}
+}
+
+func TestAssembleOutput(t *testing.T) {
+	tests := []struct {
+		name         string
+		profilerOnly bool
+		wantCapture  bool
+		wantRaw      string
+	}{
+		{"self-contained", false, true, "profile.gpuprofiler_raw/streamData"},
+		{"profiler-only", true, false, "streamData"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			in := filepath.Join(dir, "in.gputrace")
+			payload := filepath.Join(dir, "profile.gpuprofiler_raw")
+			out := filepath.Join(dir, "out")
+			if err := os.Mkdir(in, 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(in, "capture"), []byte("capture"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(payload, 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(payload, "streamData"), []byte("profile"), 0644); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := assembleOutput(in, out, payload, test.profilerOnly); err != nil {
+				t.Fatal(err)
+			}
+			_, captureErr := os.Stat(filepath.Join(out, "capture"))
+			if got := captureErr == nil; got != test.wantCapture {
+				t.Errorf("capture present = %v, want %v", got, test.wantCapture)
+			}
+			if _, err := os.Stat(filepath.Join(out, test.wantRaw)); err != nil {
+				t.Errorf("profiler data: %v", err)
 			}
 		})
 	}

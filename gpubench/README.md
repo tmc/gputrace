@@ -19,9 +19,10 @@ if err := report.ReportMetrics(b); err != nil {
 ```
 
 The module also exposes `Client.Capture` and `Client.Profile`. Profiling is
-headless; set `ProfileOptions.Wait` to queue separate, non-overlapping
-MTLReplayer jobs. This does not remove command-buffer or encoder overlap inside
-one workload.
+headless and self-contained by default; set `ProfileOptions.ProfilerOnly` for a
+smaller `.gpuprofiler_raw` artifact. Set `ProfileOptions.Wait` to queue
+separate, non-overlapping MTLReplayer jobs. This does not remove command-buffer
+or encoder overlap inside one workload.
 
 Capture and profiling should happen outside the untraced statistical benchmark
 timer. A trace is one evidence observation. Metrics remain `/trace` unless the

@@ -55,9 +55,9 @@ type CaptureOptions struct {
 
 // ProfileOptions controls headless MTLReplayer profiling.
 type ProfileOptions struct {
-	Output string
-	Embed  bool
-	Wait   bool
+	Output       string
+	ProfilerOnly bool
+	Wait         bool
 }
 
 // Status describes the quality of evidence in a report section.
@@ -195,8 +195,8 @@ func (c Client) Profile(ctx context.Context, trace string, opts ProfileOptions) 
 	if opts.Output != "" {
 		args = append(args, "--output", opts.Output)
 	}
-	if opts.Embed {
-		args = append(args, "--embed")
+	if opts.ProfilerOnly {
+		args = append(args, "--profiler-only")
 	}
 	if opts.Wait {
 		args = append(args, "--wait")
@@ -206,7 +206,7 @@ func (c Client) Profile(ctx context.Context, trace string, opts ProfileOptions) 
 	}
 	output := opts.Output
 	if output == "" {
-		output = defaultProfileOutput(trace)
+		output = defaultProfileOutput(trace, opts.ProfilerOnly)
 	}
 	path, err := filepath.Abs(output)
 	if err != nil {
@@ -324,7 +324,11 @@ func validateWork(work *Work) error {
 	}
 }
 
-func defaultProfileOutput(path string) string {
+func defaultProfileOutput(path string, profilerOnly bool) string {
 	clean := filepath.Clean(path)
-	return clean[:len(clean)-len(filepath.Ext(clean))] + "-perfdata.gputrace"
+	base := clean[:len(clean)-len(filepath.Ext(clean))] + "-perfdata"
+	if profilerOnly {
+		return base + ".gpuprofiler_raw"
+	}
+	return base + ".gputrace"
 }

@@ -7,8 +7,8 @@
 // Timeline shards. The replay is headless: MTLReplayer is an LSUIElement agent,
 // so no window opens and the frontmost application does not change.
 //
-// The payload alone is a profiler-only bundle. Embed reassembles it with the
-// original capture stream when the capture-dependent commands are needed too.
+// Profile returns a self-contained trace by default. ProfilerOnly writes only
+// the raw profiler payload when capture-dependent commands are not needed.
 package profilereplay
 
 import (
@@ -81,18 +81,25 @@ func DefaultOutput(in string) string {
 	return trimmed + "-perfdata.gputrace"
 }
 
+// DefaultProfilerOutput is where Profile writes profiler-only data when
+// Options.Output is empty.
+//
+//	run.gputrace -> run-perfdata.gpuprofiler_raw
+func DefaultProfilerOutput(in string) string {
+	trimmed := strings.TrimSuffix(filepath.Clean(in), ".gputrace")
+	return trimmed + "-perfdata.gpuprofiler_raw"
+}
+
 // Options controls where a replay writes and what it assembles.
 type Options struct {
 	// Output is the path to write. Empty means DefaultOutput of the input.
 	// It must not already exist.
 	Output string
 
-	// Embed copies the input's capture stream in alongside the profiler
-	// payload, producing a self-contained trace. Without it the output holds
-	// the profiler payload only, which is what MTLReplayer writes natively and
-	// is enough for profiler, timing, timeline and pprof. The capture-dependent
-	// commands — kernels, buffer bindings, grid sizes — need the copy.
-	Embed bool
+	// ProfilerOnly writes only the .gpuprofiler_raw payload. The default copies
+	// the input capture and resources alongside it, producing a self-contained
+	// .gputrace that Xcode and capture-dependent commands can open.
+	ProfilerOnly bool
 
 	// Wait waits for another MTLReplayer run to finish instead of returning
 	// ErrReplayerBusy. Replays remain non-overlapping across processes.
@@ -108,7 +115,14 @@ func Profile(ctx context.Context, in string, opts Options) (string, error) {
 	defer unlock()
 
 	if opts.Output == "" {
-		opts.Output = DefaultOutput(in)
+		if opts.ProfilerOnly {
+			opts.Output = DefaultProfilerOutput(in)
+		} else {
+			opts.Output = DefaultOutput(in)
+		}
+	}
+	if opts.ProfilerOnly && filepath.Ext(opts.Output) != ".gpuprofiler_raw" {
+		return "", fmt.Errorf("profiler-only output must end in .gpuprofiler_raw: %s", opts.Output)
 	}
 	if err := Available(); err != nil {
 		return "", err
@@ -132,18 +146,15 @@ func Profile(ctx context.Context, in string, opts Options) (string, error) {
 		return "", err
 	}
 
-	dest := outAbs
-	if opts.Embed {
-		// Replay to a sibling scratch directory. The output bundle is assembled
-		// only after the payload is known good, so a failed replay leaves no
-		// half-built trace behind.
-		scratch, err := os.MkdirTemp(filepath.Dir(outAbs), ".profile-replay-")
-		if err != nil {
-			return "", err
-		}
-		defer os.RemoveAll(scratch)
-		dest = filepath.Join(scratch, "payload")
+	// Replay to a sibling scratch directory. The requested output is assembled
+	// only after streamData is known good, so a failed replay leaves no
+	// half-built trace behind.
+	scratch, err := os.MkdirTemp(filepath.Dir(outAbs), ".profile-replay-")
+	if err != nil {
+		return "", err
 	}
+	defer os.RemoveAll(scratch)
+	dest := filepath.Join(scratch, "payload")
 
 	if err := run(ctx, inAbs, dest); err != nil {
 		return "", err
@@ -153,13 +164,30 @@ func Profile(ctx context.Context, in string, opts Options) (string, error) {
 	if payload == "" {
 		return "", fmt.Errorf("%w: %s holds no .gpuprofiler_raw with streamData", ErrNoProfilerData, dest)
 	}
-	if !opts.Embed {
-		return outAbs, nil
-	}
-	if err := embed(inAbs, outAbs, payload); err != nil {
+	if err := assembleOutput(inAbs, outAbs, payload, opts.ProfilerOnly); err != nil {
 		return "", err
 	}
 	return outAbs, nil
+}
+
+func assembleOutput(in, out, payload string, profilerOnly bool) error {
+	if profilerOnly {
+		return installProfilerPayload(payload, out)
+	}
+	return embed(in, out, payload)
+}
+
+func installProfilerPayload(payload, out string) error {
+	if err := os.Rename(payload, out); err == nil {
+		return nil
+	}
+	if err := os.CopyFS(out, os.DirFS(payload)); err != nil {
+		return fmt.Errorf("copy profiler payload: %w", err)
+	}
+	if !profilerraw.HasStreamData(out) {
+		return fmt.Errorf("%w: %s after copying profiler payload", ErrNoProfilerData, out)
+	}
+	return nil
 }
 
 // run launches MTLReplayer and waits for it.

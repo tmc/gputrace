@@ -110,8 +110,7 @@ if err != nil {
 	return err
 }
 profiled, err := profilereplay.Profile(ctx, tracePath, profilereplay.Options{
-	Embed: true,
-	Wait:  true,
+	Wait: true,
 })
 if err != nil {
 	return err
