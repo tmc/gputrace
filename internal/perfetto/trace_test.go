@@ -61,6 +61,7 @@ func TestWriteWithBudget(t *testing.T) {
 			StartNS: uint64(i * 10), DurationNS: 5, Args: map[string]any{"index": i},
 		})
 	}
+	trace.Events[0].Required = true
 	var full bytes.Buffer
 	if err := Write(&full, trace); err != nil {
 		t.Fatal(err)

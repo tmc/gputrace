@@ -46,6 +46,7 @@ type Event struct {
 	StartNS    uint64
 	DurationNS uint64
 	Kind       EventKind
+	Required   bool
 	Args       map[string]any
 }
 
@@ -150,11 +151,20 @@ func WriteWithOptions(w io.Writer, trace *Trace, options WriteOptions) (Receipt,
 	} else {
 		const receiptReserve = int64(2048)
 		used := framedSize(required)
+		for _, group := range groups {
+			if group.required {
+				selected = append(selected, group)
+				used += framedTimedSize(group.packets)
+			}
+		}
 		if used+receiptReserve > options.MaxBytes {
 			return Receipt{}, fmt.Errorf("write perfetto trace: max output bytes %d cannot hold required descriptors and loss receipt", options.MaxBytes)
 		}
 		sort.SliceStable(groups, func(i, j int) bool { return groups[i].hash < groups[j].hash })
 		for _, group := range groups {
+			if group.required {
+				continue
+			}
 			size := framedTimedSize(group.packets)
 			if used+size+receiptReserve > options.MaxBytes {
 				continue
@@ -325,15 +335,16 @@ type timedPacket struct {
 }
 
 type packetGroup struct {
-	class   string
-	hash    uint64
-	packets []timedPacket
+	class    string
+	hash     uint64
+	required bool
+	packets  []timedPacket
 }
 
 func eventPacketGroups(identity string, events []Event, counters []Counter) []packetGroup {
 	groups := make([]packetGroup, 0, len(events))
 	for _, event := range events {
-		group := packetGroup{class: "event", hash: identityHash(identity, "event", strconv.FormatUint(event.ID, 10), event.Name)}
+		group := packetGroup{class: "event", hash: identityHash(identity, "event", strconv.FormatUint(event.ID, 10), event.Name), required: event.Required}
 		switch event.Kind {
 		case EventGPUCompute:
 			group.packets = append(group.packets, timedPacket{event.StartNS, 1, gpuEventPacket(event)})

@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -2603,14 +2604,28 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 		ClockDomain: string(clock),
 		GPUName:     "Apple GPU",
 		Metadata: map[string]any{
-			"schema":         "gputrace.perfetto/v1",
-			"clock_domain":   string(clock),
-			"clock_mapping":  "none",
-			"timing_quality": "measured",
+			"schema":                                      "gputrace.perfetto/v1",
+			"clock_domain":                                string(clock),
+			"clock_mapping":                               "none",
+			"timing_quality":                              "measured",
+			"environment_schema":                          "gputrace.environment/v1",
+			"environment_os":                              runtime.GOOS,
+			"environment_arch":                            runtime.GOARCH,
+			"environment_exporter_runtime":                runtime.Version(),
+			"environment_source":                          "Go runtime and gputrace metadata",
+			"environment_parser":                          "gputrace.perfetto/v1",
+			"environment_driver_availability":             "unavailable",
+			"environment_mlx_runtime_availability":        "unavailable",
+			"environment_workload_availability":           "unavailable",
+			"environment_capability_catalog_availability": "unavailable",
 		},
 	}
 	if timeline.DeviceID != 0 {
 		trace.GPUModel = fmt.Sprintf("Metal device %d", timeline.DeviceID)
+		trace.Metadata["environment_device_id"] = timeline.DeviceID
+		trace.Metadata["environment_device_availability"] = "available"
+	} else {
+		trace.Metadata["environment_device_availability"] = "unavailable"
 	}
 	if timeline != nil {
 		trace.Metadata["raw_profiler_samples"] = timeline.RawProfilerSamples
@@ -2684,6 +2699,7 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 			StartNS:    event.Timestamp * 1000,
 			DurationNS: event.Duration * 1000,
 			Args:       event.Args,
+			Required:   event.Category == "encoder" || event.Category == "command_buffer",
 		}
 		if event.Category == "kernel" {
 			converted.Kind = perfetto.EventGPUCompute
@@ -2780,6 +2796,7 @@ func appendMLXSemanticEvents(trace *perfetto.Trace, timeline *Timeline) {
 			StartNS:    target.Timestamp * 1000,
 			DurationNS: target.Duration * 1000,
 			Kind:       kind,
+			Required:   true,
 			Args:       args,
 		})
 	}
