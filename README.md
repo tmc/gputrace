@@ -108,7 +108,7 @@ for the native Perfetto roadmap and proposed MLX semantic view.
 Trace JSON compatibility.
 The optional SQL file defines `gputrace_capture`, `gputrace_command_buffer`, `gputrace_dispatch`,
 `gputrace_encoder`, `gputrace_function`, `gputrace_pipeline`, `gputrace_semantic_node`, `gputrace_semantic_link`,
-`gputrace_counter_series`, and
+`gputrace_counter_series`, `gputrace_unattributed_counter`, `gputrace_evidence_gap`, and
 `gputrace_unmatched` views over the native trace.
 `gputrace_capture` provides typed trace identity, environment, clock, coverage,
 and loss-receipt columns. `gputrace_manifest_arg` exposes every manifest field
@@ -128,6 +128,10 @@ MLX semantic nodes expose parent identity, and links expose their sidecar link
 id and exact target index. `gputrace_semantic_arg` retains arbitrary node
 attributes such as dtype and shape as key/value rows; filter `event_kind` to
 distinguish untimed declarations from timed target projections.
+Pipeline counter rows that lack a capture-backed encoder identity remain
+untimed and appear in `gputrace_unattributed_counter`; arbitrary metric values
+remain available through `gputrace_unattributed_counter_arg`. Evidence families
+that cannot be placed on the selected clock appear in `gputrace_evidence_gap`.
 
 `diff` fails closed when workload, device/driver, runtime, capture mode, or
 timing-source gates differ or are unavailable. The explicit

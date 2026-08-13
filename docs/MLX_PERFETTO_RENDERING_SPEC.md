@@ -489,6 +489,9 @@ gputrace_raw_profiler_sample
 gputrace_live_command_buffer
 gputrace_host_signpost
 gputrace_counter_series
+gputrace_unattributed_counter
+gputrace_unattributed_counter_arg
+gputrace_evidence_gap
 gputrace_unmatched
 ```
 
@@ -511,6 +514,14 @@ views explicitly distinguish raw profiler input from decoded counters and GPU
 encoder intervals. Busy-domain dispatches do not receive direct sample counts
 from wall-domain timestamp overlap; only the separately labeled estimated
 scaled-window attribution may appear there.
+
+Pipeline-scoped counter rows without a capture-backed encoder identity are
+untimed evidence, not counter samples. `gputrace_unattributed_counter` exposes
+their label, source, scope, and refusal reason;
+`gputrace_unattributed_counter_arg` retains arbitrary metric values.
+`gputrace_evidence_gap` records source-backed evidence families that cannot be
+projected without inventing an identity or clock relationship. These rows use
+the `none` clock domain and never contribute GPU duration.
 
 Function-name provenance is explicit: measured dispatches use the
 `gpuCommandInfoData` function name, while capture-only dispatches retain the
