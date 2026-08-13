@@ -114,6 +114,10 @@ The optional SQL file defines `gputrace_capture`, `gputrace_command_buffer`, `gp
 timing-summary, and loss-receipt columns. Timing columns keep encoder span,
 dispatch span, command-buffer active time, command-buffer wall span, restore
 timing, display duration, and optional Xcode Effective GPU Time distinct.
+Profiled traces also carry the archive's exact Metal device name, Metal plugin
+name, and GPU generation into canonical JSON, native GPU metadata, and typed
+SQL columns. GPU generation is nullable so a recorded zero remains distinct
+from absence. Capture-only traces report streamData identity as unavailable.
 Source inventory counts remain stable across clock selection; separate
 projected counts report what was placed on the selected axis.
 When APSTimelineData supplies them, the same view exposes `absolute_time`,

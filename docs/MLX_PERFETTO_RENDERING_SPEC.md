@@ -12,7 +12,9 @@ support, and an evidence-manifest event. `--format chrome` retains Chrome Trace
 JSON. Strict MLX sidecars, dependency-closed logical-byte budgets, and the
 local viewer are implemented. APS per-encoder GPU cycles and derived cost are
 encoder details, not counter series: their counter clock has no verified
-mapping to cumulative busy time. Rolling windows, richer environment capture,
+mapping to cumulative busy time. The streamData Metal device name, plugin, and
+GPU generation are retained with archive provenance. Rolling windows, driver
+and MLX runtime environment capture,
 native-label conflict handling and the MLX plugin remain proposed. A versioned
 exporter-owned PerfettoSQL projection is available through `--sql-out`. The
 viewer is specified separately in
@@ -525,6 +527,10 @@ clock, coverage, timing-summary, and retention queries. Encoder and dispatch
 spans, command-buffer active time and wall span, restore timing, display
 duration, and Xcode Effective GPU Time are separate columns with their source
 fields. Effective GPU Time remains `NULL` when Xcode did not report it.
+For profiled traces, environment columns retain `metalDeviceName`,
+`metalPluginName`, and `gpuGeneration` directly from the streamData archive.
+GPU generation is nullable so a recorded zero remains distinct from absence.
+The fields remain `NULL` with an availability reason when streamData is absent.
 Source and projected counts are also separate: source counts inventory the
 pre-filtered capture, while projected counts inventory only events placed on
 the selected clock. Clock filtering never changes source counts or copies
