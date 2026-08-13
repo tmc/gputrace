@@ -151,7 +151,9 @@ as a key/value row, including per-class loss fields added by constrained
 exports and fields introduced by newer exporters.
 With `--clock wall --include-raw-samples`, `gputrace_profiler_stream` exposes
 raw stream aggregates and `gputrace_raw_profiler_sample` exposes GPRWCNTR
-record headers, source record ordinals, and original mach-absolute ticks.
+source record ordinals, original mach-absolute ticks, the seven fixed GRC
+fields, variable record stride, and hardware-counter column count. Hardware
+counter columns remain uninterpreted and are not exported as named metrics.
 `gputrace_track_event_arg` retains every argument for low-volume generic events
 such as command buffers and profiler streams; its `event_id` is a trace-local
 join key, not a persistent source identity. These are raw profiler input,

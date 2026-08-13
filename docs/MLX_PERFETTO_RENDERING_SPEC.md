@@ -666,6 +666,12 @@ events admitted by the strict host-correlation receipt and exposes its join
 basis, both artifact digests, clock domains, bridge digest, and maximum error.
 Neither view weakens the identity or clock gates enforced before export.
 
+`gputrace_raw_profiler_sample` retains the variable GPRWCNTR record stride and
+the seven source-defined fixed columns: timestamp, GPU cycles, sample type,
+encoder id, kick trace id, kick slot index, and source id. These are raw record
+facts. Columns after the fixed prefix remain uninterpreted hardware counters;
+their values are not named, joined, or promoted to counter tracks.
+
 Semantic node rows include their semantic parent id. Semantic link rows retain
 the sidecar link id and exact target kind/index, so consumers can reconstruct
 the validated join without interpreting names. `gputrace_semantic_arg` keeps

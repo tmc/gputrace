@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/tmc/apple/x/plist"
+	"github.com/tmc/gputrace/internal/counter"
 )
 
 // TimelineRaw represents the parsed content of a Timeline_f_*.raw file.
@@ -127,12 +128,12 @@ func EnhanceTimelineWithRawData(timeline *Timeline, tracePath string) error {
 
 		// Handle signed delta carefully
 		var timestampUs uint64
-		if rec.Timestamp >= absoluteTimeRef {
-			delta := rec.Timestamp - absoluteTimeRef
+		if rec.Sample.Timestamp >= absoluteTimeRef {
+			delta := rec.Sample.Timestamp - absoluteTimeRef
 			deltaNs := delta * timebaseNumer / timebaseDenom
 			timestampUs = (baseNsRef + deltaNs) / 1000
 		} else {
-			delta := absoluteTimeRef - rec.Timestamp
+			delta := absoluteTimeRef - rec.Sample.Timestamp
 			deltaNs := delta * timebaseNumer / timebaseDenom
 			if deltaNs > baseNsRef {
 				continue
@@ -163,61 +164,47 @@ func EnhanceTimelineWithRawData(timeline *Timeline, tracePath string) error {
 	return nil
 }
 
-func gprwcntrEventArgs(rec GPRWCNTRRecord) map[string]interface{} {
+func gprwcntrEventArgs(rec rawProfilerRecord) map[string]interface{} {
 	return map[string]interface{}{
-		"index":                 rec.EncoderIndex,
-		"stream_index":          rec.EncoderIndex,
-		"record_index":          rec.RecordIndex,
-		"timestamp_ticks":       rec.Timestamp,
-		"timestamp_domain":      "mach absolute ticks",
-		"coordinate_basis":      "GPRWCNTR tick delta converted with the trace timebase and anchored to the first APSTimelineData command buffer",
-		"size":                  rec.Size,
-		"count":                 rec.Count,
-		"flags":                 rec.Flags,
-		"record_format":         "GPRWCNTR/168-byte record",
-		"counter_decode_status": "raw record header only; counter payload is not decoded",
+		"index":                    rec.StreamIndex,
+		"stream_index":             rec.StreamIndex,
+		"record_index":             rec.RecordIndex,
+		"timestamp_ticks":          rec.Sample.Timestamp,
+		"timestamp_domain":         "mach absolute ticks",
+		"coordinate_basis":         "GPRWCNTR tick delta converted with the trace timebase and anchored to the first APSTimelineData command buffer",
+		"grc_gpu_cycles_raw":       rec.Sample.GPUCycles,
+		"grc_sample_type_raw":      rec.Sample.SampleType,
+		"grc_encoder_id_raw":       rec.Sample.EncoderID,
+		"grc_kick_trace_id_raw":    rec.Sample.KickTraceID,
+		"grc_kick_slot_index_raw":  rec.Sample.KickSlotIdx,
+		"grc_source_id_raw":        rec.Sample.SourceID,
+		"machine_wide":             rec.Sample.MachineWide(),
+		"record_stride_bytes":      rec.Stride,
+		"record_column_count":      7 + len(rec.Sample.Counters),
+		"hardware_counter_columns": len(rec.Sample.Counters),
+		"record_format":            "GPRWCNTR variable-stride record",
+		"counter_decode_status":    "fixed GRC columns decoded; hardware counter columns remain uninterpreted",
 	}
 }
 
-// GPRWCNTRRecord represents a single 168-byte sample from the GPRWCNTR stream.
-type GPRWCNTRRecord struct {
-	Timestamp    uint64
-	Size         uint64
-	Count        uint64
-	Flags        uint32
-	EncoderIndex int // Raw stream ordinal.
-	RecordIndex  int // Zero-based record ordinal within the stream.
-	// Add other fields as needed
+type rawProfilerRecord struct {
+	Sample      counter.GPRWCNTRSample
+	Stride      int
+	StreamIndex int // Raw stream ordinal.
+	RecordIndex int // Zero-based record ordinal within the stream.
 }
 
-// ParseGPRWCNTR parses the raw byte data from a GPRWCNTR stream.
-func ParseGPRWCNTR(data []byte, encoderIndex int) ([]GPRWCNTRRecord, error) {
-	if len(data) < 8 || string(data[0:8]) != "GPRWCNTR" {
-		return nil, fmt.Errorf("invalid GPRWCNTR header")
+func parseRawProfilerRecords(data []byte, streamIndex int) ([]rawProfilerRecord, error) {
+	samples, stride, err := counter.ParseGPRWCNTR(data)
+	if err != nil {
+		return nil, err
 	}
-
-	recordSize := 168
-	numRecords := (len(data) - 8) / recordSize
-
-	records := make([]GPRWCNTRRecord, 0, numRecords)
-
-	for r := 0; r < numRecords; r++ {
-		off := 8 + r*recordSize
-		if off+recordSize > len(data) {
-			break
+	records := make([]rawProfilerRecord, len(samples))
+	for i, sample := range samples {
+		records[i] = rawProfilerRecord{
+			Sample: sample, Stride: stride, StreamIndex: streamIndex, RecordIndex: i,
 		}
-
-		rec := data[off : off+recordSize]
-		records = append(records, GPRWCNTRRecord{
-			Timestamp:    binary.LittleEndian.Uint64(rec[0:8]),
-			Size:         binary.LittleEndian.Uint64(rec[8:16]),
-			Count:        binary.LittleEndian.Uint64(rec[16:24]),
-			Flags:        binary.LittleEndian.Uint32(rec[24:28]),
-			EncoderIndex: encoderIndex,
-			RecordIndex:  r,
-		})
 	}
-
 	return records, nil
 }
 
@@ -230,7 +217,7 @@ type SerialMapping struct {
 
 // RawData holds extracted raw data from streamData.
 type RawData struct {
-	GPRWCNTRRecords []GPRWCNTRRecord
+	GPRWCNTRRecords []rawProfilerRecord
 	Mappings        []SerialMapping
 	CounterNames    map[string]string
 }
@@ -347,7 +334,7 @@ func ParseAPSTimelineData(tracePath string) (*RawData, error) {
 	}
 
 	rawData := &RawData{
-		GPRWCNTRRecords: make([]GPRWCNTRRecord, 0),
+		GPRWCNTRRecords: make([]rawProfilerRecord, 0),
 		Mappings:        make([]SerialMapping, 0),
 		CounterNames:    make(map[string]string),
 	}
@@ -471,7 +458,10 @@ func ParseAPSTimelineData(tracePath string) (*RawData, error) {
 
 					for _, innerO := range innerObjs {
 						if dataBlob, ok := innerO.([]byte); ok && len(dataBlob) > 8 && string(dataBlob[0:8]) == "GPRWCNTR" {
-							recs, _ := ParseGPRWCNTR(dataBlob, gprwcntrIndex)
+							recs, err := parseRawProfilerRecords(dataBlob, gprwcntrIndex)
+							if err != nil {
+								return nil, fmt.Errorf("parse GPRWCNTR stream %d: %w", gprwcntrIndex, err)
+							}
 							if len(recs) > 0 {
 								rawData.GPRWCNTRRecords = append(rawData.GPRWCNTRRecords, recs...)
 								gprwcntrIndex++ // Increment index only for RDE_0 profiles

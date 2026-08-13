@@ -154,7 +154,7 @@ Examples:
 	cmd.Flags().StringVarP(&opts.output, "output", "o", opts.output, "Output file path (default: stdout for text, timeline.html for html, timeline.pftrace for perfetto, timeline.json otherwise)")
 	cmd.Flags().StringVar(&opts.format, "format", opts.format, "Output format: chrome, perfetto, html, json, text")
 	cmd.Flags().Var(&opts.clock, "clock", "Timeline clock domain: busy (default), wall, live, or both")
-	cmd.Flags().BoolVar(&opts.rawProfilerSamples, "include-raw-samples", opts.rawProfilerSamples, "Include raw GPRWCNTR profiler records in wall-clock output (they are not decoded hardware counters)")
+	cmd.Flags().BoolVar(&opts.rawProfilerSamples, "include-raw-samples", opts.rawProfilerSamples, "Include GPRWCNTR fixed fields in wall-clock output (hardware counter columns remain uninterpreted)")
 	cmd.Flags().BoolVar(&opts.xcodeGPUTime, "xcode-gpu-time", opts.xcodeGPUTime, "Read Xcode Overview GPU Time through GTShaderProfiler (Darwin only; runs a private-framework model pass)")
 	cmd.Flags().StringVar(&opts.sidecar, "sidecar", opts.sidecar, "Attach a strictly trace-identified MLX semantic sidecar")
 	cmd.Flags().StringVar(&opts.hostCorrelation, "host-correlation", opts.hostCorrelation, "Attach a trace-identified host-event correlation receipt (Perfetto only)")
@@ -384,8 +384,8 @@ func timelineForClock(timeline *Timeline, clock timelineClock) *Timeline {
 }
 
 // timelineForClockWithRawSamples filters a timeline to one measured clock
-// domain. Raw GPRWCNTR records are opt-in because their payload has not been
-// decoded into user-facing hardware counters.
+// domain. Raw GPRWCNTR records are opt-in because only their fixed GRC fields,
+// not the hardware counter columns, have been decoded.
 func timelineForClockWithRawSamples(timeline *Timeline, clock timelineClock, rawProfilerSamples bool) *Timeline {
 	if timeline == nil {
 		return nil
@@ -3941,7 +3941,7 @@ func timelineClockProvenanceWithRawSamples(clock timelineClock, rawProfilerSampl
 			args["included_categories"] = append(args["included_categories"].([]string), "profiler_stream", "gprwcntr")
 		} else {
 			args["excluded_categories"] = append(args["excluded_categories"].([]string), "profiler_stream", "gprwcntr")
-			args["raw_profiler_samples"] = "excluded by default: GPRWCNTR records and their aggregate profiler streams are not decoded counters or encoder intervals; use --include-raw-samples to inspect them"
+			args["raw_profiler_samples"] = "excluded by default: GPRWCNTR fixed fields and aggregate profiler streams are not decoded hardware counter series or encoder intervals; use --include-raw-samples to inspect them"
 		}
 	case timelineClockLive:
 		args["included_categories"] = []string{"live_command_buffer"}
