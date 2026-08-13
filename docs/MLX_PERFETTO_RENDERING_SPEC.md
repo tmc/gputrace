@@ -536,6 +536,10 @@ the three raw profiling-mode values, capture-range location and length,
 data-source completeness flags, and blit-call count. Numeric and Boolean fields
 are nullable so zero and false remain evidence. The private profiling enums and
 capture-range units are not interpreted or promoted to capture/replay modes.
+Command-buffer, encoder, GPU-command, pipeline, and function tables additionally
+report their exact byte length, declared record size, computed record count,
+trailing remainder bytes, availability, and integrity. A nonzero remainder is
+reported as incomplete evidence rather than silently truncating the table.
 Source and projected counts are also separate: source counts inventory the
 pre-filtered capture, while projected counts inventory only events placed on
 the selected clock. Clock filtering never changes source counts or copies
