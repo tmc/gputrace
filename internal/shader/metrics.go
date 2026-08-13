@@ -170,6 +170,9 @@ func ExtractShaderMetrics(t *trace.Trace) (*ShaderMetricsReport, error) {
 	// Calculate derived metrics and classifications
 	var totalGPUTimeNs uint64
 	for _, metrics := range metricsMap {
+		if metrics.MinDurationNs == ^uint64(0) {
+			metrics.MinDurationNs = 0
+		}
 		// Calculate average duration
 		if metrics.InvocationCount > 0 {
 			metrics.AvgDurationNs = metrics.TotalDurationNs / uint64(metrics.InvocationCount)
@@ -671,6 +674,11 @@ func classifyShaderPerformance(metrics *ShaderMetrics) {
 
 	totalThreads := metrics.TotalThreads
 	bufferCount := metrics.BufferBindings
+	if totalThreads == 0 {
+		metrics.Classification = ""
+		metrics.ComputeRatio = 0
+		return
+	}
 
 	// Calculate compute ratio (threads per buffer binding)
 	if bufferCount == 0 {
@@ -727,7 +735,7 @@ func identifyBottlenecks(metrics *ShaderMetrics) {
 	}
 
 	// Small dispatch sizes (underutilizing GPU)
-	if metrics.TotalThreadgroups < 10 {
+	if metrics.TotalThreadgroups > 0 && metrics.TotalThreadgroups < 10 {
 		metrics.Bottlenecks = append(metrics.Bottlenecks, "small_dispatch_size")
 		metrics.OptimizationHints = append(metrics.OptimizationHints,
 			fmt.Sprintf("Increase dispatch size (current: %d threadgroups)", metrics.TotalThreadgroups))

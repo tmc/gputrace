@@ -274,3 +274,15 @@ func TestPopulateFallbackTimingMetricsMarksSyntheticThreadEstimate(t *testing.T)
 		t.Fatalf("TimingSource = %q, want empty", got)
 	}
 }
+
+func TestMissingDispatchShapeHasNoPerformanceClassification(t *testing.T) {
+	metrics := &ShaderMetrics{InvocationCount: 1}
+	classifyShaderPerformance(metrics)
+	identifyBottlenecks(metrics)
+	if metrics.Classification != "" || metrics.ComputeRatio != 0 {
+		t.Fatalf("classification = %q, ratio = %v", metrics.Classification, metrics.ComputeRatio)
+	}
+	if len(metrics.Bottlenecks) != 0 || len(metrics.OptimizationHints) != 0 {
+		t.Fatalf("missing shape produced advice: %v, %v", metrics.Bottlenecks, metrics.OptimizationHints)
+	}
+}
