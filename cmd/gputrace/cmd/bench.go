@@ -34,7 +34,9 @@ accepted directly by golang.org/x/perf/benchfmt and benchstat.
 
 Go programs can use github.com/tmc/gputrace/tracebench instead of parsing this
 command's output. Its ReportMetrics method writes the same values through
-testing.B.ReportMetric.
+testing.B.ReportMetric. The nested github.com/tmc/gputrace/gpubench module is a
+standard-library-only client for projects that should not depend on the parent
+module's parser and private-framework dependencies.
 
 Examples:
   gputrace bench run.gputrace --format json

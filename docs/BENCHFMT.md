@@ -124,3 +124,25 @@ report, err := tracebench.Analyze(profiled, tracebench.Options{
 `profilereplay.Options.Wait` serializes separate MTLReplayer processes. It does
 not alter overlap among command buffers or encoders within the replayed trace.
 Keep this capture/profile path outside the untraced statistical benchmark arm.
+
+## Dependency-free client module
+
+`github.com/tmc/gputrace/gpubench` is a nested module for benchmark suites that
+should not inherit gputrace's parser and private-framework dependencies. It has
+no module requirements and invokes a configured `gputrace` executable:
+
+```go
+client := gpubench.Client{Path: "/path/to/gputrace"}
+report, err := client.Analyze(ctx, profiled, gpubench.AnalyzeOptions{
+	Work: &gpubench.Work{Count: 32, Unit: "token"},
+})
+if err != nil {
+	return err
+}
+return report.ReportMetrics(b)
+```
+
+Use the parent `tracebench` package when in-process parsing is worth the larger
+dependency graph. Use `gpubench` when process isolation and a stdlib-only Go
+dependency are preferable. Both consume the same versioned report schema and
+preserve the same denominator and timing-source rules.

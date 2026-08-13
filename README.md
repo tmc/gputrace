@@ -182,6 +182,24 @@ The Go-facing packages are deliberately separate:
 - `tracebench` analyzes retained artifacts, writes JSON or benchfmt, and reports
   metrics directly to `testing.B` without parsing CLI prose.
 
+Benchmark suites that do not want the parent module's dependencies can instead
+require `github.com/tmc/gputrace/gpubench`. It is a nested, standard-library-only
+module that invokes an installed `gputrace` binary and consumes the stable JSON
+report:
+
+```go
+client := gpubench.Client{}
+report, err := client.Analyze(ctx, tracePath, gpubench.AnalyzeOptions{
+	Work: &gpubench.Work{Count: 32, Unit: "token"},
+})
+if err != nil {
+	b.Fatal(err)
+}
+if err := report.ReportMetrics(b); err != nil {
+	b.Fatal(err)
+}
+```
+
 See [docs/BENCHFMT.md](./docs/BENCHFMT.md) for the unit and provenance mapping.
 
 ## Testing
