@@ -1,9 +1,23 @@
 # Go benchmark output
 
-`stats`, `profiler`, and `timing` accept `--benchfmt`. The output can be read
+`bench`, `stats`, `profiler`, and `timing` produce output that can be read
 directly by `golang.org/x/perf/benchstat` and `golang.org/x/perf/benchfmt`.
 Each trace is one observation, so every benchmark line uses one iteration.
 Repeated captures should be concatenated, not averaged before analysis.
+
+Use `bench` for new integrations. It emits trace totals by default and requires
+an explicit denominator before producing per-work units:
+
+```sh
+gputrace bench trace.gputrace --format benchfmt \
+  --bench-name BenchmarkDecode \
+  --bench-work 32 --bench-work-unit token \
+  --bench-config arm=candidate > gpu.bench
+```
+
+Without `--bench-work`, the same command writes units ending in `/trace`.
+Supported work units are `op`, `token`, `step`, and `byte`. A missing, zero, or
+unsupported denominator is rejected rather than inferred from the trace name.
 
 ```sh
 gputrace profiler trace.gputrace --benchfmt \
@@ -64,3 +78,26 @@ it differs between independent captures, pass `-ignore trace-uuid` to
 
 `diff` does not support `--benchfmt`: benchstat compares repeated observations,
 while `diff` already contains a precomputed two-trace delta.
+
+## Go package
+
+Package `github.com/tmc/gputrace/tracebench` exposes the same sectioned report
+without parsing command output. `Analyze` keeps structural and measured timing
+evidence independent, `WriteJSON` and `WriteBenchfmt` provide stable encodings,
+and `Report.ReportMetrics` writes directly through `testing.B.ReportMetric`.
+
+```go
+report, err := tracebench.Analyze(path, tracebench.Options{
+	Work: &tracebench.Work{Count: uint64(b.N), Unit: "op"},
+})
+if err != nil {
+	b.Fatal(err)
+}
+if err := report.ReportMetrics(b); err != nil {
+	b.Fatal(err)
+}
+```
+
+The caller owns the meaning of `b.N` and must ensure the trace contains exactly
+that work. Capture and profiler arms should run outside the ordinary benchmark
+timer; they are evidence observations, not untraced throughput samples.

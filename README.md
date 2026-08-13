@@ -145,7 +145,7 @@ See [docs/TRACE_DIFF_WORKFLOW.md](./docs/TRACE_DIFF_WORKFLOW.md) for the full wo
 
 ## Go benchmark output
 
-`stats`, `profiler`, and `timing` can write Go benchmark format for direct use
+`bench`, `stats`, `profiler`, and `timing` can write Go benchmark format for direct use
 with `benchstat`:
 
 ```bash
@@ -154,6 +154,11 @@ gputrace profiler trace.gputrace --benchfmt \
   --bench-config model=Qwen2.5-0.5B > go.txt
 benchstat -ignore trace-uuid go.txt python.txt
 ```
+
+For new integrations, `gputrace bench` emits trace-scoped totals by default and
+normalizes only when given `--bench-work` and `--bench-work-unit`. Go programs
+can use `github.com/tmc/gputrace/tracebench` to obtain the same sectioned report
+and report values directly through `testing.B.ReportMetric`.
 
 See [docs/BENCHFMT.md](./docs/BENCHFMT.md) for the unit and provenance mapping.
 
