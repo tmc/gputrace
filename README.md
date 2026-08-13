@@ -71,6 +71,10 @@ encoder details because their counter clock is not joined to the busy clock.
 Lossless busy exports also provide one presentation-only dispatch row per
 encoder so kernel detail is visible without deep zoom. Native `gpu_slice` rows
 remain the accounting source; constrained exports omit the duplicate rows.
+When profiler timing is unavailable, capture launch records instead appear as
+generic instant events with pipeline identity and dispatch geometry. They do
+not enter `gpu_slice`, and CS/debug labels are reported separately as observed
+annotations rather than encoder or dispatch instances.
 gputrace does not invent a mapping between these domains.
 
 See [MLX GPU Trace Rendering in Perfetto](docs/MLX_PERFETTO_RENDERING_SPEC.md)

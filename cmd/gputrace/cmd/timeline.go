@@ -89,6 +89,9 @@ resource policy, and loss receipt. These are part of the timeline export, not
 separate commands. Use --max-output-bytes for an explicit constrained export
 and --sql-out to write the matching PerfettoSQL views.
 
+Capture-only launches with no profiler timing are instant track events, not GPU
+duration slices. CS/debug labels remain separate observed annotations.
+
 Clock domains:
   - busy (default): cumulative GPU execution offsets for encoders, dispatches,
     and counter series only when their clock is established
@@ -412,7 +415,7 @@ func timelineEventInClock(event TimelineEvent, clock timelineClock) bool {
 func timelineEventInClockWithRawSamples(event TimelineEvent, clock timelineClock, rawProfilerSamples bool) bool {
 	switch clock {
 	case timelineClockBusy:
-		return event.Category == "encoder" || event.Category == "kernel"
+		return event.Category == "encoder" || event.Category == "kernel" || event.Category == "dispatch"
 	case timelineClockWall:
 		return event.Category == "command_buffer" || (rawProfilerSamples && (event.Category == "profiler_stream" || event.Category == "gprwcntr"))
 	default:
@@ -925,6 +928,8 @@ type Timeline struct {
 	MLXSidecarDigest     string                      `json:"mlx_sidecar_digest,omitempty"`
 	TraceUUID            string                      `json:"trace_uuid,omitempty"`
 	DeviceID             int                         `json:"device_id,omitempty"`
+	ObservedCSLabels     int                         `json:"observed_cs_labels,omitempty"`
+	UniqueCSLabels       int                         `json:"unique_cs_labels,omitempty"`
 }
 
 // UnavailableEvidence records an evidence family that could not be projected
@@ -1076,6 +1081,14 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 
 	// Get real encoder labels from ParseComputeEncoders (primary source for labels)
 	computeEncoders := trace.ParseComputeEncoders()
+	timeline.ObservedCSLabels = len(computeEncoders)
+	uniqueCSLabels := make(map[string]bool)
+	for _, encoder := range computeEncoders {
+		if encoder.Label != "" {
+			uniqueCSLabels[encoder.Label] = true
+		}
+	}
+	timeline.UniqueCSLabels = len(uniqueCSLabels)
 
 	// Extract timing metrics. This records whether encoder timings came from
 	// measured profiler data or approximate extracted/synthetic fallback data.
@@ -1173,9 +1186,9 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 		timeline.Duration = timeline.EndTime - timeline.StartTime
 
 		// Use compute encoders as primary source for encoder info (better labels)
-		if len(computeEncoders) > 0 {
+		if len(computeEncoders) > 0 && timelineMetricsSource(metrics) != "unavailable" {
 			populateUnprofiledEncoderEvents(timeline, computeEncoders, timingByLabel, metrics)
-		} else {
+		} else if timelineMetricsSource(metrics) != "unavailable" {
 			// Fall back to timing metrics if no compute encoders found
 			for i, encoder := range metrics.EncoderTimings {
 				encoderInfo := EncoderInfo{
@@ -1211,7 +1224,9 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 	// Add shader/kernel events. Prefer streamData dispatches so the Shaders lane
 	// matches Xcode's pipeline table instead of duplicating whole encoder spans.
 	if !addDispatchKernelEvents(timeline, streamStats, dispatchSIMD, shaderReport, perfStats, encoderMetrics, sourceMapper) {
-		addEncoderKernelEvents(timeline, trace, sourceMapper, storeStats)
+		if err := addCaptureDispatchEvents(timeline, trace, sourceMapper, storeStats); err != nil {
+			return nil, fmt.Errorf("add capture dispatches: %w", err)
+		}
 	}
 
 	// Add command buffer events - try to get real timing from APSTimelineData
@@ -1741,6 +1756,57 @@ func addEncoderKernelEvents(timeline *Timeline, trace *gputrace.Trace, sourceMap
 			Args:      args,
 		})
 	}
+}
+
+func addCaptureDispatchEvents(timeline *Timeline, trace *gputrace.Trace, sourceMapper *gputrace.ShaderSourceMapper, storeStats *counter.StoreStats) error {
+	if timeline == nil || trace == nil {
+		return nil
+	}
+	dispatches, err := trace.ParseAttributedDispatches()
+	if err != nil {
+		return err
+	}
+	for _, dispatch := range dispatches {
+		name := dispatch.FunctionName
+		if name == "" {
+			name = fmt.Sprintf("Dispatch #%d", dispatch.Index)
+		}
+		args := map[string]interface{}{
+			"dispatch_index":       dispatch.Index,
+			"command_buffer_index": dispatch.CommandBuffer,
+			"capture_offset":       dispatch.CaptureOffset,
+			"pipeline_address":     fmt.Sprintf("0x%x", dispatch.PipelineAddr),
+			"grid_size":            fmt.Sprintf("%d,%d,%d", dispatch.ThreadsX, dispatch.ThreadsY, dispatch.ThreadsZ),
+			"threadgroup_size":     fmt.Sprintf("%d,%d,%d", dispatch.ThreadsPerGroupX, dispatch.ThreadsPerGroupY, dispatch.ThreadsPerGroupZ),
+			"simd_groups":          dispatch.SIMDGroups(),
+			"source":               "capture dispatch record; dispatch geometry",
+			"coordinate_source":    "capture record order",
+			"timing_source":        "unavailable",
+			"function_attribution": dispatch.AttributionBasis,
+			"encoder_attribution":  "unavailable",
+		}
+		if dispatch.FunctionName != "" {
+			addStorePipelineArgs(args, storeStats.PipelineForLabel(dispatch.FunctionName))
+			if sourceMapper != nil {
+				if sourceFile, sourceLine := sourceMapper.SourceLocation(dispatch.FunctionName); sourceFile != "" {
+					args["source_available"] = true
+					args["source_file"] = sourceFile
+					args["source_line"] = sourceLine
+				}
+			}
+		}
+		timeline.Kernels = append(timeline.Kernels, KernelInfo{Name: name, Encoder: -1, Args: args})
+		timeline.Events = append(timeline.Events, TimelineEvent{
+			Name:      name,
+			Category:  "dispatch",
+			Phase:     "i",
+			Timestamp: uint64(dispatch.Index),
+			ProcessID: 1,
+			ThreadID:  3,
+			Args:      args,
+		})
+	}
+	return nil
 }
 
 func timelineEncoderEvent(timeline *Timeline, index int) (TimelineEvent, bool) {
@@ -2345,6 +2411,9 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 		trace.Metadata["dispatch_count"] = len(timeline.Kernels)
 		trace.Metadata["untimed_dispatch_count"] = timelineUntimedDispatchCount(timeline)
 		trace.Metadata["encoder_count"] = len(timeline.Encoders)
+		trace.Metadata["observed_cs_label_count"] = timeline.ObservedCSLabels
+		trace.Metadata["unique_cs_label_count"] = timeline.UniqueCSLabels
+		trace.Metadata["cs_label_semantics"] = "observed capture annotations; not dispatch or encoder instances"
 		trace.Metadata["command_buffer_count"] = timelineEventCount(timeline, "command_buffer")
 		if timeline.Timing != nil {
 			trace.Metadata["timing_source"] = timeline.Timing.TimingSource
@@ -2600,13 +2669,8 @@ func mlxSemanticProjectionCounts(timeline *Timeline) (projected, unprojected map
 	if timeline == nil || timeline.MLXSemantics == nil {
 		return projected, unprojected
 	}
-	category := map[string]string{
-		"dispatch":       "kernel",
-		"encoder":        "encoder",
-		"command_buffer": "command_buffer",
-	}
 	for _, link := range timeline.MLXSemantics.Links {
-		if _, ok := timelineEventAt(timeline, category[link.Target.Kind], link.Target.Index); ok {
+		if _, ok := timelineSemanticTargetEvent(timeline, link.Target.Kind, link.Target.Index); ok {
 			projected[link.Target.Kind]++
 		} else {
 			unprojected[link.Target.Kind]++
@@ -2618,7 +2682,7 @@ func mlxSemanticProjectionCounts(timeline *Timeline) (projected, unprojected map
 func timelineUntimedDispatchCount(timeline *Timeline) int {
 	count := 0
 	for _, event := range timeline.Events {
-		if event.Category == "kernel" && (event.Phase == "i" || event.Duration == 0) {
+		if (event.Category == "kernel" || event.Category == "dispatch") && (event.Phase == "i" || event.Duration == 0) {
 			count++
 		}
 	}
@@ -2687,13 +2751,8 @@ func appendMLXSemanticEvents(trace *perfetto.Trace, timeline *Timeline) {
 		})
 		nextID++
 	}
-	category := map[string]string{
-		"dispatch":       "kernel",
-		"encoder":        "encoder",
-		"command_buffer": "command_buffer",
-	}
 	for _, link := range timeline.MLXSemantics.Links {
-		target, ok := timelineEventAt(timeline, category[link.Target.Kind], link.Target.Index)
+		target, ok := timelineSemanticTargetEvent(timeline, link.Target.Kind, link.Target.Index)
 		if !ok {
 			continue // The target belongs to another measured clock domain.
 		}
@@ -2732,6 +2791,22 @@ func appendMLXSemanticEvents(trace *perfetto.Trace, timeline *Timeline) {
 			Args:       args,
 		})
 		nextID++
+	}
+}
+
+func timelineSemanticTargetEvent(timeline *Timeline, kind string, index int) (TimelineEvent, bool) {
+	switch kind {
+	case "dispatch":
+		if event, ok := timelineEventAt(timeline, "kernel", index); ok {
+			return event, true
+		}
+		return timelineEventAt(timeline, "dispatch", index)
+	case "encoder":
+		return timelineEventAt(timeline, "encoder", index)
+	case "command_buffer":
+		return timelineEventAt(timeline, "command_buffer", index)
+	default:
+		return TimelineEvent{}, false
 	}
 }
 
@@ -3187,7 +3262,7 @@ func timelineXcodeMetricsArgs(timeline *Timeline) map[string]interface{} {
 
 	presentFields := make(map[string]bool)
 	for _, ev := range timeline.Events {
-		if ev.Category != "kernel" || ev.Args == nil {
+		if (ev.Category != "kernel" && ev.Category != "dispatch") || ev.Args == nil {
 			continue
 		}
 		args["kernel_events"] = args["kernel_events"].(int) + 1

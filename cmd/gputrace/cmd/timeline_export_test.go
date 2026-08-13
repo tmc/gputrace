@@ -719,7 +719,7 @@ func TestTimelineForClockKeepsOnlyComparableEvents(t *testing.T) {
 		t.Fatalf("wall timeline retained busy data: %#v", wall)
 	}
 	for _, event := range wall.Events {
-		if event.Category == "encoder" || event.Category == "kernel" {
+		if event.Category == "encoder" || event.Category == "kernel" || event.Category == "dispatch" {
 			t.Fatalf("wall timeline contains busy event: %#v", event)
 		}
 	}
@@ -1442,6 +1442,41 @@ func TestTimelineDispatchSIMDGroup(t *testing.T) {
 	}
 }
 
+func TestAddCaptureDispatchEventsUsesAttributedLaunches(t *testing.T) {
+	tracePath := "../../../testdata/traces/06-six-encoders/06-six-encoders-run1.gputrace"
+	tr, err := tracepkg.Open(tracePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tr.Close()
+	dispatches, err := tr.ParseAttributedDispatches()
+	if err != nil {
+		t.Fatal(err)
+	}
+	timeline := &Timeline{}
+	if err := addCaptureDispatchEvents(timeline, tr, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(timeline.Events), len(dispatches); got != want {
+		t.Fatalf("events = %d, want %d dispatch records", got, want)
+	}
+	named := 0
+	for _, event := range timeline.Events {
+		if event.Category != "dispatch" || event.Phase != "i" || event.Duration != 0 {
+			t.Fatalf("event = %+v, want untimed instant", event)
+		}
+		if event.Args["encoder_attribution"] != "unavailable" {
+			t.Fatalf("encoder_attribution = %v", event.Args["encoder_attribution"])
+		}
+		if event.Args["function_attribution"] == "preceding pipeline state" {
+			named++
+		}
+	}
+	if named == 0 {
+		t.Fatal("fixture has no named dispatch to exercise nil store statistics")
+	}
+}
+
 func TestGenerateTimelineWithoutPerfDataIncludesDispatchSIMDGroups(t *testing.T) {
 	tracePath := "../../../testdata/traces/01-single-encoder/01-single-encoder-run1.gputrace"
 	if _, err := os.Stat(tracePath); os.IsNotExist(err) {
@@ -1458,18 +1493,28 @@ func TestGenerateTimelineWithoutPerfDataIncludesDispatchSIMDGroups(t *testing.T)
 	if err != nil {
 		t.Fatalf("generateTimeline: %v", err)
 	}
+	if len(timeline.Encoders) != 0 {
+		t.Fatalf("encoders = %d, want 0 without encoder lifecycle evidence", len(timeline.Encoders))
+	}
+	if timeline.ObservedCSLabels == 0 || timeline.UniqueCSLabels == 0 {
+		t.Fatalf("CS label evidence = %d observations, %d unique", timeline.ObservedCSLabels, timeline.UniqueCSLabels)
+	}
+	found := false
 	for _, event := range timeline.Events {
-		if event.Category != "kernel" || event.Args == nil {
+		if (event.Category != "kernel" && event.Category != "dispatch") || event.Args == nil {
 			continue
 		}
 		if got, ok := event.Args["simd_groups"].(uint64); ok && got == 32 {
 			if source := fmt.Sprint(event.Args["source"]); !strings.Contains(source, "dispatch geometry") {
 				t.Fatalf("source = %q, want dispatch geometry", source)
 			}
-			return
+			found = true
+			break
 		}
 	}
-	t.Fatalf("no kernel event with simd_groups=32 in %#v", timeline.Events)
+	if !found {
+		t.Fatalf("no kernel event with simd_groups=32 in %#v", timeline.Events)
+	}
 }
 
 func TestGenerateInteractiveHTMLIncludesShaderTooltipFields(t *testing.T) {
@@ -1745,7 +1790,7 @@ func TestUnprofiledRawTraceEmitsPhaseIInstantEvents(t *testing.T) {
 
 	var phaseXCount, phaseICount int
 	for _, event := range traceDoc.TraceEvents {
-		if event.Category == "encoder" || event.Category == "kernel" {
+		if event.Category == "encoder" || event.Category == "kernel" || event.Category == "dispatch" {
 			if event.Phase == "X" {
 				phaseXCount++
 				t.Errorf("unprofiled event %q category=%q has finite Phase X duration %d", event.Name, event.Category, event.Duration)
