@@ -183,6 +183,10 @@ the basename, family, optional numeric index, byte size, and SHA-256 as untimed
 evidence; `gputrace_capture` carries the deterministic inventory digest and
 aggregate size. The exporter does not retain host directory paths or follow
 symlinks. Hashing a large profiler directory may add several seconds to export.
+For `Timeline_f_*.raw`, `gputrace_raw_profiler_timeline` also exposes the
+fixed header's raw identity, counter count, data-section byte offset, entry
+count, and profiler-sampling timestamp. That timestamp remains raw and
+unaligned; it is not command-buffer time or cumulative GPU-busy time.
 
 `diff` fails closed when workload, device/driver, runtime, capture mode, or
 timing-source gates differ or are unavailable. The explicit

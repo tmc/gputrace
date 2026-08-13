@@ -926,6 +926,13 @@ inventory. This hashes the profiler evidence directory, not the entire
 multi-gigabyte capture bundle. A read failure makes the artifact identity
 unavailable rather than publishing a partial inventory.
 
+`Timeline_f_*.raw` artifacts additionally retain the named fields from their
+fixed 128-byte headers: raw magic, counter count, data-section byte offset,
+entry count, and raw profiler-sampling timestamp. These values are file-format
+evidence, not decoded counter samples. Magic is retained as raw identity rather
+than validated against one observed constant. The timestamp is not converted
+or joined to command-buffer wall time or cumulative GPU-busy time.
+
 When capture mode, replay mode, a counter catalog or decoder, or a separate raw
 artifact identity cannot be proved from the input, the manifest records that
 field as unavailable with a reason. It does not omit the field or infer it
