@@ -483,6 +483,8 @@ gputrace_dispatch
 gputrace_encoder
 gputrace_function
 gputrace_pipeline
+gputrace_profiler_stream
+gputrace_raw_profiler_sample
 gputrace_counter_series
 gputrace_unmatched
 ```
@@ -497,6 +499,15 @@ clock, coverage, and retention queries. `gputrace_manifest_arg` is the
 lossless key/value projection of the same manifest. It keeps dynamic
 per-evidence-class loss receipts and future manifest fields queryable without
 silently dropping them from an older typed view.
+
+The opt-in wall export retains GPRWCNTR records in
+`gputrace_raw_profiler_sample`, including their original mach-absolute tick,
+stream index, raw header fields, coordinate basis, and decode status.
+`gputrace_profiler_stream` contains source-backed aggregate stream spans. Both
+views explicitly distinguish raw profiler input from decoded counters and GPU
+encoder intervals. Busy-domain dispatches do not receive direct sample counts
+from wall-domain timestamp overlap; only the separately labeled estimated
+scaled-window attribution may appear there.
 
 Each semantic node is emitted as an explicitly untimed declaration on its
 hierarchical track. Target links are separate events and inherit timing only

@@ -111,6 +111,11 @@ The optional SQL file defines `gputrace_capture`, `gputrace_command_buffer`, `gp
 and loss-receipt columns. `gputrace_manifest_arg` exposes every manifest field
 as a key/value row, including per-class loss fields added by constrained
 exports and fields introduced by newer exporters.
+With `--clock wall --include-raw-samples`, `gputrace_profiler_stream` exposes
+raw stream aggregates and `gputrace_raw_profiler_sample` exposes GPRWCNTR
+record headers and original mach-absolute ticks. These are raw profiler input,
+not decoded counter values or GPU encoder intervals. They are never joined to
+busy-domain dispatches by comparing their displayed timestamps.
 
 `diff` fails closed when workload, device/driver, runtime, capture mode, or
 timing-source gates differ or are unavailable. The explicit
