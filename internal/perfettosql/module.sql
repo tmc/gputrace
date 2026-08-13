@@ -134,6 +134,8 @@ SELECT
   extract_arg(arg_set_id, 'grid_size') AS grid_size,
   extract_arg(arg_set_id, 'threadgroup_size') AS threadgroup_size,
   extract_arg(arg_set_id, 'geometry_source') AS geometry_source,
+  extract_arg(arg_set_id, 'xcode_type') AS xcode_type,
+  extract_arg(arg_set_id, 'xcode_view') AS xcode_view,
   extract_arg(arg_set_id, 'source_file') AS source_file,
   cast(extract_arg(arg_set_id, 'source_line') AS INT) AS source_line,
   cast(extract_arg(arg_set_id, 'source_available') AS INT) AS source_available,
@@ -176,6 +178,8 @@ SELECT
   extract_arg(arg_set_id, 'debug.grid_size') AS grid_size,
   extract_arg(arg_set_id, 'debug.threadgroup_size') AS threadgroup_size,
   'capture dispatch record' AS geometry_source,
+  extract_arg(arg_set_id, 'debug.xcode_type') AS xcode_type,
+  extract_arg(arg_set_id, 'debug.xcode_view') AS xcode_view,
   extract_arg(arg_set_id, 'debug.source_file') AS source_file,
   cast(extract_arg(arg_set_id, 'debug.source_line') AS INT) AS source_line,
   cast(extract_arg(arg_set_id, 'debug.source_available') AS INT) AS source_available,
@@ -191,6 +195,37 @@ SELECT
   arg_set_id
 FROM slice
 WHERE category = 'dispatch';
+
+-- gputrace_dispatch_arg is the lossless argument projection. Native GPU rows
+-- use unprefixed argument keys; generic recorded dispatches use debug.* keys.
+CREATE PERFETTO VIEW gputrace_dispatch_arg AS
+SELECT
+  g.id AS dispatch_id,
+  'measured_gpu_execution' AS evidence_kind,
+  a.key AS key,
+  a.flat_key AS flat_key,
+  a.value_type,
+  a.int_value,
+  a.real_value,
+  a.string_value,
+  a.display_value
+FROM gpu_slice AS g
+JOIN args AS a USING (arg_set_id)
+UNION ALL
+SELECT
+  s.id AS dispatch_id,
+  'recorded_dispatch' AS evidence_kind,
+  substr(a.key, 7) AS key,
+  substr(a.flat_key, 7) AS flat_key,
+  a.value_type,
+  a.int_value,
+  a.real_value,
+  a.string_value,
+  a.display_value
+FROM slice AS s
+JOIN args AS a USING (arg_set_id)
+WHERE s.category = 'dispatch'
+  AND a.key GLOB 'debug.*';
 
 CREATE PERFETTO VIEW gputrace_encoder AS
 SELECT
@@ -216,6 +251,23 @@ SELECT
   arg_set_id
 FROM slice
 WHERE category = 'encoder';
+
+-- gputrace_encoder_arg retains every encoder argument, including fields also
+-- present in the typed view, so callers can inspect newer exporter fields.
+CREATE PERFETTO VIEW gputrace_encoder_arg AS
+SELECT
+  s.id AS encoder_id,
+  substr(a.key, 7) AS key,
+  substr(a.flat_key, 7) AS flat_key,
+  a.value_type,
+  a.int_value,
+  a.real_value,
+  a.string_value,
+  a.display_value
+FROM slice AS s
+JOIN args AS a USING (arg_set_id)
+WHERE s.category = 'encoder'
+  AND a.key GLOB 'debug.*';
 
 CREATE PERFETTO VIEW gputrace_command_buffer AS
 SELECT

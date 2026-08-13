@@ -19,7 +19,9 @@ func TestModuleDefinesStableViews(t *testing.T) {
 		"gputrace_semantic_link",
 		"gputrace_semantic_arg",
 		"gputrace_dispatch",
+		"gputrace_dispatch_arg",
 		"gputrace_encoder",
+		"gputrace_encoder_arg",
 		"gputrace_function",
 		"gputrace_pipeline",
 		"gputrace_counter_series",
@@ -90,6 +92,10 @@ func TestModuleProjectsRecordedDispatchesAndCompilerFacts(t *testing.T) {
 		"semantic_link_id",
 		"debug.target_index",
 		"mlx_semantic_producer_version",
+		"extract_arg(arg_set_id, 'xcode_type') AS xcode_type",
+		"extract_arg(arg_set_id, 'debug.xcode_view') AS xcode_view",
+		"'measured_gpu_execution' AS evidence_kind",
+		"a.flat_key AS flat_key",
 	} {
 		if !strings.Contains(Module, want) {
 			t.Errorf("module missing %q", want)
