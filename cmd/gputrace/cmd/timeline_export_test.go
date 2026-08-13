@@ -494,11 +494,23 @@ func TestAppendMLXSemanticEvents(t *testing.T) {
 	if got := trace.Events[0].Args["join_basis"]; got != "sidecar-declaration" {
 		t.Fatalf("node declaration basis = %v", got)
 	}
+	if got := trace.Events[1].Args["semantic_parent_id"]; got != "run" {
+		t.Fatalf("semantic parent = %v, want run", got)
+	}
+	if got := trace.Events[1].Args["dtype"]; got != "bfloat16" {
+		t.Fatalf("semantic dtype = %v, want bfloat16", got)
+	}
 	if trace.Events[0].Kind != perfetto.EventInstant || trace.Events[0].Args["clock_domain"] != "none" || trace.Events[0].Args["timing_quality"] != "unavailable" {
 		t.Fatalf("node declaration timing = %+v", trace.Events[0])
 	}
 	if got := trace.Events[2].Args["join_basis"]; got != "sidecar-explicit-id" {
 		t.Fatalf("join basis = %v", got)
+	}
+	if got := trace.Events[2].Args["semantic_link_id"]; got != "link" {
+		t.Fatalf("semantic link = %v, want link", got)
+	}
+	if got := trace.Events[2].Args["target_index"]; got != 0 {
+		t.Fatalf("semantic target index = %v, want 0", got)
 	}
 }
 

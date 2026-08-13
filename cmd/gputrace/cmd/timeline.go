@@ -2500,6 +2500,8 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 		}
 		if timeline.MLXSemantics != nil {
 			trace.Metadata["mlx_semantic_schema"] = timeline.MLXSemantics.Schema
+			trace.Metadata["mlx_semantic_producer_name"] = timeline.MLXSemantics.Producer.Name
+			trace.Metadata["mlx_semantic_producer_version"] = timeline.MLXSemantics.Producer.Version
 			trace.Metadata["mlx_semantic_nodes"] = len(timeline.MLXSemantics.Nodes)
 			trace.Metadata["mlx_semantic_links"] = len(timeline.MLXSemantics.Links)
 			trace.Metadata["mlx_sidecar_digest"] = timeline.MLXSidecarDigest
@@ -2838,6 +2840,7 @@ func appendMLXSemanticEvents(trace *perfetto.Trace, timeline *Timeline) {
 			args[key] = value
 		}
 		args["semantic_id"] = node.ID
+		args["semantic_parent_id"] = node.ParentID
 		args["semantic_kind"] = node.Kind
 		args["join_basis"] = "sidecar-declaration"
 		args["clock_domain"] = "none"
@@ -2866,8 +2869,10 @@ func appendMLXSemanticEvents(trace *perfetto.Trace, timeline *Timeline) {
 		}
 		args["semantic_id"] = node.ID
 		args["semantic_kind"] = node.Kind
+		args["semantic_link_id"] = link.ID
 		args["join_basis"] = "sidecar-explicit-id"
 		args["target_kind"] = link.Target.Kind
+		args["target_index"] = link.Target.Index
 		args["clock_domain"] = timeline.ClockDomain
 		args["timing_quality"] = perfettoTimingQuality(timeline)
 		if target.Args != nil {

@@ -75,6 +75,14 @@ SELECT
   extract_arg(arg_set_id, 'debug.host_correlation_bridge_digest') AS host_correlation_bridge_digest,
   cast(extract_arg(arg_set_id, 'debug.host_correlation_max_error_ns') AS REAL) AS host_correlation_max_error_ns,
   cast(extract_arg(arg_set_id, 'debug.host_correlation_event_count') AS INT) AS host_correlation_event_count,
+  extract_arg(arg_set_id, 'debug.mlx_semantic_schema') AS mlx_semantic_schema,
+  extract_arg(arg_set_id, 'debug.mlx_semantic_producer_name') AS mlx_semantic_producer_name,
+  extract_arg(arg_set_id, 'debug.mlx_semantic_producer_version') AS mlx_semantic_producer_version,
+  cast(extract_arg(arg_set_id, 'debug.mlx_semantic_nodes') AS INT) AS mlx_semantic_nodes,
+  cast(extract_arg(arg_set_id, 'debug.mlx_semantic_links') AS INT) AS mlx_semantic_links,
+  extract_arg(arg_set_id, 'debug.mlx_sidecar_digest') AS mlx_sidecar_digest,
+  cast(extract_arg(arg_set_id, 'debug.mlx_semantic_used_nodes') AS INT) AS mlx_semantic_used_nodes,
+  cast(extract_arg(arg_set_id, 'debug.mlx_semantic_unused_nodes') AS INT) AS mlx_semantic_unused_nodes,
   cast(extract_arg(arg_set_id, 'debug.unavailable_evidence_count') AS INT) AS unavailable_evidence_count,
   arg_set_id
 FROM slice
@@ -396,6 +404,7 @@ SELECT
   dur,
   name,
   extract_arg(arg_set_id, 'debug.semantic_id') AS semantic_id,
+  extract_arg(arg_set_id, 'debug.semantic_parent_id') AS semantic_parent_id,
   extract_arg(arg_set_id, 'debug.semantic_kind') AS semantic_kind,
   extract_arg(arg_set_id, 'debug.join_basis') AS join_basis
 FROM slice
@@ -407,12 +416,40 @@ SELECT
   ts,
   dur,
   name,
+  extract_arg(arg_set_id, 'debug.semantic_link_id') AS semantic_link_id,
   extract_arg(arg_set_id, 'debug.semantic_id') AS semantic_id,
   extract_arg(arg_set_id, 'debug.semantic_kind') AS semantic_kind,
   extract_arg(arg_set_id, 'debug.target_kind') AS target_kind,
+  cast(extract_arg(arg_set_id, 'debug.target_index') AS INT) AS target_index,
   extract_arg(arg_set_id, 'debug.join_basis') AS join_basis
 FROM slice
 WHERE category = 'mlx_semantic';
+
+-- gputrace_semantic_arg retains arbitrary sidecar attributes without making
+-- their names part of the stable typed schema. Structural fields remain in
+-- gputrace_semantic_node and gputrace_semantic_link.
+CREATE PERFETTO VIEW gputrace_semantic_arg AS
+SELECT
+  s.id AS event_id,
+  s.category AS event_kind,
+  extract_arg(s.arg_set_id, 'debug.semantic_id') AS semantic_id,
+  substr(a.key, 7) AS key,
+  substr(a.flat_key, 7) AS flat_key,
+  a.value_type,
+  a.int_value,
+  a.real_value,
+  a.string_value,
+  a.display_value
+FROM slice AS s
+JOIN args AS a USING (arg_set_id)
+WHERE s.category IN ('mlx_semantic_node', 'mlx_semantic')
+  AND a.key GLOB 'debug.*'
+  AND a.key NOT IN (
+    'debug.semantic_id', 'debug.semantic_parent_id', 'debug.semantic_kind',
+    'debug.semantic_link_id', 'debug.join_basis', 'debug.target_kind',
+    'debug.target_index', 'debug.clock_domain', 'debug.timing_source',
+    'debug.timing_quality'
+  );
 
 CREATE PERFETTO VIEW gputrace_counter_series AS
 SELECT

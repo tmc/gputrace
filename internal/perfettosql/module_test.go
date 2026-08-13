@@ -17,6 +17,7 @@ func TestModuleDefinesStableViews(t *testing.T) {
 		"gputrace_host_signpost",
 		"gputrace_semantic_node",
 		"gputrace_semantic_link",
+		"gputrace_semantic_arg",
 		"gputrace_dispatch",
 		"gputrace_encoder",
 		"gputrace_function",
@@ -82,6 +83,10 @@ func TestModuleProjectsRecordedDispatchesAndCompilerFacts(t *testing.T) {
 		"host_correlation_max_error_ns",
 		"measured original-execution GPU interval from a trace-identified sidecar",
 		"debug.bridge_digest",
+		"semantic_parent_id",
+		"semantic_link_id",
+		"debug.target_index",
+		"mlx_semantic_producer_version",
 	} {
 		if !strings.Contains(Module, want) {
 			t.Errorf("module missing %q", want)
