@@ -158,8 +158,9 @@ join key, not a persistent source identity. These are raw profiler input,
 not decoded counter values or GPU encoder intervals. They are never joined to
 busy-domain dispatches by comparing their displayed timestamps.
 Original-execution timing attached with `--clock live --live-timing` appears in
-`gputrace_live_command_buffer`; its run, sidecar digest, and match counts are
-also in `gputrace_capture`. Verified `--host-correlation` events appear in
+`gputrace_live_command_buffer`, including the command buffer's GPU interval and
+the separately reported kernel start and duration; its run, sidecar digest,
+and match counts are also in `gputrace_capture`. Verified `--host-correlation` events appear in
 `gputrace_host_signpost` with both artifact digests, clocks, bridge identity,
 and declared maximum error.
 MLX semantic nodes expose parent identity, and links expose their sidecar link

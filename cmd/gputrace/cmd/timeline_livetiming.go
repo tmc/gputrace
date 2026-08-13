@@ -65,13 +65,16 @@ func projectLiveTiming(timeline *Timeline, captured map[string]struct{}, sidecar
 			DurationNS:  uint64(command.GPUEndNS - command.GPUStartNS),
 			ProcessID:   2, ThreadID: 0,
 			Args: map[string]any{
-				"command_buffer_id": command.ID,
-				"capture_label":     command.CaptureLabel,
-				"final_label":       command.FinalLabel,
-				"timing_source":     "MTLCommandBuffer.GPUStartTime/GPUEndTime",
-				"clock_domain":      "live",
-				"run_id":            sidecar.RunID,
-				"sidecar_digest":    sidecar.ContentDigest,
+				"command_buffer_id":    command.ID,
+				"capture_label":        command.CaptureLabel,
+				"final_label":          command.FinalLabel,
+				"timing_source":        "MTLCommandBuffer.GPUStartTime/GPUEndTime",
+				"kernel_start_ns":      command.KernelStartNS,
+				"kernel_duration_ns":   command.KernelEndNS - command.KernelStartNS,
+				"kernel_timing_source": "MTLCommandBuffer.kernelStartTime/kernelEndTime",
+				"clock_domain":         "live",
+				"run_id":               sidecar.RunID,
+				"sidecar_digest":       sidecar.ContentDigest,
 			},
 		})
 	}

@@ -657,6 +657,9 @@ rows, and remains `NULL` when the trace carries no such aggregate.
 
 `gputrace_live_command_buffer` retains exact nanosecond intervals reported by
 `MTLCommandBuffer.GPUStartTime/GPUEndTime` during the original execution. Its
+`kernel_start_ns` and `kernel_duration_ns` columns separately retain
+`MTLCommandBuffer.kernelStartTime/kernelEndTime`; they are evidence fields on
+the same live clock, not dispatch intervals or a nested containment claim. Its
 trace-identified sidecar receipt, clock-sample count, projected count, and
 unmatched count are typed capture fields. `gputrace_host_signpost` retains only
 events admitted by the strict host-correlation receipt and exposes its join
