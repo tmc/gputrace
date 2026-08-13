@@ -780,6 +780,12 @@ The default output is clean MLX-compatible output without requiring MLX. It
 uses native labels when present, accepts a sidecar only when explicitly named,
 and otherwise renders the Metal hierarchy faithfully.
 
+Lossless busy-clock exports include a presentation-only dispatch track beneath
+each encoder. These slices copy the measured native dispatch coordinates and
+are marked as duplicates; `gpu_slice` remains the accounting source for totals
+and SQL. Explicitly constrained exports omit this redundant presentation layer
+before dropping source evidence.
+
 ## Delivery plan
 
 ### Slice 1: canonical model and manifest

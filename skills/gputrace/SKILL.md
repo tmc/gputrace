@@ -54,6 +54,9 @@ gputrace timeline trace.gputrace --format perfetto --open --remote-ui \
 Use `--clock busy` for encoders and dispatches and `--clock wall` for command
 buffers. Do not place APS cycle aggregates on either axis as sampled counters;
 the CLI keeps them in encoder details until a counter-clock mapping is proven.
+Lossless native busy exports include per-encoder dispatch-detail rows for
+readability. Treat them as presentation duplicates; use native `gpu_slice` or
+the `gputrace_dispatch` SQL view for accounting.
 `--sidecar` accepts only the strict trace-identified schema, not a semantic
 runtime receipt without explicit GPU target links.
 For reproducible `--ui-dir` serving, require `index.html` and a

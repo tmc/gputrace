@@ -68,6 +68,9 @@ dispatches, and only counter series whose timestamps are proven in that
 domain; `--clock wall` contains APSTimelineData command buffers and wall-clock
 profiler events. Per-encoder APS GPU cycles and derived cost remain selectable
 encoder details because their counter clock is not joined to the busy clock.
+Lossless busy exports also provide one presentation-only dispatch row per
+encoder so kernel detail is visible without deep zoom. Native `gpu_slice` rows
+remain the accounting source; constrained exports omit the duplicate rows.
 gputrace does not invent a mapping between these domains.
 
 See [MLX GPU Trace Rendering in Perfetto](docs/MLX_PERFETTO_RENDERING_SPEC.md)

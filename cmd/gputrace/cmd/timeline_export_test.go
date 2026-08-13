@@ -403,6 +403,45 @@ func TestPerfettoEventArgsAddsTimingProvenanceWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestAppendMetalDispatchDetailProjection(t *testing.T) {
+	parent := perfetto.TrackUUID("test", "parent")
+	trace := &perfetto.Trace{Tracks: []perfetto.Track{{UUID: parent, Name: "parent"}}}
+	timeline := &Timeline{
+		Timing:   &TimelineTiming{TimingSource: "profiled"},
+		Encoders: []EncoderInfo{{Index: 0, Label: "eval/A"}, {Index: 1, Label: "eval/B"}},
+		Events: []TimelineEvent{
+			{Name: "a", Category: "kernel", Phase: "X", Timestamp: 1, Duration: 2, Args: map[string]interface{}{"encoder_index": 0}},
+			{Name: "b", Category: "kernel", Phase: "X", Timestamp: 3, Duration: 4, Args: map[string]interface{}{"encoder_index": 1}},
+			{Name: "unknown", Category: "kernel", Phase: "X", Args: map[string]interface{}{}},
+		},
+	}
+	tracks, events := appendMetalDispatchDetailProjection(trace, timeline, parent)
+	if tracks != 2 || events != 2 || len(trace.Tracks) != 3 || len(trace.Events) != 2 {
+		t.Fatalf("projection = tracks %d events %d; trace has %d tracks %d events", tracks, events, len(trace.Tracks), len(trace.Events))
+	}
+	if trace.Tracks[1].ParentUUID != parent || trace.Tracks[1].Name != "Encoder 0 · 1 dispatches · 0.002 ms · 1 functions — eval/A" {
+		t.Fatalf("first detail track = %+v", trace.Tracks[1])
+	}
+	if got := trace.Events[0].Args["presentation_projection"]; got != "encoder_dispatch_detail" {
+		t.Fatalf("projection marker = %v", got)
+	}
+	if trace.Events[0].StartNS != 1_000 || trace.Events[0].DurationNS != 2_000 {
+		t.Fatalf("detail timing = %d+%d", trace.Events[0].StartNS, trace.Events[0].DurationNS)
+	}
+}
+
+func TestIncludeMetalDispatchDetailProjection(t *testing.T) {
+	if !includeMetalDispatchDetailProjection(timelineClockBusy, 0) {
+		t.Fatal("lossless busy export omitted dispatch detail")
+	}
+	if includeMetalDispatchDetailProjection(timelineClockBusy, 500_000) {
+		t.Fatal("constrained export included redundant dispatch detail")
+	}
+	if includeMetalDispatchDetailProjection(timelineClockWall, 0) {
+		t.Fatal("wall export included busy dispatch detail")
+	}
+}
+
 func TestAppendMLXSemanticEvents(t *testing.T) {
 	timeline := &Timeline{
 		Events: []TimelineEvent{{

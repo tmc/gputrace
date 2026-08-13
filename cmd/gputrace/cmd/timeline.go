@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 
 	"github.com/spf13/cobra"
 
@@ -2450,6 +2451,14 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 		}
 		trace.Events = append(trace.Events, converted)
 	}
+	if includeMetalDispatchDetailProjection(clock, maxBytes) {
+		tracks, events := appendMetalDispatchDetailProjection(trace, timeline, trackIDs[[2]int{1, 1}])
+		trace.Metadata["presentation_dispatch_tracks"] = tracks
+		trace.Metadata["presentation_dispatch_events"] = events
+		trace.Metadata["presentation_dispatch_accounting"] = "duplicate detail projection; aggregate GPU totals use native gpu_slice only"
+	} else if clock == timelineClockBusy {
+		trace.Metadata["presentation_dispatch_accounting"] = "omitted from constrained export; aggregate GPU totals use native gpu_slice only"
+	}
 	appendMLXSemanticEvents(trace, timeline)
 
 	counterTracks := append([]CounterTrack(nil), timeline.CounterTracks...)
@@ -2484,6 +2493,93 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 			receipt.SamplesRetained, receipt.SamplesConsidered, receipt.LogicalBytes)
 	}
 	return nil
+}
+
+func includeMetalDispatchDetailProjection(clock timelineClock, maxBytes int64) bool {
+	return clock == timelineClockBusy && maxBytes == 0
+}
+
+// appendMetalDispatchDetailProjection adds one generic child track per encoder
+// so stock Perfetto exposes kernel names without requiring a deep zoom into the
+// packed native GPU queue. The native GPU events remain the accounting source;
+// these slices are an explicitly marked presentation duplicate.
+func appendMetalDispatchDetailProjection(trace *perfetto.Trace, timeline *Timeline, parent uint64) (trackCount, eventCount int) {
+	if trace == nil || timeline == nil || parent == 0 {
+		return 0, 0
+	}
+	byEncoder := make(map[int][]TimelineEvent)
+	for _, event := range timeline.Events {
+		if event.Category != "kernel" {
+			continue
+		}
+		index, ok := timelineEventArgInt(event.Args, "encoder_index")
+		if !ok || index < 0 {
+			continue
+		}
+		byEncoder[index] = append(byEncoder[index], event)
+	}
+	indices := make([]int, 0, len(byEncoder))
+	for index := range byEncoder {
+		indices = append(indices, index)
+	}
+	sort.Ints(indices)
+	nextID := nextPerfettoEventID(trace)
+	for _, index := range indices {
+		events := byEncoder[index]
+		functions := make(map[string]bool)
+		var duration uint64
+		for _, event := range events {
+			functions[event.Name] = true
+			duration += event.Duration
+		}
+		name := fmt.Sprintf("Encoder %d · %d dispatches · %.3f ms · %d functions", index, len(events), float64(duration)/1000, len(functions))
+		if index < len(timeline.Encoders) {
+			label := timeline.Encoders[index].Label
+			if label != "" && label != fmt.Sprintf("encoder_%d", index) {
+				name += " — " + label
+			}
+		}
+		trackID := perfetto.TrackUUID("gputrace.encoder-dispatch-detail", strconv.Itoa(index))
+		trace.Tracks = append(trace.Tracks, perfetto.Track{
+			UUID:        trackID,
+			ParentUUID:  parent,
+			Name:        name,
+			Description: "Presentation duplicate of native GPU dispatch slices; do not add to gpu_slice totals",
+		})
+		trackCount++
+		for _, event := range events {
+			args := perfettoEventArgs(timeline, event, timelineClockBusy)
+			args["presentation_projection"] = "encoder_dispatch_detail"
+			args["accounting_source"] = "native gpu_slice"
+			kind := perfetto.EventSlice
+			if event.Duration == 0 {
+				kind = perfetto.EventInstant
+			}
+			trace.Events = append(trace.Events, perfetto.Event{
+				ID:         nextID,
+				TrackUUID:  trackID,
+				Name:       event.Name,
+				Category:   "kernel_detail",
+				StartNS:    event.Timestamp * 1000,
+				DurationNS: event.Duration * 1000,
+				Kind:       kind,
+				Args:       args,
+			})
+			nextID++
+			eventCount++
+		}
+	}
+	return trackCount, eventCount
+}
+
+func nextPerfettoEventID(trace *perfetto.Trace) uint64 {
+	next := uint64(1)
+	for _, event := range trace.Events {
+		if event.ID >= next {
+			next = event.ID + 1
+		}
+	}
+	return next
 }
 
 func mlxSemanticProjectionCounts(timeline *Timeline) (projected, unprojected map[string]int) {
@@ -2556,7 +2652,8 @@ func appendMLXSemanticEvents(trace *perfetto.Trace, timeline *Timeline) {
 			Description: "MLX " + node.Kind + " semantic evidence",
 		})
 	}
-	for index, node := range timeline.MLXSemantics.Nodes {
+	nextID := nextPerfettoEventID(trace)
+	for _, node := range timeline.MLXSemantics.Nodes {
 		args := make(map[string]any, len(node.Attrs)+5)
 		for key, value := range node.Attrs {
 			args[key] = value
@@ -2568,7 +2665,7 @@ func appendMLXSemanticEvents(trace *perfetto.Trace, timeline *Timeline) {
 		args["timing_source"] = "MLX semantic sidecar declaration"
 		args["timing_quality"] = "unavailable"
 		trace.Events = append(trace.Events, perfetto.Event{
-			ID:        uint64(len(timeline.Events) + index + 1),
+			ID:        nextID,
 			TrackUUID: trackIDs[node.ID],
 			Name:      node.Name,
 			Category:  "mlx_semantic_node",
@@ -2576,13 +2673,14 @@ func appendMLXSemanticEvents(trace *perfetto.Trace, timeline *Timeline) {
 			Required:  true,
 			Args:      args,
 		})
+		nextID++
 	}
 	category := map[string]string{
 		"dispatch":       "kernel",
 		"encoder":        "encoder",
 		"command_buffer": "command_buffer",
 	}
-	for index, link := range timeline.MLXSemantics.Links {
+	for _, link := range timeline.MLXSemantics.Links {
 		target, ok := timelineEventAt(timeline, category[link.Target.Kind], link.Target.Index)
 		if !ok {
 			continue // The target belongs to another measured clock domain.
@@ -2611,7 +2709,7 @@ func appendMLXSemanticEvents(trace *perfetto.Trace, timeline *Timeline) {
 			kind = perfetto.EventInstant
 		}
 		trace.Events = append(trace.Events, perfetto.Event{
-			ID:         uint64(len(timeline.Events) + len(timeline.MLXSemantics.Nodes) + index + 1),
+			ID:         nextID,
 			TrackUUID:  trackIDs[node.ID],
 			Name:       node.Name,
 			Category:   "mlx_semantic",
@@ -2621,6 +2719,7 @@ func appendMLXSemanticEvents(trace *perfetto.Trace, timeline *Timeline) {
 			Required:   true,
 			Args:       args,
 		})
+		nextID++
 	}
 }
 
