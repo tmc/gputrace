@@ -72,7 +72,11 @@ func TestAPSDataClasses(t *testing.T) {
 		for _, name := range names {
 			t.Logf("unarchivedAPSData class=%s count=%d", name, classes[name])
 		}
-		for _, sample := range objectSamples(apsData, 5) {
+		limit := uint64(5)
+		if os.Getenv("GPUTRACE_APS_DATA_ALL") == "1" {
+			limit = uint64(objc.Send[uint](apsData, objc.Sel("count")))
+		}
+		for _, sample := range objectSamples(apsData, limit) {
 			t.Logf("unarchivedAPSData[%d] class=%s keys=%v children=%v", sample.Index, sample.ClassName, sample.Keys, sample.Children)
 		}
 	})

@@ -422,6 +422,7 @@ func TestApplyStreamIdentity(t *testing.T) {
 	twoEntries := int64(2)
 	zeroEntries := int64(0)
 	counterDecode := &counter.StreamDataCounterDecode{DecodedSamples: 20}
+	apsInventory := &counter.APSDataInventory{Blobs: 2, Dictionaries: 2, WithAPSTraceDataFile: 1}
 	timeline := &Timeline{}
 	applyStreamIdentity(timeline, &counter.StreamDataStats{
 		GPUGeneration:   &gpuGeneration,
@@ -434,9 +435,10 @@ func TestApplyStreamIdentity(t *testing.T) {
 			Tables: counter.StreamDataTables{CommandBuffers: &counter.StreamDataTable{
 				Bytes: 1184, RecordSize: &recordSize, RecordCount: &recordCount, RemainderBytes: &remainder,
 			}},
-			Families:        counter.StreamDataFamilies{APSData: &twoEntries, ShaderProfilerData: &zeroEntries},
-			DecodedFamilies: counter.StreamDataDecodedFamilies{APSData: &twoEntries, ShaderProfilerData: &zeroEntries},
-			CounterDecode:   counterDecode,
+			Families:         counter.StreamDataFamilies{APSData: &twoEntries, ShaderProfilerData: &zeroEntries},
+			DecodedFamilies:  counter.StreamDataDecodedFamilies{APSData: &twoEntries, ShaderProfilerData: &zeroEntries},
+			CounterDecode:    counterDecode,
+			APSDataInventory: apsInventory,
 		},
 	})
 	if timeline.GPUGeneration == nil || *timeline.GPUGeneration != 2 || timeline.MetalDeviceName != "Apple M4 Max" || timeline.MetalPluginName != "AGXMetalG16X" {
@@ -463,6 +465,9 @@ func TestApplyStreamIdentity(t *testing.T) {
 	if timeline.StreamMetadata.CounterDecode == nil || timeline.StreamMetadata.CounterDecode == counterDecode || timeline.StreamMetadata.CounterDecode.DecodedSamples != 20 {
 		t.Fatalf("counter decode was not independently cloned: %#v", timeline.StreamMetadata.CounterDecode)
 	}
+	if timeline.StreamMetadata.APSDataInventory == nil || timeline.StreamMetadata.APSDataInventory == apsInventory || timeline.StreamMetadata.APSDataInventory.WithAPSTraceDataFile != 1 {
+		t.Fatalf("APSData inventory was not independently cloned: %#v", timeline.StreamMetadata.APSDataInventory)
+	}
 }
 
 func TestPerfettoStreamMetadataArgsPreservesZeroAndFalse(t *testing.T) {
@@ -485,6 +490,9 @@ func TestPerfettoStreamMetadataArgsPreservesZeroAndFalse(t *testing.T) {
 		CounterDecode: &counter.StreamDataCounterDecode{
 			GPRWCNTRBlobs: 3, DecodedSamples: 20, AttributedSamples: 7,
 			MachineWideSamples: 11, UnattributedSamples: 2, StrideMismatchBlobs: 1,
+		},
+		APSDataInventory: &counter.APSDataInventory{
+			Blobs: 2, Dictionaries: 2, WithCounterInfo: 1, WithAPSTraceDataFile: 1,
 		},
 	})
 	for _, key := range []string{"stream_data_profiled_execution_mode", "stream_data_has_unused_resources", "stream_data_num_blit_calls"} {
@@ -527,6 +535,12 @@ func TestPerfettoStreamMetadataArgsPreservesZeroAndFalse(t *testing.T) {
 	}
 	if got := args["stream_data_counter_decode_stride_mismatch_blobs"]; got != 1 {
 		t.Fatalf("counter stride mismatches = %#v, want 1", got)
+	}
+	if got := args["stream_data_aps_data_inventory_dictionaries"]; got != 2 {
+		t.Fatalf("APSData dictionaries = %#v, want 2", got)
+	}
+	if got := args["stream_data_aps_data_inventory_with_counter_info"]; got != 1 {
+		t.Fatalf("APSData counter-info dictionaries = %#v, want 1", got)
 	}
 	if got := args["stream_data_gpu_timeline_data_availability"]; got != "unavailable: archive array key is absent or malformed" {
 		t.Fatalf("GPU timeline availability = %#v", got)

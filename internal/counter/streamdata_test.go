@@ -143,6 +143,24 @@ func TestSummarizeCounterArchive(t *testing.T) {
 	}
 }
 
+func TestClassifyAPSDataDictionary(t *testing.T) {
+	var got APSDataInventory
+	classifyAPSDataDictionary(&got, map[string]any{
+		"Counter Info":                 true,
+		"ShaderProfilerData":           true,
+		"Post Processing Frame Marker": true,
+		"APSTraceDataFile":             true,
+		"TraceId to BatchId":           true,
+	})
+	if got.WithCounterInfo != 1 || got.WithShaderProfilerData != 1 || got.WithFrameMarker != 1 || got.WithAPSTraceDataFile != 1 || got.WithTraceIDTables != 1 {
+		t.Fatalf("APSData classification = %#v", got)
+	}
+	classifyAPSDataDictionary(&got, map[string]any{"unrecognized": true})
+	if got.WithCounterInfo != 1 || got.WithShaderProfilerData != 1 || got.WithFrameMarker != 1 || got.WithAPSTraceDataFile != 1 || got.WithTraceIDTables != 1 {
+		t.Fatalf("unrecognized dictionary changed known counts: %#v", got)
+	}
+}
+
 func TestParseStreamDataIntegration(t *testing.T) {
 	gpuprofDir := integrationPathFromEnv(t, streamDataIntegrationDirEnv)
 	stats, err := ParseStreamData(gpuprofDir, nil)

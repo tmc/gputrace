@@ -166,6 +166,7 @@ type StreamDataStats struct {
 	CounterArchive        *CounterArchive     `json:"counter_archive,omitempty"` // Per-encoder counter attribution from APSCounterData
 	APSTimelineData       [][]byte            `json:"-"`                         // Raw APSTimelineData blobs (nested plists)
 	APSCounterData        [][]byte            `json:"-"`                         // Raw APSCounterData blobs (nested archives)
+	APSData               [][]byte            `json:"-"`                         // Raw APSData blobs (nested archives)
 	NumEncoders           int                 `json:"num_encoders"`
 	NumGPUCommands        int                 `json:"num_gpu_commands"`
 	NumPipelines          int                 `json:"num_pipelines"`
@@ -198,6 +199,7 @@ type StreamDataMetadata struct {
 	Families                     StreamDataFamilies        `json:"families"`
 	DecodedFamilies              StreamDataDecodedFamilies `json:"decoded_families"`
 	CounterDecode                *StreamDataCounterDecode  `json:"counter_decode,omitempty"`
+	APSDataInventory             *APSDataInventory         `json:"aps_data_inventory,omitempty"`
 }
 
 // StreamDataFamilies reports top-level archive array entry counts. Counts are
@@ -236,6 +238,19 @@ type StreamDataCounterDecode struct {
 	PassColumnGroups    int `json:"pass_column_groups"`
 	TraceIDRows         int `json:"trace_id_rows"`
 	StrideMismatchBlobs int `json:"stride_mismatch_blobs"`
+}
+
+// APSDataInventory reports the dictionary shapes recovered from APSData.
+// Key-presence counts are independent and do not interpret private payloads.
+type APSDataInventory struct {
+	Blobs                  int `json:"blobs"`
+	Dictionaries           int `json:"dictionaries"`
+	MalformedBlobs         int `json:"malformed_blobs"`
+	WithCounterInfo        int `json:"with_counter_info"`
+	WithShaderProfilerData int `json:"with_shader_profiler_data"`
+	WithFrameMarker        int `json:"with_frame_marker"`
+	WithAPSTraceDataFile   int `json:"with_aps_trace_data_file"`
+	WithTraceIDTables      int `json:"with_trace_id_tables"`
 }
 
 // StreamDataTables reports the byte-level integrity of fixed-record archive
@@ -340,6 +355,11 @@ func ParseStreamData(gpuprofilerDir string, addressToName map[uint64]string) (*S
 				}
 			}
 
+			stats.APSData = extractDataArray(objects, obj1, "APSData")
+			if len(stats.APSData) > 0 {
+				stats.Metadata.APSDataInventory = parseAPSDataInventory(stats.APSData)
+			}
+
 			// Extract APSTimelineData blobs (nested plists with CB timestamps)
 			stats.APSTimelineData = extractDataArray(objects, obj1, "APSTimelineData")
 			if len(stats.APSTimelineData) > 0 {
@@ -363,6 +383,46 @@ func ParseStreamData(gpuprofilerDir string, addressToName map[uint64]string) (*S
 
 	stats.setTimingSource()
 	return stats, nil
+}
+
+func parseAPSDataInventory(blobs [][]byte) *APSDataInventory {
+	if len(blobs) == 0 {
+		return nil
+	}
+	inventory := &APSDataInventory{Blobs: len(blobs)}
+	for _, blob := range blobs {
+		root, objects, ok := archiveRoot(blob)
+		if !ok {
+			inventory.MalformedBlobs++
+			continue
+		}
+		dict := keyedDict(root, objects)
+		if dict == nil {
+			inventory.MalformedBlobs++
+			continue
+		}
+		inventory.Dictionaries++
+		classifyAPSDataDictionary(inventory, dict)
+	}
+	return inventory
+}
+
+func classifyAPSDataDictionary(inventory *APSDataInventory, dict map[string]any) {
+	if _, ok := dict["Counter Info"]; ok {
+		inventory.WithCounterInfo++
+	}
+	if _, ok := dict["ShaderProfilerData"]; ok {
+		inventory.WithShaderProfilerData++
+	}
+	if _, ok := dict["Post Processing Frame Marker"]; ok {
+		inventory.WithFrameMarker++
+	}
+	if _, ok := dict["APSTraceDataFile"]; ok {
+		inventory.WithAPSTraceDataFile++
+	}
+	if _, ok := dict["TraceId to BatchId"]; ok {
+		inventory.WithTraceIDTables++
+	}
 }
 
 func summarizeCounterArchive(archive *CounterArchive) *StreamDataCounterDecode {

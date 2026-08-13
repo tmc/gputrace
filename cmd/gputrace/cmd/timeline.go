@@ -1533,7 +1533,8 @@ func streamDataMetadataPresent(metadata counter.StreamDataMetadata) bool {
 		metadata.CaptureRangeLength != nil || metadata.DataSourceHasUnusedResources != nil ||
 		metadata.SupportsSeparateAPSData != nil || metadata.NumBlitCalls != nil ||
 		streamDataTablesPresent(metadata.Tables) || streamDataFamiliesPresent(metadata.Families) ||
-		streamDataDecodedFamiliesPresent(metadata.DecodedFamilies) || metadata.CounterDecode != nil
+		streamDataDecodedFamiliesPresent(metadata.DecodedFamilies) || metadata.CounterDecode != nil ||
+		metadata.APSDataInventory != nil
 }
 
 func streamDataTablesPresent(tables counter.StreamDataTables) bool {
@@ -1585,6 +1586,10 @@ func cloneStreamDataMetadata(metadata counter.StreamDataMetadata) counter.Stream
 	if metadata.CounterDecode != nil {
 		counterDecode := *metadata.CounterDecode
 		result.CounterDecode = &counterDecode
+	}
+	if metadata.APSDataInventory != nil {
+		inventory := *metadata.APSDataInventory
+		result.APSDataInventory = &inventory
 	}
 	return result
 }
@@ -3005,7 +3010,26 @@ func perfettoStreamMetadataArgs(metadata *counter.StreamDataMetadata) map[string
 	appendDecodedStreamDataFamilyArgs(args, "gpu_timeline_data", metadata.Families.GPUTimelineData, metadata.DecodedFamilies.GPUTimelineData)
 	appendDecodedStreamDataFamilyArgs(args, "batch_id_filtered_counters_data", metadata.Families.BatchIDFilteredCountersData, metadata.DecodedFamilies.BatchIDFilteredCountersData)
 	appendStreamDataCounterDecodeArgs(args, metadata.CounterDecode)
+	appendAPSDataInventoryArgs(args, metadata.APSDataInventory)
 	return args
+}
+
+func appendAPSDataInventoryArgs(args map[string]any, inventory *counter.APSDataInventory) {
+	const prefix = "stream_data_aps_data_inventory_"
+	if inventory == nil {
+		args[prefix+"availability"] = "unavailable: no APSData dictionaries were decoded"
+		return
+	}
+	args[prefix+"availability"] = "available"
+	args[prefix+"count_semantics"] = "independent dictionary key-presence counts; private payloads remain uninterpreted"
+	args[prefix+"blobs"] = inventory.Blobs
+	args[prefix+"dictionaries"] = inventory.Dictionaries
+	args[prefix+"malformed_blobs"] = inventory.MalformedBlobs
+	args[prefix+"with_counter_info"] = inventory.WithCounterInfo
+	args[prefix+"with_shader_profiler_data"] = inventory.WithShaderProfilerData
+	args[prefix+"with_frame_marker"] = inventory.WithFrameMarker
+	args[prefix+"with_aps_trace_data_file"] = inventory.WithAPSTraceDataFile
+	args[prefix+"with_trace_id_tables"] = inventory.WithTraceIDTables
 }
 
 func appendStreamDataCounterDecodeArgs(args map[string]any, decode *counter.StreamDataCounterDecode) {
