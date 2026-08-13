@@ -42,6 +42,9 @@ func TestModuleProjectsRecordedDispatchesAndCompilerFacts(t *testing.T) {
 		"compilation_time_ms",
 		"metrics_source",
 		"extract_arg(arg_set_id, 'debug.allocated_registers')",
+		"debug.function_attribution",
+		"debug.grid_size",
+		"profiling_sample_share_estimate_pct",
 	} {
 		if !strings.Contains(Module, want) {
 			t.Errorf("module missing %q", want)
