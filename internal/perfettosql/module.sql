@@ -354,6 +354,7 @@ SELECT
   id,
   ts,
   name,
+  cast(extract_arg(arg_set_id, 'debug.record_index') AS INT) AS source_record_index,
   cast(extract_arg(arg_set_id, 'debug.stream_index') AS INT) AS stream_id,
   cast(extract_arg(arg_set_id, 'debug.timestamp_ticks') AS INT) AS source_timestamp_ticks,
   extract_arg(arg_set_id, 'debug.timestamp_domain') AS source_timestamp_domain,
@@ -369,6 +370,30 @@ SELECT
   arg_set_id
 FROM slice
 WHERE category = 'gprwcntr';
+
+-- gputrace_track_event_arg is the lossless extension surface for low-volume
+-- generic track events. event_id is a trace-processor-local join key, not a
+-- persistent source identity. High-volume dispatch and raw-sample arguments
+-- have dedicated views.
+CREATE PERFETTO VIEW gputrace_track_event_arg AS
+SELECT
+  s.id AS event_id,
+  s.category,
+  s.name AS event_name,
+  substr(a.key, 7) AS key,
+  substr(a.flat_key, 7) AS flat_key,
+  a.value_type,
+  a.int_value,
+  a.real_value,
+  a.string_value,
+  a.display_value
+FROM slice AS s
+JOIN args AS a USING (arg_set_id)
+WHERE s.category IN (
+    'command_buffer', 'profiler_stream', 'live_command_buffer',
+    'host_signpost', 'evidence_gap'
+  )
+  AND a.key GLOB 'debug.*';
 
 CREATE PERFETTO VIEW gputrace_live_command_buffer AS
 SELECT

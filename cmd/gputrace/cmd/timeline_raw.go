@@ -167,6 +167,7 @@ func gprwcntrEventArgs(rec GPRWCNTRRecord) map[string]interface{} {
 	return map[string]interface{}{
 		"index":                 rec.EncoderIndex,
 		"stream_index":          rec.EncoderIndex,
+		"record_index":          rec.RecordIndex,
 		"timestamp_ticks":       rec.Timestamp,
 		"timestamp_domain":      "mach absolute ticks",
 		"coordinate_basis":      "GPRWCNTR tick delta converted with the trace timebase and anchored to the first APSTimelineData command buffer",
@@ -184,7 +185,8 @@ type GPRWCNTRRecord struct {
 	Size         uint64
 	Count        uint64
 	Flags        uint32
-	EncoderIndex int // Added for alignment verification
+	EncoderIndex int // Raw stream ordinal.
+	RecordIndex  int // Zero-based record ordinal within the stream.
 	// Add other fields as needed
 }
 
@@ -212,6 +214,7 @@ func ParseGPRWCNTR(data []byte, encoderIndex int) ([]GPRWCNTRRecord, error) {
 			Count:        binary.LittleEndian.Uint64(rec[16:24]),
 			Flags:        binary.LittleEndian.Uint32(rec[24:28]),
 			EncoderIndex: encoderIndex,
+			RecordIndex:  r,
 		})
 	}
 
