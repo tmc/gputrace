@@ -120,7 +120,7 @@ type TimelineInfo struct {
 	TimebaseDenom           uint64                   `json:"timebase_denom"`             // Tick-to-ns denominator (e.g., 3)
 	AbsoluteTime            uint64                   `json:"absolute_time"`              // Capture start time in ticks
 	ContinuousTime          uint64                   `json:"continuous_time,omitempty"`
-	PState                  int                      `json:"pstate,omitempty"`
+	PState                  *int                     `json:"pstate,omitempty"`
 	ReplayerGPUTimeNs       uint64                   `json:"replayer_gpu_time_ns,omitempty"`
 	CommandBufferActiveNs   uint64                   `json:"command_buffer_active_time_ns,omitempty"`
 	CommandBufferWallNs     uint64                   `json:"command_buffer_wall_time_ns,omitempty"`
@@ -1055,7 +1055,8 @@ func parseTimelineMetadataBlob(data []byte, info *TimelineInfo) bool {
 		case "Continuous Time":
 			info.ContinuousTime = plistUint64(val)
 		case "PState":
-			info.PState = int(plistUint64(val))
+			value := int(plistUint64(val))
+			info.PState = &value
 		case "ReplayerGPUTime":
 			if v, ok := val.(float64); ok && v > 0 {
 				info.ReplayerGPUTimeNs = uint64(v*1e9 + 0.5)

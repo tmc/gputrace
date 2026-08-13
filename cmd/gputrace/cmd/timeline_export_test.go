@@ -306,10 +306,12 @@ func TestExportChromeTracingStdoutWritesCleanJSON(t *testing.T) {
 }
 
 func TestExportPerfettoWritesNativeProtobuf(t *testing.T) {
+	pstate := 500
 	timeline := &Timeline{
 		ClockDomain:    "busy",
 		AbsoluteTime:   465068216775,
 		ContinuousTime: 123456,
+		PState:         &pstate,
 		TimebaseNumer:  125,
 		TimebaseDenom:  3,
 		Timing: &TimelineTiming{
@@ -397,6 +399,7 @@ func TestExportPerfettoWritesNativeProtobuf(t *testing.T) {
 		"display_duration_source", "encoder_timing_source",
 		"clock_conversion_availability", "absolute_time", "timebase_numer", "timebase_denom",
 		"continuous_time", "continuous_time_availability",
+		"pstate", "pstate_availability", "pstate_semantics",
 	} {
 		if !bytes.Contains(data, []byte(want)) {
 			t.Fatalf("native trace missing manifest value %q", want)
@@ -405,17 +408,22 @@ func TestExportPerfettoWritesNativeProtobuf(t *testing.T) {
 }
 
 func TestPerfettoClockConversionArgs(t *testing.T) {
+	zeroPState := 0
+	nonzeroPState := 500
 	tests := []struct {
 		name       string
 		timeline   *Timeline
 		available  bool
 		continuous bool
+		pstate     bool
 	}{
 		{name: "nil"},
 		{name: "missing absolute time", timeline: &Timeline{TimebaseNumer: 125, TimebaseDenom: 3}},
 		{name: "missing denominator", timeline: &Timeline{AbsoluteTime: 7, TimebaseNumer: 125}},
 		{name: "available", timeline: &Timeline{AbsoluteTime: 465068216775, TimebaseNumer: 125, TimebaseDenom: 3}, available: true},
 		{name: "continuous only", timeline: &Timeline{ContinuousTime: 99}, continuous: true},
+		{name: "pstate zero", timeline: &Timeline{PState: &zeroPState}, pstate: true},
+		{name: "pstate nonzero", timeline: &Timeline{PState: &nonzeroPState}, pstate: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -434,6 +442,13 @@ func TestPerfettoClockConversionArgs(t *testing.T) {
 			if got["continuous_time_availability"] == "" {
 				t.Fatalf("continuous time receipt = %#v", got)
 			}
+			_, hasPState := got["pstate"]
+			if hasPState != test.pstate {
+				t.Fatalf("pstate present = %v, want %v: %#v", hasPState, test.pstate, got)
+			}
+			if got["pstate_availability"] == "" {
+				t.Fatalf("pstate receipt = %#v", got)
+			}
 			if test.available {
 				if got["timebase_numer"] != uint64(125) || got["timebase_denom"] != uint64(3) {
 					t.Fatalf("timebase = %#v, want 125/3", got)
@@ -441,6 +456,36 @@ func TestPerfettoClockConversionArgs(t *testing.T) {
 				if got["clock_conversion_formula"] == "" || got["clock_conversion_source"] == "" {
 					t.Fatalf("available clock conversion lacks provenance: %#v", got)
 				}
+			}
+		})
+	}
+}
+
+func TestTimelineJSONDistinguishesZeroPStateFromAbsence(t *testing.T) {
+	zero := 0
+	for _, test := range []struct {
+		name       string
+		timeline   Timeline
+		wantPState bool
+	}{
+		{name: "absent", timeline: Timeline{}},
+		{name: "zero", timeline: Timeline{PState: &zero}, wantPState: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			data, err := json.Marshal(test.timeline)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatal(err)
+			}
+			value, ok := got["pstate"]
+			if ok != test.wantPState {
+				t.Fatalf("pstate present = %v, want %v: %s", ok, test.wantPState, data)
+			}
+			if ok && value != float64(0) {
+				t.Fatalf("pstate = %#v, want zero", value)
 			}
 		})
 	}

@@ -950,6 +950,7 @@ type Timeline struct {
 	XcodeMetrics         map[string]any              `json:"xcode_metrics,omitempty"`
 	AbsoluteTime         uint64                      `json:"absolute_time"`
 	ContinuousTime       uint64                      `json:"continuous_time,omitempty"`
+	PState               *int                        `json:"pstate,omitempty"`
 	TimebaseNumer        uint64                      `json:"timebase_numer"`
 	TimebaseDenom        uint64                      `json:"timebase_denom"`
 	MLXSemantics         *mlxsemantic.Sidecar        `json:"mlx_semantics,omitempty"`
@@ -1170,6 +1171,10 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 			if streamStats.Timeline != nil {
 				timeline.AbsoluteTime = streamStats.Timeline.AbsoluteTime
 				timeline.ContinuousTime = streamStats.Timeline.ContinuousTime
+				if streamStats.Timeline.PState != nil {
+					value := *streamStats.Timeline.PState
+					timeline.PState = &value
+				}
 				timeline.TimebaseNumer = streamStats.Timeline.TimebaseNumer
 				timeline.TimebaseDenom = streamStats.Timeline.TimebaseDenom
 			}
@@ -1295,6 +1300,10 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 		ti := streamStats.Timeline
 		timeline.AbsoluteTime = ti.AbsoluteTime
 		timeline.ContinuousTime = ti.ContinuousTime
+		if ti.PState != nil {
+			value := *ti.PState
+			timeline.PState = &value
+		}
 		timeline.TimebaseNumer = ti.TimebaseNumer
 		timeline.TimebaseDenom = ti.TimebaseDenom
 
@@ -2746,11 +2755,18 @@ func perfettoClockConversionArgs(timeline *Timeline) map[string]any {
 		"clock_conversion_domain":       "wall",
 		"clock_conversion_availability": "unavailable: APSTimelineData absolute time and timebase are incomplete",
 		"continuous_time_availability":  "unavailable: APSTimelineData Continuous Time is absent or zero",
+		"pstate_availability":           "unavailable: APSTimelineData PState field is absent",
 	}
 	if timeline != nil && timeline.ContinuousTime != 0 {
 		args["continuous_time"] = timeline.ContinuousTime
 		args["continuous_time_domain"] = "raw APSTimelineData field; relationship to exported clocks is unverified"
 		args["continuous_time_availability"] = "available: retained without conversion or clock mapping"
+	}
+	if timeline != nil && timeline.PState != nil {
+		args["pstate"] = *timeline.PState
+		args["pstate_source"] = "APSTimelineData PState"
+		args["pstate_semantics"] = "raw replay performance-state value; unit and operating-point mapping are unverified"
+		args["pstate_availability"] = "available: retained without interpreting frequency or voltage"
 	}
 	if timeline == nil || timeline.AbsoluteTime == 0 || timeline.TimebaseNumer == 0 || timeline.TimebaseDenom == 0 {
 		return args
@@ -4265,6 +4281,10 @@ func buildTimelineFromProfilerData(tracePath string, stats *counter.StreamDataSt
 		timebaseDenom = stats.Timeline.TimebaseDenom
 		absoluteTime = stats.Timeline.AbsoluteTime
 		timeline.ContinuousTime = stats.Timeline.ContinuousTime
+		if stats.Timeline.PState != nil {
+			value := *stats.Timeline.PState
+			timeline.PState = &value
+		}
 	}
 
 	timeline.TimebaseNumer = timebaseNumer
