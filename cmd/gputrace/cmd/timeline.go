@@ -2451,13 +2451,17 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 		}
 		trace.Events = append(trace.Events, converted)
 	}
-	if includeMetalDispatchDetailProjection(clock, maxBytes) {
+	if includeMetalDispatchDetailProjection(timeline, clock, maxBytes) {
 		tracks, events := appendMetalDispatchDetailProjection(trace, timeline, trackIDs[[2]int{1, 1}])
 		trace.Metadata["presentation_dispatch_tracks"] = tracks
 		trace.Metadata["presentation_dispatch_events"] = events
 		trace.Metadata["presentation_dispatch_accounting"] = "duplicate detail projection; aggregate GPU totals use native gpu_slice only"
 	} else if clock == timelineClockBusy {
-		trace.Metadata["presentation_dispatch_accounting"] = "omitted from constrained export; aggregate GPU totals use native gpu_slice only"
+		reason := "omitted from constrained export"
+		if maxBytes == 0 {
+			reason = "omitted because dispatch timing is unavailable"
+		}
+		trace.Metadata["presentation_dispatch_accounting"] = reason + "; aggregate GPU totals use native gpu_slice only"
 	}
 	appendMLXSemanticEvents(trace, timeline)
 
@@ -2495,8 +2499,16 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 	return nil
 }
 
-func includeMetalDispatchDetailProjection(clock timelineClock, maxBytes int64) bool {
-	return clock == timelineClockBusy && maxBytes == 0
+func includeMetalDispatchDetailProjection(timeline *Timeline, clock timelineClock, maxBytes int64) bool {
+	if timeline == nil || clock != timelineClockBusy || maxBytes != 0 {
+		return false
+	}
+	for _, event := range timeline.Events {
+		if event.Category == "kernel" && event.Duration > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // appendMetalDispatchDetailProjection adds one generic child track per encoder

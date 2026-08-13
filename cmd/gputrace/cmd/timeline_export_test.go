@@ -431,14 +431,41 @@ func TestAppendMetalDispatchDetailProjection(t *testing.T) {
 }
 
 func TestIncludeMetalDispatchDetailProjection(t *testing.T) {
-	if !includeMetalDispatchDetailProjection(timelineClockBusy, 0) {
+	timed := &Timeline{Events: []TimelineEvent{{Category: "kernel", Duration: 1}}}
+	untimed := &Timeline{Events: []TimelineEvent{{Category: "kernel"}}}
+	if !includeMetalDispatchDetailProjection(timed, timelineClockBusy, 0) {
 		t.Fatal("lossless busy export omitted dispatch detail")
 	}
-	if includeMetalDispatchDetailProjection(timelineClockBusy, 500_000) {
+	if includeMetalDispatchDetailProjection(timed, timelineClockBusy, 500_000) {
 		t.Fatal("constrained export included redundant dispatch detail")
 	}
-	if includeMetalDispatchDetailProjection(timelineClockWall, 0) {
+	if includeMetalDispatchDetailProjection(timed, timelineClockWall, 0) {
 		t.Fatal("wall export included busy dispatch detail")
+	}
+	if includeMetalDispatchDetailProjection(untimed, timelineClockBusy, 0) {
+		t.Fatal("untimed export included one detail track per dispatch")
+	}
+}
+
+func TestExportPerfettoOmitsUntimedDispatchDetailProjection(t *testing.T) {
+	timeline := &Timeline{Events: []TimelineEvent{
+		{Name: "label/A", Category: "kernel", Phase: "i", Args: map[string]interface{}{"encoder_index": 0}},
+		{Name: "label/B", Category: "kernel", Phase: "i", Args: map[string]interface{}{"encoder_index": 1}},
+	}}
+	out := filepath.Join(t.TempDir(), "untimed.pftrace")
+	if err := exportPerfettoForClock(timeline, out, timelineClockBusy); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(data, []byte("kernel_detail")) {
+		t.Fatal("untimed export contains dispatch detail projection")
+	}
+	want := "omitted because dispatch timing is unavailable; aggregate GPU totals use native gpu_slice only"
+	if !bytes.Contains(data, []byte(want)) {
+		t.Fatalf("untimed export missing manifest reason %q", want)
 	}
 }
 
