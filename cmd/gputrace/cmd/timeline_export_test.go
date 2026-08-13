@@ -945,7 +945,7 @@ func TestTimelineSQLOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, view := range []string{"gputrace_capture", "gputrace_dispatch", "gputrace_dispatch_arg", "gputrace_encoder_arg", "gputrace_raw_profiler_sample", "gputrace_track_event_arg", "gputrace_pipeline", "gputrace_counter_series", "gputrace_unmatched"} {
+	for _, view := range []string{"gputrace_capture", "gputrace_dispatch", "gputrace_dispatch_arg", "gputrace_encoder_arg", "gputrace_raw_profiler_sample", "gputrace_raw_profiler_sample_arg", "gputrace_track_event_arg", "gputrace_pipeline", "gputrace_counter_series", "gputrace_unmatched"} {
 		if !bytes.Contains(data, []byte("CREATE PERFETTO VIEW "+view)) {
 			t.Errorf("SQL output missing %s", view)
 		}

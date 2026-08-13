@@ -154,6 +154,10 @@ raw stream aggregates and `gputrace_raw_profiler_sample` exposes GPRWCNTR
 source record ordinals, original mach-absolute ticks, the seven fixed GRC
 fields, variable record stride, and hardware-counter column count. Hardware
 counter columns remain uninterpreted and are not exported as named metrics.
+`gputrace_raw_profiler_sample_arg` retains each payload value by its recorded
+zero-based ordinal without assigning a counter name, unit, or meaning. Its
+decimal `raw_value_uint64` text preserves the full unsigned range; the
+companion `raw_value_int64` column is Perfetto's signed integer projection.
 `gputrace_track_event_arg` retains every argument for low-volume generic events
 such as command buffers and profiler streams; its `event_id` is a trace-local
 join key, not a persistent source identity. These are raw profiler input,

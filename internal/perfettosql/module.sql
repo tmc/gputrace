@@ -535,6 +535,23 @@ SELECT
 FROM slice
 WHERE category = 'gprwcntr';
 
+-- gputrace_raw_profiler_sample_arg retains the unnamed hardware-counter
+-- payload after the seven fixed GRC columns. counter_ordinal is only its
+-- position in the recorded pass; it does not identify a counter or unit.
+CREATE PERFETTO VIEW gputrace_raw_profiler_sample_arg AS
+SELECT
+  s.id AS sample_id,
+  cast(extract_arg(s.arg_set_id, 'debug.stream_index') AS INT) AS stream_id,
+  cast(extract_arg(s.arg_set_id, 'debug.record_index') AS INT) AS source_record_index,
+  cast(replace(replace(a.key, 'debug.hardware_counter_', ''), '_raw', '') AS INT) AS counter_ordinal,
+  a.int_value AS raw_value_int64,
+  a.display_value AS raw_value_uint64,
+  'ordinal only; counter name, unit, and interpretation unavailable' AS semantics
+FROM slice AS s
+JOIN args AS a USING (arg_set_id)
+WHERE s.category = 'gprwcntr'
+  AND a.key GLOB 'debug.hardware_counter_[0-9]*_raw';
+
 -- gputrace_track_event_arg is the lossless extension surface for low-volume
 -- generic track events. event_id is a trace-processor-local join key, not a
 -- persistent source identity. High-volume dispatch and raw-sample arguments

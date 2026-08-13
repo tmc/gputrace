@@ -165,7 +165,7 @@ func EnhanceTimelineWithRawData(timeline *Timeline, tracePath string) error {
 }
 
 func gprwcntrEventArgs(rec rawProfilerRecord) map[string]interface{} {
-	return map[string]interface{}{
+	args := map[string]interface{}{
 		"index":                    rec.StreamIndex,
 		"stream_index":             rec.StreamIndex,
 		"record_index":             rec.RecordIndex,
@@ -185,6 +185,10 @@ func gprwcntrEventArgs(rec rawProfilerRecord) map[string]interface{} {
 		"record_format":            "GPRWCNTR variable-stride record",
 		"counter_decode_status":    "fixed GRC columns decoded; hardware counter columns remain uninterpreted",
 	}
+	for i, value := range rec.Sample.Counters {
+		args[fmt.Sprintf("hardware_counter_%d_raw", i)] = value
+	}
+	return args
 }
 
 type rawProfilerRecord struct {

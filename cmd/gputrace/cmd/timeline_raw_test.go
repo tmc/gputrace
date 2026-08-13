@@ -49,6 +49,12 @@ func TestGPRWCNTREventArgs(t *testing.T) {
 	if got := args["counter_decode_status"]; got != "fixed GRC columns decoded; hardware counter columns remain uninterpreted" {
 		t.Fatalf("counter_decode_status = %q", got)
 	}
+	if got := args["hardware_counter_0_raw"]; got != uint64(11) {
+		t.Errorf("hardware_counter_0_raw = %v, want 11", got)
+	}
+	if got := args["hardware_counter_1_raw"]; got != uint64(12) {
+		t.Errorf("hardware_counter_1_raw = %v, want 12", got)
+	}
 }
 
 func TestExportRawProfilerFixedFieldsReachPerfettoSQL(t *testing.T) {
@@ -91,6 +97,51 @@ FROM gputrace_raw_profiler_sample;
 	}
 	want := []string{"3", "11", "5678", "6", "4294967295", "4294967295", "9", "10", "1", "80", "9", "2"}
 	if len(rows) != 2 || !slices.Equal(rows[1], want) {
+		t.Fatalf("PerfettoSQL rows = %q, want header and %q", rows, want)
+	}
+}
+
+func TestExportRawProfilerHardwareCountersReachPerfettoSQL(t *testing.T) {
+	processor := os.Getenv("TRACE_PROCESSOR_SHELL")
+	if processor == "" {
+		t.Skip("set TRACE_PROCESSOR_SHELL to run native PerfettoSQL integration")
+	}
+	record := rawProfilerRecord{
+		Sample: counter.GPRWCNTRSample{
+			Timestamp: 1234, GPUCycles: 5678, SampleType: 6,
+			EncoderID: counter.GRCMachineWideID, KickTraceID: counter.GRCMachineWideID,
+			KickSlotIdx: 9, SourceID: 10, Counters: []uint64{444, ^uint64(0)},
+		},
+		Stride: 80, StreamIndex: 3, RecordIndex: 11,
+	}
+	timeline := &Timeline{Events: []TimelineEvent{{
+		Name: "Sample", Category: "gprwcntr", Phase: "I", TimestampNS: 1_000,
+		ProcessID: 1, ThreadID: 10, Args: gprwcntrEventArgs(record),
+	}}}
+	trace := filepath.Join(t.TempDir(), "raw-counters.pftrace")
+	if err := exportPerfettoForClock(timeline, trace, timelineClockWall); err != nil {
+		t.Fatal(err)
+	}
+	query := perfettosql.Module + `
+SELECT stream_id, source_record_index, counter_ordinal, raw_value_int64, raw_value_uint64, semantics
+FROM gputrace_raw_profiler_sample_arg
+ORDER BY counter_ordinal;
+`
+	command := exec.Command(processor, "query", trace)
+	command.Stdin = strings.NewReader(query)
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("trace processor: %v\n%s", err, output)
+	}
+	rows, err := csv.NewReader(strings.NewReader(string(output))).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		{"3", "11", "0", "444", "444", "ordinal only; counter name, unit, and interpretation unavailable"},
+		{"3", "11", "1", "-1", "18446744073709551615", "ordinal only; counter name, unit, and interpretation unavailable"},
+	}
+	if len(rows) != 3 || !slices.Equal(rows[1], want[0]) || !slices.Equal(rows[2], want[1]) {
 		t.Fatalf("PerfettoSQL rows = %q, want header and %q", rows, want)
 	}
 }

@@ -507,6 +507,7 @@ gputrace_function
 gputrace_pipeline
 gputrace_profiler_stream
 gputrace_raw_profiler_sample
+gputrace_raw_profiler_sample_arg
 gputrace_track_event_arg
 gputrace_live_command_buffer
 gputrace_host_signpost
@@ -616,6 +617,13 @@ classifications as typed columns. `gputrace_dispatch_arg` and
 including typed fields. This is the forward-compatible extension surface for
 uncommon or newly added evidence; users do not need to join Perfetto's generic
 argument table or wait for a typed schema revision.
+
+`gputrace_raw_profiler_sample_arg` retains every pass-specific payload value
+after the seven fixed GRC columns. Values are identified only by their recorded
+zero-based ordinal. Counter names, units, derived meanings, and clock joins
+remain unavailable until separately proven. `raw_value_uint64` is the exact
+unsigned decimal representation retained by Perfetto; `raw_value_int64` is
+the corresponding signed SQL integer projection.
 
 Pipeline identity is explicitly capture-local. Profiled dispatches use the
 pipeline ID and address from `streamData` `pipelineStateInfoData`; capture-only
