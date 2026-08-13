@@ -57,6 +57,10 @@ the CLI keeps them in encoder details until a counter-clock mapping is proven.
 Lossless native busy exports include per-encoder dispatch-detail rows for
 readability. Treat them as presentation duplicates; use native `gpu_slice` or
 the `gputrace_dispatch` SQL view for accounting.
+For capture-only traces without profiler timing, launches are generic instant
+events rather than `gpu_slice` rows. Their pipeline identity and dispatch
+geometry are evidence; their duration and encoder membership are unavailable.
+Treat CS/debug-label counts as annotations, not launch or encoder counts.
 `--sidecar` accepts only the strict trace-identified schema, not a semantic
 runtime receipt without explicit GPU target links.
 For reproducible `--ui-dir` serving, require `index.html` and a
