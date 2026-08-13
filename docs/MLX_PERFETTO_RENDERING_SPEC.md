@@ -720,6 +720,11 @@ resource policy and loss receipt
 retained raw-artifact identities and digests
 ```
 
+When capture mode, replay mode, a counter catalog or decoder, or a separate raw
+artifact identity cannot be proved from the input, the manifest records that
+field as unavailable with a reason. It does not omit the field or infer it
+from a filename.
+
 The input path must not participate in stable identity and may be omitted for
 privacy. Labels and semantic attributes may contain model or application data;
 the local viewer must not upload them.

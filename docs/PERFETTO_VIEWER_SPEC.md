@@ -2,7 +2,7 @@
 
 ## Status
 
-`gputrace timeline --format perfetto --open` implements the local viewer
+`gputrace timeline --format perfetto --open` implements the local viewer code
 described here. It exports one clock domain, binds to loopback, serves a pinned
 local UI or an explicitly selected remote UI, transfers the trace after the
 embedding PING/PONG handshake, and shuts down with the command context.
@@ -10,6 +10,9 @@ Exact kernel/occurrence focus and explicit initial time ranges are implemented.
 A packaged UI and the MLX plugin remain proposed. The same
 timeline command without `--open` writes native Perfetto protobuf and populates
 native GPU tables; `--format chrome` retains Chrome Trace JSON compatibility.
+Automated visual verification remains pending because no browser backend was
+available in the current test environment; handler, protocol, routing, and
+lifecycle behavior are tested without treating them as visual proof.
 
 The design has two independent deliverables:
 

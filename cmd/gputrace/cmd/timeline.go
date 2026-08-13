@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/tmc/gputrace"
+	"github.com/tmc/gputrace/internal/buildinfo"
 	"github.com/tmc/gputrace/internal/counter"
 	"github.com/tmc/gputrace/internal/mlxsemantic"
 	"github.com/tmc/gputrace/internal/perfetto"
@@ -2287,6 +2288,9 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 		GPUName:     "Apple GPU",
 		Metadata: map[string]any{
 			"schema":                                      "gputrace.perfetto/v1",
+			"exporter_version":                            buildinfo.EffectiveVersion(),
+			"exporter_commit":                             buildinfo.Commit,
+			"exporter_build_date":                         buildinfo.Date,
 			"clock_domain":                                string(clock),
 			"clock_mapping":                               "none",
 			"timing_quality":                              "measured",
@@ -2300,6 +2304,11 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 			"environment_mlx_runtime_availability":        "unavailable",
 			"environment_workload_availability":           "unavailable",
 			"environment_capability_catalog_availability": "unavailable",
+			"capture_mode_availability":                   "unavailable: capture provenance is not recorded in this trace schema",
+			"replay_mode_availability":                    "unavailable: replay provenance is not recorded in this trace schema",
+			"counter_catalog_availability":                "unavailable: no clock-aligned counter catalog identity is retained",
+			"counter_decoder_availability":                "unavailable: no clock-aligned decoded hardware counter series is retained",
+			"raw_counter_artifact_availability":           "unavailable: no separate raw artifact identity and digest were verified",
 			"perfetto_schema_revision":                    perfetto.SchemaRevision,
 			"packet_family_gpu_info":                      true,
 			"packet_family_gpu_render_stage_event":        true,
@@ -2333,6 +2342,7 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 	if timeline != nil {
 		trace.Metadata["raw_profiler_samples"] = timeline.RawProfilerSamples
 		trace.Metadata["dispatch_count"] = len(timeline.Kernels)
+		trace.Metadata["untimed_dispatch_count"] = timelineUntimedDispatchCount(timeline)
 		trace.Metadata["encoder_count"] = len(timeline.Encoders)
 		trace.Metadata["command_buffer_count"] = timelineEventCount(timeline, "command_buffer")
 		if timeline.Timing != nil {
@@ -2466,6 +2476,16 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 			receipt.SamplesRetained, receipt.SamplesConsidered, receipt.LogicalBytes)
 	}
 	return nil
+}
+
+func timelineUntimedDispatchCount(timeline *Timeline) int {
+	count := 0
+	for _, event := range timeline.Events {
+		if event.Category == "kernel" && (event.Phase == "i" || event.Duration == 0) {
+			count++
+		}
+	}
+	return count
 }
 
 func perfettoEventArgs(timeline *Timeline, event TimelineEvent, clock timelineClock) map[string]any {

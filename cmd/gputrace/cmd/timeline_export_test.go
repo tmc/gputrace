@@ -369,10 +369,25 @@ func TestExportPerfettoWritesNativeProtobuf(t *testing.T) {
 		"unavailable_evidence_0_family", "APSCounterData time series", "counter clock is not joined",
 		"mlx_semantic_unused_nodes", "mlx_semantic_unmatched_dispatch", perfetto.SchemaRevision,
 		"input_content_digest_availability", "unavailable_syscalls", "packet_family_gpu_render_stage_event",
+		"exporter_version", "capture_mode_availability", "replay_mode_availability",
+		"counter_catalog_availability", "counter_decoder_availability", "raw_counter_artifact_availability",
+		"untimed_dispatch_count",
 	} {
 		if !bytes.Contains(data, []byte(want)) {
 			t.Fatalf("native trace missing manifest value %q", want)
 		}
+	}
+}
+
+func TestTimelineUntimedDispatchCount(t *testing.T) {
+	timeline := &Timeline{Events: []TimelineEvent{
+		{Category: "kernel", Phase: "X", Duration: 10},
+		{Category: "kernel", Phase: "i"},
+		{Category: "kernel", Phase: "X"},
+		{Category: "encoder", Phase: "i"},
+	}}
+	if got, want := timelineUntimedDispatchCount(timeline), 2; got != want {
+		t.Fatalf("untimed dispatch count = %d, want %d", got, want)
 	}
 }
 
