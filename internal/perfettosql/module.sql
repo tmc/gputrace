@@ -60,6 +60,21 @@ SELECT
   cast(extract_arg(arg_set_id, 'debug.presentation_dispatch_tracks') AS INT) AS presentation_dispatch_tracks,
   cast(extract_arg(arg_set_id, 'debug.presentation_dispatch_events') AS INT) AS presentation_dispatch_events,
   extract_arg(arg_set_id, 'debug.presentation_dispatch_accounting') AS presentation_dispatch_accounting,
+  extract_arg(arg_set_id, 'debug.live_timing_run_id') AS live_timing_run_id,
+  extract_arg(arg_set_id, 'debug.live_timing_digest') AS live_timing_digest,
+  cast(extract_arg(arg_set_id, 'debug.live_timing_clock_samples') AS INT) AS live_timing_clock_samples,
+  cast(extract_arg(arg_set_id, 'debug.live_timing_command_buffers') AS INT) AS live_timing_command_buffers,
+  cast(extract_arg(arg_set_id, 'debug.live_timing_projected_command_buffers') AS INT) AS live_timing_projected_command_buffers,
+  cast(extract_arg(arg_set_id, 'debug.live_timing_unmatched_command_buffers') AS INT) AS live_timing_unmatched_command_buffers,
+  extract_arg(arg_set_id, 'debug.host_correlation_schema') AS host_correlation_schema,
+  extract_arg(arg_set_id, 'debug.host_correlation_run_id') AS host_correlation_run_id,
+  extract_arg(arg_set_id, 'debug.host_correlation_host_digest') AS host_correlation_host_digest,
+  extract_arg(arg_set_id, 'debug.host_correlation_trace_digest') AS host_correlation_trace_digest,
+  extract_arg(arg_set_id, 'debug.host_correlation_host_clock') AS host_correlation_host_clock,
+  extract_arg(arg_set_id, 'debug.host_correlation_gpu_clock') AS host_correlation_gpu_clock,
+  extract_arg(arg_set_id, 'debug.host_correlation_bridge_digest') AS host_correlation_bridge_digest,
+  cast(extract_arg(arg_set_id, 'debug.host_correlation_max_error_ns') AS REAL) AS host_correlation_max_error_ns,
+  cast(extract_arg(arg_set_id, 'debug.host_correlation_event_count') AS INT) AS host_correlation_event_count,
   cast(extract_arg(arg_set_id, 'debug.unavailable_evidence_count') AS INT) AS unavailable_evidence_count,
   arg_set_id
 FROM slice
@@ -268,6 +283,44 @@ SELECT
   arg_set_id
 FROM slice
 WHERE category = 'gprwcntr';
+
+CREATE PERFETTO VIEW gputrace_live_command_buffer AS
+SELECT
+  id,
+  ts,
+  dur,
+  name,
+  cast(extract_arg(arg_set_id, 'debug.command_buffer_id') AS INT) AS command_buffer_id,
+  extract_arg(arg_set_id, 'debug.capture_label') AS capture_label,
+  extract_arg(arg_set_id, 'debug.final_label') AS final_label,
+  extract_arg(arg_set_id, 'debug.run_id') AS run_id,
+  extract_arg(arg_set_id, 'debug.sidecar_digest') AS sidecar_digest,
+  extract_arg(arg_set_id, 'debug.clock_domain') AS clock_domain,
+  extract_arg(arg_set_id, 'debug.timing_source') AS timing_source,
+  'measured original-execution GPU interval from a trace-identified sidecar' AS evidence_kind,
+  arg_set_id
+FROM slice
+WHERE category = 'live_command_buffer';
+
+CREATE PERFETTO VIEW gputrace_host_signpost AS
+SELECT
+  id,
+  ts,
+  dur,
+  name,
+  extract_arg(arg_set_id, 'debug.event_id') AS event_id,
+  extract_arg(arg_set_id, 'debug.join_basis') AS join_basis,
+  extract_arg(arg_set_id, 'debug.run_id') AS run_id,
+  extract_arg(arg_set_id, 'debug.host_digest') AS host_digest,
+  extract_arg(arg_set_id, 'debug.trace_digest') AS trace_digest,
+  extract_arg(arg_set_id, 'debug.host_clock') AS host_clock,
+  extract_arg(arg_set_id, 'debug.clock_domain') AS gpu_clock,
+  extract_arg(arg_set_id, 'debug.bridge_digest') AS bridge_digest,
+  cast(extract_arg(arg_set_id, 'debug.max_error_ns') AS REAL) AS max_error_ns,
+  extract_arg(arg_set_id, 'debug.timing_quality') AS timing_quality,
+  arg_set_id
+FROM slice
+WHERE category = 'host_signpost';
 
 CREATE PERFETTO VIEW gputrace_function AS
 SELECT

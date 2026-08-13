@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,6 +47,20 @@ func TestAttachHostCorrelation(t *testing.T) {
 	appendHostCorrelationEvents(trace, timeline)
 	if len(trace.Events) != 1 || trace.Events[0].StartNS != 1250 || trace.Events[0].DurationNS != 500 {
 		t.Fatalf("events = %+v, want exact nanosecond interval", trace.Events)
+	}
+
+	out := filepath.Join(t.TempDir(), "host.pftrace")
+	if err := exportPerfettoForClock(timeline, out, timelineClockBusy); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"host_correlation_event_count", "event-1", receipt.GPU.ContentDigest} {
+		if !bytes.Contains(data, []byte(want)) {
+			t.Errorf("native host-correlation trace missing %q", want)
+		}
 	}
 }
 

@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -29,6 +32,45 @@ func TestProjectLiveTimingBindsCaptureLabelsAndNanoseconds(t *testing.T) {
 	}
 	if !timelineHasMeasuredClock(timeline, timelineClockLive) {
 		t.Fatal("live clock not admitted")
+	}
+}
+
+func TestExportLiveTimingRetainsReceiptAndEventEvidence(t *testing.T) {
+	timeline := &Timeline{
+		LiveTiming: &liveTimingProjection{
+			RunID: "run-1", ContentDigest: testDigest("a"),
+			ClockSamples: 3, CommandBuffers: 2, Projected: 1, Unmatched: 1,
+		},
+		Events: []TimelineEvent{{
+			Name: "decode", Category: "live_command_buffer", Phase: "X",
+			TimestampNS: 1_250, DurationNS: 501, ProcessID: 2,
+			Args: map[string]interface{}{
+				"command_buffer_id": 1,
+				"capture_label":     "gputrace.live.cb.1",
+				"final_label":       "decode",
+				"timing_source":     "MTLCommandBuffer.GPUStartTime/GPUEndTime",
+				"clock_domain":      "live",
+				"run_id":            "run-1",
+				"sidecar_digest":    testDigest("a"),
+			},
+		}},
+	}
+	out := filepath.Join(t.TempDir(), "live.pftrace")
+	if err := exportPerfettoForClock(timeline, out, timelineClockLive); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"live_timing_projected_command_buffers", "live_timing_unmatched_command_buffers",
+		"live_timing_digest", testDigest("a"),
+		"gputrace.live.cb.1", "MTLCommandBuffer.GPUStartTime/GPUEndTime",
+	} {
+		if !bytes.Contains(data, []byte(want)) {
+			t.Errorf("native live trace missing %q", want)
+		}
 	}
 }
 

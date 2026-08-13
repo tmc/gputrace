@@ -13,6 +13,8 @@ func TestModuleDefinesStableViews(t *testing.T) {
 		"gputrace_command_buffer",
 		"gputrace_profiler_stream",
 		"gputrace_raw_profiler_sample",
+		"gputrace_live_command_buffer",
+		"gputrace_host_signpost",
 		"gputrace_semantic_node",
 		"gputrace_semantic_link",
 		"gputrace_dispatch",
@@ -76,6 +78,10 @@ func TestModuleProjectsRecordedDispatchesAndCompilerFacts(t *testing.T) {
 		"source_available",
 		"source_aggregate_simd_groups",
 		"source_aggregate_simd_groups_basis",
+		"live_timing_projected_command_buffers",
+		"host_correlation_max_error_ns",
+		"measured original-execution GPU interval from a trace-identified sidecar",
+		"debug.bridge_digest",
 	} {
 		if !strings.Contains(Module, want) {
 			t.Errorf("module missing %q", want)
