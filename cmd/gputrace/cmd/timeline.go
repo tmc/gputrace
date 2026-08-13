@@ -1665,20 +1665,49 @@ func annotateDispatchExecutionCosts(stats *counter.StreamDataStats, profilerDir 
 	}
 }
 
-// addStorePipelineArgs records the shader statistics archived in the capture
-// bundle. Only fields the store actually carries are set; high_register,
-// occupancy and ALU utilization are not archived here and stay absent.
-func addStorePipelineArgs(args map[string]interface{}, p *counter.PipelineStats) {
+// addPipelineCompilerArgs records static shader compiler statistics. The
+// caller supplies an already-attributed pipeline; this function does not infer
+// pipeline identity or add dynamic counter measurements.
+func addPipelineCompilerArgs(args map[string]interface{}, p *counter.PipelineStats, source string) {
 	if p == nil {
 		return
 	}
-	args["function_name"] = p.FunctionName
+	if p.FunctionName != "" {
+		args["function_name"] = p.FunctionName
+	}
+	if p.PipelineID != 0 {
+		if _, ok := args["pipeline_id"]; !ok {
+			args["pipeline_id"] = p.PipelineID
+		}
+	}
+	if p.PipelineAddress != 0 {
+		args["pipeline_state"] = fmt.Sprintf("0x%x", p.PipelineAddress)
+	}
 	args["allocated_registers"] = p.TemporaryRegisterCount
 	args["uniform_registers"] = p.UniformRegisterCount
 	args["spilled_bytes"] = p.SpilledBytes
+	args["thread_invariant_spilled"] = p.ThreadInvariantSpilled
 	args["threadgroup_memory"] = p.ThreadgroupMemory
 	args["instruction_count"] = p.InstructionCount
-	args["metrics_source"] = "capture bundle store sections"
+	args["alu_instruction_count"] = p.ALUInstructionCount
+	args["fp32_instruction_count"] = p.FP32InstructionCount
+	args["fp16_instruction_count"] = p.FP16InstructionCount
+	args["int32_instruction_count"] = p.INT32InstructionCount
+	args["int16_instruction_count"] = p.INT16InstructionCount
+	args["branch_instruction_count"] = p.BranchInstructionCount
+	args["device_load_instruction_count"] = p.DeviceLoadCount
+	args["device_store_instruction_count"] = p.DeviceStoreCount
+	args["device_atomic_instruction_count"] = p.DeviceAtomicCount
+	args["texture_reads_instruction_count"] = p.TextureReadCount
+	args["texture_writes_instruction_count"] = p.TextureWriteCount
+	args["threadgroup_load_instruction_count"] = p.ThreadgroupLoadCount
+	args["threadgroup_store_instruction_count"] = p.ThreadgroupStoreCount
+	args["threadgroup_atomic_instruction_count"] = p.ThreadgroupAtomicCount
+	args["wait_instruction_count"] = p.WaitInstructionCount
+	args["constant_calculation_temporary_register_count"] = p.ConstantCalculationTemporaryRegisterCount
+	args["constant_calculation_phase_present"] = p.ConstantCalculationPhasePresent
+	args["compilation_time_ms"] = p.CompilationTimeMs
+	args["metrics_source"] = source
 }
 
 func addEncoderKernelEvents(timeline *Timeline, trace *gputrace.Trace, sourceMapper *gputrace.ShaderSourceMapper, storeStats *counter.StoreStats) {
@@ -1715,7 +1744,7 @@ func addEncoderKernelEvents(timeline *Timeline, trace *gputrace.Trace, sourceMap
 				}
 			}
 		}
-		addStorePipelineArgs(args, storeStats.PipelineForLabel(encoder.Label))
+		addPipelineCompilerArgs(args, storeStats.PipelineForLabel(encoder.Label), "capture bundle store sections")
 		if sourceMapper != nil {
 			if sourceFile, sourceLine := sourceMapper.SourceLocation(encoder.Label); sourceFile != "" {
 				args["source_available"] = true
@@ -1786,7 +1815,7 @@ func addCaptureDispatchEvents(timeline *Timeline, trace *gputrace.Trace, sourceM
 			"encoder_attribution":  "unavailable",
 		}
 		if dispatch.FunctionName != "" {
-			addStorePipelineArgs(args, storeStats.PipelineForLabel(dispatch.FunctionName))
+			addPipelineCompilerArgs(args, storeStats.PipelineForLabel(dispatch.FunctionName), "capture bundle store sections")
 			if sourceMapper != nil {
 				if sourceFile, sourceLine := sourceMapper.SourceLocation(dispatch.FunctionName); sourceFile != "" {
 					args["source_available"] = true
@@ -1989,22 +2018,7 @@ func dispatchKernelArgs(d counter.DispatchInfo, p *counter.PipelineStats, simdGr
 		args["start_ticks"] = d.StartTicks
 		args["end_ticks"] = d.EndTicks
 	}
-	if p != nil {
-		if p.FunctionName != "" {
-			args["function_name"] = p.FunctionName
-		}
-		if p.PipelineAddress != 0 {
-			args["pipeline_state"] = fmt.Sprintf("0x%x", p.PipelineAddress)
-		}
-		args["allocated_registers"] = p.TemporaryRegisterCount
-		args["uniform_registers"] = p.UniformRegisterCount
-		args["spilled_bytes"] = p.SpilledBytes
-		args["threadgroup_memory"] = p.ThreadgroupMemory
-		args["instruction_count"] = p.InstructionCount
-		args["alu_instruction_count"] = p.ALUInstructionCount
-		args["fp32_instruction_count"] = p.FP32InstructionCount
-		args["fp16_instruction_count"] = p.FP16InstructionCount
-	}
+	addPipelineCompilerArgs(args, p, "streamData pipelinePerformanceStatistics")
 	if sourceMapper != nil {
 		sourceName := d.FunctionName
 		if sourceName == "" && p != nil {

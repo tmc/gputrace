@@ -1606,6 +1606,88 @@ func TestDispatchKernelArgsOmitsUnreadEncoderCounters(t *testing.T) {
 	}
 }
 
+func TestAddPipelineCompilerArgs(t *testing.T) {
+	pipeline := &counter.PipelineStats{
+		PipelineID:                                7,
+		PipelineAddress:                           0x1234,
+		FunctionName:                              "kernel",
+		TemporaryRegisterCount:                    1,
+		UniformRegisterCount:                      2,
+		SpilledBytes:                              3,
+		ThreadInvariantSpilled:                    4,
+		ThreadgroupMemory:                         5,
+		InstructionCount:                          6,
+		ALUInstructionCount:                       7,
+		FP32InstructionCount:                      8,
+		FP16InstructionCount:                      9,
+		INT32InstructionCount:                     10,
+		INT16InstructionCount:                     11,
+		BranchInstructionCount:                    12,
+		DeviceLoadCount:                           13,
+		DeviceStoreCount:                          14,
+		DeviceAtomicCount:                         15,
+		TextureReadCount:                          16,
+		TextureWriteCount:                         17,
+		ThreadgroupLoadCount:                      18,
+		ThreadgroupStoreCount:                     19,
+		ThreadgroupAtomicCount:                    20,
+		WaitInstructionCount:                      21,
+		ConstantCalculationTemporaryRegisterCount: 22,
+		ConstantCalculationPhasePresent:           true,
+		CompilationTimeMs:                         23.5,
+	}
+	args := map[string]interface{}{}
+	addPipelineCompilerArgs(args, pipeline, "test")
+
+	tests := []struct {
+		key  string
+		want interface{}
+	}{
+		{"pipeline_id", 7},
+		{"pipeline_state", "0x1234"},
+		{"function_name", "kernel"},
+		{"allocated_registers", 1},
+		{"uniform_registers", 2},
+		{"spilled_bytes", 3},
+		{"thread_invariant_spilled", 4},
+		{"threadgroup_memory", 5},
+		{"instruction_count", 6},
+		{"alu_instruction_count", 7},
+		{"fp32_instruction_count", 8},
+		{"fp16_instruction_count", 9},
+		{"int32_instruction_count", 10},
+		{"int16_instruction_count", 11},
+		{"branch_instruction_count", 12},
+		{"device_load_instruction_count", 13},
+		{"device_store_instruction_count", 14},
+		{"device_atomic_instruction_count", 15},
+		{"texture_reads_instruction_count", 16},
+		{"texture_writes_instruction_count", 17},
+		{"threadgroup_load_instruction_count", 18},
+		{"threadgroup_store_instruction_count", 19},
+		{"threadgroup_atomic_instruction_count", 20},
+		{"wait_instruction_count", 21},
+		{"constant_calculation_temporary_register_count", 22},
+		{"constant_calculation_phase_present", true},
+		{"compilation_time_ms", 23.5},
+		{"metrics_source", "test"},
+	}
+	for _, test := range tests {
+		if got := args[test.key]; got != test.want {
+			t.Errorf("%s = %#v, want %#v", test.key, got, test.want)
+		}
+	}
+}
+
+func TestAddPipelineCompilerArgsKeepsDispatchIdentity(t *testing.T) {
+	args := map[string]interface{}{"pipeline_id": 99}
+	addPipelineCompilerArgs(args, &counter.PipelineStats{PipelineID: 7}, "test")
+	if got, want := args["pipeline_id"], 99; got != want {
+		t.Fatalf("pipeline_id = %v, want existing %v", got, want)
+	}
+	addPipelineCompilerArgs(args, nil, "test")
+}
+
 func timelineTimingSourceTraceDir(t *testing.T) string {
 	t.Helper()
 
