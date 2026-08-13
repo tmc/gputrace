@@ -726,7 +726,11 @@ the local viewer must not upload them.
 
 ## CLI shape
 
-Proposed commands and options:
+The existing `timeline` subcommand owns conversion, semantic attachment,
+resource policy, the embedded evidence manifest and loss receipt, SQL views,
+and viewer launch. These are not separate top-level commands.
+
+Current commands and options:
 
 ```text
 gputrace timeline TRACE --format perfetto --clock busy -o trace.pftrace
@@ -735,10 +739,6 @@ gputrace timeline TRACE --format perfetto --open [--sidecar semantics.json]
 
 --clock busy|wall
 --sidecar FILE
---counters default|all|none
---counter-sampling raw|downsampled
---diagnostics default|none
---manifest FILE
 --max-output-bytes N
 --sql-out FILE
 --kernel NAME
@@ -746,6 +746,11 @@ gputrace timeline TRACE --format perfetto --open [--sidecar semantics.json]
 --time-start SECONDS
 --time-end SECONDS
 ```
+
+The evidence manifest and loss receipt are embedded in native output. They do
+not require a separate command or sidecar file. Counter selection, counter
+sampling, diagnostic selection, and a separate manifest file remain possible
+future `timeline` flags; they are not current CLI promises.
 
 `--max-output-bytes` is an explicit lossy-export request and uses the logical
 protobuf-byte definition and dependency-closed policy above. Zero or omission

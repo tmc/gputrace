@@ -304,6 +304,44 @@ func TestTimelineFormatHelpIncludesPerfetto(t *testing.T) {
 	}
 }
 
+func TestTimelineOwnsPerfettoExportWorkflow(t *testing.T) {
+	for _, name := range []string{
+		"format",
+		"sidecar",
+		"open",
+		"serve",
+		"max-output-bytes",
+		"sql-out",
+		"kernel",
+		"kernel-occurrence",
+		"time-start",
+		"time-end",
+	} {
+		if timelineCmd.Flags().Lookup(name) == nil {
+			t.Errorf("timeline command missing --%s", name)
+		}
+	}
+
+	for _, name := range []string{"perfetto", "viewer", "manifest"} {
+		if visibleSubcommand(rootCmd, name) != nil {
+			t.Errorf("%s is a separate command; want timeline to own the workflow", name)
+		}
+	}
+
+	for _, want := range []string{
+		"evidence manifest",
+		"environment projection",
+		"resource policy",
+		"loss receipt",
+		"part of the timeline export",
+		"separate commands",
+	} {
+		if !strings.Contains(timelineCmd.Long, want) {
+			t.Errorf("timeline help does not contain %q", want)
+		}
+	}
+}
+
 func TestGraphHelpMatchesDefaultType(t *testing.T) {
 	flag := graphCmd.Flags().Lookup("type")
 	if flag == nil {

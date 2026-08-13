@@ -81,6 +81,11 @@ Output formats:
   - html: Interactive standalone HTML timeline viewer
   - json: Raw timeline data in JSON format
 
+Native Perfetto exports include the evidence manifest, environment projection,
+resource policy, and loss receipt. These are part of the timeline export, not
+separate commands. Use --max-output-bytes for an explicit constrained export
+and --sql-out to write the matching PerfettoSQL views.
+
 Clock domains:
   - busy (default): cumulative GPU execution offsets for encoders, dispatches,
     and counter series only when their clock is established
@@ -122,6 +127,10 @@ Examples:
 
   # Emit stable PerfettoSQL views beside a native trace
   gputrace timeline trace.gputrace --format perfetto --sql-out gputrace.sql
+
+  # Write a constrained native trace with an embedded loss receipt
+  gputrace timeline trace.gputrace --format perfetto \
+    --max-output-bytes 500000 -o timeline.pftrace
 
   # Open one exact kernel occurrence
   gputrace timeline trace.gputrace --format perfetto --open --remote-ui \
