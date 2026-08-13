@@ -25,7 +25,21 @@ func TestValidate(t *testing.T) {
 		{"missing bridge", func(r *Receipt) { r.GPU.ClockDomain = "gpu" }, ErrUncorrelated},
 		{"unnecessary bridge", func(r *Receipt) { r.Bridge = validBridge("host") }, ErrInvalid},
 		{"wrong bridge clock", func(r *Receipt) { r.GPU.ClockDomain = "gpu"; r.Bridge = validBridge("other") }, ErrUncorrelated},
-		{"zero scale", func(r *Receipt) { r.GPU.ClockDomain = "gpu"; r.Bridge = validBridge("gpu"); r.Bridge.Scale = 0 }, ErrInvalid},
+		{"two samples", func(r *Receipt) {
+			r.GPU.ClockDomain = "gpu"
+			r.Bridge = validBridge("gpu")
+			r.Bridge.Samples = r.Bridge.Samples[:2]
+		}, ErrInvalid},
+		{"unordered host samples", func(r *Receipt) {
+			r.GPU.ClockDomain = "gpu"
+			r.Bridge = validBridge("gpu")
+			r.Bridge.Samples[1].HostNS = 0
+		}, ErrInvalid},
+		{"unordered GPU samples", func(r *Receipt) {
+			r.GPU.ClockDomain = "gpu"
+			r.Bridge = validBridge("gpu")
+			r.Bridge.Samples[1].GPUNS = 0
+		}, ErrInvalid},
 		{"uppercase digest", func(r *Receipt) { r.Host.ContentDigest = strings.ToUpper(digestA) }, ErrInvalid},
 		{"zero digest", func(r *Receipt) { r.Host.ContentDigest = "sha256:" + strings.Repeat("0", 64) }, ErrInvalid},
 		{"whitespace run", func(r *Receipt) { r.Host.RunID = " run-1" }, ErrInvalid},
@@ -51,9 +65,6 @@ func TestProject(t *testing.T) {
 	receipt := validReceipt()
 	receipt.GPU.ClockDomain = "gpu"
 	receipt.Bridge = validBridge("gpu")
-	receipt.Bridge.Scale = 2
-	receipt.Bridge.Offset = 5
-	receipt.Bridge.MaxErrorNS = 7
 	receipt.Events = []Event{{ID: "encode", Kind: "interval", Name: "Encode", TimestampNS: 10, DurationNS: 4}}
 	got, err := receipt.Project()
 	if err != nil {
@@ -69,7 +80,6 @@ func TestProjectRejectsOverflow(t *testing.T) {
 	receipt.Events[0].TimestampNS = math.MaxInt64
 	receipt.GPU.ClockDomain = "gpu"
 	receipt.Bridge = validBridge("gpu")
-	receipt.Bridge.Scale = 2
 	if _, err := receipt.Project(); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("Project() error = %v, want ErrInvalid", err)
 	}
@@ -117,7 +127,11 @@ func validReceipt() Receipt {
 
 func validBridge(gpuClock string) *ClockBridge {
 	return &ClockBridge{
-		HostClock: "host", GPUClock: gpuClock, Scale: 1, Offset: 10,
-		MaxErrorNS: 100, SourceDigest: digestA,
+		HostClock: "host", GPUClock: gpuClock, SourceDigest: digestA,
+		Samples: []ClockSample{
+			{HostNS: 0, GPUNS: 5},
+			{HostNS: 50, GPUNS: 112},
+			{HostNS: 100, GPUNS: 205},
+		},
 	}
 }

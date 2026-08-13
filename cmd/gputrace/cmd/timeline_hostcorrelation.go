@@ -59,7 +59,7 @@ func attachHostCorrelation(timeline *Timeline, tracePath string, clock timelineC
 	}
 	if receipt.Bridge != nil {
 		projection.BridgeDigest = receipt.Bridge.SourceDigest
-		projection.MaxErrorNS = receipt.Bridge.MaxErrorNS
+		projection.MaxErrorNS = events[0].MaxErrorNS
 	}
 	timeline.HostCorrelation = projection
 	return nil

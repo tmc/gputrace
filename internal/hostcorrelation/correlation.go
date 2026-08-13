@@ -35,12 +35,16 @@ type Artifact struct {
 
 // ClockBridge maps timestamps from the host clock to the GPU clock.
 type ClockBridge struct {
-	HostClock    string  `json:"host_clock"`
-	GPUClock     string  `json:"gpu_clock"`
-	Scale        float64 `json:"scale"`
-	Offset       float64 `json:"offset"`
-	MaxErrorNS   float64 `json:"max_error_ns"`
-	SourceDigest string  `json:"source_digest"`
+	HostClock    string        `json:"host_clock"`
+	GPUClock     string        `json:"gpu_clock"`
+	SourceDigest string        `json:"source_digest"`
+	Samples      []ClockSample `json:"samples"`
+}
+
+// ClockSample is one simultaneously observed host and GPU timestamp pair.
+type ClockSample struct {
+	HostNS int64 `json:"host_ns"`
+	GPUNS  int64 `json:"gpu_ns"`
 }
 
 // Event is one host-clock signpost observation.
@@ -101,9 +105,11 @@ func (r Receipt) Validate() error {
 	if b.HostClock != r.Host.ClockDomain || b.GPUClock != r.GPU.ClockDomain {
 		return fmt.Errorf("%w: bridge clock identity differs", ErrUncorrelated)
 	}
-	if !finite(b.Scale) || b.Scale <= 0 || !finite(b.Offset) ||
-		!finite(b.MaxErrorNS) || b.MaxErrorNS < 0 || !validDigest(b.SourceDigest) {
+	if !validDigest(b.SourceDigest) {
 		return fmt.Errorf("%w: malformed clock bridge", ErrInvalid)
+	}
+	if _, _, _, err := b.parameters(); err != nil {
+		return err
 	}
 	return nil
 }
@@ -115,7 +121,11 @@ func (r Receipt) Project() ([]ProjectedEvent, error) {
 	}
 	scale, offset, maxError := 1.0, 0.0, 0.0
 	if r.Bridge != nil {
-		scale, offset, maxError = r.Bridge.Scale, r.Bridge.Offset, r.Bridge.MaxErrorNS
+		var err error
+		scale, offset, maxError, err = r.Bridge.parameters()
+		if err != nil {
+			return nil, err
+		}
 	}
 	projected := make([]ProjectedEvent, len(r.Events))
 	for i, event := range r.Events {
@@ -208,6 +218,32 @@ func validDigest(s string) bool {
 }
 
 func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
+
+func (b ClockBridge) parameters() (scale, offset, maxError float64, err error) {
+	if len(b.Samples) < 3 || len(b.Samples) > 4096 {
+		return 0, 0, 0, fmt.Errorf("%w: clock bridge needs 3 to 4096 samples", ErrInvalid)
+	}
+	for i, sample := range b.Samples {
+		if sample.HostNS < 0 || sample.GPUNS < 0 ||
+			i > 0 && (sample.HostNS <= b.Samples[i-1].HostNS || sample.GPUNS <= b.Samples[i-1].GPUNS) {
+			return 0, 0, 0, fmt.Errorf("%w: clock samples are not strictly ordered", ErrInvalid)
+		}
+	}
+	first, last := b.Samples[0], b.Samples[len(b.Samples)-1]
+	scale = float64(last.GPUNS-first.GPUNS) / float64(last.HostNS-first.HostNS)
+	offset = float64(first.GPUNS) - float64(first.HostNS)*scale
+	if !finite(scale) || scale <= 0 || !finite(offset) {
+		return 0, 0, 0, fmt.Errorf("%w: malformed clock bridge", ErrInvalid)
+	}
+	for _, sample := range b.Samples {
+		predicted := float64(sample.HostNS)*scale + offset
+		residual := math.Abs(float64(sample.GPUNS) - predicted)
+		if residual > maxError {
+			maxError = residual
+		}
+	}
+	return scale, offset, maxError, nil
+}
 
 func project(value int64, scale, offset float64) (int64, bool) {
 	v := float64(value)*scale + offset
