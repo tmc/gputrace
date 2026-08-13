@@ -86,7 +86,7 @@ func runTree(cmd *cobra.Command, args []string, opts *treeOptions) error {
 		if err != nil {
 			return err
 		}
-		return writeTreeTopology(cmd.OutOrStdout(), timeline, limit)
+		return writeTreeTopology(cmd.OutOrStdout(), timeline, limit, opts.verbose)
 	}
 
 	// 1. Parse top-level MTSP records (preserving hierarchy)
@@ -147,53 +147,140 @@ func runTree(cmd *cobra.Command, args []string, opts *treeOptions) error {
 	}
 }
 
-func writeTreeTopology(w io.Writer, timeline *Timeline, limit int) error {
-	view := *timeline
-	if limit >= 0 && len(view.Encoders) > limit {
-		keep := make(map[int]bool, limit)
-		for _, encoder := range view.Encoders[:limit] {
-			keep[encoder.Index] = true
-		}
-		view.Encoders = view.Encoders[:limit]
-		view.Kernels = nil
-		for _, kernel := range timeline.Kernels {
-			if keep[kernel.Encoder] {
-				view.Kernels = append(view.Kernels, kernel)
-			}
-		}
-		var commandBuffers []TimelineEvent
-		for _, event := range timeline.Events {
-			if event.Category == "command_buffer" {
-				commandBuffers = append(commandBuffers, event)
-			}
-		}
-		byCommandBuffer, _ := attributeEncodersToCBs(timeline, commandBuffers)
-		keepCommandBuffer := make(map[int]bool)
-		for index, encoders := range byCommandBuffer {
-			for _, encoder := range encoders {
-				if keep[encoder.Index] {
-					keepCommandBuffer[index] = true
-				}
-			}
-		}
-		view.Events = nil
-		for _, event := range timeline.Events {
-			if event.Category != "command_buffer" {
-				view.Events = append(view.Events, event)
-				continue
-			}
-			if index, ok := timelineEventArgInt(event.Args, "index"); ok && keepCommandBuffer[index] {
-				view.Events = append(view.Events, event)
-			}
+func writeTreeTopology(w io.Writer, timeline *Timeline, limit int, verbose bool) error {
+	encoders := timeline.Encoders
+	if limit >= 0 && len(encoders) > limit {
+		encoders = encoders[:limit]
+	}
+	keep := make(map[int]bool, len(encoders))
+	for _, encoder := range encoders {
+		keep[encoder.Index] = true
+	}
+
+	var commandBuffers []TimelineEvent
+	for _, event := range timeline.Events {
+		if event.Category == "command_buffer" {
+			commandBuffers = append(commandBuffers, event)
 		}
 	}
-	if err := writeTextTimeline(w, &view, timeline); err != nil {
-		return err
+	if len(commandBuffers) == 0 {
+		commandBuffers = []TimelineEvent{{Name: "Command Buffer", Args: map[string]interface{}{"index": 0}}}
+	}
+	byCommandBuffer, unattributed := attributeEncodersToCBs(timeline, commandBuffers)
+
+	source := "capture records"
+	if timeline.Timing != nil && timeline.Timing.EncoderTimingSource != "" {
+		source = timeline.Timing.EncoderTimingSource
+		if timeline.Timing.EncoderTimingApproximate {
+			source += ", approximate timing"
+		}
+	}
+	fmt.Fprintf(w, "GPU execution tree (%s)\n", source)
+	fmt.Fprintf(w, "%d command buffers, %d encoders, %d dispatches\n\n",
+		len(commandBuffers), len(timeline.Encoders), len(timeline.Kernels))
+
+	for _, cb := range commandBuffers {
+		index, ok := timelineEventArgInt(cb.Args, "index")
+		if !ok {
+			continue
+		}
+		var shown []EncoderInfo
+		for _, encoder := range byCommandBuffer[index] {
+			if keep[encoder.Index] {
+				shown = append(shown, encoder)
+			}
+		}
+		if len(shown) == 0 {
+			continue
+		}
+		name := cb.Name
+		if name == "" {
+			name = fmt.Sprintf("Command Buffer %d", index)
+		}
+		if cb.Duration > 0 {
+			fmt.Fprintf(w, "%s [%s]\n", name, FormatDuration(int(cb.Duration)))
+		} else {
+			fmt.Fprintln(w, name)
+		}
+		writeTreeEncoders(w, timeline, shown, verbose)
+	}
+
+	var shownUnattributed []EncoderInfo
+	for _, encoder := range unattributed {
+		if keep[encoder.Index] {
+			shownUnattributed = append(shownUnattributed, encoder)
+		}
+	}
+	if len(shownUnattributed) > 0 {
+		fmt.Fprintln(w, "Unattributed encoders")
+		writeTreeEncoders(w, timeline, shownUnattributed, verbose)
 	}
 	if limit >= 0 && len(timeline.Encoders) > limit {
-		fmt.Fprintf(w, "... %d more encoders omitted (use --all)\n", len(timeline.Encoders)-limit)
+		fmt.Fprintf(w, "\n... %d more encoders omitted (use --all)\n", len(timeline.Encoders)-limit)
 	}
 	return nil
+}
+
+func writeTreeEncoders(w io.Writer, timeline *Timeline, encoders []EncoderInfo, verbose bool) {
+	for i, encoder := range encoders {
+		branch, child := "├─", "│ "
+		if i == len(encoders)-1 {
+			branch, child = "└─", "  "
+		}
+		label := encoder.Label
+		if label == "" {
+			label = fmt.Sprintf("Encoder %d", encoder.Index)
+		}
+		var kernels []KernelInfo
+		for _, kernel := range timeline.Kernels {
+			if kernel.Encoder == encoder.Index {
+				kernels = append(kernels, kernel)
+			}
+		}
+		var dispatchDuration uint64
+		for _, kernel := range kernels {
+			dispatchDuration += kernel.Duration
+		}
+		if dispatchDuration > 0 {
+			fmt.Fprintf(w, "%s %s [%d dispatches, %s dispatch time]\n", branch, label, len(kernels), FormatDurationNs(dispatchDuration))
+		} else {
+			fmt.Fprintf(w, "%s %s [%d dispatches]\n", branch, label, len(kernels))
+		}
+		if verbose {
+			for j, kernel := range kernels {
+				leaf := "├─"
+				if j == len(kernels)-1 {
+					leaf = "└─"
+				}
+				fmt.Fprintf(w, "%s%s %s [%s]\n", child, leaf, kernel.Name, FormatDurationNs(kernel.Duration))
+			}
+			continue
+		}
+		type kernelSummary struct {
+			name     string
+			count    int
+			duration uint64
+		}
+		var summaries []kernelSummary
+		byName := make(map[string]int)
+		for _, kernel := range kernels {
+			pos, found := byName[kernel.Name]
+			if !found {
+				pos = len(summaries)
+				byName[kernel.Name] = pos
+				summaries = append(summaries, kernelSummary{name: kernel.Name})
+			}
+			summaries[pos].count++
+			summaries[pos].duration += kernel.Duration
+		}
+		for j, summary := range summaries {
+			leaf := "├─"
+			if j == len(summaries)-1 {
+				leaf = "└─"
+			}
+			fmt.Fprintf(w, "%s%s %s ×%d [%s]\n", child, leaf, summary.name, summary.count, FormatDurationNs(summary.duration))
+		}
+	}
 }
 
 func writeTreeTopologyJSON(w io.Writer, timeline *Timeline) error {

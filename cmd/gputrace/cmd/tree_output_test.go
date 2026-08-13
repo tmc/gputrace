@@ -23,8 +23,30 @@ func TestRunTreeTextUsesCommandOutput(t *testing.T) {
 	if stdout != "" {
 		t.Fatalf("os stdout = %q, want empty", stdout)
 	}
-	if !strings.Contains(out.String(), "GPU Timeline") {
+	if !strings.Contains(out.String(), "GPU execution tree") {
 		t.Fatalf("command output missing semantic topology:\n%s", out.String())
+	}
+}
+
+func TestWriteTreeTopologySummarizesKernels(t *testing.T) {
+	timeline := &Timeline{
+		Events: []TimelineEvent{{
+			Name:     "CB#0",
+			Category: "command_buffer",
+			Args:     map[string]interface{}{"index": 0},
+		}},
+		Encoders: []EncoderInfo{{Index: 0, Label: "attention", Duration: 30}},
+		Kernels: []KernelInfo{
+			{Name: "copy", Encoder: 0, Duration: 10},
+			{Name: "copy", Encoder: 0, Duration: 20},
+		},
+	}
+	var out bytes.Buffer
+	if err := writeTreeTopology(&out, timeline, -1, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); !strings.Contains(got, "copy ×2") {
+		t.Fatalf("output does not summarize repeated kernels:\n%s", got)
 	}
 }
 
