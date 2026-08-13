@@ -12,6 +12,7 @@ func TestModuleDefinesStableViews(t *testing.T) {
 		"gputrace_semantic_node",
 		"gputrace_semantic_link",
 		"gputrace_dispatch",
+		"gputrace_encoder",
 		"gputrace_function",
 		"gputrace_pipeline",
 		"gputrace_counter_series",
@@ -56,6 +57,8 @@ func TestModuleProjectsRecordedDispatchesAndCompilerFacts(t *testing.T) {
 		"geometry_source",
 		"source_aggregate_duration_ns",
 		"work_share_basis",
+		"derived_execution_cost_pct",
+		"counter_clock_relation",
 	} {
 		if !strings.Contains(Module, want) {
 			t.Errorf("module missing %q", want)

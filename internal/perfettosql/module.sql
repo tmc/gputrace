@@ -95,6 +95,31 @@ SELECT
 FROM slice
 WHERE category = 'dispatch';
 
+CREATE PERFETTO VIEW gputrace_encoder AS
+SELECT
+  id,
+  ts,
+  dur,
+  name,
+  cast(extract_arg(arg_set_id, 'debug.index') AS INT) AS encoder_id,
+  extract_arg(arg_set_id, 'debug.clock_domain') AS clock_domain,
+  extract_arg(arg_set_id, 'debug.timing_source') AS timing_source,
+  extract_arg(arg_set_id, 'debug.timing_quality') AS timing_quality,
+  cast(extract_arg(arg_set_id, 'debug.timing_approximate') AS INT) AS timing_approximate,
+  cast(extract_arg(arg_set_id, 'debug.real_timing') AS INT) AS real_timing,
+  cast(extract_arg(arg_set_id, 'debug.gpu_cycles') AS INT) AS gpu_cycles,
+  extract_arg(arg_set_id, 'debug.gpu_cycles_source') AS gpu_cycles_source,
+  cast(extract_arg(arg_set_id, 'debug.execution_cost_pct') AS REAL) AS derived_execution_cost_pct,
+  extract_arg(arg_set_id, 'debug.execution_cost_formula') AS execution_cost_formula,
+  extract_arg(arg_set_id, 'debug.counter_attribution_basis') AS counter_attribution_basis,
+  extract_arg(arg_set_id, 'debug.counter_coverage') AS counter_coverage,
+  cast(extract_arg(arg_set_id, 'debug.counter_end_records') AS INT) AS counter_end_records,
+  cast(extract_arg(arg_set_id, 'debug.counter_sample_count') AS INT) AS counter_sample_count,
+  'aggregate details only; counter sample timestamps are not joined to the busy clock' AS counter_clock_relation,
+  arg_set_id
+FROM slice
+WHERE category = 'encoder';
+
 CREATE PERFETTO VIEW gputrace_function AS
 SELECT
   evidence_kind,
