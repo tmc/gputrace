@@ -906,6 +906,7 @@ The rendering design is implemented when all of the following hold:
 - [Local Perfetto viewer specification](PERFETTO_VIEWER_SPEC.md)
 - [Current timeline design](research/PERFETTO_TIMELINE_DESIGN.md)
 - [Ideal GPU execution timeline](research/IDEAL_TIMELINE_VIEW.md)
+- [Shader source attribution](SHADER_SOURCE_ATTRIBUTION_SPEC.md)
 - [Counter lanes design](research/COUNTER_LANES_DESIGN.md)
 - [Stream data format](STREAMDATA_FORMAT.md)
 - [Perfetto GPU data sources](https://perfetto.dev/docs/data-sources/gpu)
