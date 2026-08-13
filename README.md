@@ -45,9 +45,11 @@ gputrace timeline trace.gputrace --format perfetto --open \
 ```
 
 Perfetto has one global time axis. `--clock busy` therefore contains encoders,
-dispatches, and source-backed busy-domain counters; `--clock wall` contains
-APSTimelineData command buffers and wall-clock profiler events. gputrace does
-not invent a mapping between these domains.
+dispatches, and only counter series whose timestamps are proven in that
+domain; `--clock wall` contains APSTimelineData command buffers and wall-clock
+profiler events. Per-encoder APS GPU cycles and derived cost remain selectable
+encoder details because their counter clock is not joined to the busy clock.
+gputrace does not invent a mapping between these domains.
 
 See [MLX GPU Trace Rendering in Perfetto](docs/MLX_PERFETTO_RENDERING_SPEC.md)
 for the native Perfetto roadmap and proposed MLX semantic view.

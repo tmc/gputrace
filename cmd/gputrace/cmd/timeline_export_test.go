@@ -3,6 +3,7 @@
 package cmd
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -338,6 +339,10 @@ func TestExportPerfettoWritesNativeProtobuf(t *testing.T) {
 			Description: "measured cycles",
 			Samples:     []CounterSample{{Timestamp: 20_000, Value: 0}},
 		}},
+		UnavailableEvidence: []UnavailableEvidence{{
+			Family: "APSCounterData time series",
+			Reason: "counter clock is not joined",
+		}},
 	}
 	out := filepath.Join(t.TempDir(), "timeline.pftrace")
 	if err := exportPerfettoForClock(timeline, out, timelineClockBusy); err != nil {
@@ -352,6 +357,11 @@ func TestExportPerfettoWritesNativeProtobuf(t *testing.T) {
 	}
 	if json.Valid(data) {
 		t.Fatal("native Perfetto output is JSON")
+	}
+	for _, want := range []string{"unavailable_evidence_0_family", "APSCounterData time series", "counter clock is not joined"} {
+		if !bytes.Contains(data, []byte(want)) {
+			t.Fatalf("native trace missing manifest value %q", want)
+		}
 	}
 }
 
@@ -1346,182 +1356,56 @@ func TestGenerateInteractiveHTMLIncludesEstimatedTimingWarning(t *testing.T) {
 	}
 }
 
-func TestGenerateCounterTracksFromPerfDataUsesEncoderCounters(t *testing.T) {
+func TestAnnotateEncoderCounterArchive(t *testing.T) {
 	timeline := &Timeline{
-		Encoders: []EncoderInfo{{
-			Index:     1,
-			Label:     "kernel0",
-			Type:      "compute",
-			StartTime: 100,
-			EndTime:   200,
-			Duration:  100,
-		}},
+		Encoders: []EncoderInfo{
+			{Index: 0, StartTime: 100, EndTime: 200},
+			{Index: 1, StartTime: 300, EndTime: 400},
+		},
+		Events: []TimelineEvent{
+			{Category: "encoder", Args: map[string]interface{}{"index": 0}},
+			{Category: "encoder", Args: map[string]interface{}{"index": 1}},
+		},
 	}
-	encoderMetrics := []counter.EncoderCounterMetrics{{
-		EncoderIndex:               1,
-		EncoderLabel:               "kernel0",
-		Attribution:                counter.CounterAttributionEncoder,
-		ALUUtilization:             3.25,
-		DeviceMemoryBandwidthGBps:  12.5,
-		BytesReadFromDeviceMemory:  500,
-		GPUWriteBandwidthGBps:      4.5,
-		InstructionThroughputUtil:  2.5,
-		ComputeUtilization:         3.25,
-		ComputeShaderLaunchLimiter: 0.17,
-		L1CacheLimiter:             0.25,
-		TextureReadLimiter:         0.5,
-		BufferL1MissRate:           1.25,
-	}}
-
-	streamStats := &gputrace.StreamDataStats{
-		FunctionNames: []string{"kernel0"},
-		Pipelines: []gputrace.PipelineStats{{
-			FunctionName:           "kernel0",
-			TemporaryRegisterCount: 46,
-			UniformRegisterCount:   8,
-			SpilledBytes:           16,
-			ThreadgroupMemory:      1024,
-		}},
-	}
-
-	tracks := generateCounterTracksFromPerfData(streamStats, encoderMetrics, timeline)
-	alu := findCounterTrackForTest(t, tracks, "ALU Utilization")
-	if len(alu.Samples) != 2 || alu.Samples[0].Value != 3.25 {
-		t.Fatalf("ALU samples = %+v, want two samples at 3.25", alu.Samples)
-	}
-	bandwidth := findCounterTrackForTest(t, tracks, "Bandwidth")
-	if len(bandwidth.Samples) != 2 || bandwidth.Samples[0].Value != 12.5 {
-		t.Fatalf("bandwidth samples = %+v, want two samples at 12.5", bandwidth.Samples)
-	}
-	readBW := findCounterTrackForTest(t, tracks, "Memory Read BW")
-	if len(readBW.Samples) != 2 || readBW.Samples[0].Value != 5.0 {
-		t.Fatalf("memory read samples = %+v, want two samples at 5.0", readBW.Samples)
-	}
-	writeBW := findCounterTrackForTest(t, tracks, "Memory Write BW")
-	if len(writeBW.Samples) != 2 || writeBW.Samples[0].Value != 4.5 {
-		t.Fatalf("memory write samples = %+v, want two samples at 4.5", writeBW.Samples)
-	}
-	l1Miss := findCounterTrackForTest(t, tracks, "L1 Cache Miss Rate")
-	if len(l1Miss.Samples) != 2 || l1Miss.Samples[0].Value != 1.25 {
-		t.Fatalf("L1 miss samples = %+v, want two samples at 1.25", l1Miss.Samples)
-	}
-	computeLimiter := findCounterTrackForTest(t, tracks, "Limiter: Compute")
-	if len(computeLimiter.Samples) != 2 || computeLimiter.Samples[0].Value != 0.17 {
-		t.Fatalf("compute limiter samples = %+v, want two samples at 0.17", computeLimiter.Samples)
-	}
-	memoryLimiter := findCounterTrackForTest(t, tracks, "Limiter: Memory")
-	if len(memoryLimiter.Samples) != 2 || memoryLimiter.Samples[0].Value != 0.75 {
-		t.Fatalf("memory limiter samples = %+v, want two samples at 0.75", memoryLimiter.Samples)
-	}
-
-	allocated := findCounterTrackForTest(t, tracks, "Allocated Registers")
-	if len(allocated.Samples) != 2 || allocated.Samples[0].Value != 46 {
-		t.Fatalf("allocated register samples = %+v, want two samples at 46", allocated.Samples)
-	}
-	uniform := findCounterTrackForTest(t, tracks, "Uniform Registers")
-	if len(uniform.Samples) != 2 || uniform.Samples[0].Value != 8 {
-		t.Fatalf("uniform register samples = %+v, want two samples at 8", uniform.Samples)
-	}
-	spills := findCounterTrackForTest(t, tracks, "Spilled Bytes")
-	if len(spills.Samples) != 2 || spills.Samples[0].Value != 16 {
-		t.Fatalf("spilled byte samples = %+v, want two samples at 16", spills.Samples)
-	}
-	tgmem := findCounterTrackForTest(t, tracks, "Threadgroup Memory")
-	if len(tgmem.Samples) != 2 || tgmem.Samples[0].Value != 1024 {
-		t.Fatalf("threadgroup memory samples = %+v, want two samples at 1024", tgmem.Samples)
-	}
-}
-
-func TestGenerateCounterTracksFromCounterArchive(t *testing.T) {
-	timeline := &Timeline{Encoders: []EncoderInfo{
-		{Index: 0, StartTime: 100, EndTime: 200},
-		{Index: 1, StartTime: 300, EndTime: 400},
-	}}
 	archive := &counter.CounterArchive{Encoders: []counter.EncoderSamples{
-		{Ordinal: 0, GPUCycles: 100, EndSamples: 16},
-		{Ordinal: 1, GPUCycles: 300, EndSamples: 16},
+		{Ordinal: 0, GPUCycles: 100, EndSamples: 16, SampleCount: 32},
+		{Ordinal: 1, GPUCycles: 300, EndSamples: 16, SampleCount: 32},
 	}}
-	tracks := generateCounterTracksFromCounterArchive(archive, timeline)
-	if got, want := len(tracks), 2; got != want {
-		t.Fatalf("tracks = %d, want %d", got, want)
+
+	annotateEncoderCounterArchive(timeline, archive)
+
+	if got, want := timeline.Events[0].Args["gpu_cycles"], uint64(100); got != want {
+		t.Fatalf("gpu_cycles = %v, want %v", got, want)
 	}
-	if got, want := tracks[0].Name, "GPU Cycles"; got != want {
-		t.Fatalf("cycles track = %q, want %q", got, want)
+	if got, want := timeline.Events[0].Args["execution_cost_pct"], 25.0; got != want {
+		t.Fatalf("execution_cost_pct = %v, want %v", got, want)
 	}
-	if got, want := tracks[1].Name, "Execution Cost"; got != want {
-		t.Fatalf("cost track = %q, want %q", got, want)
+	if got, want := timeline.Events[0].Args["counter_attribution_basis"], "Encoder Infos execution ordinal"; got != want {
+		t.Fatalf("counter_attribution_basis = %v, want %q", got, want)
 	}
-	if got, want := tracks[1].Samples[0].Value, 25.0; got != want {
-		t.Fatalf("first cost = %v, want %v", got, want)
-	}
-	if got, want := tracks[1].Description, "Derived per encoder from APSCounterData GRC_GPU_CYCLES; not Xcode's exact Execution Cost column."; got != want {
-		t.Fatalf("cost description = %q, want %q", got, want)
+	if got, want := timeline.Events[0].Args["counter_coverage"], "at least one end-counter read per replay group"; got != want {
+		t.Fatalf("counter_coverage = %v, want %q", got, want)
 	}
 }
 
-func TestGenerateCounterTracksFromCounterArchiveMarksSparseValues(t *testing.T) {
-	timeline := &Timeline{Encoders: []EncoderInfo{{Index: 0, StartTime: 100, EndTime: 200}}}
+func TestAnnotateEncoderCounterArchiveMarksSparseValues(t *testing.T) {
+	timeline := &Timeline{Events: []TimelineEvent{{
+		Category: "encoder",
+		Args:     map[string]interface{}{"index": 0},
+	}}}
 	archive := &counter.CounterArchive{Encoders: []counter.EncoderSamples{{
 		Ordinal:    0,
 		GPUCycles:  100,
 		EndSamples: 15,
 	}}}
-	tracks := generateCounterTracksFromCounterArchive(archive, timeline)
-	if got, want := len(tracks), 2; got != want {
-		t.Fatalf("tracks = %d, want %d", got, want)
-	}
-	if !strings.Contains(tracks[0].Description, "1 encoder value(s) have fewer than 16 end-counter reads, the minimum for the archive's 16 replay groups") {
-		t.Fatalf("cycles description = %q, want sparse-read caveat", tracks[0].Description)
+
+	annotateEncoderCounterArchive(timeline, archive)
+
+	if got, want := timeline.Events[0].Args["counter_coverage"], "sparse: fewer than 16 end-counter reads"; got != want {
+		t.Fatalf("counter_coverage = %v, want %q", got, want)
 	}
 }
 
-func TestGenerateCounterTracksDoesNotEstimateShaderLaunchLimiter(t *testing.T) {
-	timeline := &Timeline{Encoders: []EncoderInfo{{
-		Index:     0,
-		Label:     "kernel0",
-		StartTime: 100,
-		EndTime:   200,
-		Duration:  100,
-	}}}
-	tracks := generateCounterTracksFromPerfData(nil, nil, timeline)
-	limiter := findCounterTrackForTest(t, tracks, "Shader Launch Limiter")
-	if counterTrackHasSignal(limiter) {
-		t.Fatalf("shader launch limiter = %+v, want no signal without a measured limiter", limiter.Samples)
-	}
-}
-
-func TestGenerateCounterTracksFromPerfDataKeepsSourceBackedZeroValues(t *testing.T) {
-	timeline := &Timeline{
-		Encoders: []EncoderInfo{{
-			Index:     0,
-			Label:     "kernel0",
-			Type:      "compute",
-			StartTime: 10,
-			EndTime:   20,
-			Duration:  10,
-		}},
-	}
-	encoderMetrics := []counter.EncoderCounterMetrics{{
-		EncoderIndex: 0,
-		EncoderLabel: "kernel0",
-		Attribution:  counter.CounterAttributionEncoder,
-	}}
-
-	tracks := generateCounterTracksFromPerfData(nil, encoderMetrics, timeline)
-	alu := findCounterTrackForTest(t, tracks, "ALU Utilization")
-	if len(alu.Samples) != 2 {
-		t.Fatalf("ALU samples = %d, want 2", len(alu.Samples))
-	}
-	if got := alu.Samples[0].Value; got != 0 {
-		t.Fatalf("ALU value = %v, want 0", got)
-	}
-}
-
-// TestDispatchKernelArgsOmitsUnreadEncoderCounters guards against reporting an
-// unread counter as a measured zero. An empty EncoderCounterMetrics means the
-// counters were not read; Xcode reports ALU Utilization of 1.59% to 3.35% for
-// the encoders of qwen25-05b-staticmask-warm-tokens2-4-rep1 where gputrace used
-// to emit 0.00 with the label "encoder counter fallback".
 func TestDispatchKernelArgsOmitsUnreadEncoderCounters(t *testing.T) {
 	args := dispatchKernelArgs(counter.DispatchInfo{}, nil, 0, 0, nil, nil, &counter.EncoderCounterMetrics{}, nil)
 	for _, key := range []string{"alu_utilization_pct", "alu_utilization_source"} {

@@ -7,10 +7,13 @@ produced by MLX programs in Perfetto. It is a design, not a description of the
 current output.
 
 `gputrace timeline --format perfetto` now writes native Perfetto protobuf with
-GPU compute slices, generic hierarchy tracks, measured counter packets, and an
-evidence-manifest event. `--format chrome` retains Chrome Trace JSON. Strict
-MLX sidecars, dependency-closed logical-byte budgets, and the local viewer are
-implemented. Rolling windows, richer environment capture, and the MLX plugin
+GPU compute slices, generic hierarchy tracks, clock-qualified counter-packet
+support, and an evidence-manifest event. `--format chrome` retains Chrome Trace
+JSON. Strict MLX sidecars, dependency-closed logical-byte budgets, and the
+local viewer are implemented. APS per-encoder GPU cycles and derived cost are
+encoder details, not counter series: their counter clock has no verified
+mapping to cumulative busy time. Rolling windows, richer environment capture,
+native-label conflict handling, exporter-owned SQL views, and the MLX plugin
 remain proposed. The viewer is specified separately in
 [PERFETTO_VIEWER_SPEC.md](PERFETTO_VIEWER_SPEC.md).
 
@@ -249,9 +252,11 @@ GPU execution (cumulative busy)
 ├── compute encoder 19
 │   └── sdpa_vector_...
 └── unattributed dispatches
+Encoder counter details
+├── GPU cycles (capture-backed aggregate)
+└── execution cost (derived share)
 Validated GPU counters
-├── execution cost
-└── GPU cycles
+└── unavailable until a series passes the clock and decoder gates
 Diagnostics
 └── unmatched and unavailable evidence
 ```
@@ -400,6 +405,14 @@ schema. A series records whether it came from a checked pure parser, an Xcode
 private-framework computation, or another decoder. The manifest pins the
 Xcode build and framework identity for private results. Backends must satisfy
 the same identity, formula, unit, clock, health, and coverage gates.
+
+The current APS counter archive has capture-backed encoder ids and stable
+execution ordinals across replay passes. It supports per-encoder aggregate GPU
+cycles and a derived capture share. It does not establish a mapping from APS
+counter timestamps to cumulative GPU-busy timestamps. The exporter therefore
+places those aggregates in encoder details with
+`counter_attribution_basis = Encoder Infos execution ordinal`, reports the
+clock gap in the manifest, and emits no native counter samples for them.
 
 ## Native Perfetto representation
 

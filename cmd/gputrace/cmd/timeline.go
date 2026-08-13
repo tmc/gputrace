@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -845,6 +844,7 @@ type Timeline struct {
 	APICallseq           []APICall                   `json:"api_callseq"`
 	CounterTracks        []CounterTrack              `json:"counter_tracks,omitempty"`
 	UnattributedCounters []UnattributedCounterMetric `json:"unattributed_counters,omitempty"`
+	UnavailableEvidence  []UnavailableEvidence       `json:"unavailable_evidence,omitempty"`
 	Timing               *TimelineTiming             `json:"timing,omitempty"`
 	XcodeMetrics         map[string]any              `json:"xcode_metrics,omitempty"`
 	AbsoluteTime         uint64                      `json:"absolute_time"`
@@ -854,6 +854,13 @@ type Timeline struct {
 	MLXSidecarDigest     string                      `json:"mlx_sidecar_digest,omitempty"`
 	TraceUUID            string                      `json:"trace_uuid,omitempty"`
 	DeviceID             int                         `json:"device_id,omitempty"`
+}
+
+// UnavailableEvidence records an evidence family that could not be projected
+// without inventing an identity or clock relationship.
+type UnavailableEvidence struct {
+	Family string `json:"family"`
+	Reason string `json:"reason"`
 }
 
 // TimelineTiming summarizes the timing sources that Xcode and gputrace expose.
@@ -1393,24 +1400,21 @@ func populateUnprofiledEncoderEvents(timeline *Timeline, computeEncoders []*trac
 	}
 }
 
-// generateCounterTracks creates the measured per-encoder counter tracks for
-// the timeline. Pipeline instruction and register statistics remain event
-// metadata: plotting a static compiler property as a stepped time series
-// makes it look like a sampled hardware counter.
+// generateCounterTracks returns only counter series whose clock is established
+// in the selected timeline domain. APSCounterData currently provides useful
+// per-encoder aggregates, but its timestamps have no verified mapping to the
+// cumulative busy clock, so those aggregates remain encoder details.
 func generateCounterTracks(trace *gputrace.Trace, timeline *Timeline) []CounterTrack {
-	tracks := make([]CounterTrack, 0)
-
-	// Skip if no encoders (can't generate meaningful counter data)
-	if len(timeline.Encoders) == 0 {
-		return tracks
-	}
-
 	streamStats, _ := gputrace.ExtractPipelineStats(trace)
-	if streamStats != nil {
-		tracks = append(tracks, generateCounterTracksFromCounterArchive(streamStats.CounterArchive, timeline)...)
+	if streamStats == nil || streamStats.CounterArchive == nil {
+		return nil
 	}
-
-	return applyXcodeCounterMetadata(tracks)
+	annotateEncoderCounterArchive(timeline, streamStats.CounterArchive)
+	timeline.UnavailableEvidence = append(timeline.UnavailableEvidence, UnavailableEvidence{
+		Family: "APSCounterData time series",
+		Reason: "counter clock has no verified mapping to cumulative GPU-busy time",
+	})
+	return nil
 }
 
 func recordUnattributedCounterMetrics(timeline *Timeline, metrics []counter.EncoderCounterMetrics) {
@@ -1455,440 +1459,47 @@ func recordUnattributedCounterMetrics(timeline *Timeline, metrics []counter.Enco
 	}
 }
 
-// generateCounterTracksFromCounterArchive records measured per-encoder GPU
-// cycles and their archive-derived execution-cost share.
-func generateCounterTracksFromCounterArchive(archive *counter.CounterArchive, timeline *Timeline) []CounterTrack {
+// annotateEncoderCounterArchive records capture-backed cycle aggregates on
+// encoder events. Encoder Infos guarantees execution order, but does not expose
+// a Metal encoder foreign key, so the relationship basis remains explicit.
+func annotateEncoderCounterArchive(timeline *Timeline, archive *counter.CounterArchive) {
 	if archive == nil || timeline == nil {
-		return nil
+		return
 	}
 	costs := archive.EncoderCosts()
 	if len(costs) == 0 {
-		return nil
+		return
 	}
-	cycles := CounterTrack{
-		Name:        "GPU Cycles",
-		Unit:        "cycles",
-		Description: "Measured per encoder from APSCounterData GRC_GPU_CYCLES.",
-	}
-	cost := CounterTrack{
-		Name:        "Execution Cost",
-		Unit:        "%",
-		Description: "Derived per encoder from APSCounterData GRC_GPU_CYCLES; not Xcode's exact Execution Cost column.",
-	}
-	var sparse int
+	byOrdinal := make(map[int]counter.EncoderCost, len(costs))
 	for _, c := range costs {
-		if c.Ordinal < 0 || c.Ordinal >= len(timeline.Encoders) {
+		byOrdinal[c.Ordinal] = c
+	}
+	for i := range timeline.Events {
+		event := &timeline.Events[i]
+		if event.Category != "encoder" {
 			continue
 		}
+		index, ok := timelineEventArgInt(event.Args, "index")
+		if !ok {
+			continue
+		}
+		c, ok := byOrdinal[index]
+		if !ok {
+			continue
+		}
+		event.Args["gpu_cycles"] = c.GPUCycles
+		event.Args["gpu_cycles_source"] = "APSCounterData GRC_GPU_CYCLES end records"
+		event.Args["execution_cost_pct"] = c.CostPercent
+		event.Args["execution_cost_formula"] = "100 * encoder GPU cycles / capture GPU cycles"
+		event.Args["counter_attribution_basis"] = "Encoder Infos execution ordinal"
+		event.Args["counter_end_records"] = c.EndRecords
+		event.Args["counter_sample_count"] = c.SampleCount
 		if c.Sparse() {
-			sparse++
-		}
-		encoder := timeline.Encoders[c.Ordinal]
-		appendCounterTrackSampleValue(&cycles, encoder, float64(c.GPUCycles))
-		appendCounterTrackSampleValue(&cost, encoder, c.CostPercent)
-	}
-	if sparse > 0 {
-		caveat := fmt.Sprintf(" %d encoder value(s) have fewer than 16 end-counter reads, the minimum for the archive's 16 replay groups; treat those values as low confidence.", sparse)
-		cycles.Description += caveat
-		cost.Description += caveat
-	}
-	calculateTrackStats(&cycles)
-	calculateTrackStats(&cost)
-	if len(cycles.Samples) == 0 || len(cost.Samples) == 0 {
-		return nil
-	}
-	return []CounterTrack{cycles, cost}
-}
-
-// generateCounterTracksFromPerfData creates counter tracks from real performance counter data.
-func generateCounterTracksFromPerfData(streamStats *gputrace.StreamDataStats, encoderMetrics []counter.EncoderCounterMetrics, timeline *Timeline) []CounterTrack {
-	tracks := make([]CounterTrack, 0)
-
-	// Initialize counter tracks
-	activeCoresTrack := CounterTrack{
-		Name:    "Active Cores",
-		Unit:    "count",
-		Samples: make([]CounterSample, 0),
-	}
-
-	aluTrack := CounterTrack{
-		Name:    "ALU Utilization",
-		Unit:    "%",
-		Samples: make([]CounterSample, 0),
-	}
-
-	bandwidthTrack := CounterTrack{
-		Name:    "Bandwidth",
-		Unit:    "GB/s",
-		Samples: make([]CounterSample, 0),
-	}
-
-	throughputTrack := CounterTrack{
-		Name:    "Instruction Throughput",
-		Unit:    "%",
-		Samples: make([]CounterSample, 0),
-	}
-
-	shaderLaunchLimiterTrack := CounterTrack{
-		Name:    "Shader Launch Limiter",
-		Unit:    "%",
-		Samples: make([]CounterSample, 0),
-	}
-
-	encoderMetricsByIndex := make(map[int]*counter.EncoderCounterMetrics)
-	encoderMetricsByLabel := make(map[string]*counter.EncoderCounterMetrics)
-	for i := range encoderMetrics {
-		m := &encoderMetrics[i]
-		if m.Attribution != counter.CounterAttributionEncoder || m.EncoderIndex < 0 {
-			continue
-		}
-		encoderMetricsByIndex[m.EncoderIndex] = m
-		if m.EncoderLabel != "" {
-			encoderMetricsByLabel[m.EncoderLabel] = m
-		}
-	}
-
-	// Build map of function name to PipelineStats for instruction counts
-	// This provides instruction counts by kernel name directly
-	pipelineByName := make(map[string]*gputrace.PipelineStats)
-	if streamStats != nil {
-		// Index by function name for fuzzy matching
-		for i, funcName := range streamStats.FunctionNames {
-			if i < len(streamStats.Pipelines) {
-				p := &streamStats.Pipelines[i]
-				pipelineByName[funcName] = p
-			}
-		}
-	}
-
-	// Generate samples for each encoder period using actual hardware metrics
-	for _, encoder := range timeline.Encoders {
-		var encoderMetric *counter.EncoderCounterMetrics
-		if m, exists := encoderMetricsByLabel[encoder.Label]; exists {
-			encoderMetric = m
-		} else if m, exists := encoderMetricsByIndex[encoder.Index]; exists {
-			encoderMetric = m
-		}
-
-		// Calculate values from real hardware data.
-		var activeCores float64
-		var aluUtil float64
-		var bandwidth float64
-		var throughput float64
-		var shaderLaunchLimiter float64
-
-		if encoderMetric != nil {
-			if aluUtil == 0 {
-				aluUtil = encoderMetric.ALUUtilization
-			}
-			if bandwidth == 0 {
-				switch {
-				case encoderMetric.DeviceMemoryBandwidthGBps > 0:
-					bandwidth = encoderMetric.DeviceMemoryBandwidthGBps
-				case encoderMetric.MemoryBandwidth > 0 && encoder.Duration > 0:
-					durationSec := float64(encoder.Duration) / 1e9
-					bandwidth = float64(encoderMetric.MemoryBandwidth) / 1e9 / durationSec
-				}
-			}
-			if throughput == 0 {
-				throughput = encoderMetric.InstructionThroughputUtil
-			}
-			if shaderLaunchLimiter == 0 {
-				shaderLaunchLimiter = encoderMetric.ComputeShaderLaunchLimiter
-			}
-		}
-		if encoderMetric == nil {
-			// No real data for this encoder - skip it (no synthetic data)
-			continue
-		}
-
-		// Add samples at start and end of encoder execution. For source-backed
-		// Xcode counters, zero is a meaningful value and should appear as a
-		// flat track instead of being reported as unavailable.
-		appendCounterTrackSample(&activeCoresTrack, encoder, activeCores)
-		appendCounterTrackSampleValue(&aluTrack, encoder, aluUtil)
-		appendCounterTrackSampleValue(&bandwidthTrack, encoder, bandwidth)
-		appendCounterTrackSampleValue(&throughputTrack, encoder, throughput)
-		appendCounterTrackSampleValue(&shaderLaunchLimiterTrack, encoder, shaderLaunchLimiter)
-	}
-
-	// Calculate statistics for each track
-	calculateTrackStats(&activeCoresTrack)
-	calculateTrackStats(&aluTrack)
-	calculateTrackStats(&bandwidthTrack)
-	calculateTrackStats(&throughputTrack)
-	calculateTrackStats(&shaderLaunchLimiterTrack)
-
-	tracks = append(tracks, activeCoresTrack, aluTrack, bandwidthTrack, throughputTrack, shaderLaunchLimiterTrack)
-
-	// Add L1 Cache Miss Rate Track
-	l1MissTrack := CounterTrack{
-		Name:    "L1 Cache Miss Rate",
-		Unit:    "%",
-		Samples: make([]CounterSample, 0),
-	}
-
-	// Add Memory Read/Write Bandwidth Tracks
-	memReadTrack := CounterTrack{
-		Name:    "Memory Read BW",
-		Unit:    "GB/s",
-		Samples: make([]CounterSample, 0),
-	}
-	memWriteTrack := CounterTrack{
-		Name:    "Memory Write BW",
-		Unit:    "GB/s",
-		Samples: make([]CounterSample, 0),
-	}
-
-	// Add Bottleneck Limiter Tracks
-	computeLimiterTrack := CounterTrack{
-		Name:    "Limiter: Compute",
-		Unit:    "%",
-		Samples: make([]CounterSample, 0),
-	}
-	memoryLimiterTrack := CounterTrack{
-		Name:    "Limiter: Memory",
-		Unit:    "%",
-		Samples: make([]CounterSample, 0),
-	}
-
-	// Generate samples for new tracks - only for encoders with real data
-	for _, encoder := range timeline.Encoders {
-		var encoderMetric *counter.EncoderCounterMetrics
-		if m, exists := encoderMetricsByLabel[encoder.Label]; exists {
-			encoderMetric = m
-		} else if m, exists := encoderMetricsByIndex[encoder.Index]; exists {
-			encoderMetric = m
-		}
-		if encoderMetric == nil {
-			// No real data for this encoder - skip it (no synthetic data)
-			continue
-		}
-
-		var l1Miss float64
-		var memRead, memWrite float64
-		var compLimit, memLimit float64
-
-		if encoderMetric != nil {
-			if l1Miss == 0 {
-				l1Miss = encoderMetric.BufferL1MissRate
-			}
-			if memRead == 0 {
-				if encoderMetric.GPUReadBandwidthGBps > 0 {
-					memRead = encoderMetric.GPUReadBandwidthGBps
-				} else if encoderMetric.BytesReadFromDeviceMemory > 0 && encoder.Duration > 0 {
-					durationSec := float64(encoder.Duration) / 1e9
-					memRead = float64(encoderMetric.BytesReadFromDeviceMemory) / 1e9 / durationSec
-				}
-			}
-			if memWrite == 0 {
-				if encoderMetric.GPUWriteBandwidthGBps > 0 {
-					memWrite = encoderMetric.GPUWriteBandwidthGBps
-				} else if encoderMetric.BytesWrittenToDeviceMemory > 0 && encoder.Duration > 0 {
-					durationSec := float64(encoder.Duration) / 1e9
-					memWrite = float64(encoderMetric.BytesWrittenToDeviceMemory) / 1e9 / durationSec
-				}
-			}
-			if compLimit == 0 {
-				compLimit = encoderMetric.ComputeShaderLaunchLimiter
-			}
-			if memLimit == 0 {
-				memLimit = encoderMetric.L1CacheLimiter + encoderMetric.LastLevelCacheLimiter + encoderMetric.TextureReadLimiter
-			}
-		}
-
-		appendCounterTrackSampleValue(&l1MissTrack, encoder, l1Miss)
-		appendCounterTrackSampleValue(&memReadTrack, encoder, memRead)
-		appendCounterTrackSampleValue(&memWriteTrack, encoder, memWrite)
-		appendCounterTrackSampleValue(&computeLimiterTrack, encoder, compLimit)
-		appendCounterTrackSampleValue(&memoryLimiterTrack, encoder, memLimit)
-	}
-
-	calculateTrackStats(&l1MissTrack)
-	calculateTrackStats(&memReadTrack)
-	calculateTrackStats(&memWriteTrack)
-	calculateTrackStats(&computeLimiterTrack)
-	calculateTrackStats(&memoryLimiterTrack)
-
-	tracks = append(tracks, l1MissTrack, memReadTrack, memWriteTrack, computeLimiterTrack, memoryLimiterTrack)
-
-	// Add Instruction Count Tracks from PipelineStats/streamData
-	instructionTrack := CounterTrack{
-		Name:    "Total Instructions",
-		Unit:    "count",
-		Samples: make([]CounterSample, 0),
-	}
-	aluInstrTrack := CounterTrack{
-		Name:    "ALU Instructions",
-		Unit:    "count",
-		Samples: make([]CounterSample, 0),
-	}
-	fp32InstrTrack := CounterTrack{
-		Name:    "FP32 Instructions",
-		Unit:    "count",
-		Samples: make([]CounterSample, 0),
-	}
-	fp16InstrTrack := CounterTrack{
-		Name:    "FP16 Instructions",
-		Unit:    "count",
-		Samples: make([]CounterSample, 0),
-	}
-	int32InstrTrack := CounterTrack{
-		Name:    "INT32 Instructions",
-		Unit:    "count",
-		Samples: make([]CounterSample, 0),
-	}
-	int16InstrTrack := CounterTrack{
-		Name:    "INT16 Instructions",
-		Unit:    "count",
-		Samples: make([]CounterSample, 0),
-	}
-	branchInstrTrack := CounterTrack{
-		Name:    "Branch Instructions",
-		Unit:    "count",
-		Samples: make([]CounterSample, 0),
-	}
-	threadgroupMemTrack := CounterTrack{
-		Name:    "Threadgroup Memory",
-		Unit:    "bytes",
-		Samples: make([]CounterSample, 0),
-	}
-	allocatedRegsTrack := CounterTrack{
-		Name:    "Allocated Registers",
-		Unit:    "count",
-		Samples: make([]CounterSample, 0),
-	}
-	uniformRegsTrack := CounterTrack{
-		Name:    "Uniform Registers",
-		Unit:    "count",
-		Samples: make([]CounterSample, 0),
-	}
-	spilledBytesTrack := CounterTrack{
-		Name:    "Spilled Bytes",
-		Unit:    "bytes",
-		Samples: make([]CounterSample, 0),
-	}
-
-	// Generate samples for instruction tracks - use PipelineStats from streamData
-	// Match by encoder label (which is the kernel/function name)
-	for _, encoder := range timeline.Encoders {
-		// Try to find matching PipelineStats by exact or fuzzy match
-		var pipeline *gputrace.PipelineStats
-		if p, exists := pipelineByName[encoder.Label]; exists {
-			pipeline = p
+			event.Args["counter_coverage"] = "sparse: fewer than 16 end-counter reads"
 		} else {
-			// Try fuzzy match - encoder label may contain or be contained in
-			// function name. An empty name must not match everything.
-			for funcName, p := range pipelineByName {
-				if encoder.Label == "" || funcName == "" {
-					continue
-				}
-				if strings.Contains(encoder.Label, funcName) || strings.Contains(funcName, encoder.Label) {
-					pipeline = p
-					break
-				}
-			}
+			event.Args["counter_coverage"] = "at least one end-counter read per replay group"
 		}
-
-		if pipeline == nil {
-			continue
-		}
-
-		// Add instruction count samples
-		if pipeline.InstructionCount > 0 {
-			instructionTrack.Samples = append(instructionTrack.Samples,
-				CounterSample{Timestamp: encoder.StartTime, Value: float64(pipeline.InstructionCount)},
-				CounterSample{Timestamp: encoder.EndTime, Value: float64(pipeline.InstructionCount)})
-		}
-		if pipeline.ALUInstructionCount > 0 {
-			aluInstrTrack.Samples = append(aluInstrTrack.Samples,
-				CounterSample{Timestamp: encoder.StartTime, Value: float64(pipeline.ALUInstructionCount)},
-				CounterSample{Timestamp: encoder.EndTime, Value: float64(pipeline.ALUInstructionCount)})
-		}
-		if pipeline.FP32InstructionCount > 0 {
-			fp32InstrTrack.Samples = append(fp32InstrTrack.Samples,
-				CounterSample{Timestamp: encoder.StartTime, Value: float64(pipeline.FP32InstructionCount)},
-				CounterSample{Timestamp: encoder.EndTime, Value: float64(pipeline.FP32InstructionCount)})
-		}
-		if pipeline.FP16InstructionCount > 0 {
-			fp16InstrTrack.Samples = append(fp16InstrTrack.Samples,
-				CounterSample{Timestamp: encoder.StartTime, Value: float64(pipeline.FP16InstructionCount)},
-				CounterSample{Timestamp: encoder.EndTime, Value: float64(pipeline.FP16InstructionCount)})
-		}
-		if pipeline.INT32InstructionCount > 0 {
-			int32InstrTrack.Samples = append(int32InstrTrack.Samples,
-				CounterSample{Timestamp: encoder.StartTime, Value: float64(pipeline.INT32InstructionCount)},
-				CounterSample{Timestamp: encoder.EndTime, Value: float64(pipeline.INT32InstructionCount)})
-		}
-		if pipeline.INT16InstructionCount > 0 {
-			int16InstrTrack.Samples = append(int16InstrTrack.Samples,
-				CounterSample{Timestamp: encoder.StartTime, Value: float64(pipeline.INT16InstructionCount)},
-				CounterSample{Timestamp: encoder.EndTime, Value: float64(pipeline.INT16InstructionCount)})
-		}
-		if pipeline.BranchInstructionCount > 0 {
-			branchInstrTrack.Samples = append(branchInstrTrack.Samples,
-				CounterSample{Timestamp: encoder.StartTime, Value: float64(pipeline.BranchInstructionCount)},
-				CounterSample{Timestamp: encoder.EndTime, Value: float64(pipeline.BranchInstructionCount)})
-		}
-		if pipeline.ThreadgroupMemory > 0 {
-			threadgroupMemTrack.Samples = append(threadgroupMemTrack.Samples,
-				CounterSample{Timestamp: encoder.StartTime, Value: float64(pipeline.ThreadgroupMemory)},
-				CounterSample{Timestamp: encoder.EndTime, Value: float64(pipeline.ThreadgroupMemory)})
-		}
-		appendCounterTrackSample(&allocatedRegsTrack, encoder, float64(pipeline.TemporaryRegisterCount))
-		appendCounterTrackSample(&uniformRegsTrack, encoder, float64(pipeline.UniformRegisterCount))
-		appendCounterTrackSample(&spilledBytesTrack, encoder, float64(pipeline.SpilledBytes))
 	}
-
-	// Calculate stats and append tracks that have data
-	calculateTrackStats(&instructionTrack)
-	calculateTrackStats(&aluInstrTrack)
-	calculateTrackStats(&fp32InstrTrack)
-	calculateTrackStats(&fp16InstrTrack)
-	calculateTrackStats(&int32InstrTrack)
-	calculateTrackStats(&int16InstrTrack)
-	calculateTrackStats(&branchInstrTrack)
-	calculateTrackStats(&threadgroupMemTrack)
-	calculateTrackStats(&allocatedRegsTrack)
-	calculateTrackStats(&uniformRegsTrack)
-	calculateTrackStats(&spilledBytesTrack)
-
-	// Only add tracks that have samples
-	if len(instructionTrack.Samples) > 0 {
-		tracks = append(tracks, instructionTrack)
-	}
-	if len(aluInstrTrack.Samples) > 0 {
-		tracks = append(tracks, aluInstrTrack)
-	}
-	if len(fp32InstrTrack.Samples) > 0 {
-		tracks = append(tracks, fp32InstrTrack)
-	}
-	if len(fp16InstrTrack.Samples) > 0 {
-		tracks = append(tracks, fp16InstrTrack)
-	}
-	if len(int32InstrTrack.Samples) > 0 {
-		tracks = append(tracks, int32InstrTrack)
-	}
-	if len(int16InstrTrack.Samples) > 0 {
-		tracks = append(tracks, int16InstrTrack)
-	}
-	if len(branchInstrTrack.Samples) > 0 {
-		tracks = append(tracks, branchInstrTrack)
-	}
-	if len(threadgroupMemTrack.Samples) > 0 {
-		tracks = append(tracks, threadgroupMemTrack)
-	}
-	if len(allocatedRegsTrack.Samples) > 0 {
-		tracks = append(tracks, allocatedRegsTrack)
-	}
-	if len(uniformRegsTrack.Samples) > 0 {
-		tracks = append(tracks, uniformRegsTrack)
-	}
-	if len(spilledBytesTrack.Samples) > 0 {
-		tracks = append(tracks, spilledBytesTrack)
-	}
-
-	return tracks
 }
 
 // calculateTrackStats calculates min, max, and average values for a counter track.
@@ -2647,6 +2258,11 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 			trace.Metadata["mlx_semantic_links"] = len(timeline.MLXSemantics.Links)
 			trace.Metadata["mlx_sidecar_digest"] = timeline.MLXSidecarDigest
 		}
+		trace.Metadata["unavailable_evidence_count"] = len(timeline.UnavailableEvidence)
+		for i, gap := range timeline.UnavailableEvidence {
+			trace.Metadata[fmt.Sprintf("unavailable_evidence_%d_family", i)] = gap.Family
+			trace.Metadata[fmt.Sprintf("unavailable_evidence_%d_reason", i)] = gap.Reason
+		}
 	}
 
 	trackNames := make(map[[2]int]string)
@@ -3035,6 +2651,19 @@ func exportChromeTracingForClock(timeline *Timeline, outputPath string, clock ti
 			Args:      args,
 		})
 	}
+	for _, gap := range timeline.UnavailableEvidence {
+		metadataEvents = append(metadataEvents, TimelineEvent{
+			Name:      "Unavailable evidence: " + gap.Family,
+			Category:  "evidence_gap",
+			Phase:     "i",
+			ProcessID: 1,
+			ThreadID:  15,
+			Args: map[string]interface{}{
+				"family": gap.Family,
+				"reason": gap.Reason,
+			},
+		})
+	}
 
 	if timeline.Timing != nil {
 		metadataEvents = append(metadataEvents,
@@ -3330,6 +2959,14 @@ func timelineXcodeMetricsArgs(timeline *Timeline) map[string]interface{} {
 		args["unattributed_counter_rows"] = len(timeline.UnattributedCounters)
 		args["unattributed_counter_labels"] = labels
 		args["counter_attribution_reason"] = "no capture-backed encoder identity"
+	}
+	if len(timeline.UnavailableEvidence) > 0 {
+		families := make([]string, 0, len(timeline.UnavailableEvidence))
+		for _, gap := range timeline.UnavailableEvidence {
+			families = append(families, gap.Family+": "+gap.Reason)
+		}
+		sort.Strings(families)
+		args["unavailable_evidence"] = families
 	}
 	if timeline.Timing != nil {
 		args["display_duration_source"] = timeline.Timing.DisplayDurationSource
