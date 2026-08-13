@@ -35,6 +35,9 @@ type Options struct {
 	// after the interposer variables so a caller can override them.
 	Env []string
 
+	// Stdin supplies the target's input. Nil reads no input.
+	Stdin io.Reader
+
 	// Stdout and Stderr receive the target's output. Nil discards it.
 	Stdout, Stderr io.Writer
 }
@@ -126,6 +129,7 @@ func Run(ctx context.Context, opts Options, argv ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, bin, argv[1:]...)
 	cmd.Dir = opts.Dir
 	cmd.Env = append(env(opts.Output, lock, dylib), opts.Env...)
+	cmd.Stdin = opts.Stdin
 	if opts.Stdout != nil {
 		cmd.Stdout = opts.Stdout
 	}

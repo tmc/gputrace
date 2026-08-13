@@ -49,11 +49,12 @@ Examples:
 			if opts.output == "" {
 				return errors.New("capture: -o is required")
 			}
-			var stdout, stderr bytes.Buffer
+			var stderr bytes.Buffer
 			out, err := capture.Run(cmd.Context(), capture.Options{
 				Output: opts.output,
 				Dir:    opts.dir,
-				Stdout: &stdout,
+				Stdin:  cmd.InOrStdin(),
+				Stdout: cmd.OutOrStdout(),
 				Stderr: &stderr,
 			}, args...)
 			if err != nil {
