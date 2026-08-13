@@ -72,6 +72,10 @@ func TestModuleProjectsRecordedDispatchesAndCompilerFacts(t *testing.T) {
 		"a.display_value",
 		"raw profiler stream aggregate; not a GPU encoder interval",
 		"counter_decode_status",
+		"streamData gpuCommandInfoData functionName",
+		"source_available",
+		"source_aggregate_simd_groups",
+		"source_aggregate_simd_groups_basis",
 	} {
 		if !strings.Contains(Module, want) {
 			t.Errorf("module missing %q", want)

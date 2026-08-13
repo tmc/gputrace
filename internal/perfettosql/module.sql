@@ -101,7 +101,7 @@ SELECT
   extract_arg(arg_set_id, 'timing_quality') AS timing_quality,
   extract_arg(arg_set_id, 'clock_domain') AS clock_domain,
   extract_arg(arg_set_id, 'encoder_containment') AS parent_basis,
-  NULL AS function_attribution,
+  'streamData gpuCommandInfoData functionName' AS function_attribution,
   NULL AS coordinate_source,
   cast(extract_arg(arg_set_id, 'cumulative_us') AS INT) AS source_cumulative_us,
   cast(extract_arg(arg_set_id, 'simd_groups') AS INT) AS simd_groups,
@@ -110,6 +110,7 @@ SELECT
   extract_arg(arg_set_id, 'geometry_source') AS geometry_source,
   extract_arg(arg_set_id, 'source_file') AS source_file,
   cast(extract_arg(arg_set_id, 'source_line') AS INT) AS source_line,
+  cast(extract_arg(arg_set_id, 'source_available') AS INT) AS source_available,
   cast(extract_arg(arg_set_id, 'gprwcntr_sample_count') AS INT) AS sample_count,
   cast(extract_arg(arg_set_id, 'sampling_density') AS REAL) AS sampling_density,
   extract_arg(arg_set_id, 'sample_attribution_basis') AS sample_attribution_basis,
@@ -151,6 +152,7 @@ SELECT
   'capture dispatch record' AS geometry_source,
   extract_arg(arg_set_id, 'debug.source_file') AS source_file,
   cast(extract_arg(arg_set_id, 'debug.source_line') AS INT) AS source_line,
+  cast(extract_arg(arg_set_id, 'debug.source_available') AS INT) AS source_available,
   NULL AS sample_count,
   NULL AS sampling_density,
   NULL AS sample_attribution_basis,
@@ -274,6 +276,14 @@ SELECT
   count(*) AS dispatch_count,
   sum(CASE WHEN evidence_kind = 'measured_gpu_execution' THEN dur END) AS measured_duration_ns,
   sum(simd_groups) AS total_simd_groups,
+  max(cast(coalesce(
+    extract_arg(arg_set_id, 'function_simd_groups'),
+    extract_arg(arg_set_id, 'debug.function_simd_groups')
+  ) AS INT)) AS source_aggregate_simd_groups,
+  max(coalesce(
+    extract_arg(arg_set_id, 'function_simd_groups_source'),
+    extract_arg(arg_set_id, 'debug.function_simd_groups_source')
+  )) AS source_aggregate_simd_groups_basis,
   max(cast(coalesce(
     extract_arg(arg_set_id, 'shader_duration_ns'),
     extract_arg(arg_set_id, 'debug.shader_duration_ns')
