@@ -6,7 +6,8 @@
 described here. It exports one clock domain, binds to loopback, serves a pinned
 local UI or an explicitly selected remote UI, transfers the trace after the
 embedding PING/PONG handshake, and shuts down with the command context.
-Focused opening, a packaged UI, and the MLX plugin remain proposed. The same
+Exact kernel/occurrence focus and explicit initial time ranges are implemented.
+A packaged UI and the MLX plugin remain proposed. The same
 timeline command without `--open` writes native Perfetto protobuf and populates
 native GPU tables; `--format chrome` retains Chrome Trace JSON compatibility.
 
@@ -54,7 +55,7 @@ The command is:
 gputrace timeline TRACE --format perfetto --open
 ```
 
-Proposed options:
+Options:
 
 ```text
 --listen 127.0.0.1:0    listen address; port zero selects an unused port
@@ -62,7 +63,8 @@ Proposed options:
 --ui-dir DIR            serve a pinned Perfetto UI build from DIR
 --remote-ui             embed https://ui.perfetto.dev instead of a local UI
 --clock busy|wall       exported clock domain; default busy
---kernel NAME           focus the first exact matching kernel
+--kernel NAME           focus an exact kernel name; ambiguity is an error
+--kernel-occurrence N   zero-based occurrence; required for repeated names
 --time-start SECONDS    initial absolute viewport start
 --time-end SECONDS      initial absolute viewport end
 ```
@@ -295,10 +297,10 @@ zero.
 - Validate output with `trace_processor_shell` queries against `gpu`,
   `gpu_track`, `gpu_slice`, `gpu_render_stage`, and `gpu_counter_track`.
 
-### Slice 3: focused opening
+### Slice 3: focused opening (implemented)
 
 - Add exact kernel selection, occurrence selection, and viewport messages.
-- Add documented startup commands for track pinning and initial queries.
+- Add deep-link navigation for the selected event or explicit time range.
 - Report unmatched and ambiguous selections without silently falling back.
 
 ### Slice 4: optional trace merging

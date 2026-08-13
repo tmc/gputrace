@@ -46,6 +46,10 @@ gputrace timeline trace.gputrace --format perfetto --open --remote-ui
 gputrace timeline trace.gputrace --format perfetto --open \
   --ui-dir /path/to/perfetto-ui
 
+# Focus one exact occurrence; repeated names require the occurrence flag
+gputrace timeline trace.gputrace --format perfetto --open --remote-ui \
+  --kernel rmsbfloat16 --kernel-occurrence 0
+
 # Write stable PerfettoSQL views for trace_processor_shell
 gputrace timeline trace.gputrace --format perfetto \
   --sql-out gputrace.sql -o trace.pftrace

@@ -77,3 +77,14 @@ func TestHandlerRequiresOneUI(t *testing.T) {
 		t.Fatal("two UI modes were accepted")
 	}
 }
+
+func TestUIURLNavigation(t *testing.T) {
+	got := uiURL(Config{RemoteUI: true, Navigation: &Navigation{
+		ViewStartNS: 10, ViewEndNS: 40, SelectionStartNS: 20, SelectionDurNS: 5, HasSelection: true,
+	}})
+	for _, want := range []string{"mode=embedded", "visStart=10", "visEnd=40", "ts=20", "dur=5"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("uiURL = %q, missing %q", got, want)
+		}
+	}
+}

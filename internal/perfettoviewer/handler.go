@@ -5,17 +5,30 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
 // Config configures a viewer handler.
 type Config struct {
-	TracePath string
-	UIPath    string
-	RemoteUI  bool
-	Title     string
+	TracePath  string
+	UIPath     string
+	RemoteUI   bool
+	Title      string
+	Navigation *Navigation
+}
+
+// Navigation selects an initial viewport and optional trace event. Values use
+// nanoseconds, matching Perfetto's deep-link parameters.
+type Navigation struct {
+	ViewStartNS      uint64
+	ViewEndNS        uint64
+	SelectionStartNS uint64
+	SelectionDurNS   uint64
+	HasSelection     bool
 }
 
 // NewHandler returns the fixed viewer HTTP surface.
@@ -40,6 +53,9 @@ func NewHandler(config Config) (http.Handler, error) {
 	}
 	if config.Title == "" {
 		config.Title = filepath.Base(config.TracePath)
+	}
+	if config.Navigation != nil && config.Navigation.ViewEndNS <= config.Navigation.ViewStartNS {
+		return nil, fmt.Errorf("create Perfetto viewer: navigation end must be after start")
 	}
 
 	mux := http.NewServeMux()
@@ -70,10 +86,20 @@ func NewHandler(config Config) (http.Handler, error) {
 }
 
 func uiURL(config Config) string {
+	base := "/ui/"
 	if config.RemoteUI {
-		return "https://ui.perfetto.dev/#!/?mode=embedded"
+		base = "https://ui.perfetto.dev/"
 	}
-	return "/ui/#!/?mode=embedded"
+	query := url.Values{"mode": {"embedded"}}
+	if navigation := config.Navigation; navigation != nil {
+		query.Set("visStart", strconv.FormatUint(navigation.ViewStartNS, 10))
+		query.Set("visEnd", strconv.FormatUint(navigation.ViewEndNS, 10))
+		if navigation.HasSelection {
+			query.Set("ts", strconv.FormatUint(navigation.SelectionStartNS, 10))
+			query.Set("dur", strconv.FormatUint(navigation.SelectionDurNS, 10))
+		}
+	}
+	return base + "#!/?" + query.Encode()
 }
 
 func noListFileServer(root string) http.Handler {

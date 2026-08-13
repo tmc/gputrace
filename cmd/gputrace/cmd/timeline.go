@@ -21,24 +21,35 @@ import (
 )
 
 var timelineCmd = newTimelineCommand(&timelineOptions{
-	format: "text",
-	clock:  timelineClockBusy,
+	format:           "text",
+	clock:            timelineClockBusy,
+	kernelOccurrence: -1,
+	timeStart:        -1,
+	timeEnd:          -1,
 })
 
 type timelineOptions struct {
-	output             string
-	format             string
-	clock              timelineClock
-	rawProfilerSamples bool
-	xcodeGPUTime       bool
-	sidecar            string
-	openViewer         bool
-	serveViewer        bool
-	uiDir              string
-	remoteUI           bool
-	listen             string
-	maxOutputBytes     int64
-	sqlOutput          string
+	output              string
+	format              string
+	clock               timelineClock
+	rawProfilerSamples  bool
+	xcodeGPUTime        bool
+	sidecar             string
+	openViewer          bool
+	serveViewer         bool
+	uiDir               string
+	remoteUI            bool
+	listen              string
+	maxOutputBytes      int64
+	sqlOutput           string
+	kernel              string
+	kernelOccurrence    int
+	timeStart           float64
+	timeEnd             float64
+	navigationStartNS   uint64
+	navigationEndNS     uint64
+	selectionStartNS    uint64
+	selectionDurationNS uint64
 }
 
 // timelineClock selects one measured timestamp domain. The profiler records
@@ -110,7 +121,11 @@ Examples:
   gputrace timeline trace.gputrace -o timeline.json --format json
 
   # Emit stable PerfettoSQL views beside a native trace
-  gputrace timeline trace.gputrace --format perfetto --sql-out gputrace.sql`,
+  gputrace timeline trace.gputrace --format perfetto --sql-out gputrace.sql
+
+  # Open one exact kernel occurrence
+  gputrace timeline trace.gputrace --format perfetto --open --remote-ui \
+    --kernel rmsbfloat16 --kernel-occurrence 0`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runTimeline(cmd, args, opts)
@@ -130,6 +145,10 @@ Examples:
 	cmd.Flags().StringVar(&opts.listen, "listen", "127.0.0.1:0", "Loopback viewer listen address")
 	cmd.Flags().Int64Var(&opts.maxOutputBytes, "max-output-bytes", opts.maxOutputBytes, "Maximum logical native protobuf bytes; zero is lossless")
 	cmd.Flags().StringVar(&opts.sqlOutput, "sql-out", opts.sqlOutput, "Write the gputrace PerfettoSQL views (with --format perfetto)")
+	cmd.Flags().StringVar(&opts.kernel, "kernel", opts.kernel, "Focus an exact kernel name in the viewer")
+	cmd.Flags().IntVar(&opts.kernelOccurrence, "kernel-occurrence", -1, "Zero-based occurrence for --kernel; required when the name is repeated")
+	cmd.Flags().Float64Var(&opts.timeStart, "time-start", -1, "Initial viewer range start in seconds")
+	cmd.Flags().Float64Var(&opts.timeEnd, "time-end", -1, "Initial viewer range end in seconds")
 	return cmd
 }
 
@@ -229,6 +248,9 @@ func runTimeline(cmd *cobra.Command, args []string, opts *timelineOptions) error
 	}
 	fullTimeline := timeline // Keep pre-clock-filtered timeline for text export wall-time gaps.
 	timeline = timelineForClockWithRawSamples(timeline, opts.clock, opts.rawProfilerSamples)
+	if err := resolveTimelineNavigation(timeline, opts); err != nil {
+		return err
+	}
 
 	// Export based on format
 	switch opts.format {
@@ -3553,6 +3575,9 @@ func runTimelineFromProfiler(cmd *cobra.Command, tracePath string, opts *timelin
 		return nil
 	}
 	timeline = timelineForClockWithRawSamples(timeline, opts.clock, opts.rawProfilerSamples)
+	if err := resolveTimelineNavigation(timeline, opts); err != nil {
+		return err
+	}
 
 	// Export based on format
 	switch opts.format {

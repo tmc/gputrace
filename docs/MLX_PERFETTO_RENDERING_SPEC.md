@@ -733,6 +733,10 @@ gputrace timeline TRACE --format perfetto --open [--sidecar semantics.json]
 --manifest FILE
 --max-output-bytes N
 --sql-out FILE
+--kernel NAME
+--kernel-occurrence N
+--time-start SECONDS
+--time-end SECONDS
 ```
 
 `--max-output-bytes` is an explicit lossy-export request and uses the logical
