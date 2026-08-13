@@ -154,8 +154,10 @@ func WriteWithOptions(w io.Writer, trace *Trace, options WriteOptions) (Receipt,
 	var required [][]byte
 	required = append(required, initialPacket(trace))
 
-	tracks := append([]Track(nil), trace.Tracks...)
-	sort.Slice(tracks, func(i, j int) bool { return tracks[i].UUID < tracks[j].UUID })
+	tracks, err := orderedTracks(trace.Tracks)
+	if err != nil {
+		return Receipt{}, err
+	}
 	for _, track := range tracks {
 		required = append(required, trackDescriptorPacket(track))
 	}
@@ -286,6 +288,14 @@ func validate(trace *Trace) error {
 		}
 		tracks[track.UUID] = true
 	}
+	for _, track := range trace.Tracks {
+		if track.ParentUUID != 0 && !tracks[track.ParentUUID] {
+			return fmt.Errorf("write perfetto trace: track %d references unknown parent %d", track.UUID, track.ParentUUID)
+		}
+	}
+	if _, err := orderedTracks(trace.Tracks); err != nil {
+		return err
+	}
 	for _, event := range trace.Events {
 		if event.Kind != EventGPUCompute && !tracks[event.TrackUUID] {
 			return fmt.Errorf("write perfetto trace: event %q references unknown track %d", event.Name, event.TrackUUID)
@@ -302,6 +312,50 @@ func validate(trace *Trace) error {
 		ids[counter.ID] = true
 	}
 	return nil
+}
+
+// orderedTracks returns a deterministic parent-before-child descriptor order.
+// Readers therefore never need to resolve a child against a parent descriptor
+// that has not yet appeared in the packet sequence.
+func orderedTracks(tracks []Track) ([]Track, error) {
+	byID := make(map[uint64]Track, len(tracks))
+	ids := make([]uint64, 0, len(tracks))
+	for _, track := range tracks {
+		byID[track.UUID] = track
+		ids = append(ids, track.UUID)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+
+	state := make(map[uint64]uint8, len(tracks))
+	ordered := make([]Track, 0, len(tracks))
+	var visit func(uint64) error
+	visit = func(id uint64) error {
+		switch state[id] {
+		case 1:
+			return fmt.Errorf("write perfetto trace: track parent cycle at %d", id)
+		case 2:
+			return nil
+		}
+		track := byID[id]
+		state[id] = 1
+		if track.ParentUUID != 0 {
+			if _, ok := byID[track.ParentUUID]; !ok {
+				return fmt.Errorf("write perfetto trace: track %d references unknown parent %d", id, track.ParentUUID)
+			}
+			if err := visit(track.ParentUUID); err != nil {
+				return err
+			}
+		}
+		state[id] = 2
+		ordered = append(ordered, track)
+		return nil
+	}
+	for _, id := range ids {
+		if err := visit(id); err != nil {
+			return nil, err
+		}
+	}
+	return ordered, nil
 }
 
 type traceWriter struct{ w io.Writer }

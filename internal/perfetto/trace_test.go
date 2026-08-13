@@ -45,6 +45,42 @@ func TestWriteRejectsDanglingTrack(t *testing.T) {
 	}
 }
 
+func TestOrderedTracksParentsBeforeChildren(t *testing.T) {
+	tracks := []Track{
+		{UUID: 1, ParentUUID: 9, Name: "child-b"},
+		{UUID: 2, ParentUUID: 9, Name: "child-a"},
+		{UUID: 9, Name: "parent"},
+	}
+	ordered, err := orderedTracks(tracks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := []uint64{ordered[0].UUID, ordered[1].UUID, ordered[2].UUID}
+	want := []uint64{9, 1, 2}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("track order = %v, want %v", got, want)
+	}
+}
+
+func TestWriteRejectsInvalidTrackHierarchy(t *testing.T) {
+	tests := []struct {
+		name   string
+		tracks []Track
+		want   string
+	}{
+		{"unknown parent", []Track{{UUID: 1, ParentUUID: 2}}, "unknown parent 2"},
+		{"cycle", []Track{{UUID: 1, ParentUUID: 2}, {UUID: 2, ParentUUID: 1}}, "parent cycle"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := Write(&bytes.Buffer{}, &Trace{ClockDomain: "busy", Tracks: test.tracks})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Write error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestTrackUUID(t *testing.T) {
 	a := TrackUUID("busy", "1/2")
 	b := TrackUUID("busy", "1/2")
