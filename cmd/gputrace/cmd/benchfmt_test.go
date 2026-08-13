@@ -36,7 +36,7 @@ pkg: github.com/tmc/gputrace
 trace-uuid: ABC-123
 timing-source: streamData
 
-BenchmarkGPUTrace/Qwen_2_5_0_5B-1 1 2.317e+07 dispatch_span_ns/op 869 dispatches/op 30 command-buffers/op
+BenchmarkGPUTrace/Qwen_2_5_0_5B-1 1 2.317e+07 dispatch_span_ns/trace 869 dispatches/trace 30 command-buffers/trace
 `
 	if got := out.String(); got != want {
 		t.Fatalf("output:\n%s\nwant:\n%s", got, want)
@@ -86,7 +86,7 @@ func TestWriteBenchfmtDefaultName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := out.String(), "BenchmarkGPUTrace-1 1 1 encoders/op\n"; got != want {
+	if got, want := out.String(), "BenchmarkGPUTrace-1 1 1 encoders/trace\n"; got != want {
 		t.Fatalf("output = %q, want %q", got, want)
 	}
 }

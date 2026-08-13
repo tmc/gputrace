@@ -44,19 +44,19 @@ The benchmark line uses separate units for values with different meanings:
 
 | Unit | Meaning |
 | --- | --- |
-| `dispatch_span_ns/op` | Span of cumulative profiler dispatch offsets |
-| `cb_active_ns/op` | Sum of command-buffer active ranges |
-| `cb_wall_ns/op` | Wall span covered by command buffers |
-| `effective_gpu_ns/op` | Xcode APSTimelineData effective GPU time |
+| `dispatch_span_ns/trace` | Span of cumulative profiler dispatch offsets |
+| `cb_active_ns/trace` | Sum of command-buffer active ranges |
+| `cb_wall_ns/trace` | Wall span covered by command buffers |
+| `effective_gpu_ns/trace` | Xcode APSTimelineData effective GPU time |
 | `profiler_sample_cost_percent` | Per-function share of USC statistical profiler samples |
-| `profiler_cost_samples/op` | USC samples underlying statistical execution-cost attribution |
-| `gprwcntr_samples/op` | GPRWCNTR samples attached to dispatch records |
-| `dispatches/op` | GPU dispatch count |
-| `command-buffers/op` | Command-buffer count |
-| `encoders/op` | Compute-encoder count |
+| `profiler_cost_samples/trace` | USC samples underlying statistical execution-cost attribution |
+| `gprwcntr_samples/trace` | GPRWCNTR samples attached to dispatch records |
+| `dispatches/trace` | GPU dispatch count |
+| `command-buffers/trace` | Command-buffer count |
+| `encoders/trace` | Compute-encoder count |
 
 The span units are not aliases for active or effective GPU time.
-`profiler_cost_samples/op` is emitted by `profiler`, which reads the
+`profiler_cost_samples/trace` is emitted by `profiler`, which reads the
 `Profiling_f_*.raw` execution-cost records. `stats` and `timing` do not scan
 those records. The same command emits one stable function-specific benchmark
 row with `profiler_sample_cost_percent` for each attributed function. These

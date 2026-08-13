@@ -13,16 +13,16 @@ import (
 )
 
 const (
-	benchfmtDispatchSpanUnit        = "dispatch_span_ns/op"
-	benchfmtCBActiveUnit            = "cb_active_ns/op"
-	benchfmtCBWallUnit              = "cb_wall_ns/op"
-	benchfmtEffectiveGPUUnit        = "effective_gpu_ns/op"
+	benchfmtDispatchSpanUnit        = "dispatch_span_ns/trace"
+	benchfmtCBActiveUnit            = "cb_active_ns/trace"
+	benchfmtCBWallUnit              = "cb_wall_ns/trace"
+	benchfmtEffectiveGPUUnit        = "effective_gpu_ns/trace"
 	benchfmtProfilerSampleCostUnit  = "profiler_sample_cost_percent"
-	benchfmtProfilerCostSamplesUnit = "profiler_cost_samples/op"
-	benchfmtGPRWCNTRSamplesUnit     = "gprwcntr_samples/op"
-	benchfmtDispatchesUnit          = "dispatches/op"
-	benchfmtCommandBuffersUnit      = "command-buffers/op"
-	benchfmtEncodersUnit            = "encoders/op"
+	benchfmtProfilerCostSamplesUnit = "profiler_cost_samples/trace"
+	benchfmtGPRWCNTRSamplesUnit     = "gprwcntr_samples/trace"
+	benchfmtDispatchesUnit          = "dispatches/trace"
+	benchfmtCommandBuffersUnit      = "command-buffers/trace"
+	benchfmtEncodersUnit            = "encoders/trace"
 )
 
 var benchfmtConfigOrder = []string{
