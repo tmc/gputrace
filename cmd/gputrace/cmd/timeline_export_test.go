@@ -365,7 +365,11 @@ func TestExportPerfettoWritesNativeProtobuf(t *testing.T) {
 	if json.Valid(data) {
 		t.Fatal("native Perfetto output is JSON")
 	}
-	for _, want := range []string{"unavailable_evidence_0_family", "APSCounterData time series", "counter clock is not joined", "mlx_semantic_unused_nodes", "mlx_semantic_unmatched_dispatch"} {
+	for _, want := range []string{
+		"unavailable_evidence_0_family", "APSCounterData time series", "counter clock is not joined",
+		"mlx_semantic_unused_nodes", "mlx_semantic_unmatched_dispatch", perfetto.SchemaRevision,
+		"input_content_digest_availability", "unavailable_syscalls", "packet_family_gpu_render_stage_event",
+	} {
 		if !bytes.Contains(data, []byte(want)) {
 			t.Fatalf("native trace missing manifest value %q", want)
 		}

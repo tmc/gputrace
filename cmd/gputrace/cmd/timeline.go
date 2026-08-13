@@ -2290,7 +2290,28 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 			"environment_mlx_runtime_availability":        "unavailable",
 			"environment_workload_availability":           "unavailable",
 			"environment_capability_catalog_availability": "unavailable",
+			"perfetto_schema_revision":                    perfetto.SchemaRevision,
+			"packet_family_gpu_info":                      true,
+			"packet_family_gpu_render_stage_event":        true,
+			"packet_family_track_event":                   true,
+			"packet_family_gpu_counter_event":             len(timeline.CounterTracks) > 0,
+			"unavailable_cpu_scheduling":                  "Metal trace contains no CPU scheduling evidence",
+			"unavailable_syscalls":                        "Metal trace contains no syscall evidence",
+			"unavailable_cpu_frequency":                   "Metal trace contains no CPU frequency evidence",
+			"unavailable_system_memory":                   "Metal trace contains no system-memory evidence",
 		},
+	}
+	if timeline.TraceUUID != "" {
+		trace.Metadata["input_uuid"] = timeline.TraceUUID
+		trace.Metadata["input_uuid_availability"] = "available"
+	} else {
+		trace.Metadata["input_uuid_availability"] = "unavailable"
+	}
+	if timeline.MLXSemantics != nil && timeline.MLXSemantics.Trace.ContentDigest != "" {
+		trace.Metadata["input_content_digest"] = timeline.MLXSemantics.Trace.ContentDigest
+		trace.Metadata["input_content_digest_availability"] = "available: verified strict sidecar"
+	} else {
+		trace.Metadata["input_content_digest_availability"] = "unavailable: exact tree hashing is performed only for strict sidecar validation"
 	}
 	if timeline.DeviceID != 0 {
 		trace.GPUModel = fmt.Sprintf("Metal device %d", timeline.DeviceID)
@@ -2303,6 +2324,7 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 		trace.Metadata["raw_profiler_samples"] = timeline.RawProfilerSamples
 		trace.Metadata["dispatch_count"] = len(timeline.Kernels)
 		trace.Metadata["encoder_count"] = len(timeline.Encoders)
+		trace.Metadata["command_buffer_count"] = timelineEventCount(timeline, "command_buffer")
 		if timeline.Timing != nil {
 			trace.Metadata["timing_source"] = timeline.Timing.TimingSource
 			trace.Metadata["timing_approximate"] = timeline.Timing.EncoderTimingApproximate

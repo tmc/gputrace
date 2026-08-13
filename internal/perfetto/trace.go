@@ -9,6 +9,10 @@ import (
 	"strconv"
 )
 
+// SchemaRevision is the Perfetto release used to validate the hand-written
+// packet field mapping.
+const SchemaRevision = "Perfetto v57.2 (da1d152cff27890903d158fe96751de3aab883cc)"
+
 const (
 	clockID    = 64 // Sequence-scoped user clock.
 	sequenceID = 1

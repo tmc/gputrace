@@ -3,12 +3,25 @@
 set -eu
 
 require_gpu=false
-if [ "${1:-}" = "--require-gpu" ]; then
-	require_gpu=true
-	shift
-fi
+sql=
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+	--require-gpu)
+		require_gpu=true
+		shift
+		;;
+	--sql)
+		[ "$#" -ge 2 ] || { echo "--sql requires a file" >&2; exit 2; }
+		sql=$2
+		shift 2
+		;;
+	*)
+		break
+		;;
+	esac
+done
 if [ "$#" -ne 1 ]; then
-	echo "usage: $0 [--require-gpu] trace.pftrace" >&2
+	echo "usage: $0 [--require-gpu] [--sql gputrace.sql] trace.pftrace" >&2
 	exit 2
 fi
 
@@ -38,5 +51,27 @@ slices=$(
 		tail -1 | tr -d '"'
 )
 [ "$slices" -gt 0 ] || { echo "native trace contains no slice rows" >&2; exit 1; }
+
+manifest_schema=$(
+	"$tp" query "$trace" \
+		"select extract_arg(arg_set_id,'debug.schema') from slice where name='gputrace evidence manifest'" \
+		2>/dev/null | tail -1 | tr -d '"'
+)
+[ "$manifest_schema" = gputrace.perfetto/v1 ] || {
+	echo "native trace has no gputrace.perfetto/v1 manifest" >&2
+	exit 1
+}
+
+if [ -n "$sql" ]; then
+	[ -f "$sql" ] || { echo "PerfettoSQL file not found: $sql" >&2; exit 2; }
+	view_dispatches=$(
+		{ sed -n '1,$p' "$sql"; printf '%s\n' 'select count(*) from gputrace_dispatch;'; } |
+			"$tp" query "$trace" 2>/dev/null | tail -1 | tr -d '"'
+	)
+	[ "$view_dispatches" = "$gpu_slices" ] || {
+		echo "gputrace_dispatch has $view_dispatches rows; gpu_slice has $gpu_slices" >&2
+		exit 1
+	}
+fi
 
 printf 'native Perfetto validation passed: %s slices, %s GPU slices\n' "$slices" "$gpu_slices"

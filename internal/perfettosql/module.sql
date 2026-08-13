@@ -4,13 +4,13 @@
 CREATE PERFETTO VIEW gputrace_capture AS
 SELECT
   id,
-  extract_arg(arg_set_id, 'schema') AS schema,
-  extract_arg(arg_set_id, 'clock_domain') AS clock_domain,
-  extract_arg(arg_set_id, 'timing_source') AS timing_source,
-  extract_arg(arg_set_id, 'timing_quality') AS timing_quality,
-  extract_arg(arg_set_id, 'dispatch_count') AS dispatch_count,
-  extract_arg(arg_set_id, 'encoder_count') AS encoder_count,
-  extract_arg(arg_set_id, 'output_complete') AS output_complete
+  extract_arg(arg_set_id, 'debug.schema') AS schema,
+  extract_arg(arg_set_id, 'debug.clock_domain') AS clock_domain,
+  extract_arg(arg_set_id, 'debug.timing_source') AS timing_source,
+  extract_arg(arg_set_id, 'debug.timing_quality') AS timing_quality,
+  extract_arg(arg_set_id, 'debug.dispatch_count') AS dispatch_count,
+  extract_arg(arg_set_id, 'debug.encoder_count') AS encoder_count,
+  extract_arg(arg_set_id, 'debug.output_complete') AS output_complete
 FROM slice
 WHERE name = 'gputrace evidence manifest';
 
@@ -48,10 +48,10 @@ SELECT
   ts,
   dur,
   name,
-  extract_arg(arg_set_id, 'semantic_id') AS semantic_id,
-  extract_arg(arg_set_id, 'semantic_kind') AS semantic_kind,
-  extract_arg(arg_set_id, 'target_kind') AS target_kind,
-  extract_arg(arg_set_id, 'join_basis') AS join_basis
+  extract_arg(arg_set_id, 'debug.semantic_id') AS semantic_id,
+  extract_arg(arg_set_id, 'debug.semantic_kind') AS semantic_kind,
+  extract_arg(arg_set_id, 'debug.target_kind') AS target_kind,
+  extract_arg(arg_set_id, 'debug.join_basis') AS join_basis
 FROM slice
 WHERE category = 'mlx_semantic';
 
@@ -70,18 +70,18 @@ GROUP BY ct.id, ct.name, ct.unit, ct.description;
 
 CREATE PERFETTO VIEW gputrace_unmatched AS
 SELECT 'semantic_node' AS kind,
-       extract_arg(arg_set_id, 'mlx_semantic_unused_nodes') AS count
+       extract_arg(arg_set_id, 'debug.mlx_semantic_unused_nodes') AS count
 FROM slice
 WHERE name = 'gputrace evidence manifest'
 UNION ALL
-SELECT 'dispatch', extract_arg(arg_set_id, 'mlx_semantic_unmatched_dispatch')
+SELECT 'dispatch', extract_arg(arg_set_id, 'debug.mlx_semantic_unmatched_dispatch')
 FROM slice
 WHERE name = 'gputrace evidence manifest'
 UNION ALL
-SELECT 'encoder', extract_arg(arg_set_id, 'mlx_semantic_unmatched_encoder')
+SELECT 'encoder', extract_arg(arg_set_id, 'debug.mlx_semantic_unmatched_encoder')
 FROM slice
 WHERE name = 'gputrace evidence manifest'
 UNION ALL
-SELECT 'command_buffer', extract_arg(arg_set_id, 'mlx_semantic_unmatched_command_buffer')
+SELECT 'command_buffer', extract_arg(arg_set_id, 'debug.mlx_semantic_unmatched_command_buffer')
 FROM slice
 WHERE name = 'gputrace evidence manifest';

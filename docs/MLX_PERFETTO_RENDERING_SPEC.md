@@ -694,7 +694,9 @@ Every export carries a manifest containing at least:
 
 ```text
 schema and exporter version
-input UUID and content digest
+input UUID and content digest when already verified for a strict sidecar;
+otherwise explicit digest unavailability (ordinary export does not hash a
+multi-gigabyte bundle merely to render it)
 input path for diagnostics only
 device and OS/Xcode identity when available
 capture and replay mode
