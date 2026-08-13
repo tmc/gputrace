@@ -26,19 +26,59 @@ SELECT
   extract_arg(arg_set_id, 'pipeline_state') AS pipeline_state,
   extract_arg(arg_set_id, 'timing_source') AS timing_source,
   extract_arg(arg_set_id, 'encoder_containment') AS parent_basis,
+  'measured_gpu_execution' AS evidence_kind,
   arg_set_id
-FROM gpu_slice;
+FROM gpu_slice
+UNION ALL
+SELECT
+  id,
+  ts,
+  dur,
+  name,
+  extract_arg(arg_set_id, 'debug.dispatch_index') AS dispatch_id,
+  extract_arg(arg_set_id, 'debug.encoder_index') AS encoder_id,
+  extract_arg(arg_set_id, 'debug.pipeline_id') AS pipeline_id,
+  coalesce(
+    extract_arg(arg_set_id, 'debug.pipeline_state'),
+    extract_arg(arg_set_id, 'debug.pipeline_address')
+  ) AS pipeline_state,
+  extract_arg(arg_set_id, 'debug.timing_source') AS timing_source,
+  extract_arg(arg_set_id, 'debug.encoder_attribution') AS parent_basis,
+  'recorded_dispatch' AS evidence_kind,
+  arg_set_id
+FROM slice
+WHERE category = 'dispatch';
 
 CREATE PERFETTO VIEW gputrace_pipeline AS
 SELECT
   pipeline_id,
   pipeline_state,
   name AS function_name,
-  extract_arg(arg_set_id, 'allocated_registers') AS allocated_registers,
-  extract_arg(arg_set_id, 'uniform_registers') AS uniform_registers,
-  extract_arg(arg_set_id, 'spilled_bytes') AS spilled_bytes,
-  extract_arg(arg_set_id, 'threadgroup_memory') AS threadgroup_memory,
-  extract_arg(arg_set_id, 'instruction_count') AS instruction_count
+  max(cast(coalesce(extract_arg(arg_set_id, 'allocated_registers'), extract_arg(arg_set_id, 'debug.allocated_registers')) AS INT)) AS allocated_registers,
+  max(cast(coalesce(extract_arg(arg_set_id, 'uniform_registers'), extract_arg(arg_set_id, 'debug.uniform_registers')) AS INT)) AS uniform_registers,
+  max(cast(coalesce(extract_arg(arg_set_id, 'spilled_bytes'), extract_arg(arg_set_id, 'debug.spilled_bytes')) AS INT)) AS spilled_bytes,
+  max(cast(coalesce(extract_arg(arg_set_id, 'thread_invariant_spilled'), extract_arg(arg_set_id, 'debug.thread_invariant_spilled')) AS INT)) AS thread_invariant_spilled,
+  max(cast(coalesce(extract_arg(arg_set_id, 'threadgroup_memory'), extract_arg(arg_set_id, 'debug.threadgroup_memory')) AS INT)) AS threadgroup_memory,
+  max(cast(coalesce(extract_arg(arg_set_id, 'instruction_count'), extract_arg(arg_set_id, 'debug.instruction_count')) AS INT)) AS instruction_count,
+  max(cast(coalesce(extract_arg(arg_set_id, 'alu_instruction_count'), extract_arg(arg_set_id, 'debug.alu_instruction_count')) AS INT)) AS alu_instruction_count,
+  max(cast(coalesce(extract_arg(arg_set_id, 'fp32_instruction_count'), extract_arg(arg_set_id, 'debug.fp32_instruction_count')) AS INT)) AS fp32_instruction_count,
+  max(cast(coalesce(extract_arg(arg_set_id, 'fp16_instruction_count'), extract_arg(arg_set_id, 'debug.fp16_instruction_count')) AS INT)) AS fp16_instruction_count,
+  max(cast(coalesce(extract_arg(arg_set_id, 'int32_instruction_count'), extract_arg(arg_set_id, 'debug.int32_instruction_count')) AS INT)) AS int32_instruction_count,
+  max(cast(coalesce(extract_arg(arg_set_id, 'int16_instruction_count'), extract_arg(arg_set_id, 'debug.int16_instruction_count')) AS INT)) AS int16_instruction_count,
+  max(cast(coalesce(extract_arg(arg_set_id, 'branch_instruction_count'), extract_arg(arg_set_id, 'debug.branch_instruction_count')) AS INT)) AS branch_instruction_count,
+  max(cast(coalesce(extract_arg(arg_set_id, 'device_load_instruction_count'), extract_arg(arg_set_id, 'debug.device_load_instruction_count')) AS INT)) AS device_load_instruction_count,
+  max(cast(coalesce(extract_arg(arg_set_id, 'device_store_instruction_count'), extract_arg(arg_set_id, 'debug.device_store_instruction_count')) AS INT)) AS device_store_instruction_count,
+  max(cast(coalesce(extract_arg(arg_set_id, 'device_atomic_instruction_count'), extract_arg(arg_set_id, 'debug.device_atomic_instruction_count')) AS INT)) AS device_atomic_instruction_count,
+  max(cast(coalesce(extract_arg(arg_set_id, 'texture_reads_instruction_count'), extract_arg(arg_set_id, 'debug.texture_reads_instruction_count')) AS INT)) AS texture_reads_instruction_count,
+  max(cast(coalesce(extract_arg(arg_set_id, 'texture_writes_instruction_count'), extract_arg(arg_set_id, 'debug.texture_writes_instruction_count')) AS INT)) AS texture_writes_instruction_count,
+  max(cast(coalesce(extract_arg(arg_set_id, 'threadgroup_load_instruction_count'), extract_arg(arg_set_id, 'debug.threadgroup_load_instruction_count')) AS INT)) AS threadgroup_load_instruction_count,
+  max(cast(coalesce(extract_arg(arg_set_id, 'threadgroup_store_instruction_count'), extract_arg(arg_set_id, 'debug.threadgroup_store_instruction_count')) AS INT)) AS threadgroup_store_instruction_count,
+  max(cast(coalesce(extract_arg(arg_set_id, 'threadgroup_atomic_instruction_count'), extract_arg(arg_set_id, 'debug.threadgroup_atomic_instruction_count')) AS INT)) AS threadgroup_atomic_instruction_count,
+  max(cast(coalesce(extract_arg(arg_set_id, 'wait_instruction_count'), extract_arg(arg_set_id, 'debug.wait_instruction_count')) AS INT)) AS wait_instruction_count,
+  max(cast(coalesce(extract_arg(arg_set_id, 'constant_calculation_temporary_register_count'), extract_arg(arg_set_id, 'debug.constant_calculation_temporary_register_count')) AS INT)) AS constant_calculation_temporary_register_count,
+  max(cast(coalesce(extract_arg(arg_set_id, 'constant_calculation_phase_present'), extract_arg(arg_set_id, 'debug.constant_calculation_phase_present')) AS INT)) AS constant_calculation_phase_present,
+  max(cast(coalesce(extract_arg(arg_set_id, 'compilation_time_ms'), extract_arg(arg_set_id, 'debug.compilation_time_ms')) AS REAL)) AS compilation_time_ms,
+  max(coalesce(extract_arg(arg_set_id, 'metrics_source'), extract_arg(arg_set_id, 'debug.metrics_source'))) AS compiler_metrics_source
 FROM gputrace_dispatch
 GROUP BY pipeline_id, pipeline_state, function_name;
 

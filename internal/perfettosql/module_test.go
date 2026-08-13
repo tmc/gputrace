@@ -28,3 +28,23 @@ func TestModuleDefinesStableViews(t *testing.T) {
 		t.Fatal("Write output differs from Module")
 	}
 }
+
+func TestModuleProjectsRecordedDispatchesAndCompilerFacts(t *testing.T) {
+	for _, want := range []string{
+		"WHERE category = 'dispatch'",
+		"'measured_gpu_execution' AS evidence_kind",
+		"'recorded_dispatch' AS evidence_kind",
+		"thread_invariant_spilled",
+		"int32_instruction_count",
+		"device_load_instruction_count",
+		"threadgroup_store_instruction_count",
+		"constant_calculation_phase_present",
+		"compilation_time_ms",
+		"metrics_source",
+		"extract_arg(arg_set_id, 'debug.allocated_registers')",
+	} {
+		if !strings.Contains(Module, want) {
+			t.Errorf("module missing %q", want)
+		}
+	}
+}
