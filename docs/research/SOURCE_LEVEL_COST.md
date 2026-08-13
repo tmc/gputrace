@@ -3,7 +3,9 @@
 Two questions:
 
 1. Can gputrace attribute cost to a line inside a Metal kernel, the way Xcode's
-   shader source viewer does? **No** — nothing in the archive supports it.
+   shader source viewer does? **Not yet.** Xcode's processed replay model can
+   contain instruction costs, but the measured fixture does not provide the
+   complete identity and debug-range join required for source-line cost.
 2. What backs Xcode's Heat Map tab, and can gputrace reproduce it? A heat map
    **does** exist for compute dispatches, showing per-thread-position Shader
    Execution Cost. But no part of it is in the archive, so gputrace cannot
@@ -77,10 +79,47 @@ field 1 selects source paths, field 2 selects function names, and fields 3 and
 4 are line and column. The named direct accessors agree with the table when
 read as `NSString` objects.
 
-This is source mapping, not source-level cost. The current model exposes no
-validated instruction-to-location edge and no cost attributed to an instruction
-or location. It therefore cannot change a duration or counter observation into
-a line-level measurement.
+This is source mapping, not by itself source-level cost. A later debug replay
+experiment found instruction-addressed cost in Xcode's processed model, but
+the instruction-to-location coverage and binary identity joins remain
+incomplete. It therefore still cannot change a duration or counter observation
+into a supported line-level measurement.
+
+## Processed debug replay experiment
+
+A debug MLX Swift replay was processed with Xcode's private data-path setup:
+
+```text
+capture: qwen-sdpa.gputrace
+replay:  qwen-sdpa.gpuprofiler_raw
+GPU:     Apple M4 Max, G16C B1
+binaries: 36
+instructions: 6,514
+nonzero instruction costs: 6,411
+instructions with nonzero addresses: 6,513
+instructions with debug ranges: 5,830
+decoded debug locations: 3,192
+```
+
+`[V]` The counts come from `GTMioShaderBinaryData` after `_setupDataPath` and
+the complete processor wait sequence. A mutation-sensitive unit test verifies
+that a nonzero data-master instruction-count field changes the classifier from
+empty to measured.
+
+The `instructionCosts` property cannot be tested by pointer presence. Its
+Objective-C implementation calls the internal C++ vector accessor and, when
+that returns null, substitutes the address of a zero `GTMioCostInfo` embedded
+in the object. Disassembly of the internal accessor shows that a populated
+vector returns its first element at a 0x130-byte stride. `gputrace` therefore
+reads the array only after data-path setup and tests the cost payload fields.
+
+The result is positive evidence for measured instruction cost, but a negative
+qualification result for source-line attribution. One instruction reports a
+zero address, which may be a valid binary-relative first address; 684
+instructions lack debug ranges, and no reproducible
+binary-to-pipeline plus content-identical-metallib identity edge has been
+established. `SourceCostEvidence` reports those facts with `ready=false`; pprof
+and Perfetto remain at `kernel_total_at_declaration` granularity.
 
 ## Falsifier 1: does the archived MTLLibrary carry debug info?
 

@@ -218,6 +218,24 @@ Source-line attribution is ready only when:
 Until those gates pass, shader-source output is useful navigation and
 pipeline-level diagnosis, not source-line performance attribution.
 
+## Current Xcode model boundary
+
+On the retained G16C debug replay, Xcode's data-path setup populated nonzero
+instruction-cost payloads for 6,411 of 6,514 compiled instructions across all
+36 shader binaries. The same model reported nonzero instruction addresses for
+6,513 instructions and debug ranges for 5,830. A zero address may be a valid
+binary-relative first address, so only the nonzero cardinality is reported.
+This proves that the private model can contain measured instruction costs; it
+does not complete the source join.
+
+`ProcessedStreamData.Binaries.SourceCost` reports these cardinalities and a
+machine-readable refusal status. It remains `ready=false` because debug-range
+coverage is incomplete and no reproducible edge yet binds each
+processed binary to an exact captured pipeline and content-identified
+metallib. The `instructionCosts` accessor is also non-null when its internal
+vector is empty: it returns an embedded zero record. Consumers must use payload
+and readiness fields, never pointer presence.
+
 ## Related documents
 
 - [MLX GPU Trace Rendering in Perfetto](MLX_PERFETTO_RENDERING_SPEC.md)
