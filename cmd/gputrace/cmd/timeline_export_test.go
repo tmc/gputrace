@@ -1153,6 +1153,9 @@ func TestAddDispatchKernelEventsIncludesXcodeShaderArgs(t *testing.T) {
 	checkArg("instruction_count", 99)
 	checkArg("shader_duration_ns", uint64(7000))
 	checkArg("gprwcntr_sample_count", 3)
+	checkArg("sample_attribution_basis", "GPRWCNTR samples in a scaled cumulative-dispatch window")
+	checkArg("sample_window_basis", "cumulative dispatch time scaled over the first APSTimelineData command buffer")
+	checkArg("sample_timestamp_domain", "mach absolute ticks")
 	checkArg("xcode_view", "Shaders")
 	checkArg("encoder_containment", "strict")
 }

@@ -56,10 +56,10 @@ type DispatchInfo struct {
 	ExecutionCostPct        float64 `json:"execution_cost_pct,omitempty"`         // Cost from a validated source (0-100%)
 	ProfilingSampleSharePct float64 `json:"profiling_sample_share_pct,omitempty"` // Pipeline share of Profiling_f samples; an estimate, not Xcode Execution Cost
 	// GPRWCNTR sample correlation (populated by CorrelateDispatchSamples)
-	SampleCount     int     `json:"sample_count,omitempty"`     // Number of GPRWCNTR samples during this dispatch
-	SamplingDensity float64 `json:"sampling_density,omitempty"` // Samples per microsecond (GPU utilization proxy)
-	StartTicks      uint64  `json:"start_ticks,omitempty"`      // Absolute start timestamp in ticks
-	EndTicks        uint64  `json:"end_ticks,omitempty"`        // Absolute end timestamp in ticks
+	SampleCount     int     `json:"sample_count,omitempty"`     // GPRWCNTR samples in the estimated dispatch window
+	SamplingDensity float64 `json:"sampling_density,omitempty"` // Estimated samples per dispatch microsecond
+	StartTicks      uint64  `json:"start_ticks,omitempty"`      // Estimated dispatch-window start, in mach absolute ticks
+	EndTicks        uint64  `json:"end_ticks,omitempty"`        // Estimated dispatch-window end, in mach absolute ticks
 }
 
 // DisplayName returns the shader name used in Xcode-style reports.
@@ -1386,8 +1386,12 @@ func extractEncoderBlobData(data []byte) (source string, ringIdx int, spd []byte
 //
 // The function modifies dispatches in place, populating:
 //   - SampleCount: number of GPRWCNTR samples during this dispatch
-//   - SamplingDensity: samples per microsecond
-//   - StartTicks/EndTicks: absolute timestamps
+//   - SamplingDensity: samples per dispatch microsecond in the estimated window
+//   - StartTicks/EndTicks: estimated bounds in mach absolute ticks
+//
+// The archive does not join cumulative dispatch offsets to the absolute sample
+// clock. This routine scales dispatch offsets across the first command-buffer
+// interval, so its attribution is an estimate rather than measured timing.
 func CorrelateDispatchSamples(stats *StreamDataStats) {
 	if stats == nil || stats.Timeline == nil || len(stats.Dispatches) == 0 {
 		return

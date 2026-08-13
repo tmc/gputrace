@@ -48,6 +48,9 @@ func TestModuleProjectsRecordedDispatchesAndCompilerFacts(t *testing.T) {
 		"cast(extract_arg(arg_set_id, 'dispatch_index') AS INT)",
 		"debug.command_buffer_index",
 		"capture_structure_source",
+		"gprwcntr_sample_count",
+		"sample_attribution_basis",
+		"sample_timestamp_domain",
 	} {
 		if !strings.Contains(Module, want) {
 			t.Errorf("module missing %q", want)

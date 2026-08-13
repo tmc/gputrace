@@ -2018,10 +2018,13 @@ func dispatchKernelArgs(d counter.DispatchInfo, p *counter.PipelineStats, simdGr
 	if d.SampleCount > 0 {
 		args["gprwcntr_sample_count"] = d.SampleCount
 		args["sampling_density"] = d.SamplingDensity
+		args["sample_attribution_basis"] = "GPRWCNTR samples in a scaled cumulative-dispatch window"
 	}
 	if d.StartTicks != 0 || d.EndTicks != 0 {
 		args["start_ticks"] = d.StartTicks
 		args["end_ticks"] = d.EndTicks
+		args["sample_window_basis"] = "cumulative dispatch time scaled over the first APSTimelineData command buffer"
+		args["sample_timestamp_domain"] = "mach absolute ticks"
 	}
 	addPipelineCompilerArgs(args, p, "streamData pipelinePerformanceStatistics")
 	if sourceMapper != nil {
