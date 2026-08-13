@@ -197,7 +197,7 @@ func decodeCommand(raw record) (CommandBuffer, error) {
 		return CommandBuffer{}, fmt.Errorf("%w: malformed GPU start time", ErrInvalid)
 	}
 	end, ok := secondsToNS(*raw.GPUEndSeconds)
-	if !ok || end <= start {
+	if !ok || end < start {
 		return CommandBuffer{}, fmt.Errorf("%w: malformed GPU end time", ErrInvalid)
 	}
 	kernelStart, ok := secondsToNS(*raw.KernelStartSeconds)

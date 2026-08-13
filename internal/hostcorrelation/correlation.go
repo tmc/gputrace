@@ -111,6 +111,13 @@ func (r Receipt) Validate() error {
 	if _, _, _, err := b.parameters(); err != nil {
 		return err
 	}
+	first := b.Samples[0].HostNS
+	last := b.Samples[len(b.Samples)-1].HostNS
+	for _, event := range r.Events {
+		if event.TimestampNS < first || event.DurationNS > last-event.TimestampNS {
+			return fmt.Errorf("%w: event %q is outside sampled host clock range", ErrUncorrelated, event.ID)
+		}
+	}
 	return nil
 }
 

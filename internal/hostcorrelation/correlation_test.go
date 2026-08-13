@@ -48,6 +48,11 @@ func TestValidate(t *testing.T) {
 			r.Events = append(r.Events, Event{ID: "earlier", Kind: "instant", Name: "earlier", TimestampNS: 1})
 		}, ErrInvalid},
 		{"instant duration", func(r *Receipt) { r.Events[0].DurationNS = 1 }, ErrInvalid},
+		{"event outside bridge", func(r *Receipt) {
+			r.GPU.ClockDomain = "gpu"
+			r.Bridge = validBridge("gpu")
+			r.Events[0].TimestampNS = 101
+		}, ErrUncorrelated},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -80,8 +85,8 @@ func TestProjectRejectsOverflow(t *testing.T) {
 	receipt.Events[0].TimestampNS = math.MaxInt64
 	receipt.GPU.ClockDomain = "gpu"
 	receipt.Bridge = validBridge("gpu")
-	if _, err := receipt.Project(); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("Project() error = %v, want ErrInvalid", err)
+	if _, err := receipt.Project(); !errors.Is(err, ErrUncorrelated) {
+		t.Fatalf("Project() error = %v, want ErrUncorrelated", err)
 	}
 }
 

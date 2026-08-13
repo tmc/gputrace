@@ -47,6 +47,7 @@ Buffer Analysis:
 
 Visualization & Export:
   timeline         - Text timeline and Chrome/Perfetto export
+  host-receipt     - Bind measured host intervals to live GPU timing
   graph            - Graph visualization
   tree             - Execution tree view
   diff             - Compare two traces

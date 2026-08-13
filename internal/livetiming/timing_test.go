@@ -29,6 +29,13 @@ func TestRead(t *testing.T) {
 	}
 }
 
+func TestReadAcceptsCompletedZeroDurationCommandBuffer(t *testing.T) {
+	input := strings.Replace(validInput, `"gpu_end_seconds":0.00000035`, `"gpu_end_seconds":0.00000025`, 1)
+	if _, err := readString(t, input); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestReadRefusesMalformedEvidence(t *testing.T) {
 	tests := []struct {
 		name string
