@@ -1740,6 +1740,7 @@ func addPipelineCompilerArgs(args map[string]interface{}, p *counter.PipelineSta
 	}
 	if p.PipelineAddress != 0 {
 		args["pipeline_state"] = fmt.Sprintf("0x%x", p.PipelineAddress)
+		args["pipeline_address"] = p.PipelineAddress
 	}
 	args["allocated_registers"] = p.TemporaryRegisterCount
 	args["uniform_registers"] = p.UniformRegisterCount
@@ -1859,15 +1860,18 @@ func addCaptureDispatchEvents(timeline *Timeline, trace *gputrace.Trace, sourceM
 			name = fmt.Sprintf("Dispatch #%d", dispatch.Index)
 		}
 		args := map[string]interface{}{
-			"dispatch_index":       dispatch.Index,
-			"command_buffer_index": dispatch.CommandBuffer,
-			"capture_offset":       dispatch.CaptureOffset,
-			"pipeline_address":     fmt.Sprintf("0x%x", dispatch.PipelineAddr),
-			"source":               "capture dispatch record; dispatch geometry",
-			"coordinate_source":    "capture record order",
-			"timing_source":        "unavailable",
-			"function_attribution": dispatch.AttributionBasis,
-			"encoder_attribution":  "unavailable",
+			"dispatch_index":           dispatch.Index,
+			"command_buffer_index":     dispatch.CommandBuffer,
+			"capture_offset":           dispatch.CaptureOffset,
+			"pipeline_state":           fmt.Sprintf("0x%x", dispatch.PipelineAddr),
+			"pipeline_address":         dispatch.PipelineAddr,
+			"pipeline_identity_source": "capture dispatch record",
+			"pipeline_identity_scope":  "capture-local",
+			"source":                   "capture dispatch record; dispatch geometry",
+			"coordinate_source":        "capture record order",
+			"timing_source":            "unavailable",
+			"function_attribution":     dispatch.AttributionBasis,
+			"encoder_attribution":      "unavailable",
 		}
 		addDispatchGeometryArgs(args, dispatch.DispatchThreads)
 		if dispatch.FunctionName != "" {
@@ -2085,6 +2089,8 @@ func dispatchKernelArgs(d counter.DispatchInfo, p *counter.PipelineStats, simdGr
 		args["sample_timestamp_domain"] = "mach absolute ticks"
 	}
 	addPipelineCompilerArgs(args, p, "streamData pipelinePerformanceStatistics")
+	args["pipeline_identity_source"] = "streamData pipelineStateInfoData"
+	args["pipeline_identity_scope"] = "capture-local"
 	if sourceMapper != nil {
 		sourceName := d.FunctionName
 		if sourceName == "" && p != nil {

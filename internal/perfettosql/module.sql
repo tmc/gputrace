@@ -150,6 +150,9 @@ SELECT
   cast(extract_arg(arg_set_id, 'pipeline_id') AS INT) AS pipeline_id,
   cast(extract_arg(arg_set_id, 'pipeline_idx') AS INT) AS pipeline_index,
   extract_arg(arg_set_id, 'pipeline_state') AS pipeline_state,
+  cast(extract_arg(arg_set_id, 'pipeline_address') AS INT) AS pipeline_address,
+  extract_arg(arg_set_id, 'pipeline_identity_source') AS pipeline_identity_source,
+  extract_arg(arg_set_id, 'pipeline_identity_scope') AS pipeline_identity_scope,
   cast(extract_arg(arg_set_id, 'command_buffer_index') AS INT) AS command_buffer_id,
   cast(extract_arg(arg_set_id, 'capture_offset') AS INT) AS capture_offset,
   extract_arg(arg_set_id, 'capture_structure_source') AS capture_structure_source,
@@ -194,6 +197,9 @@ SELECT
     extract_arg(arg_set_id, 'debug.pipeline_state'),
     extract_arg(arg_set_id, 'debug.pipeline_address')
   ) AS pipeline_state,
+  cast(extract_arg(arg_set_id, 'debug.pipeline_address') AS INT) AS pipeline_address,
+  'capture dispatch record' AS pipeline_identity_source,
+  'capture-local' AS pipeline_identity_scope,
   cast(extract_arg(arg_set_id, 'debug.command_buffer_index') AS INT) AS command_buffer_id,
   cast(extract_arg(arg_set_id, 'debug.capture_offset') AS INT) AS capture_offset,
   'capture dispatch record' AS capture_structure_source,
@@ -478,7 +484,14 @@ CREATE PERFETTO VIEW gputrace_pipeline AS
 SELECT
   pipeline_id,
   pipeline_state,
+  pipeline_address,
   name AS function_name,
+  max(pipeline_identity_source) AS pipeline_identity_source,
+  max(pipeline_identity_scope) AS pipeline_identity_scope,
+  count(*) AS dispatch_count,
+  sum(CASE WHEN evidence_kind = 'measured_gpu_execution' THEN 1 ELSE 0 END) AS measured_dispatch_count,
+  sum(CASE WHEN evidence_kind = 'recorded_dispatch' THEN 1 ELSE 0 END) AS recorded_dispatch_count,
+  sum(CASE WHEN evidence_kind = 'measured_gpu_execution' THEN dur END) AS measured_duration_ns,
   max(cast(coalesce(extract_arg(arg_set_id, 'allocated_registers'), extract_arg(arg_set_id, 'debug.allocated_registers')) AS INT)) AS allocated_registers,
   max(cast(coalesce(extract_arg(arg_set_id, 'uniform_registers'), extract_arg(arg_set_id, 'debug.uniform_registers')) AS INT)) AS uniform_registers,
   max(cast(coalesce(extract_arg(arg_set_id, 'spilled_bytes'), extract_arg(arg_set_id, 'debug.spilled_bytes')) AS INT)) AS spilled_bytes,
@@ -505,7 +518,7 @@ SELECT
   max(cast(coalesce(extract_arg(arg_set_id, 'compilation_time_ms'), extract_arg(arg_set_id, 'debug.compilation_time_ms')) AS REAL)) AS compilation_time_ms,
   max(coalesce(extract_arg(arg_set_id, 'metrics_source'), extract_arg(arg_set_id, 'debug.metrics_source'))) AS compiler_metrics_source
 FROM gputrace_dispatch
-GROUP BY pipeline_id, pipeline_state, function_name;
+GROUP BY pipeline_id, pipeline_state, pipeline_address, function_name;
 
 CREATE PERFETTO VIEW gputrace_semantic_node AS
 SELECT

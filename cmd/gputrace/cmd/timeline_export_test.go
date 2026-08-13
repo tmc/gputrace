@@ -1238,6 +1238,9 @@ func TestAddDispatchKernelEventsIncludesXcodeShaderArgs(t *testing.T) {
 	checkArg("simd_group_share_pct", 100.0)
 	checkArg("profiling_sample_share_estimate_pct", 85.25)
 	checkArg("pipeline_state", "0xabc")
+	checkArg("pipeline_address", uint64(0xabc))
+	checkArg("pipeline_identity_source", "streamData pipelineStateInfoData")
+	checkArg("pipeline_identity_scope", "capture-local")
 	checkArg("simd_groups", uint64(4))
 	checkArg("grid_size", "64,2,1")
 	checkArg("threadgroup_size", "32,1,1")
@@ -1783,6 +1786,7 @@ func TestAddPipelineCompilerArgs(t *testing.T) {
 	}{
 		{"pipeline_id", 7},
 		{"pipeline_state", "0x1234"},
+		{"pipeline_address", uint64(0x1234)},
 		{"function_name", "kernel"},
 		{"allocated_registers", 1},
 		{"uniform_registers", 2},
