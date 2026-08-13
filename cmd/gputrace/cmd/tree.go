@@ -271,7 +271,6 @@ func renderEncoderTree(w io.Writer, t *trace.Trace, records []trace.MTSPRecord, 
 				indent += "  "
 			} else if flags&0xFF == 0x13 {
 				fmt.Fprintf(w, "%s%s %s\n", indent, Colorize("⌘", ColorBlue), Colorize(rec.Label, ColorYellow))
-				indent += "  "
 			} else if flags&0xFF == 0x2d {
 				fmt.Fprintf(w, "%s%s %s\n", indent, Colorize("ƒ", ColorBlue), Colorize(rec.Label, ColorPurple))
 				indent += "  "
