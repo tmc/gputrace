@@ -6,6 +6,8 @@ source lookup behavior:
 
 | Variable | Effect |
 | --- | --- |
+| `APPLE_GTSHADERPROFILER_FRAMEWORK_PATH` | Overrides generated `GTShaderProfiler` loading before process initialization. Accepts an OS path-list of binaries, framework bundles, or directories containing `GTShaderProfiler.framework`. |
+| `DEVELOPER_DIR` | Selects the Xcode tools directory used for private-framework lookup before falling back to `xcode-select`. |
 | `GPUTRACE_APS_PRELOAD_BUNDLE` | Preloads `AGXGPURawCounterBundle` before APS source-group discovery, so a discovery failure reports the real reason. |
 | `GPUTRACE_DEBUG` | Enables extra debug logging from shader metrics helpers. |
 | `GPUTRACE_MIO_MCA` | Enables MCA register readback for pipelines in `streamData` model integration. |
@@ -16,8 +18,8 @@ source lookup behavior:
 | `GPUTRACE_PROCESS_STREAMDATA` | Specifies a `.gpuprofiler_raw/streamData` file for opt-in streamData model integration tests. |
 | `GPUTRACE_SHADER_SEARCH_PATHS` | Adds platform-specific path-list entries to shader source lookup before built-in search paths. |
 | `GPUTRACE_SKIP_MACGO` | Skips macgo app-bundle setup for capture and Xcode profiler automation, using current process identity instead. |
-| `GPUTRACE_XCODE_APP` | Selects the app name passed to `open -a` when opening traces in Xcode automation. |
-| `GPUTRACE_XCODE_DEVELOPER_DIR` | Specifies an explicit Xcode Developer directory override for private `GTShaderProfiler.framework` loading. |
+| `GPUTRACE_XCODE_APP` | Selects the Xcode bundle used by automation, counter catalogs, and `shaders --xcode-cost`. The cost command restarts itself so the matching private framework loads before package initialization. |
+| `GPUTRACE_XCODE_DEVELOPER_DIR` | Specifies an explicit `Xcode.app/Contents/Developer` override for private `GTShaderProfiler.framework` and its matching `GTLLVMHelper`. |
 
 Test-only environment variables are documented in
 [`TESTING.md`](./TESTING.md).

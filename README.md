@@ -100,6 +100,17 @@ unavailable on recent GPU generations; see `docs/research/` for why.
 Commands that need performance data say so on stderr when a trace lacks it,
 and name the command that would add it.
 
+To reproduce Xcode's All Shaders `Cost` column, use its processed pipeline
+timing rather than the default SIMD-group share:
+
+```bash
+gputrace shaders run-perfdata.gputrace --xcode-cost
+```
+
+This runs Xcode's private stream-data processor and can take several seconds.
+It follows `DEVELOPER_DIR` or `xcode-select`; `GPUTRACE_XCODE_APP` pins a
+different Xcode and causes the command to restart itself with that framework.
+
 ## Trace Diff
 
 Compare two profiled traces and explain performance deltas at dispatch, kernel, encoder, and timeline-window levels:

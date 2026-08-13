@@ -18,26 +18,26 @@ func TestAppsPinIsExclusive(t *testing.T) {
 	}
 }
 
-// TestAppsUnsetPrefersTheLoadedFramework pins the order to the bundle whose
-// framework is actually mapped, which is Xcode.app: the generated
-// gtshaderprofiler bindings dlopen it by an absolute path at package
-// initialization.
-//
-// This assertion used to be the opposite, on the stated grounds that a release
-// candidate "ships the newer dictionary and its GTShaderProfiler is the one
-// internal/agxps loads". The second half was false, and it is what made the
-// default split: names came from the release candidate while the numbers came
-// from Xcode.app. Newer names describing a binary that is not measuring is the
-// defect, not the fix.
-func TestAppsUnsetPrefersTheLoadedFramework(t *testing.T) {
+func TestXcodeAppForDeveloperDir(t *testing.T) {
+	developer := "/Applications/Xcode-beta.app/Contents/Developer"
+	if got := xcodeAppForDeveloperDir(developer); got != "/Applications/Xcode-beta.app" {
+		t.Fatalf("xcodeAppForDeveloperDir(%q) = %q", developer, got)
+	}
+}
+
+// TestAppsUnsetPrefersTheSelectedXcode pins the catalog to the Xcode whose
+// framework the generated loader selects through xcode-select.
+func TestAppsUnsetPrefersTheSelectedXcode(t *testing.T) {
 	t.Setenv(AppEnv, "")
+	saved := findDeveloperDir
+	findDeveloperDir = func() string { return "/Applications/Xcode-beta.app/Contents/Developer" }
+	t.Cleanup(func() { findDeveloperDir = saved })
 	apps := Apps()
 	if len(apps) < 2 {
 		t.Fatalf("Apps() = %v, want several candidates", apps)
 	}
-	if apps[0] != "/Applications/Xcode.app" {
-		t.Errorf("Apps()[0] = %q, want /Applications/Xcode.app: it is the bundle the "+
-			"generated bindings dlopen, and the catalog has to follow the framework", apps[0])
+	if apps[0] != "/Applications/Xcode-beta.app" {
+		t.Errorf("Apps()[0] = %q, want the bundle selected by xcode-select", apps[0])
 	}
 }
 
@@ -125,6 +125,9 @@ func TestCounterGraphFollowsFrameworkBundle(t *testing.T) {
 	saved := candidateApps
 	candidateApps = []string{first, second}
 	t.Cleanup(func() { candidateApps = saved })
+	savedFind := findDeveloperDir
+	findDeveloperDir = func() string { return "" }
+	t.Cleanup(func() { findDeveloperDir = savedFind })
 	t.Setenv(AppEnv, "")
 
 	fw := FrameworkPath()

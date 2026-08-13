@@ -14,7 +14,9 @@ package xcodepath
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // AppEnv names the environment variable that pins the bundle. It is the same
@@ -23,14 +25,8 @@ import (
 // Xcode that drives a capture, loads the framework, and explains its counters.
 const AppEnv = "GPUTRACE_XCODE_APP"
 
-// candidateApps are the bundles searched when AppEnv is unset, in preference
-// order.
-//
-// Xcode.app sorts first because it is the bundle the generated bindings dlopen
-// at package initialization, and the catalog has to follow the framework rather
-// than lead it: names read from a release candidate would describe a build that
-// is not the one measuring. A release candidate is newer data, but newer data
-// about a different binary is the defect this package exists to prevent.
+// candidateApps are fallback bundles after explicit framework paths,
+// DEVELOPER_DIR, and xcode-select have been considered.
 var candidateApps = []string{
 	"/Applications/Xcode.app",
 	"/Applications/Xcode-rc.app",
@@ -46,14 +42,69 @@ var counterGraphRelative = []string{
 	"Contents/Applications/Instruments.app/Contents/PlugIns/GPUPlugin.xrplugin/Contents/Resources/GPUCounterGraph.plist",
 }
 
-// Apps returns the bundles to search, most preferred first. When AppEnv is set
-// it is the only candidate: a pin that silently falls back to another Xcode
-// would defeat the point of pinning.
+// Apps returns bundles in the generated framework loader's preference order.
+// When AppEnv is set it is the only candidate: a pin that silently falls back
+// to another Xcode would defeat the point of pinning.
 func Apps() []string {
 	if app := os.Getenv(AppEnv); app != "" {
 		return []string{app}
 	}
-	return candidateApps
+	var apps []string
+	for _, path := range filepath.SplitList(os.Getenv("APPLE_GTSHADERPROFILER_FRAMEWORK_PATH")) {
+		apps = appendUnique(apps, xcodeAppForPath(path))
+	}
+	if developerDir := os.Getenv("GPUTRACE_XCODE_DEVELOPER_DIR"); developerDir != "" {
+		apps = appendUnique(apps, xcodeAppForDeveloperDir(developerDir))
+	} else if developerDir := os.Getenv("DEVELOPER_DIR"); developerDir != "" {
+		apps = appendUnique(apps, xcodeAppForDeveloperDir(developerDir))
+	} else {
+		apps = appendUnique(apps, xcodeAppForDeveloperDir(activeDeveloperDir()))
+	}
+	for _, app := range candidateApps {
+		apps = appendUnique(apps, app)
+	}
+	return apps
+}
+
+var findDeveloperDir = func() string {
+	out, err := exec.Command("xcode-select", "--print-path").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func activeDeveloperDir() string {
+	return findDeveloperDir()
+}
+
+func xcodeAppForDeveloperDir(developerDir string) string {
+	developerDir = filepath.Clean(strings.TrimSpace(developerDir))
+	if filepath.Base(developerDir) != "Developer" || filepath.Base(filepath.Dir(developerDir)) != "Contents" {
+		return ""
+	}
+	return filepath.Dir(filepath.Dir(developerDir))
+}
+
+func xcodeAppForPath(path string) string {
+	for path = filepath.Clean(strings.TrimSpace(path)); path != "." && path != string(filepath.Separator); path = filepath.Dir(path) {
+		if strings.HasSuffix(path, ".app") {
+			return path
+		}
+	}
+	return ""
+}
+
+func appendUnique(paths []string, path string) []string {
+	if path == "" {
+		return paths
+	}
+	for _, existing := range paths {
+		if existing == path {
+			return paths
+		}
+	}
+	return append(paths, path)
 }
 
 // CounterGraphPaths returns every GPUCounterGraph.plist location to try, in

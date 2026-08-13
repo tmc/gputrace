@@ -19,10 +19,11 @@ var shadersCmd = newShadersCommand(&shadersOptions{
 })
 
 type shadersOptions struct {
-	verbose  bool
-	estimate bool
-	format   string
-	all      bool
+	verbose   bool
+	estimate  bool
+	format    string
+	all       bool
+	xcodeCost bool
 }
 
 func newShadersCommand(opts *shadersOptions) *cobra.Command {
@@ -34,6 +35,10 @@ func newShadersCommand(opts *shadersOptions) *cobra.Command {
 By default shows a simple two-column output:
   - Share % (SIMD-group share for full traces; dispatch-span share for profiler-only traces)
   - Shader name
+
+Use --xcode-cost to run Xcode's private stream-data processor and show the
+pipeline compute-time share from its All Shaders table. This is slower than the
+default parser and requires the matching Xcode framework and GTLLVMHelper.
 
 Use --all for full Xcode Instruments format with additional columns:
   - Type (Compute)
@@ -53,6 +58,7 @@ Examples:
   gputrace shaders trace.gputrace                    # Simple cost + name output
   gputrace shaders trace.gputrace --all              # Full Xcode format
   gputrace shaders trace.gputrace --estimate         # Show estimates for unknown fields
+  gputrace shaders trace.gputrace --xcode-cost       # Match Xcode's All Shaders Cost
   gputrace shaders trace.gputrace --format csv       # Export as CSV
   gputrace shaders trace.gputrace --format json      # Export as JSON`,
 		Args: cobra.ExactArgs(1),
@@ -65,6 +71,7 @@ Examples:
 	cmd.Flags().BoolVarP(&opts.estimate, "estimate", "e", opts.estimate, "Show estimated values for uncomputed fields")
 	cmd.Flags().StringVarP(&opts.format, "format", "f", opts.format, "Output format: text, csv, or json")
 	cmd.Flags().BoolVarP(&opts.all, "all", "a", opts.all, "Show all columns (full Xcode Instruments format)")
+	cmd.Flags().BoolVar(&opts.xcodeCost, "xcode-cost", opts.xcodeCost, "Use Xcode's processed pipeline timing for Cost")
 	return cmd
 }
 
@@ -100,9 +107,12 @@ func runShaders(cmd *cobra.Command, args []string, opts *shadersOptions) error {
 		fmt.Fprintf(os.Stderr, "  gputrace xp run %s -o profiled.gputrace\n\n", tracePath)
 		return fmt.Errorf("profiler data required for shader timing")
 	}
+	if opts.xcodeCost {
+		return runShadersXcodeCost(cmd, tracePath, opts)
+	}
 
 	if hasUnsortedCapture {
-		// Full trace with profiler: use SIMD-based cost (matches Xcode)
+		// Full trace with profiler: use SIMD-based share.
 		return runShadersFromFullTrace(tracePath, opts)
 	}
 
@@ -173,8 +183,7 @@ func formatShadersNoCostText(w io.Writer, report *gputrace.ShaderMetricsReport) 
 	return nil
 }
 
-// runShadersFromFullTrace uses full trace parsing for SIMD-based cost calculation.
-// This matches Xcode's Cost % = SIMD Groups / Total SIMD Groups × 100
+// runShadersFromFullTrace uses full trace parsing for SIMD-based share.
 func runShadersFromFullTrace(tracePath string, opts *shadersOptions) error {
 	// Open trace for full parsing
 	trace, err := gputrace.Open(tracePath)
@@ -189,7 +198,7 @@ func runShadersFromFullTrace(tracePath string, opts *shadersOptions) error {
 		report, err := extractSIMDBasedMetrics(trace, profilerDir)
 		if err == nil && len(report.Shaders) > 0 {
 			report.ShareBasis = "simd_groups"
-			writeShaderShareBasis(opts.format, "SIMD groups (Xcode Cost basis)")
+			writeShaderShareBasis(opts.format, "SIMD groups")
 			// Output based on format
 			switch opts.format {
 			case "csv":
@@ -214,7 +223,7 @@ func runShadersFromFullTrace(tracePath string, opts *shadersOptions) error {
 		return fmt.Errorf("extract shader metrics: %w", err)
 	}
 
-	// Recalculate Cost % based on SIMD Groups (TotalThreadgroups) to match Xcode
+	// Recalculate share based on SIMD Groups (TotalThreadgroups).
 	var totalSIMDGroups uint64
 	for _, shader := range report.Shaders {
 		totalSIMDGroups += shader.TotalThreadgroups
@@ -226,7 +235,7 @@ func runShadersFromFullTrace(tracePath string, opts *shadersOptions) error {
 		}
 	}
 	report.ShareBasis = "simd_groups"
-	writeShaderShareBasis(opts.format, "SIMD groups (Xcode Cost basis)")
+	writeShaderShareBasis(opts.format, "SIMD groups")
 
 	// Re-sort by SIMD-based cost
 	sort.Slice(report.Shaders, func(i, j int) bool {
@@ -329,7 +338,7 @@ func extractSIMDBasedMetrics(trace *gputrace.Trace, profilerDir string) (*gputra
 			TotalDurationNs:   funcDurations[funcName],
 		}
 
-		// Calculate SIMD-based cost percentage (matches Xcode)
+		// Calculate SIMD-based share percentage.
 		if totalSIMDGroups > 0 {
 			m.PercentOfTotal = float64(simdGroups) / float64(totalSIMDGroups) * 100.0
 		}
@@ -375,11 +384,10 @@ func findProfilerDir(tracePath string) string {
 }
 
 // runShadersFromProfiler extracts shader info from .gpuprofiler_raw when unsorted-capture is missing.
-// Note: This uses dispatch duration for Cost %, NOT SIMD groups (Xcode uses SIMD groups).
-// For Xcode-matching Cost %, use a full trace with unsorted-capture directory.
+// Note: This uses dispatch duration for Share %, not Xcode pipeline timing.
 func runShadersFromProfiler(tracePath string, opts *shadersOptions) error {
 	fmt.Fprintln(os.Stderr, "Note: Share is based on cumulative dispatch span for this profiler-only trace.")
-	fmt.Fprintln(os.Stderr, "      Xcode's SIMD Share uses SIMD groups; use a full trace when that basis is required.")
+	fmt.Fprintln(os.Stderr, "      Use --xcode-cost for Xcode's processed pipeline timing.")
 	fmt.Fprintln(os.Stderr, "")
 	profilerDir := profilerraw.FindDir(tracePath)
 
@@ -435,7 +443,7 @@ func writeShaderShareBasis(format, basis string) {
 }
 
 // convertPipelineStatsToShaderReport converts PipelineStats from streamData to ShaderMetricsReport.
-// If execCosts is provided, uses statistical sampling cost for PercentOfTotal (matches Xcode).
+// If execCosts is provided, uses statistical sampling cost for PercentOfTotal.
 // Otherwise falls back to dispatch duration-based cost.
 func convertPipelineStatsToShaderReport(stats *counter.StreamDataStats, execCosts *counter.ExecutionCostMetrics) *gputrace.ShaderMetricsReport {
 	report := &gputrace.ShaderMetricsReport{
@@ -507,7 +515,7 @@ func convertPipelineStatsToShaderReport(stats *counter.StreamDataStats, execCost
 			m.AvgDurationNs = m.TotalDurationNs / uint64(m.InvocationCount)
 		}
 
-		// Use execution cost from statistical sampling if available (matches Xcode)
+		// Use execution cost from statistical sampling if available.
 		if execCosts != nil {
 			// Sum cost across all pipeline IDs for this function
 			var totalCost float64

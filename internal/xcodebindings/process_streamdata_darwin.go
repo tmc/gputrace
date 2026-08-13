@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"sync"
 	"unsafe"
 
@@ -20,9 +21,9 @@ import (
 // ProcessedStreamData reports the shader model Xcode derives from a profiler
 // archive: the top-level counts, the device metadata, and one record per
 // pipeline state.
-// The cost collections are deliberately not exposed as Go slices. They are C
-// arrays rather than objects. The opt-in data-path setup does expose their
-// count and safe scalar scope totals below.
+// The raw cost collections are deliberately not exposed as Go slices. They
+// are C arrays rather than objects. Pipeline timing is an Objective-C model
+// and is exposed through PipelineRecord when Xcode builds it.
 type ProcessedStreamData struct {
 	Path           string `json:"path"`
 	LLVMHelperPath string `json:"llvm_helper_path"`
@@ -166,12 +167,15 @@ type USCCliqueSample struct {
 // the named form of the 40-byte pipeline record the archive stores, which
 // GTMioShaderProfilerPipelineState wraps.
 type PipelineRecord struct {
-	ObjectID       uint64 `json:"object_id"`
-	PointerID      uint64 `json:"pointer_id"`
-	FunctionIndex  uint64 `json:"function_index"`
-	Index          uint32 `json:"index"`
-	NumGPUCommands uint32 `json:"num_gpu_commands"`
-	FunctionName   string `json:"function_name,omitempty"`
+	ObjectID         uint64 `json:"object_id"`
+	PointerID        uint64 `json:"pointer_id"`
+	FunctionIndex    uint64 `json:"function_index"`
+	FunctionObjectID uint64 `json:"function_object_id,omitempty"`
+	LibraryObjectID  uint64 `json:"library_object_id,omitempty"`
+	Index            uint32 `json:"index"`
+	NumGPUCommands   uint32 `json:"num_gpu_commands"`
+	FunctionName     string `json:"function_name,omitempty"`
+	ComputeTime      uint64 `json:"compute_time,omitempty"`
 
 	// The MCA fields describe the register allocation the compiler chose for
 	// this pipeline. They are read only when MCA analysis is requested, and on
@@ -179,6 +183,13 @@ type PipelineRecord struct {
 	MCAHighRegister int32  `json:"mca_high_register,omitempty"`
 	MCAAllocatedGPR int32  `json:"mca_allocated_gpr,omitempty"`
 	MCABinaryCount  uint64 `json:"mca_binary_count,omitempty"`
+}
+
+// ShaderCost is one row in Xcode's All Shaders cost table.
+type ShaderCost struct {
+	Name        string  `json:"name"`
+	ComputeTime uint64  `json:"compute_time"`
+	Cost        float64 `json:"cost"`
 }
 
 // EncoderRecord identifies one encoder and its contiguous GPU-command range.
@@ -252,9 +263,50 @@ func ProcessStreamData(path string) (ProcessedStreamData, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	objc.AutoreleasePool(func() {
-		err = processStreamData(&summary)
+		err = processStreamData(&summary, false)
 	})
 	return summary, err
+}
+
+// ShaderCosts builds Xcode's shader model and returns the same pipeline timing
+// rows used by its All Shaders table.
+func ShaderCosts(path string) ([]ShaderCost, uint64, error) {
+	summary := ProcessedStreamData{Path: path}
+	var err error
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	objc.AutoreleasePool(func() {
+		err = processStreamData(&summary, true)
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+	return shaderCostRows(summary)
+}
+
+func shaderCostRows(summary ProcessedStreamData) ([]ShaderCost, uint64, error) {
+	if summary.GPUTime == 0 {
+		return nil, 0, fmt.Errorf("Xcode shader profiler returned zero GPU time")
+	}
+	rows := make([]ShaderCost, 0, len(summary.Pipelines))
+	for _, pipeline := range summary.Pipelines {
+		name := pipeline.FunctionName
+		if name == "" && pipeline.LibraryObjectID != 0 && pipeline.FunctionObjectID > pipeline.LibraryObjectID {
+			name = fmt.Sprintf("MTLFunction %d", pipeline.FunctionObjectID-pipeline.LibraryObjectID)
+		}
+		rows = append(rows, ShaderCost{
+			Name:        name,
+			ComputeTime: pipeline.ComputeTime,
+			Cost:        100 * float64(pipeline.ComputeTime) / float64(summary.GPUTime),
+		})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].ComputeTime != rows[j].ComputeTime {
+			return rows[i].ComputeTime > rows[j].ComputeTime
+		}
+		return rows[i].Name < rows[j].Name
+	})
+	return rows, summary.GPUTime, nil
 }
 
 // processedModel is one in-flight or completed ProcessStreamData call.
@@ -358,9 +410,9 @@ func WithProcessedModel(ctx context.Context, path string, fn func(model *Process
 	return fn(&model)
 }
 
-func processStreamData(summary *ProcessedStreamData) error {
+func processStreamData(summary *ProcessedStreamData, requireDataPath bool) error {
 	loadPath := summary.Path
-	setupDataPath := mioDataPathRequired()
+	setupDataPath := requireDataPath || mioDataPathRequired()
 	if setupDataPath && filepath.Base(loadPath) == "streamData" {
 		// The data-path setup resolves sibling Counters_f_*.raw files only when
 		// the archive directory, rather than its inner streamData file, is the
@@ -856,14 +908,22 @@ func readPipelines(result objc.ID) []PipelineRecord {
 		if !responds(state, "objectId") {
 			continue
 		}
-		records = append(records, PipelineRecord{
+		record := PipelineRecord{
 			ObjectID:       uint64Property(state, "objectId"),
 			PointerID:      uint64Property(state, "pointerId"),
 			FunctionIndex:  uint64Property(state, "functionIndex"),
 			Index:          uint32Property(state, "index"),
 			NumGPUCommands: uint32Property(state, "numGPUCommands"),
 			FunctionName:   firstFunctionName(state),
-		})
+		}
+		if functions := elementsOf(objectFor(state, "shaderFunctions")); len(functions) != 0 {
+			record.FunctionObjectID = uint64Property(functions[0], "objectId")
+			record.LibraryObjectID = uint64Property(functions[0], "libraryObjectId")
+		}
+		if timing := objectFor(state, "timingInfo"); timing != 0 {
+			record.ComputeTime = uint64Property(timing, "computeTime")
+		}
+		records = append(records, record)
 	}
 	return records
 }

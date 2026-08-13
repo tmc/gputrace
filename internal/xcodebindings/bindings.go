@@ -18,6 +18,10 @@ import (
 
 const defaultFrameworkPath = "/Applications/Xcode.app/Contents/PlugIns/GPUDebugger.ideplugin/Contents/Frameworks/GTShaderProfiler.framework/Versions/A/GTShaderProfiler"
 
+// FrameworkPathEnv is the generated binding's process-start framework
+// override. It must be set before importing programs initialize.
+const FrameworkPathEnv = "APPLE_GTSHADERPROFILER_FRAMEWORK_PATH"
+
 // Report describes the GTShaderProfiler Objective-C surface gputrace needs for
 // Xcode parity.
 type Report struct {
@@ -225,31 +229,76 @@ func resolvedFrameworkPath() string {
 	return defaultFrameworkPath
 }
 
+// FrameworkPath returns the GTShaderProfiler binary selected for this process.
+func FrameworkPath() string {
+	return resolvedFrameworkPath()
+}
+
 func frameworkCandidates() []string {
 	var candidates []string
+	for _, path := range filepath.SplitList(os.Getenv(FrameworkPathEnv)) {
+		candidates = append(candidates, frameworkOverridePaths(path)...)
+	}
 	if developerDir := os.Getenv("GPUTRACE_XCODE_DEVELOPER_DIR"); developerDir != "" {
-		candidates = append(candidates, frameworkPathForDeveloperDir(developerDir))
+		candidates = append(candidates, frameworkPathsForDeveloperDir(developerDir)...)
 	}
 	// GPUTRACE_XCODE_APP pins the bundle the counter catalog is read from.
 	// Honouring it here too is what stops this package from loading one
 	// release's framework while internal/parity names its counters from
 	// another. GPUTRACE_XCODE_DEVELOPER_DIR still wins: it is the more
 	// specific of the two, and it names a framework directly.
-	candidates = append(candidates, xcodepath.FrameworkPaths()...)
-	// Keep the historically selected Xcode.app first when no explicit override
-	// is supplied; its generated bindings are the version validated by this
-	// module. xcode-select remains a fallback for hosts with only one Xcode.
-	candidates = append(candidates, defaultFrameworkPath)
+	if os.Getenv(xcodepath.AppEnv) != "" {
+		candidates = append(candidates, xcodepath.FrameworkPaths()...)
+	}
+	if developerDir := os.Getenv("DEVELOPER_DIR"); developerDir != "" {
+		candidates = append(candidates, frameworkPathsForDeveloperDir(developerDir)...)
+	}
 	if output, err := exec.Command("xcode-select", "-p").Output(); err == nil {
 		if developerDir := strings.TrimSpace(string(output)); developerDir != "" {
-			candidates = append(candidates, frameworkPathForDeveloperDir(developerDir))
+			candidates = append(candidates, frameworkPathsForDeveloperDir(developerDir)...)
 		}
 	}
+	candidates = append(candidates, xcodepath.FrameworkPaths()...)
+	candidates = append(candidates, defaultFrameworkPath)
 	return candidates
 }
 
 func frameworkPathForDeveloperDir(developerDir string) string {
-	return filepath.Join(developerDir, "PlugIns", "GPUDebugger.ideplugin", "Contents", "Frameworks", "GTShaderProfiler.framework", "Versions", "A", "GTShaderProfiler")
+	return frameworkPathsForDeveloperDir(developerDir)[0]
+}
+
+func frameworkPathsForDeveloperDir(developerDir string) []string {
+	developerDir = filepath.Clean(developerDir)
+	contentsDir := developerDir
+	if filepath.Base(developerDir) == "Developer" {
+		contentsDir = filepath.Dir(developerDir)
+	}
+	return []string{
+		filepath.Join(contentsDir, "PlugIns", "GPUDebugger.ideplugin", "Contents", "Frameworks", "GTShaderProfiler.framework", "Versions", "A", "GTShaderProfiler"),
+		filepath.Join(developerDir, "PlugIns", "GPUDebugger.ideplugin", "Contents", "Frameworks", "GTShaderProfiler.framework", "Versions", "A", "GTShaderProfiler"),
+	}
+}
+
+func frameworkOverridePaths(path string) []string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil
+	}
+	info, err := os.Stat(path)
+	if err != nil || !info.IsDir() {
+		return []string{path}
+	}
+	if strings.HasSuffix(path, ".framework") {
+		return []string{
+			filepath.Join(path, "Versions", "A", "GTShaderProfiler"),
+			filepath.Join(path, "GTShaderProfiler"),
+		}
+	}
+	bundle := filepath.Join(path, "GTShaderProfiler.framework")
+	return []string{
+		filepath.Join(bundle, "Versions", "A", "GTShaderProfiler"),
+		filepath.Join(bundle, "GTShaderProfiler"),
+	}
 }
 
 func fileExists(path string) bool {
