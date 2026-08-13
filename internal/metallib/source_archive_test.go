@@ -118,6 +118,14 @@ func TestDebugRecordsFromFile(t *testing.T) {
 		t.Fatal("no debug records")
 	}
 	t.Logf("decoded %d functions and %d unbound debug records", len(functions), len(records))
+	pairs, err := lib.ListFunctionDebug()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pairs) != len(functions) {
+		t.Fatalf("decoded %d function/debug pairs, want %d", len(pairs), len(functions))
+	}
+	t.Logf("decoded %d structurally bound function/debug pairs", len(pairs))
 }
 
 func putUint64(p []byte, v uint64) {

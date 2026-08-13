@@ -3,6 +3,8 @@ package metallib
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"unicode/utf8"
 )
 
@@ -12,6 +14,52 @@ type DebugRecord struct {
 	Source     string
 	Line       uint32
 	Dependency string
+}
+
+// FunctionDebug binds a function-list entry to the private metadata entry at
+// the same metallib table index.
+type FunctionDebug struct {
+	Function Function
+	Debug    DebugRecord
+}
+
+// ListFunctionDebug returns function/debug pairs from the parallel metallib
+// function and private-metadata tables. It refuses absent sections, malformed
+// entries, count mismatches, and trailing private metadata.
+func (m *File) ListFunctionDebug() ([]FunctionDebug, error) {
+	if m == nil {
+		return nil, errors.New("metallib: nil file")
+	}
+	functions, err := m.ListFunctionMetadata()
+	if err != nil {
+		return nil, err
+	}
+	private, ok := metallibSection(m.Data, m.Header.PrivateMetadata, m.Header.PrivateMetadataSize)
+	if !ok {
+		return nil, errors.New("metallib: missing private metadata section")
+	}
+	pairs := make([]FunctionDebug, 0, len(functions))
+	pos := 0
+	for i, function := range functions {
+		if len(private)-pos < 4 {
+			return nil, fmt.Errorf("metallib: private metadata has %d entries, want %d", i, len(functions))
+		}
+		size := int(binary.LittleEndian.Uint32(private[pos : pos+4]))
+		if size < 8 || size > len(private)-pos {
+			return nil, fmt.Errorf("metallib: invalid private metadata entry %d size %d", i, size)
+		}
+		entry := private[pos+4 : pos+size]
+		record, end, ok := parseDebugRecord(entry, 0)
+		if !ok || len(entry)-end != 4 || string(entry[end:]) != "ENDT" {
+			return nil, fmt.Errorf("metallib: invalid private metadata entry %d", i)
+		}
+		pairs = append(pairs, FunctionDebug{Function: function, Debug: record})
+		pos += size
+	}
+	if pos != len(private) {
+		return nil, fmt.Errorf("metallib: %d trailing private metadata bytes", len(private)-pos)
+	}
+	return pairs, nil
 }
 
 // ListDebugRecords returns structurally valid DEBI/DEPF records found in the

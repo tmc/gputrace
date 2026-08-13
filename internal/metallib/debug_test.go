@@ -43,6 +43,51 @@ func TestListDebugRecordsUsesDeclaredPrivateMetadata(t *testing.T) {
 	}
 }
 
+func TestListFunctionDebug(t *testing.T) {
+	data := buildTaggedMTLBForTest(
+		taggedFunctionForTest("a", 0, 1, 0),
+		taggedFunctionForTest("b", 1, 1, 0),
+	)
+	private := privateMetadataForTest(
+		debugRecordForTest("a.metal", 3, "a.air"),
+		debugRecordForTest("b.metal", 5, "b.air"),
+	)
+	off := len(data)
+	data = append(data, private...)
+	lib, err := Parse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lib.Header.PrivateMetadata = uint64(off)
+	lib.Header.PrivateMetadataSize = uint64(len(private))
+	pairs, err := lib.ListFunctionDebug()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pairs) != 2 || pairs[0].Function.Name != "a" || pairs[0].Debug.Source != "a.metal" || pairs[1].Function.Name != "b" || pairs[1].Debug.Source != "b.metal" {
+		t.Fatalf("pairs = %#v", pairs)
+	}
+}
+
+func TestListFunctionDebugRefusesCountMismatch(t *testing.T) {
+	data := buildTaggedMTLBForTest(
+		taggedFunctionForTest("a", 0, 1, 0),
+		taggedFunctionForTest("b", 1, 1, 0),
+	)
+	private := privateMetadataForTest(debugRecordForTest("a.metal", 3, "a.air"))
+	off := len(data)
+	data = append(data, private...)
+	lib, err := Parse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lib.Header.PrivateMetadata = uint64(off)
+	lib.Header.PrivateMetadataSize = uint64(len(private))
+	if _, err := lib.ListFunctionDebug(); err == nil {
+		t.Fatal("ListFunctionDebug succeeded with a missing entry")
+	}
+}
+
 func debugRecordForTest(source string, line uint32, dependency string) []byte {
 	sourcePayload := make([]byte, 4, 5+len(source))
 	binary.LittleEndian.PutUint32(sourcePayload, line)
@@ -52,4 +97,15 @@ func debugRecordForTest(source string, line uint32, dependency string) []byte {
 	record := taggedFieldForTest("DEBI", sourcePayload)
 	record = append(record, taggedFieldForTest("DEPF", dependencyPayload)...)
 	return record
+}
+
+func privateMetadataForTest(entries ...[]byte) []byte {
+	var data []byte
+	for _, entry := range entries {
+		size := uint32(4 + len(entry) + 4)
+		data = append(data, littleUint32ForTest(size)...)
+		data = append(data, entry...)
+		data = append(data, []byte("ENDT")...)
+	}
+	return data
 }
