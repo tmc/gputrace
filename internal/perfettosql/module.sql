@@ -189,6 +189,11 @@ SELECT
   extract_arg(arg_set_id, 'debug.counter_catalog_availability') AS counter_catalog_availability,
   extract_arg(arg_set_id, 'debug.counter_decoder_availability') AS counter_decoder_availability,
   extract_arg(arg_set_id, 'debug.raw_counter_artifact_availability') AS raw_counter_artifact_availability,
+  cast(extract_arg(arg_set_id, 'debug.raw_profiler_artifact_count') AS INT) AS raw_profiler_artifact_count,
+  cast(extract_arg(arg_set_id, 'debug.raw_profiler_artifact_total_bytes') AS INT) AS raw_profiler_artifact_total_bytes,
+  extract_arg(arg_set_id, 'debug.raw_profiler_artifact_inventory_sha256') AS raw_profiler_artifact_inventory_sha256,
+  extract_arg(arg_set_id, 'debug.raw_profiler_artifact_digest_algorithm') AS raw_profiler_artifact_digest_algorithm,
+  extract_arg(arg_set_id, 'debug.raw_profiler_artifact_scope') AS raw_profiler_artifact_scope,
   cast(extract_arg(arg_set_id, 'debug.packet_family_gpu_info') AS INT) AS packet_family_gpu_info,
   cast(extract_arg(arg_set_id, 'debug.packet_family_gpu_render_stage_event') AS INT) AS packet_family_gpu_render_stage_event,
   cast(extract_arg(arg_set_id, 'debug.packet_family_track_event') AS INT) AS packet_family_track_event,
@@ -770,6 +775,22 @@ SELECT
   arg_set_id
 FROM slice
 WHERE category = 'evidence_gap';
+
+CREATE PERFETTO VIEW gputrace_raw_profiler_artifact AS
+SELECT
+  id,
+  name,
+  extract_arg(arg_set_id, 'debug.name') AS artifact_name,
+  extract_arg(arg_set_id, 'debug.kind') AS artifact_kind,
+  cast(extract_arg(arg_set_id, 'debug.file_index') AS INT) AS file_index,
+  cast(extract_arg(arg_set_id, 'debug.size_bytes') AS INT) AS size_bytes,
+  extract_arg(arg_set_id, 'debug.sha256') AS sha256,
+  extract_arg(arg_set_id, 'debug.digest_algorithm') AS digest_algorithm,
+  extract_arg(arg_set_id, 'debug.path_scope') AS path_scope,
+  extract_arg(arg_set_id, 'debug.clock_domain') AS clock_domain,
+  arg_set_id
+FROM slice
+WHERE category = 'raw_profiler_artifact';
 
 CREATE PERFETTO VIEW gputrace_unmatched AS
 SELECT 'semantic_node' AS kind,

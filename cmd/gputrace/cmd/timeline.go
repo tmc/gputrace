@@ -211,6 +211,9 @@ func runTimeline(cmd *cobra.Command, args []string, opts *timelineOptions) error
 	if err := enrichTimelineWithXcodeGPUTime(tracePath, timeline, opts.xcodeGPUTime); err != nil {
 		return err
 	}
+	if opts.format == "perfetto" || opts.format == "json" {
+		attachRawProfilerArtifacts(timeline, tracePath)
+	}
 	if trace.Metadata != nil {
 		timeline.TraceUUID = trace.Metadata.UUID
 		timeline.DeviceID = trace.Metadata.DeviceID
@@ -933,40 +936,58 @@ func timelineEventArgInt(args map[string]interface{}, key string) (int, bool) {
 
 // Timeline represents the complete timeline data.
 type Timeline struct {
-	TracePath            string                      `json:"trace_path,omitempty"`
-	ClockDomain          string                      `json:"clock_domain,omitempty"`
-	RawProfilerSamples   bool                        `json:"raw_profiler_samples,omitempty"`
-	StartTime            uint64                      `json:"start_time"`
-	EndTime              uint64                      `json:"end_time"`
-	Duration             uint64                      `json:"duration"`
-	Events               []TimelineEvent             `json:"events"`
-	Encoders             []EncoderInfo               `json:"encoders"`
-	Kernels              []KernelInfo                `json:"kernels"`
-	APICallseq           []APICall                   `json:"api_callseq"`
-	CounterTracks        []CounterTrack              `json:"counter_tracks,omitempty"`
-	UnattributedCounters []UnattributedCounterMetric `json:"unattributed_counters,omitempty"`
-	UnavailableEvidence  []UnavailableEvidence       `json:"unavailable_evidence,omitempty"`
-	Timing               *TimelineTiming             `json:"timing,omitempty"`
-	XcodeMetrics         map[string]any              `json:"xcode_metrics,omitempty"`
-	AbsoluteTime         uint64                      `json:"absolute_time"`
-	ContinuousTime       uint64                      `json:"continuous_time,omitempty"`
-	PState               *int                        `json:"pstate,omitempty"`
-	TimebaseNumer        uint64                      `json:"timebase_numer"`
-	TimebaseDenom        uint64                      `json:"timebase_denom"`
-	MLXSemantics         *mlxsemantic.Sidecar        `json:"mlx_semantics,omitempty"`
-	MLXSemanticReport    *mlxsemantic.Report         `json:"mlx_semantic_report,omitempty"`
-	MLXSidecarDigest     string                      `json:"mlx_sidecar_digest,omitempty"`
-	HostCorrelation      *hostCorrelationProjection  `json:"host_correlation,omitempty"`
-	LiveTiming           *liveTimingProjection       `json:"live_timing,omitempty"`
-	TraceUUID            string                      `json:"trace_uuid,omitempty"`
-	DeviceID             int                         `json:"device_id,omitempty"`
-	GPUGeneration        *uint32                     `json:"gpu_generation,omitempty"`
-	MetalDeviceName      string                      `json:"metal_device_name,omitempty"`
-	MetalPluginName      string                      `json:"metal_plugin_name,omitempty"`
-	StreamMetadata       *counter.StreamDataMetadata `json:"stream_metadata,omitempty"`
-	ObservedCSLabels     int                         `json:"observed_cs_labels,omitempty"`
-	UniqueCSLabels       int                         `json:"unique_cs_labels,omitempty"`
-	EvidenceInventory    *TimelineEvidenceInventory  `json:"evidence_inventory,omitempty"`
+	TracePath                string                         `json:"trace_path,omitempty"`
+	ClockDomain              string                         `json:"clock_domain,omitempty"`
+	RawProfilerSamples       bool                           `json:"raw_profiler_samples,omitempty"`
+	StartTime                uint64                         `json:"start_time"`
+	EndTime                  uint64                         `json:"end_time"`
+	Duration                 uint64                         `json:"duration"`
+	Events                   []TimelineEvent                `json:"events"`
+	Encoders                 []EncoderInfo                  `json:"encoders"`
+	Kernels                  []KernelInfo                   `json:"kernels"`
+	APICallseq               []APICall                      `json:"api_callseq"`
+	CounterTracks            []CounterTrack                 `json:"counter_tracks,omitempty"`
+	UnattributedCounters     []UnattributedCounterMetric    `json:"unattributed_counters,omitempty"`
+	UnavailableEvidence      []UnavailableEvidence          `json:"unavailable_evidence,omitempty"`
+	Timing                   *TimelineTiming                `json:"timing,omitempty"`
+	XcodeMetrics             map[string]any                 `json:"xcode_metrics,omitempty"`
+	AbsoluteTime             uint64                         `json:"absolute_time"`
+	ContinuousTime           uint64                         `json:"continuous_time,omitempty"`
+	PState                   *int                           `json:"pstate,omitempty"`
+	TimebaseNumer            uint64                         `json:"timebase_numer"`
+	TimebaseDenom            uint64                         `json:"timebase_denom"`
+	MLXSemantics             *mlxsemantic.Sidecar           `json:"mlx_semantics,omitempty"`
+	MLXSemanticReport        *mlxsemantic.Report            `json:"mlx_semantic_report,omitempty"`
+	MLXSidecarDigest         string                         `json:"mlx_sidecar_digest,omitempty"`
+	HostCorrelation          *hostCorrelationProjection     `json:"host_correlation,omitempty"`
+	LiveTiming               *liveTimingProjection          `json:"live_timing,omitempty"`
+	TraceUUID                string                         `json:"trace_uuid,omitempty"`
+	DeviceID                 int                            `json:"device_id,omitempty"`
+	GPUGeneration            *uint32                        `json:"gpu_generation,omitempty"`
+	MetalDeviceName          string                         `json:"metal_device_name,omitempty"`
+	MetalPluginName          string                         `json:"metal_plugin_name,omitempty"`
+	StreamMetadata           *counter.StreamDataMetadata    `json:"stream_metadata,omitempty"`
+	ObservedCSLabels         int                            `json:"observed_cs_labels,omitempty"`
+	UniqueCSLabels           int                            `json:"unique_cs_labels,omitempty"`
+	EvidenceInventory        *TimelineEvidenceInventory     `json:"evidence_inventory,omitempty"`
+	RawProfilerArtifacts     *profilerraw.ArtifactInventory `json:"raw_profiler_artifacts,omitempty"`
+	RawProfilerArtifactError string                         `json:"raw_profiler_artifact_error,omitempty"`
+}
+
+func attachRawProfilerArtifacts(timeline *Timeline, tracePath string) {
+	if timeline == nil {
+		return
+	}
+	dir := profilerraw.FindDir(tracePath)
+	if dir == "" {
+		return
+	}
+	inventory, err := profilerraw.Inventory(dir)
+	if err != nil {
+		timeline.RawProfilerArtifactError = err.Error()
+		return
+	}
+	timeline.RawProfilerArtifacts = inventory
 }
 
 // TimelineEvidenceInventory counts source records before clock filtering.
@@ -2676,6 +2697,16 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 			"unavailable_system_memory":                   "Metal trace contains no system-memory evidence",
 		},
 	}
+	if inventory := timeline.RawProfilerArtifacts; inventory != nil {
+		trace.Metadata["raw_counter_artifact_availability"] = "available: content-identified profiler archive"
+		trace.Metadata["raw_profiler_artifact_count"] = len(inventory.Artifacts)
+		trace.Metadata["raw_profiler_artifact_total_bytes"] = inventory.TotalBytes
+		trace.Metadata["raw_profiler_artifact_inventory_sha256"] = inventory.SHA256
+		trace.Metadata["raw_profiler_artifact_digest_algorithm"] = "sha256"
+		trace.Metadata["raw_profiler_artifact_scope"] = "regular files directly beneath the resolved .gpuprofiler_raw directory"
+	} else if timeline.RawProfilerArtifactError != "" {
+		trace.Metadata["raw_counter_artifact_availability"] = "unavailable: " + timeline.RawProfilerArtifactError
+	}
 	if timeline.TraceUUID != "" {
 		trace.Metadata["input_uuid"] = timeline.TraceUUID
 		trace.Metadata["input_uuid_availability"] = "available"
@@ -3366,7 +3397,8 @@ func appendMLXSemanticEvents(trace *perfetto.Trace, timeline *Timeline) {
 }
 
 func appendEvidenceDetailEvents(trace *perfetto.Trace, timeline *Timeline) {
-	if len(timeline.UnattributedCounters) == 0 && len(timeline.UnavailableEvidence) == 0 {
+	if len(timeline.UnattributedCounters) == 0 && len(timeline.UnavailableEvidence) == 0 &&
+		(timeline.RawProfilerArtifacts == nil || len(timeline.RawProfilerArtifacts.Artifacts) == 0) {
 		return
 	}
 	trackID := perfetto.TrackUUID("gputrace.evidence", "details")
@@ -3417,6 +3449,34 @@ func appendEvidenceDetailEvents(trace *perfetto.Trace, timeline *Timeline) {
 				"clock_domain":   "none",
 				"timing_quality": "unavailable",
 			},
+		})
+		nextID++
+	}
+	if timeline.RawProfilerArtifacts == nil {
+		return
+	}
+	for _, artifact := range timeline.RawProfilerArtifacts.Artifacts {
+		args := map[string]any{
+			"name":             artifact.Name,
+			"kind":             artifact.Kind,
+			"size_bytes":       artifact.Size,
+			"sha256":           artifact.SHA256,
+			"digest_algorithm": "sha256",
+			"path_scope":       "basename within resolved .gpuprofiler_raw directory",
+			"clock_domain":     "none",
+			"timing_quality":   "unavailable",
+		}
+		if artifact.Index != nil {
+			args["file_index"] = *artifact.Index
+		}
+		trace.Events = append(trace.Events, perfetto.Event{
+			ID:        nextID,
+			TrackUUID: trackID,
+			Name:      "Raw profiler artifact: " + artifact.Name,
+			Category:  "raw_profiler_artifact",
+			Kind:      perfetto.EventInstant,
+			Required:  true,
+			Args:      args,
 		})
 		nextID++
 	}
@@ -4539,6 +4599,9 @@ func runTimelineFromProfiler(cmd *cobra.Command, tracePath string, opts *timelin
 
 	// Build timeline from profiler data
 	timeline := buildTimelineFromProfilerData(tracePath, stats)
+	if opts.format == "perfetto" || opts.format == "json" {
+		attachRawProfilerArtifacts(timeline, tracePath)
+	}
 	if err := enrichTimelineWithXcodeGPUTime(tracePath, timeline, opts.xcodeGPUTime); err != nil {
 		return err
 	}

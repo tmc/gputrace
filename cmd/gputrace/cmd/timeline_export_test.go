@@ -16,9 +16,28 @@ import (
 	"github.com/tmc/gputrace/internal/counter"
 	"github.com/tmc/gputrace/internal/mlxsemantic"
 	"github.com/tmc/gputrace/internal/perfetto"
+	"github.com/tmc/gputrace/internal/profilerraw"
 	tracepkg "github.com/tmc/gputrace/internal/trace"
 	"github.com/tmc/gputrace/internal/xcodebindings"
 )
+
+func TestAppendEvidenceDetailEventsIncludesRawProfilerArtifacts(t *testing.T) {
+	index := 2
+	timeline := &Timeline{RawProfilerArtifacts: &profilerraw.ArtifactInventory{
+		Artifacts: []profilerraw.Artifact{{
+			Name: "Counters_f_2.raw", Kind: "counters", Index: &index, Size: 17, SHA256: "abc",
+		}},
+	}}
+	trace := &perfetto.Trace{}
+	appendEvidenceDetailEvents(trace, timeline)
+	if len(trace.Tracks) != 1 || len(trace.Events) != 1 {
+		t.Fatalf("artifact evidence = %d tracks, %d events", len(trace.Tracks), len(trace.Events))
+	}
+	event := trace.Events[0]
+	if event.Category != "raw_profiler_artifact" || event.Kind != perfetto.EventInstant || event.Args["file_index"] != 2 || event.Args["size_bytes"] != int64(17) || event.Args["sha256"] != "abc" {
+		t.Fatalf("artifact event = %#v", event)
+	}
+}
 
 func TestExportChromeTracingIncludesTimingMetadata(t *testing.T) {
 	effective := uint64(1650625)

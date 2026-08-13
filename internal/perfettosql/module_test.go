@@ -30,6 +30,7 @@ func TestModuleDefinesStableViews(t *testing.T) {
 		"gputrace_unattributed_counter",
 		"gputrace_unattributed_counter_arg",
 		"gputrace_evidence_gap",
+		"gputrace_raw_profiler_artifact",
 		"gputrace_unmatched",
 	} {
 		if !strings.Contains(Module, "CREATE PERFETTO VIEW "+name+" AS") {
@@ -113,6 +114,9 @@ func TestModuleProjectsRecordedDispatchesAndCompilerFacts(t *testing.T) {
 		"stream_data_aps_data_inventory_count_semantics",
 		"stream_data_aps_data_inventory_dictionaries",
 		"stream_data_aps_data_inventory_with_aps_trace_data_file",
+		"raw_profiler_artifact_inventory_sha256",
+		"raw_profiler_artifact_total_bytes",
+		"artifact_kind",
 		"dependency_skeletons_retained",
 		"presentation_dispatch_accounting",
 		"a.display_value",
