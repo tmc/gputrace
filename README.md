@@ -107,6 +107,10 @@ The optional SQL file defines `gputrace_capture`, `gputrace_command_buffer`, `gp
 `gputrace_encoder`, `gputrace_function`, `gputrace_pipeline`, `gputrace_semantic_node`, `gputrace_semantic_link`,
 `gputrace_counter_series`, and
 `gputrace_unmatched` views over the native trace.
+`gputrace_capture` provides typed trace identity, environment, clock, coverage,
+and loss-receipt columns. `gputrace_manifest_arg` exposes every manifest field
+as a key/value row, including per-class loss fields added by constrained
+exports and fields introduced by newer exporters.
 
 `diff` fails closed when workload, device/driver, runtime, capture mode, or
 timing-source gates differ or are unavailable. The explicit

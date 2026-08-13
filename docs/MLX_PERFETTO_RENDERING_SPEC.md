@@ -475,6 +475,7 @@ and also provide an exporter-owned SQL module with a stable logical view:
 
 ```sql
 gputrace_capture
+gputrace_manifest_arg
 gputrace_command_buffer
 gputrace_semantic_node
 gputrace_semantic_link
@@ -490,6 +491,12 @@ gputrace_unmatched
 measured APSTimelineData spans and their source ticks. Capture-only traces
 expose command-buffer record identity and byte offset with unavailable timing.
 It does not join either representation to cumulative GPU-busy dispatch time.
+
+`gputrace_capture` provides typed columns for common identity, environment,
+clock, coverage, and retention queries. `gputrace_manifest_arg` is the
+lossless key/value projection of the same manifest. It keeps dynamic
+per-evidence-class loss receipts and future manifest fields queryable without
+silently dropping them from an older typed view.
 
 Each semantic node is emitted as an explicitly untimed declaration on its
 hierarchical track. Target links are separate events and inherit timing only
