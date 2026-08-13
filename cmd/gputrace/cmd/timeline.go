@@ -388,6 +388,10 @@ func timelineForClockWithRawSamples(timeline *Timeline, clock timelineClock, raw
 		return nil
 	}
 	selected := *timeline
+	if selected.EvidenceInventory == nil {
+		inventory := timelineEvidenceInventory(timeline)
+		selected.EvidenceInventory = &inventory
+	}
 	selected.ClockDomain = string(clock)
 	selected.RawProfilerSamples = clock == timelineClockWall && rawProfilerSamples
 	selected.Events = make([]TimelineEvent, 0, len(timeline.Events))
@@ -956,6 +960,32 @@ type Timeline struct {
 	DeviceID             int                         `json:"device_id,omitempty"`
 	ObservedCSLabels     int                         `json:"observed_cs_labels,omitempty"`
 	UniqueCSLabels       int                         `json:"unique_cs_labels,omitempty"`
+	EvidenceInventory    *TimelineEvidenceInventory  `json:"evidence_inventory,omitempty"`
+}
+
+// TimelineEvidenceInventory counts source records before clock filtering.
+// Projected event counts are reported separately by each exporter.
+type TimelineEvidenceInventory struct {
+	CommandBuffers    int `json:"command_buffers"`
+	Encoders          int `json:"encoders"`
+	Dispatches        int `json:"dispatches"`
+	ProfilerStreams   int `json:"raw_profiler_streams"`
+	ProfilerRecords   int `json:"raw_profiler_records"`
+	UntimedDispatches int `json:"untimed_dispatches"`
+}
+
+func timelineEvidenceInventory(timeline *Timeline) TimelineEvidenceInventory {
+	if timeline == nil {
+		return TimelineEvidenceInventory{}
+	}
+	return TimelineEvidenceInventory{
+		CommandBuffers:    timelineEventCount(timeline, "command_buffer"),
+		Encoders:          timelineEventCount(timeline, "encoder"),
+		Dispatches:        timelineEventCount(timeline, "kernel") + timelineEventCount(timeline, "dispatch"),
+		ProfilerStreams:   timelineEventCount(timeline, "profiler_stream"),
+		ProfilerRecords:   timelineEventCount(timeline, "gprwcntr"),
+		UntimedDispatches: timelineUntimedDispatchCount(timeline),
+	}
 }
 
 // UnavailableEvidence records an evidence family that could not be projected
@@ -2480,6 +2510,23 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 		trace.Metadata["environment_device_availability"] = "unavailable"
 	}
 	if timeline != nil {
+		inventory := timeline.EvidenceInventory
+		if inventory == nil {
+			value := timelineEvidenceInventory(timeline)
+			inventory = &value
+		}
+		trace.Metadata["source_command_buffer_count"] = inventory.CommandBuffers
+		trace.Metadata["source_encoder_count"] = inventory.Encoders
+		trace.Metadata["source_dispatch_count"] = inventory.Dispatches
+		trace.Metadata["source_untimed_dispatch_count"] = inventory.UntimedDispatches
+		trace.Metadata["source_raw_profiler_stream_count"] = inventory.ProfilerStreams
+		trace.Metadata["source_raw_profiler_record_count"] = inventory.ProfilerRecords
+		trace.Metadata["projected_command_buffer_count"] = timelineEventCount(timeline, "command_buffer")
+		trace.Metadata["projected_encoder_count"] = timelineEventCount(timeline, "encoder")
+		trace.Metadata["projected_dispatch_count"] = timelineEventCount(timeline, "kernel") + timelineEventCount(timeline, "dispatch")
+		trace.Metadata["projected_untimed_dispatch_count"] = timelineUntimedDispatchCount(timeline)
+		trace.Metadata["projected_raw_profiler_stream_count"] = timelineEventCount(timeline, "profiler_stream")
+		trace.Metadata["projected_raw_profiler_record_count"] = timelineEventCount(timeline, "gprwcntr")
 		trace.Metadata["raw_profiler_samples"] = timeline.RawProfilerSamples
 		trace.Metadata["dispatch_count"] = len(timeline.Kernels)
 		trace.Metadata["untimed_dispatch_count"] = timelineUntimedDispatchCount(timeline)

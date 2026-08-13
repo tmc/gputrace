@@ -762,6 +762,9 @@ func TestTimelineForClockKeepsOnlyComparableEvents(t *testing.T) {
 	if got, want := busy.Duration, uint64(200_000); got != want {
 		t.Fatalf("busy duration = %d, want %d", got, want)
 	}
+	if got, want := *busy.EvidenceInventory, (TimelineEvidenceInventory{CommandBuffers: 1, Encoders: 1, Dispatches: 1, ProfilerStreams: 1, ProfilerRecords: 1, UntimedDispatches: 1}); got != want {
+		t.Fatalf("busy evidence inventory = %#v, want %#v", got, want)
+	}
 
 	wall := timelineForClock(timeline, timelineClockWall)
 	if got, want := len(wall.Events), 3; got != want {
@@ -780,6 +783,9 @@ func TestTimelineForClockKeepsOnlyComparableEvents(t *testing.T) {
 	}
 	if got, want := wall.Duration, uint64(340_000_000); got != want {
 		t.Fatalf("wall duration = %d, want %d", got, want)
+	}
+	if got, want := *wall.EvidenceInventory, *busy.EvidenceInventory; got != want {
+		t.Fatalf("wall evidence inventory = %#v, want %#v", got, want)
 	}
 	if got, want := len(timeline.Events), 5; got != want {
 		t.Fatalf("source timeline events = %d, want %d", got, want)

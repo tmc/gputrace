@@ -95,6 +95,8 @@ func TestModuleProjectsRecordedDispatchesAndCompilerFacts(t *testing.T) {
 		"effective_gpu_time_ns",
 		"command_buffer_active_time_ns",
 		"display_duration_source",
+		"source_raw_profiler_record_count",
+		"projected_command_buffer_count",
 		"extract_arg(arg_set_id, 'xcode_type') AS xcode_type",
 		"extract_arg(arg_set_id, 'debug.xcode_view') AS xcode_view",
 		"'measured_gpu_execution' AS evidence_kind",
