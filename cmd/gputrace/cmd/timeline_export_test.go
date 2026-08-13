@@ -372,6 +372,18 @@ func TestExportPerfettoWritesNativeProtobuf(t *testing.T) {
 	}
 }
 
+func TestPerfettoEventArgsAddsTimingProvenanceWithoutMutation(t *testing.T) {
+	timeline := &Timeline{Timing: &TimelineTiming{TimingSource: "streamData", EncoderTimingApproximate: true}}
+	event := TimelineEvent{Args: map[string]interface{}{"index": 7}}
+	args := perfettoEventArgs(timeline, event, timelineClockBusy)
+	if args["clock_domain"] != "busy" || args["timing_source"] != "streamData" || args["timing_quality"] != "approximate" {
+		t.Fatalf("Perfetto args = %+v", args)
+	}
+	if _, ok := event.Args["clock_domain"]; ok {
+		t.Fatal("perfettoEventArgs mutated canonical event args")
+	}
+}
+
 func TestAppendMLXSemanticEvents(t *testing.T) {
 	timeline := &Timeline{
 		Events: []TimelineEvent{{

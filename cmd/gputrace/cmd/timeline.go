@@ -2385,7 +2385,7 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 			Category:   event.Category,
 			StartNS:    event.Timestamp * 1000,
 			DurationNS: event.Duration * 1000,
-			Args:       event.Args,
+			Args:       perfettoEventArgs(timeline, event, clock),
 			Required:   event.Category == "encoder" || event.Category == "command_buffer",
 		}
 		if event.Category == "kernel" {
@@ -2436,6 +2436,29 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 	return nil
 }
 
+func perfettoEventArgs(timeline *Timeline, event TimelineEvent, clock timelineClock) map[string]any {
+	args := make(map[string]any, len(event.Args)+3)
+	for key, value := range event.Args {
+		args[key] = value
+	}
+	args["clock_domain"] = string(clock)
+	args["timing_quality"] = perfettoTimingQuality(timeline)
+	if _, ok := args["timing_source"]; !ok && timeline != nil && timeline.Timing != nil && timeline.Timing.TimingSource != "" {
+		args["timing_source"] = timeline.Timing.TimingSource
+	}
+	return args
+}
+
+func perfettoTimingQuality(timeline *Timeline) string {
+	if timeline == nil || timeline.Timing == nil || timeline.Timing.TimingSource == "" || timeline.Timing.TimingSource == "unavailable" {
+		return "unavailable"
+	}
+	if timeline.Timing.EncoderTimingApproximate {
+		return "approximate"
+	}
+	return "measured"
+}
+
 func appendMLXSemanticEvents(trace *perfetto.Trace, timeline *Timeline) {
 	if timeline.MLXSemantics == nil {
 		return
@@ -2471,6 +2494,16 @@ func appendMLXSemanticEvents(trace *perfetto.Trace, timeline *Timeline) {
 		args["semantic_kind"] = node.Kind
 		args["join_basis"] = "sidecar-explicit-id"
 		args["target_kind"] = link.Target.Kind
+		args["clock_domain"] = timeline.ClockDomain
+		args["timing_quality"] = perfettoTimingQuality(timeline)
+		if target.Args != nil {
+			if source, ok := target.Args["timing_source"]; ok {
+				args["timing_source"] = source
+			}
+		}
+		if _, ok := args["timing_source"]; !ok && timeline.Timing != nil {
+			args["timing_source"] = timeline.Timing.TimingSource
+		}
 		kind := perfetto.EventSlice
 		if target.Duration == 0 {
 			kind = perfetto.EventInstant
