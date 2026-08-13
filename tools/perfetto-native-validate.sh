@@ -64,12 +64,17 @@ manifest_schema=$(
 
 if [ -n "$sql" ]; then
 	[ -f "$sql" ] || { echo "PerfettoSQL file not found: $sql" >&2; exit 2; }
+	recorded_dispatches=$(
+		"$tp" query "$trace" "select count(*) from slice where category='dispatch'" 2>/dev/null |
+			tail -1 | tr -d '"'
+	)
 	view_dispatches=$(
 		{ sed -n '1,$p' "$sql"; printf '%s\n' 'select count(*) from gputrace_dispatch;'; } |
 			"$tp" query "$trace" 2>/dev/null | tail -1 | tr -d '"'
 	)
-	[ "$view_dispatches" = "$gpu_slices" ] || {
-		echo "gputrace_dispatch has $view_dispatches rows; gpu_slice has $gpu_slices" >&2
+	expected_dispatches=$((gpu_slices + recorded_dispatches))
+	[ "$view_dispatches" = "$expected_dispatches" ] || {
+		echo "gputrace_dispatch has $view_dispatches rows; expected $expected_dispatches ($gpu_slices measured GPU slices + $recorded_dispatches recorded dispatches)" >&2
 		exit 1
 	}
 fi
