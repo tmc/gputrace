@@ -13,6 +13,8 @@ import (
 
 	"github.com/tmc/gputrace"
 	"github.com/tmc/gputrace/internal/counter"
+	"github.com/tmc/gputrace/internal/mlxsemantic"
+	"github.com/tmc/gputrace/internal/perfetto"
 	"github.com/tmc/gputrace/internal/profilerraw"
 	tracepkg "github.com/tmc/gputrace/internal/trace"
 )
@@ -28,6 +30,12 @@ type timelineOptions struct {
 	clock              timelineClock
 	rawProfilerSamples bool
 	xcodeGPUTime       bool
+	sidecar            string
+	openViewer         bool
+	serveViewer        bool
+	uiDir              string
+	remoteUI           bool
+	listen             string
 }
 
 // timelineClock selects one measured timestamp domain. The profiler records
@@ -55,7 +63,7 @@ func newTimelineCommand(opts *timelineOptions) *cobra.Command {
 Output formats:
   - text: Hierarchical text output to stdout
   - chrome: Chrome tracing format (chrome://tracing)
-  - perfetto: Perfetto format (ui.perfetto.dev) - same as chrome
+  - perfetto: Native Perfetto protobuf format (ui.perfetto.dev)
   - html: Interactive standalone HTML timeline viewer
   - json: Raw timeline data in JSON format
 
@@ -77,10 +85,10 @@ Examples:
   gputrace timeline trace.gputrace --format chrome -o timeline.json
 
   # Inspect wall-clock command-buffer scheduling separately
-  gputrace timeline trace.gputrace --format perfetto --clock wall -o command-buffers.json
+  gputrace timeline trace.gputrace --format perfetto --clock wall -o command-buffers.pftrace
 
   # Add Xcode Overview GPU Time without aligning the two timeline clocks
-  gputrace timeline trace.gputrace --format perfetto --xcode-gpu-time -o timeline.json
+  gputrace timeline trace.gputrace --format perfetto --xcode-gpu-time -o timeline.pftrace
 
   # Inspect both domains without inventing a clock mapping
   gputrace timeline trace.gputrace --format html --clock both -o timeline.html
@@ -92,7 +100,7 @@ Examples:
 
   # View in Perfetto UI (recommended)
   # 1. Open https://ui.perfetto.dev
-  # 2. Drag and drop timeline.json or click "Open trace file"
+  # 2. Drag and drop timeline.pftrace or click "Open trace file"
   # 3. Use keyboard shortcuts: W/S zoom, A/D pan, F fit
 
   # Generate raw JSON for custom processing
@@ -103,11 +111,17 @@ Examples:
 		},
 	}
 
-	cmd.Flags().StringVarP(&opts.output, "output", "o", opts.output, "Output file path (default: stdout for text, timeline.html for html, timeline.json otherwise)")
+	cmd.Flags().StringVarP(&opts.output, "output", "o", opts.output, "Output file path (default: stdout for text, timeline.html for html, timeline.pftrace for perfetto, timeline.json otherwise)")
 	cmd.Flags().StringVar(&opts.format, "format", opts.format, "Output format: chrome, perfetto, html, json, text")
 	cmd.Flags().Var(&opts.clock, "clock", "Timeline clock domain: busy (default), wall, or both (separate views; no clock mapping)")
 	cmd.Flags().BoolVar(&opts.rawProfilerSamples, "include-raw-samples", opts.rawProfilerSamples, "Include raw GPRWCNTR profiler records in wall-clock output (they are not decoded hardware counters)")
 	cmd.Flags().BoolVar(&opts.xcodeGPUTime, "xcode-gpu-time", opts.xcodeGPUTime, "Read Xcode Overview GPU Time through GTShaderProfiler (Darwin only; runs a private-framework model pass)")
+	cmd.Flags().StringVar(&opts.sidecar, "sidecar", opts.sidecar, "Attach a strictly trace-identified MLX semantic sidecar")
+	cmd.Flags().BoolVar(&opts.openViewer, "open", opts.openViewer, "Serve the native trace and open it in Perfetto")
+	cmd.Flags().BoolVar(&opts.serveViewer, "serve", opts.serveViewer, "Serve the native trace without opening a browser")
+	cmd.Flags().StringVar(&opts.uiDir, "ui-dir", opts.uiDir, "Pinned local Perfetto UI directory (with --open or --serve)")
+	cmd.Flags().BoolVar(&opts.remoteUI, "remote-ui", opts.remoteUI, "Embed https://ui.perfetto.dev (with --open or --serve)")
+	cmd.Flags().StringVar(&opts.listen, "listen", "127.0.0.1:0", "Loopback viewer listen address")
 	return cmd
 }
 
@@ -135,7 +149,7 @@ func runTimeline(cmd *cobra.Command, args []string, opts *timelineOptions) error
 		// Fall back to profiler-only mode when there is no capture stream.
 		// Open now succeeds on such bundles, so the flag, not the error, is
 		// what distinguishes them.
-		return runTimelineFromProfiler(tracePath, opts)
+		return runTimelineFromProfiler(cmd, tracePath, opts)
 	}
 
 	// Generate timeline data
@@ -145,6 +159,19 @@ func runTimeline(cmd *cobra.Command, args []string, opts *timelineOptions) error
 	}
 	if err := enrichTimelineWithXcodeGPUTime(tracePath, timeline, opts.xcodeGPUTime); err != nil {
 		return err
+	}
+	if trace.Metadata != nil {
+		timeline.TraceUUID = trace.Metadata.UUID
+		timeline.DeviceID = trace.Metadata.DeviceID
+	}
+	if opts.sidecar != "" {
+		uuid := ""
+		if trace.Metadata != nil {
+			uuid = trace.Metadata.UUID
+		}
+		if err := attachMLXSidecar(timeline, tracePath, uuid, opts.sidecar); err != nil {
+			return err
+		}
 	}
 
 	// Enhance with raw GPRWCNTR data if available.
@@ -177,6 +204,9 @@ func runTimeline(cmd *cobra.Command, args []string, opts *timelineOptions) error
 	}
 
 	outputPath := timelineOutputPath(opts.format, opts.output)
+	if err := validateTimelineViewerOptions(opts, outputPath); err != nil {
+		return err
+	}
 	if opts.clock == timelineClockBoth {
 		if err := exportTimelineBothWithRawSamples(timeline, opts.format, outputPath, opts.rawProfilerSamples); err != nil {
 			return err
@@ -191,9 +221,13 @@ func runTimeline(cmd *cobra.Command, args []string, opts *timelineOptions) error
 
 	// Export based on format
 	switch opts.format {
-	case "chrome", "perfetto":
+	case "chrome":
 		if err := exportChromeTracingForClock(timeline, outputPath, opts.clock); err != nil {
-			return fmt.Errorf("failed to export Chrome/Perfetto tracing: %w", err)
+			return fmt.Errorf("failed to export Chrome tracing: %w", err)
+		}
+	case "perfetto":
+		if err := exportPerfettoForClock(timeline, outputPath, opts.clock); err != nil {
+			return fmt.Errorf("failed to export Perfetto tracing: %w", err)
 		}
 	case "html":
 		if err := exportHTML(timeline, outputPath); err != nil {
@@ -216,7 +250,7 @@ func runTimeline(cmd *cobra.Command, args []string, opts *timelineOptions) error
 	}
 
 	printTimelineExportStatus(outputPath, opts.format, false)
-	return nil
+	return serveTimelinePerfetto(cmd, tracePath, outputPath, opts)
 }
 
 func validateTimelineClock(clock timelineClock) error {
@@ -332,6 +366,9 @@ func timelineOutputPath(format, output string) string {
 	}
 	if format == "html" {
 		return "timeline.html"
+	}
+	if format == "perfetto" {
+		return "timeline.pftrace"
 	}
 	return "timeline.json"
 }
@@ -810,6 +847,10 @@ type Timeline struct {
 	AbsoluteTime         uint64                      `json:"absolute_time"`
 	TimebaseNumer        uint64                      `json:"timebase_numer"`
 	TimebaseDenom        uint64                      `json:"timebase_denom"`
+	MLXSemantics         *mlxsemantic.Sidecar        `json:"mlx_semantics,omitempty"`
+	MLXSidecarDigest     string                      `json:"mlx_sidecar_digest,omitempty"`
+	TraceUUID            string                      `json:"trace_uuid,omitempty"`
+	DeviceID             int                         `json:"device_id,omitempty"`
 }
 
 // TimelineTiming summarizes the timing sources that Xcode and gputrace expose.
@@ -2485,6 +2526,258 @@ func exportChromeTracing(timeline *Timeline, outputPath string) error {
 	return exportChromeTracingForClock(timeline, outputPath, timelineClockBusy)
 }
 
+func attachMLXSidecar(timeline *Timeline, tracePath, uuid, sidecarPath string) error {
+	if uuid == "" {
+		return fmt.Errorf("attach MLX sidecar: trace UUID is unavailable")
+	}
+	sidecar, err := mlxsemantic.Read(sidecarPath)
+	if err != nil {
+		return err
+	}
+	digest, err := mlxsemantic.Digest(tracePath)
+	if err != nil {
+		return err
+	}
+	counts := map[string]int{
+		"dispatch":       timelineEventCount(timeline, "kernel"),
+		"encoder":        timelineEventCount(timeline, "encoder"),
+		"command_buffer": timelineEventCount(timeline, "command_buffer"),
+	}
+	if err := sidecar.Validate(mlxsemantic.Identity{UUID: uuid, ContentDigest: digest}, counts); err != nil {
+		return err
+	}
+	sidecarDigest, err := mlxsemantic.Digest(sidecarPath)
+	if err != nil {
+		return err
+	}
+	timeline.MLXSemantics = sidecar
+	timeline.MLXSidecarDigest = sidecarDigest
+	return nil
+}
+
+func timelineEventCount(timeline *Timeline, category string) int {
+	count := 0
+	for _, event := range timeline.Events {
+		if event.Category == category {
+			count++
+		}
+	}
+	return count
+}
+
+func timelineEventAt(timeline *Timeline, category string, index int) (TimelineEvent, bool) {
+	for _, event := range timeline.Events {
+		if event.Category != category {
+			continue
+		}
+		if index == 0 {
+			return event, true
+		}
+		index--
+	}
+	return TimelineEvent{}, false
+}
+
+// exportPerfettoForClock writes one measured clock domain as native Perfetto
+// protobuf. Chrome JSON remains available through --format chrome.
+func exportPerfettoForClock(timeline *Timeline, outputPath string, clock timelineClock) error {
+	if timeline == nil {
+		return fmt.Errorf("write perfetto trace: nil timeline")
+	}
+	w, closeOutput, err := createCommandOutput(outputPath)
+	if err != nil {
+		return err
+	}
+	if closeOutput != nil {
+		defer closeOutput()
+	}
+
+	trace := &perfetto.Trace{
+		ClockDomain: string(clock),
+		GPUName:     "Apple GPU",
+		Metadata: map[string]any{
+			"schema":         "gputrace.perfetto/v1",
+			"clock_domain":   string(clock),
+			"clock_mapping":  "none",
+			"timing_quality": "measured",
+		},
+	}
+	if timeline.DeviceID != 0 {
+		trace.GPUModel = fmt.Sprintf("Metal device %d", timeline.DeviceID)
+	}
+	if timeline != nil {
+		trace.Metadata["raw_profiler_samples"] = timeline.RawProfilerSamples
+		trace.Metadata["dispatch_count"] = len(timeline.Kernels)
+		trace.Metadata["encoder_count"] = len(timeline.Encoders)
+		if timeline.Timing != nil {
+			trace.Metadata["timing_source"] = timeline.Timing.TimingSource
+			trace.Metadata["timing_approximate"] = timeline.Timing.EncoderTimingApproximate
+			if timeline.Timing.EncoderTimingApproximate {
+				trace.Metadata["timing_quality"] = "approximate"
+			}
+		} else {
+			trace.Metadata["timing_source"] = "unavailable"
+			trace.Metadata["timing_quality"] = "unavailable"
+		}
+		if timeline.MLXSemantics != nil {
+			trace.Metadata["mlx_semantic_schema"] = timeline.MLXSemantics.Schema
+			trace.Metadata["mlx_semantic_nodes"] = len(timeline.MLXSemantics.Nodes)
+			trace.Metadata["mlx_semantic_links"] = len(timeline.MLXSemantics.Links)
+			trace.Metadata["mlx_sidecar_digest"] = timeline.MLXSidecarDigest
+		}
+	}
+
+	trackNames := make(map[[2]int]string)
+	if clock == timelineClockBusy {
+		trackNames[[2]int{1, 1}] = "Compute encoders and dispatches (cumulative busy)"
+		trackNames[[2]int{1, 3}] = "Unattributed compute dispatches (cumulative busy)"
+	} else {
+		trackNames[[2]int{1, 0}] = "Command buffers (wall clock; APSTimelineData)"
+	}
+	for _, event := range timeline.Events {
+		if event.Phase != "M" || event.Name != "thread_name" {
+			continue
+		}
+		if name, ok := event.Args["name"].(string); ok && name != "" {
+			trackNames[[2]int{event.ProcessID, event.ThreadID}] = name
+		}
+	}
+
+	trackIDs := make(map[[2]int]uint64)
+	for _, event := range timeline.Events {
+		if event.Phase == "M" || event.Category == "kernel" {
+			continue
+		}
+		key := [2]int{event.ProcessID, event.ThreadID}
+		if trackIDs[key] != 0 {
+			continue
+		}
+		identity := fmt.Sprintf("%s/%d/%d", clock, key[0], key[1])
+		id := perfetto.TrackUUID("gputrace.timeline", identity)
+		trackIDs[key] = id
+		name := trackNames[key]
+		if name == "" {
+			name = fmt.Sprintf("%s lane %d", event.Category, event.ThreadID)
+		}
+		trace.Tracks = append(trace.Tracks, perfetto.Track{
+			UUID:        id,
+			Name:        name,
+			Description: fmt.Sprintf("gputrace %s-domain evidence", clock),
+		})
+	}
+
+	for index, event := range timeline.Events {
+		if event.Phase == "M" {
+			continue
+		}
+		converted := perfetto.Event{
+			ID:         uint64(index + 1),
+			Name:       event.Name,
+			Category:   event.Category,
+			StartNS:    event.Timestamp * 1000,
+			DurationNS: event.Duration * 1000,
+			Args:       event.Args,
+		}
+		if event.Category == "kernel" {
+			converted.Kind = perfetto.EventGPUCompute
+		} else {
+			converted.TrackUUID = trackIDs[[2]int{event.ProcessID, event.ThreadID}]
+			if event.Phase == "i" || event.Duration == 0 {
+				converted.Kind = perfetto.EventInstant
+			} else {
+				converted.Kind = perfetto.EventSlice
+			}
+		}
+		trace.Events = append(trace.Events, converted)
+	}
+	appendMLXSemanticEvents(trace, timeline)
+
+	counterTracks := append([]CounterTrack(nil), timeline.CounterTracks...)
+	sort.SliceStable(counterTracks, func(i, j int) bool { return counterTracks[i].Name < counterTracks[j].Name })
+	for _, track := range counterTracks {
+		// Presence and measured zero are different. A native counter series with
+		// source-backed samples is retained even when every value is zero.
+		if len(track.Samples) == 0 {
+			continue
+		}
+		counter := perfetto.Counter{
+			ID:          uint32(len(trace.Counters) + 1),
+			Name:        track.Name,
+			Description: track.Description,
+		}
+		for _, sample := range track.Samples {
+			counter.Samples = append(counter.Samples, perfetto.CounterSample{
+				TimestampNS: sample.Timestamp,
+				Value:       sample.Value,
+			})
+		}
+		trace.Counters = append(trace.Counters, counter)
+	}
+
+	return perfetto.Write(w, trace)
+}
+
+func appendMLXSemanticEvents(trace *perfetto.Trace, timeline *Timeline) {
+	if timeline.MLXSemantics == nil {
+		return
+	}
+	trackIDs := make(map[string]uint64)
+	for _, node := range timeline.MLXSemantics.Nodes {
+		trackIDs[node.ID] = perfetto.TrackUUID("gputrace.mlx", node.ID)
+	}
+	for _, node := range timeline.MLXSemantics.Nodes {
+		trace.Tracks = append(trace.Tracks, perfetto.Track{
+			UUID:        trackIDs[node.ID],
+			ParentUUID:  trackIDs[node.ParentID],
+			Name:        node.Name,
+			Description: "MLX " + node.Kind + " semantic evidence",
+		})
+	}
+	category := map[string]string{
+		"dispatch":       "kernel",
+		"encoder":        "encoder",
+		"command_buffer": "command_buffer",
+	}
+	for index, link := range timeline.MLXSemantics.Links {
+		target, ok := timelineEventAt(timeline, category[link.Target.Kind], link.Target.Index)
+		if !ok {
+			continue // Validation made this impossible; keep projection total.
+		}
+		node := mlxSemanticNode(timeline.MLXSemantics, link.SemanticID)
+		args := make(map[string]any, len(node.Attrs)+4)
+		for key, value := range node.Attrs {
+			args[key] = value
+		}
+		args["semantic_id"] = node.ID
+		args["semantic_kind"] = node.Kind
+		args["join_basis"] = "sidecar-explicit-id"
+		args["target_kind"] = link.Target.Kind
+		kind := perfetto.EventSlice
+		if target.Duration == 0 {
+			kind = perfetto.EventInstant
+		}
+		trace.Events = append(trace.Events, perfetto.Event{
+			ID:         uint64(len(timeline.Events) + index + 1),
+			TrackUUID:  trackIDs[node.ID],
+			Name:       node.Name,
+			Category:   "mlx_semantic",
+			StartNS:    target.Timestamp * 1000,
+			DurationNS: target.Duration * 1000,
+			Kind:       kind,
+			Args:       args,
+		})
+	}
+}
+
+func mlxSemanticNode(sidecar *mlxsemantic.Sidecar, id string) mlxsemantic.Node {
+	for _, node := range sidecar.Nodes {
+		if node.ID == id {
+			return node
+		}
+	}
+	return mlxsemantic.Node{}
+}
+
 // exportChromeTracingForClock exports one measured timestamp domain. Perfetto
 // has one global time axis, so callers must not combine wall-clock command
 // buffers and cumulative GPU-busy execution in the same export.
@@ -3483,7 +3776,7 @@ func exportHTMLBoth(busy, wall *Timeline, outputPath string) error {
 }
 
 // runTimelineFromProfiler generates timeline from profiler-only traces (.gpuprofiler_raw without unsorted-capture).
-func runTimelineFromProfiler(tracePath string, opts *timelineOptions) error {
+func runTimelineFromProfiler(cmd *cobra.Command, tracePath string, opts *timelineOptions) error {
 	if err := validateTimelineFormat(opts.format); err != nil {
 		return err
 	}
@@ -3512,10 +3805,16 @@ func runTimelineFromProfiler(tracePath string, opts *timelineOptions) error {
 	if err := enrichTimelineWithXcodeGPUTime(tracePath, timeline, opts.xcodeGPUTime); err != nil {
 		return err
 	}
+	if opts.sidecar != "" {
+		return fmt.Errorf("attach MLX sidecar: profiler-only input has no capture UUID; use the self-contained profiled .gputrace")
+	}
 	if timeline.Timing == nil || timeline.Timing.EncoderTimingApproximate || timeline.Timing.TimingSource == "" || timeline.Timing.TimingSource == "unavailable" {
 		fmt.Fprintln(os.Stderr, "Warning: trace lacks precise hardware timing data; encoder/dispatch durations are estimated.")
 	}
 	outputPath := timelineOutputPath(opts.format, opts.output)
+	if err := validateTimelineViewerOptions(opts, outputPath); err != nil {
+		return err
+	}
 	if opts.clock == timelineClockBoth {
 		if err := exportTimelineBothWithRawSamples(timeline, opts.format, outputPath, opts.rawProfilerSamples); err != nil {
 			return err
@@ -3529,9 +3828,13 @@ func runTimelineFromProfiler(tracePath string, opts *timelineOptions) error {
 
 	// Export based on format
 	switch opts.format {
-	case "chrome", "perfetto":
+	case "chrome":
 		if err := exportChromeTracingForClock(timeline, outputPath, opts.clock); err != nil {
-			return fmt.Errorf("failed to export Chrome/Perfetto tracing: %w", err)
+			return fmt.Errorf("failed to export Chrome tracing: %w", err)
+		}
+	case "perfetto":
+		if err := exportPerfettoForClock(timeline, outputPath, opts.clock); err != nil {
+			return fmt.Errorf("failed to export Perfetto tracing: %w", err)
 		}
 	case "html":
 		if err := exportHTML(timeline, outputPath); err != nil {
@@ -3554,8 +3857,7 @@ func runTimelineFromProfiler(tracePath string, opts *timelineOptions) error {
 	}
 
 	printTimelineExportStatus(outputPath, opts.format, true)
-
-	return nil
+	return serveTimelinePerfetto(cmd, tracePath, outputPath, opts)
 }
 
 // buildTimelineFromProfilerData creates a Timeline from StreamDataStats.

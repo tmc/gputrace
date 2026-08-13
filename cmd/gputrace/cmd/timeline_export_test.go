@@ -13,6 +13,8 @@ import (
 
 	"github.com/tmc/gputrace"
 	"github.com/tmc/gputrace/internal/counter"
+	"github.com/tmc/gputrace/internal/mlxsemantic"
+	"github.com/tmc/gputrace/internal/perfetto"
 	tracepkg "github.com/tmc/gputrace/internal/trace"
 	"github.com/tmc/gputrace/internal/xcodebindings"
 )
@@ -302,6 +304,122 @@ func TestExportChromeTracingStdoutWritesCleanJSON(t *testing.T) {
 	}
 }
 
+func TestExportPerfettoWritesNativeProtobuf(t *testing.T) {
+	timeline := &Timeline{
+		ClockDomain: "busy",
+		Timing: &TimelineTiming{
+			TimingSource: "APSTimelineData",
+		},
+		Events: []TimelineEvent{
+			{
+				Name:      "encoder",
+				Category:  "encoder",
+				Phase:     "X",
+				Timestamp: 10,
+				Duration:  20,
+				ProcessID: 1,
+				ThreadID:  1,
+			},
+			{
+				Name:      "kernel",
+				Category:  "kernel",
+				Phase:     "X",
+				Timestamp: 12,
+				Duration:  5,
+				ProcessID: 1,
+				ThreadID:  1,
+				Args: map[string]interface{}{
+					"encoder_containment": "strict",
+				},
+			},
+		},
+		CounterTracks: []CounterTrack{{
+			Name:        "GPU Cycles",
+			Description: "measured cycles",
+			Samples:     []CounterSample{{Timestamp: 20_000, Value: 0}},
+		}},
+	}
+	out := filepath.Join(t.TempDir(), "timeline.pftrace")
+	if err := exportPerfettoForClock(timeline, out, timelineClockBusy); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) == 0 || data[0] != 0x0a {
+		t.Fatalf("native trace starts %x, want protobuf Trace.packet tag 0a", data[:1])
+	}
+	if json.Valid(data) {
+		t.Fatal("native Perfetto output is JSON")
+	}
+}
+
+func TestAppendMLXSemanticEvents(t *testing.T) {
+	timeline := &Timeline{
+		Events: []TimelineEvent{{
+			Name: "kernel", Category: "kernel", Phase: "X", Timestamp: 10, Duration: 5,
+		}},
+		MLXSemantics: &mlxsemantic.Sidecar{
+			Schema: mlxsemantic.SchemaV1,
+			Nodes: []mlxsemantic.Node{
+				{ID: "run", Kind: "run", Name: "decode"},
+				{ID: "op", ParentID: "run", Kind: "operation", Name: "matmul", Attrs: map[string]any{"dtype": "bfloat16"}},
+			},
+			Links: []mlxsemantic.Link{{ID: "link", SemanticID: "op", Target: mlxsemantic.Target{Kind: "dispatch", Index: 0}}},
+		},
+	}
+	trace := &perfetto.Trace{}
+	appendMLXSemanticEvents(trace, timeline)
+	if got, want := len(trace.Tracks), 2; got != want {
+		t.Fatalf("semantic tracks = %d, want %d", got, want)
+	}
+	if got, want := len(trace.Events), 1; got != want {
+		t.Fatalf("semantic events = %d, want %d", got, want)
+	}
+	if got := trace.Events[0].Args["join_basis"]; got != "sidecar-explicit-id" {
+		t.Fatalf("join basis = %v", got)
+	}
+}
+
+func TestAttachMLXSidecarChecksTraceIdentity(t *testing.T) {
+	traceDir := filepath.Join(t.TempDir(), "trace.gputrace")
+	if err := os.Mkdir(traceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(traceDir, "capture"), []byte("trace"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	digest, err := mlxsemantic.Digest(traceDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sidecar := mlxsemantic.Sidecar{
+		Schema: mlxsemantic.SchemaV1,
+		Trace:  mlxsemantic.Identity{UUID: "trace-id", ContentDigest: digest},
+		Nodes:  []mlxsemantic.Node{{ID: "op", Kind: "operation", Name: "matmul"}},
+		Links:  []mlxsemantic.Link{{ID: "link", SemanticID: "op", Target: mlxsemantic.Target{Kind: "dispatch", Index: 0}}},
+	}
+	data, err := json.Marshal(sidecar)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sidecarPath := filepath.Join(t.TempDir(), "semantic.json")
+	if err := os.WriteFile(sidecarPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	timeline := &Timeline{Events: []TimelineEvent{{Category: "kernel"}}}
+	if err := attachMLXSidecar(timeline, traceDir, "trace-id", sidecarPath); err != nil {
+		t.Fatal(err)
+	}
+	if timeline.MLXSemantics == nil || timeline.MLXSidecarDigest == "" {
+		t.Fatal("sidecar was not attached with its digest")
+	}
+	if err := attachMLXSidecar(&Timeline{Events: []TimelineEvent{{Category: "kernel"}}}, traceDir, "other", sidecarPath); err == nil {
+		t.Fatal("wrong trace UUID was accepted")
+	}
+}
+
 func TestTimelineOutputPath(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -312,7 +430,7 @@ func TestTimelineOutputPath(t *testing.T) {
 		{name: "text default", format: "text", want: ""},
 		{name: "json default", format: "json", want: "timeline.json"},
 		{name: "chrome default", format: "chrome", want: "timeline.json"},
-		{name: "perfetto default", format: "perfetto", want: "timeline.json"},
+		{name: "perfetto default", format: "perfetto", want: "timeline.pftrace"},
 		{name: "html default", format: "html", want: "timeline.html"},
 		{name: "html explicit file", format: "html", output: "custom.htm", want: "custom.htm"},
 		{name: "text explicit file", format: "text", output: "timeline.txt", want: "timeline.txt"},

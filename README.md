@@ -27,20 +27,32 @@ gputrace profiler trace.gputrace
 gputrace pprof trace.gputrace -o trace.pb
 go tool pprof -http=:8080 trace.pb
 
-# Export the readable, cumulative-GPU-busy Perfetto timeline (default)
-gputrace timeline trace.gputrace --format perfetto -o trace.json
+# Export the readable, cumulative-GPU-busy native Perfetto timeline (default)
+gputrace timeline trace.gputrace --format perfetto -o trace.pftrace
 
 # Inspect command-buffer scheduling on its separate wall-clock axis
-gputrace timeline trace.gputrace --format perfetto --clock wall -o command-buffers.json
+gputrace timeline trace.gputrace --format perfetto --clock wall -o command-buffers.pftrace
 
 # Compare two traces
 gputrace diff A.gputrace B.gputrace --explain
+
+# Serve a native trace through the hosted Perfetto UI without uploading it
+gputrace timeline trace.gputrace --format perfetto --open --remote-ui
+
+# Reproducible mode with a pinned local Perfetto UI build
+gputrace timeline trace.gputrace --format perfetto --open \
+  --ui-dir /path/to/perfetto-ui
 ```
 
 Perfetto has one global time axis. `--clock busy` therefore contains encoders,
 dispatches, and source-backed busy-domain counters; `--clock wall` contains
 APSTimelineData command buffers and wall-clock profiler events. gputrace does
 not invent a mapping between these domains.
+
+See [MLX GPU Trace Rendering in Perfetto](docs/MLX_PERFETTO_RENDERING_SPEC.md)
+for the native Perfetto roadmap and proposed MLX semantic view.
+`--format perfetto` writes binary protobuf; `--format chrome` retains Chrome
+Trace JSON compatibility.
 
 ## Commands
 

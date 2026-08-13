@@ -2,10 +2,13 @@
 
 ## Status
 
-This document specifies a proposed `gputrace perfetto` command. The command is
-not implemented yet. Current `gputrace timeline --format perfetto` output is
-Chrome Trace JSON accepted by Perfetto; it is not a native Perfetto protobuf
-trace and does not populate Perfetto's native GPU tables.
+`gputrace timeline --format perfetto --open` implements the local viewer
+described here. It exports one clock domain, binds to loopback, serves a pinned
+local UI or an explicitly selected remote UI, transfers the trace after the
+embedding PING/PONG handshake, and shuts down with the command context.
+Focused opening, a packaged UI, and the MLX plugin remain proposed. The same
+timeline command without `--open` writes native Perfetto protobuf and populates
+native GPU tables; `--format chrome` retains Chrome Trace JSON compatibility.
 
 The design has two independent deliverables:
 
@@ -15,6 +18,10 @@ The design has two independent deliverables:
 
 The viewer can be implemented before the native writer, but it must describe
 Chrome JSON as compatibility input until the native writer ships.
+
+The MLX semantic hierarchy, evidence model, track layout, counter policy, and
+plugin experience are specified in
+[MLX_PERFETTO_RENDERING_SPEC.md](MLX_PERFETTO_RENDERING_SPEC.md).
 
 ## Goals
 
@@ -41,44 +48,41 @@ Chrome JSON as compatibility input until the native writer ships.
 
 ## Command line
 
-The proposed command is:
+The command is:
 
 ```text
-gputrace perfetto TRACE
+gputrace timeline TRACE --format perfetto --open
 ```
 
 Proposed options:
 
 ```text
 --listen 127.0.0.1:0    listen address; port zero selects an unused port
---no-open               serve without opening a browser
+--serve                 serve without opening a browser
 --ui-dir DIR            serve a pinned Perfetto UI build from DIR
 --remote-ui             embed https://ui.perfetto.dev instead of a local UI
 --clock busy|wall       exported clock domain; default busy
 --kernel NAME           focus the first exact matching kernel
 --time-start SECONDS    initial absolute viewport start
 --time-end SECONDS      initial absolute viewport end
---keep                  retain the generated trace after shutdown
 ```
 
-`--ui-dir` and `--remote-ui` are mutually exclusive. A packaged UI may later
+`--open` and `--serve` are mutually exclusive. `--ui-dir` and `--remote-ui`
+are mutually exclusive. A packaged UI may later
 become the default, but the first implementation should require `--ui-dir` for
 self-hosting rather than download mutable assets implicitly.
-
-Examples in this section are proposed CLI syntax, not commands available in
-the current release.
 
 ## Server lifecycle
 
 The command performs these steps:
 
 1. Validate the input trace and selected clock domain.
-2. Export the trace to a task-specific directory under `~/tmp/`.
-3. Listen on `127.0.0.1:0` unless `--listen` overrides it.
+2. Export the trace to the requested output, or `timeline.pftrace` by default.
+3. Listen on `127.0.0.1:0` unless `--listen` selects another loopback address.
 4. Serve the host page, trace bytes, and optionally the pinned Perfetto UI.
-5. Open the host-page URL unless `--no-open` is set.
+5. Open the host-page URL for `--open`; leave it unopened for `--serve`.
 6. Wait until interrupted or until the server fails.
-7. Close the listener and remove generated files unless `--keep` is set.
+7. Close the listener when the command context is canceled.
 
 The command prints the exact URL and generated trace path before opening the
 browser. A non-loopback `--listen` value requires an explicit warning because
@@ -170,9 +174,9 @@ plugins through trace data, not depend on an undocumented UI command.
 
 ## Trace formats
 
-### Compatibility phase
+### Compatibility format
 
-The first viewer may serve the existing Chrome Trace JSON produced by:
+The viewer may serve Chrome Trace JSON produced by:
 
 ```text
 gputrace timeline TRACE --format chrome --clock busy
@@ -182,11 +186,11 @@ This retains current encoder, dispatch, and counter slices. It must be labeled
 `chrome-json` in server status and diagnostic output. Naming the file
 `.pftrace` does not make it native Perfetto data.
 
-### Native Perfetto phase
+### Native Perfetto format
 
-`gputrace timeline --format perfetto` should eventually write binary Perfetto
-protobuf and diverge from `--format chrome`. The native writer maps only
-source-backed evidence:
+`gputrace timeline --format perfetto` writes binary Perfetto protobuf and is
+distinct from `--format chrome`. The native writer maps only source-backed
+evidence:
 
 | gputrace evidence | Native Perfetto data |
 | --- | --- |
@@ -272,12 +276,13 @@ zero.
 
 ## Implementation slices
 
-### Slice 1: local viewer
+### Slice 1: local viewer (implemented)
 
-- Add `gputrace perfetto TRACE` with loopback serving and clean shutdown.
+- Add viewer flags to `gputrace timeline TRACE --format perfetto` with loopback
+  serving and clean shutdown.
 - Serve current Chrome JSON and label it accurately.
 - Implement the PING/PONG handshake and `ArrayBuffer` post.
-- Support `--ui-dir`, `--remote-ui`, `--no-open`, and `--clock`.
+- Support `--ui-dir`, `--remote-ui`, `--open`, `--serve`, and `--clock`.
 - Test routing, path traversal rejection, headers, shutdown, and generated host
   JavaScript.
 

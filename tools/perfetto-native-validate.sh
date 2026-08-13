@@ -1,0 +1,29 @@
+#!/bin/sh
+# perfetto-native-validate.sh checks a native gputrace Perfetto export.
+set -eu
+
+if [ "$#" -ne 1 ]; then
+	echo "usage: $0 trace.pftrace" >&2
+	exit 2
+fi
+
+tp=${TRACE_PROCESSOR_SHELL:-$HOME/tmp/trace_processor_shell}
+[ -x "$tp" ] || { echo "trace_processor_shell not found: $tp" >&2; exit 2; }
+
+trace=$1
+[ -f "$trace" ] || { echo "trace not found: $trace" >&2; exit 2; }
+
+errors=$(
+	"$tp" query "$trace" \
+		"select coalesce(sum(value),0) from stats where value>0 and severity in ('error','data_loss')" \
+		2>/dev/null | tail -1 | tr -d '"'
+)
+[ "$errors" = 0 ] || { echo "trace processor reported $errors errors or losses" >&2; exit 1; }
+
+gpu_slices=$(
+	"$tp" query "$trace" "select count(*) from gpu_slice" 2>/dev/null |
+		tail -1 | tr -d '"'
+)
+[ "$gpu_slices" -gt 0 ] || { echo "native trace contains no gpu_slice rows" >&2; exit 1; }
+
+printf 'native Perfetto validation passed: %s GPU slices\n' "$gpu_slices"
