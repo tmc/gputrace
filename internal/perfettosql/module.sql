@@ -44,6 +44,8 @@ SELECT
   cast(extract_arg(arg_set_id, 'debug.display_duration_ns') AS INT) AS display_duration_ns,
   extract_arg(arg_set_id, 'debug.display_duration_source') AS display_duration_source,
   cast(extract_arg(arg_set_id, 'debug.command_buffer_count') AS INT) AS command_buffer_count,
+  cast(extract_arg(arg_set_id, 'debug.source_restore_interval_count') AS INT) AS source_restore_interval_count,
+  cast(extract_arg(arg_set_id, 'debug.projected_restore_interval_count') AS INT) AS projected_restore_interval_count,
   cast(extract_arg(arg_set_id, 'debug.encoder_count') AS INT) AS encoder_count,
   cast(extract_arg(arg_set_id, 'debug.dispatch_count') AS INT) AS dispatch_count,
   cast(extract_arg(arg_set_id, 'debug.untimed_dispatch_count') AS INT) AS untimed_dispatch_count,
@@ -347,6 +349,25 @@ SELECT
   arg_set_id
 FROM slice
 WHERE category = 'command_buffer';
+
+CREATE PERFETTO VIEW gputrace_restore_interval AS
+SELECT
+  id,
+  ts,
+  dur,
+  name,
+  cast(extract_arg(arg_set_id, 'debug.index') AS INT) AS restore_interval_id,
+  cast(extract_arg(arg_set_id, 'debug.start_ticks') AS INT) AS source_start_ticks,
+  cast(extract_arg(arg_set_id, 'debug.end_ticks') AS INT) AS source_end_ticks,
+  cast(extract_arg(arg_set_id, 'debug.raw_start_offset_ns') AS INT) AS source_wall_offset_ns,
+  cast(extract_arg(arg_set_id, 'debug.duration_ns') AS INT) AS source_duration_ns,
+  extract_arg(arg_set_id, 'debug.clock_domain') AS clock_domain,
+  extract_arg(arg_set_id, 'debug.timing_source') AS timing_source,
+  extract_arg(arg_set_id, 'debug.evidence_kind') AS evidence_kind,
+  'replay restore activity; not GPU execution' AS accounting_scope,
+  arg_set_id
+FROM slice
+WHERE category = 'restore';
 
 CREATE PERFETTO VIEW gputrace_profiler_stream AS
 SELECT

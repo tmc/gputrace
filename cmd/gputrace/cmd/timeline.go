@@ -443,7 +443,7 @@ func timelineEventInClockWithRawSamples(event TimelineEvent, clock timelineClock
 	case timelineClockBusy:
 		return event.Category == "encoder" || event.Category == "kernel" || event.Category == "dispatch"
 	case timelineClockWall:
-		return event.Category == "command_buffer" || (rawProfilerSamples && (event.Category == "profiler_stream" || event.Category == "gprwcntr"))
+		return event.Category == "command_buffer" || event.Category == "restore" || (rawProfilerSamples && (event.Category == "profiler_stream" || event.Category == "gprwcntr"))
 	case timelineClockLive:
 		return event.Category == "live_command_buffer"
 	default:
@@ -969,6 +969,7 @@ type Timeline struct {
 // Projected event counts are reported separately by each exporter.
 type TimelineEvidenceInventory struct {
 	CommandBuffers    int `json:"command_buffers"`
+	RestoreIntervals  int `json:"restore_intervals"`
 	Encoders          int `json:"encoders"`
 	Dispatches        int `json:"dispatches"`
 	ProfilerStreams   int `json:"raw_profiler_streams"`
@@ -982,6 +983,7 @@ func timelineEvidenceInventory(timeline *Timeline) TimelineEvidenceInventory {
 	}
 	return TimelineEvidenceInventory{
 		CommandBuffers:    timelineEventCount(timeline, "command_buffer"),
+		RestoreIntervals:  timelineEventCount(timeline, "restore"),
 		Encoders:          timelineEventCount(timeline, "encoder"),
 		Dispatches:        timelineEventCount(timeline, "kernel") + timelineEventCount(timeline, "dispatch"),
 		ProfilerStreams:   timelineEventCount(timeline, "profiler_stream"),
@@ -1306,6 +1308,7 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 		}
 		timeline.TimebaseNumer = ti.TimebaseNumer
 		timeline.TimebaseDenom = ti.TimebaseDenom
+		addRestoreEvents(timeline, ti)
 
 		// Command buffers are placed at their real offset from AbsoluteTime.
 		// They used to be packed back to back with a running displayStartNs
@@ -2393,6 +2396,50 @@ func timelineDurationPhase(durationUs uint64) string {
 	return "X"
 }
 
+// addRestoreEvents retains APSTimelineData Restore Timestamps on the wall
+// clock. They describe replay restore activity, not GPU execution, and stay on
+// a separate track from command buffers.
+func addRestoreEvents(timeline *Timeline, info *counter.TimelineInfo) {
+	if timeline == nil || info == nil || info.TimebaseNumer == 0 || info.TimebaseDenom == 0 {
+		return
+	}
+	for _, interval := range info.RestoreTimestamps {
+		if interval.EndTicks < interval.StartTicks {
+			continue
+		}
+		var startNS uint64
+		if interval.StartTicks > info.AbsoluteTime {
+			startNS = (interval.StartTicks - info.AbsoluteTime) * info.TimebaseNumer / info.TimebaseDenom
+		}
+		durationNS := interval.DurationNs(info.TimebaseNumer, info.TimebaseDenom)
+		phase := "i"
+		if durationNS != 0 {
+			phase = "X"
+		}
+		timeline.Events = append(timeline.Events, TimelineEvent{
+			Name:        fmt.Sprintf("Restore #%d", interval.Index),
+			Category:    "restore",
+			Phase:       phase,
+			Timestamp:   startNS / 1000,
+			Duration:    durationNS / 1000,
+			TimestampNS: startNS,
+			DurationNS:  durationNS,
+			ProcessID:   1,
+			ThreadID:    2,
+			Args: map[string]interface{}{
+				"index":               interval.Index,
+				"start_ticks":         interval.StartTicks,
+				"end_ticks":           interval.EndTicks,
+				"raw_start_offset_ns": startNS,
+				"duration_ns":         durationNS,
+				"timing_source":       "APSTimelineData Restore Timestamps",
+				"clock_domain":        "wall",
+				"evidence_kind":       "replay_restore_interval",
+			},
+		})
+	}
+}
+
 // exportChromeTracing exports timeline in Chrome tracing format.
 func exportChromeTracing(timeline *Timeline, outputPath string) error {
 	return exportChromeTracingForClock(timeline, outputPath, timelineClockBusy)
@@ -2537,12 +2584,14 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 			inventory = &value
 		}
 		trace.Metadata["source_command_buffer_count"] = inventory.CommandBuffers
+		trace.Metadata["source_restore_interval_count"] = inventory.RestoreIntervals
 		trace.Metadata["source_encoder_count"] = inventory.Encoders
 		trace.Metadata["source_dispatch_count"] = inventory.Dispatches
 		trace.Metadata["source_untimed_dispatch_count"] = inventory.UntimedDispatches
 		trace.Metadata["source_raw_profiler_stream_count"] = inventory.ProfilerStreams
 		trace.Metadata["source_raw_profiler_record_count"] = inventory.ProfilerRecords
 		trace.Metadata["projected_command_buffer_count"] = timelineEventCount(timeline, "command_buffer")
+		trace.Metadata["projected_restore_interval_count"] = timelineEventCount(timeline, "restore")
 		trace.Metadata["projected_encoder_count"] = timelineEventCount(timeline, "encoder")
 		trace.Metadata["projected_dispatch_count"] = timelineEventCount(timeline, "kernel") + timelineEventCount(timeline, "dispatch")
 		trace.Metadata["projected_untimed_dispatch_count"] = timelineUntimedDispatchCount(timeline)
@@ -2634,6 +2683,7 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 		trackNames[[2]int{2, 0}] = "Command buffers (original live GPU clock)"
 	} else {
 		trackNames[[2]int{1, 0}] = "Command buffers (wall clock; APSTimelineData)"
+		trackNames[[2]int{1, 2}] = "Replay restore intervals (wall clock; APSTimelineData)"
 	}
 	for _, event := range timeline.Events {
 		if event.Phase != "M" || event.Name != "thread_name" {
@@ -2682,9 +2732,9 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 			StartNS:    event.Timestamp * 1000,
 			DurationNS: event.Duration * 1000,
 			Args:       perfettoEventArgs(timeline, event, clock),
-			Required:   event.Category == "encoder" || event.Category == "command_buffer" || event.Category == "live_command_buffer",
+			Required:   event.Category == "encoder" || event.Category == "command_buffer" || event.Category == "restore" || event.Category == "live_command_buffer",
 		}
-		if event.TimestampNS != 0 {
+		if event.TimestampNS != 0 || event.DurationNS != 0 {
 			converted.StartNS = event.TimestampNS
 			converted.DurationNS = event.DurationNS
 		}
@@ -3507,10 +3557,10 @@ func timelineClockProvenanceWithRawSamples(clock timelineClock, rawProfilerSampl
 	switch clock {
 	case timelineClockBusy:
 		args["included_categories"] = []string{"encoder", "kernel", "counter"}
-		args["excluded_categories"] = []string{"command_buffer", "profiler_stream", "gprwcntr"}
+		args["excluded_categories"] = []string{"command_buffer", "restore", "profiler_stream", "gprwcntr"}
 		args["excluded_counter_series"] = "memory-side GTMioCounterData has scope=2/index=0 and a separate tick domain; it is not encoder-attributed or clock-aligned"
 	case timelineClockWall:
-		args["included_categories"] = []string{"command_buffer"}
+		args["included_categories"] = []string{"command_buffer", "restore"}
 		args["excluded_categories"] = []string{"encoder", "kernel", "counter"}
 		if rawProfilerSamples {
 			args["included_categories"] = append(args["included_categories"].([]string), "profiler_stream", "gprwcntr")
@@ -4290,6 +4340,7 @@ func buildTimelineFromProfilerData(tracePath string, stats *counter.StreamDataSt
 	timeline.TimebaseNumer = timebaseNumer
 	timeline.TimebaseDenom = timebaseDenom
 	timeline.AbsoluteTime = absoluteTime
+	addRestoreEvents(timeline, stats.Timeline)
 
 	// Add command buffer events with real timing from APSTimelineData
 	if stats.Timeline != nil && len(stats.Timeline.CommandBufferTimestamps) > 0 {

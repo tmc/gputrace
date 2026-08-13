@@ -217,7 +217,7 @@ func TestTimelineClockProvenance(t *testing.T) {
 		included []string
 	}{
 		{clock: timelineClockBusy, included: []string{"encoder", "kernel", "counter"}},
-		{clock: timelineClockWall, included: []string{"command_buffer", "profiler_stream", "gprwcntr"}},
+		{clock: timelineClockWall, included: []string{"command_buffer", "restore", "profiler_stream", "gprwcntr"}},
 	} {
 		t.Run(string(test.clock), func(t *testing.T) {
 			args := timelineClockProvenance(test.clock)
@@ -765,6 +765,41 @@ func TestTimelineDurationPhase(t *testing.T) {
 	}
 }
 
+func TestAddRestoreEventsPreservesRawWallEvidence(t *testing.T) {
+	timeline := &Timeline{}
+	addRestoreEvents(timeline, &counter.TimelineInfo{
+		AbsoluteTime:  100,
+		TimebaseNumer: 125,
+		TimebaseDenom: 3,
+		RestoreTimestamps: []counter.TimestampRange{
+			{Index: 7, StartTicks: 100, EndTicks: 101},
+			{Index: 8, StartTicks: 130, EndTicks: 129},
+		},
+	})
+	if got, want := len(timeline.Events), 1; got != want {
+		t.Fatalf("restore events = %d, want %d", got, want)
+	}
+	event := timeline.Events[0]
+	if got, want := event.Category, "restore"; got != want {
+		t.Fatalf("category = %q, want %q", got, want)
+	}
+	if got, want := event.TimestampNS, uint64(0); got != want {
+		t.Fatalf("timestamp_ns = %d, want %d", got, want)
+	}
+	if got, want := event.DurationNS, uint64(41); got != want {
+		t.Fatalf("duration_ns = %d, want %d", got, want)
+	}
+	if got, want := event.Args["start_ticks"], uint64(100); got != want {
+		t.Fatalf("start_ticks = %#v, want %#v", got, want)
+	}
+	if got, want := event.Args["evidence_kind"], "replay_restore_interval"; got != want {
+		t.Fatalf("evidence_kind = %#v, want %#v", got, want)
+	}
+	if got, want := event.Phase, "X"; got != want {
+		t.Fatalf("phase = %q, want %q for nonzero sub-microsecond interval", got, want)
+	}
+}
+
 func TestValidateTimelineFormat(t *testing.T) {
 	for _, format := range []string{"chrome", "perfetto", "html", "json", "text"} {
 		t.Run(format, func(t *testing.T) {
@@ -829,6 +864,7 @@ func TestTimelineForClockKeepsOnlyComparableEvents(t *testing.T) {
 		Duration:  999_999_900,
 		Events: []TimelineEvent{
 			{Category: "command_buffer", Timestamp: 300_000},
+			{Category: "restore", Timestamp: 310_000},
 			{Category: "profiler_stream", Timestamp: 320_000},
 			{Category: "gprwcntr", Timestamp: 340_000},
 			{Category: "encoder", Timestamp: 0},
@@ -855,12 +891,12 @@ func TestTimelineForClockKeepsOnlyComparableEvents(t *testing.T) {
 	if got, want := busy.Duration, uint64(200_000); got != want {
 		t.Fatalf("busy duration = %d, want %d", got, want)
 	}
-	if got, want := *busy.EvidenceInventory, (TimelineEvidenceInventory{CommandBuffers: 1, Encoders: 1, Dispatches: 1, ProfilerStreams: 1, ProfilerRecords: 1, UntimedDispatches: 1}); got != want {
+	if got, want := *busy.EvidenceInventory, (TimelineEvidenceInventory{CommandBuffers: 1, RestoreIntervals: 1, Encoders: 1, Dispatches: 1, ProfilerStreams: 1, ProfilerRecords: 1, UntimedDispatches: 1}); got != want {
 		t.Fatalf("busy evidence inventory = %#v, want %#v", got, want)
 	}
 
 	wall := timelineForClock(timeline, timelineClockWall)
-	if got, want := len(wall.Events), 3; got != want {
+	if got, want := len(wall.Events), 4; got != want {
 		t.Fatalf("wall events = %d, want %d", got, want)
 	}
 	if len(wall.Encoders) != 0 || len(wall.Kernels) != 0 || len(wall.CounterTracks) != 0 {
@@ -880,7 +916,7 @@ func TestTimelineForClockKeepsOnlyComparableEvents(t *testing.T) {
 	if got, want := *wall.EvidenceInventory, *busy.EvidenceInventory; got != want {
 		t.Fatalf("wall evidence inventory = %#v, want %#v", got, want)
 	}
-	if got, want := len(timeline.Events), 5; got != want {
+	if got, want := len(timeline.Events), 6; got != want {
 		t.Fatalf("source timeline events = %d, want %d", got, want)
 	}
 }
@@ -916,8 +952,8 @@ func TestTimelineForClockWithoutRawProfilerSamples(t *testing.T) {
 
 func TestTimelineClockProvenanceWithoutRawProfilerSamples(t *testing.T) {
 	args := timelineClockProvenanceWithRawSamples(timelineClockWall, false)
-	if got := strings.Join(args["included_categories"].([]string), ","); got != "command_buffer" {
-		t.Fatalf("included_categories = %q, want command_buffer", got)
+	if got := strings.Join(args["included_categories"].([]string), ","); got != "command_buffer,restore" {
+		t.Fatalf("included_categories = %q, want command_buffer,restore", got)
 	}
 	if got := strings.Join(args["excluded_categories"].([]string), ","); !strings.Contains(got, "gprwcntr") {
 		t.Fatalf("excluded_categories = %q, want gprwcntr", got)
