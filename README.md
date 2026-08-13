@@ -89,7 +89,10 @@ identity. Those fields do not imply that wall-clock command-buffer spans
 contain busy-clock dispatch intervals.
 Per-launch SIMD groups remain dispatch facts. The `gputrace_function` view
 holds one row per function for aggregate duration, total SIMD work, and work
-share, avoiding repeated aggregates that produce misleading sums.
+share, avoiding repeated aggregates that produce misleading sums. Profiled
+function names retain their `gpuCommandInfoData` attribution; capture-only
+names retain their capture attribution. Source-reported aggregate SIMD work is
+kept in separate `source_aggregate_*` columns and remains `NULL` when absent.
 The `gputrace_encoder` view exposes profiled encoder timing and archive-backed
 cycle aggregates, including their derivation, coverage, and unjoined counter
 clock status. Capture-only traces do not manufacture encoder rows.

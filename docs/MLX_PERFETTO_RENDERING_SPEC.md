@@ -509,6 +509,13 @@ encoder intervals. Busy-domain dispatches do not receive direct sample counts
 from wall-domain timestamp overlap; only the separately labeled estimated
 scaled-window attribution may appear there.
 
+Function-name provenance is explicit: measured dispatches use the
+`gpuCommandInfoData` function name, while capture-only dispatches retain the
+capture parser's attribution basis. `gputrace_function` keeps summed
+per-launch SIMD work separate from a source-reported function aggregate. The
+latter uses one repeated source fact per function, never a sum across dispatch
+rows, and remains `NULL` when the trace carries no such aggregate.
+
 Each semantic node is emitted as an explicitly untimed declaration on its
 hierarchical track. Target links are separate events and inherit timing only
 from their explicitly identified GPU target in the selected clock domain.
