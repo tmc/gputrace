@@ -2,6 +2,7 @@ package hostcorrelation
 
 import (
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,6 +29,11 @@ func TestValidate(t *testing.T) {
 		{"uppercase digest", func(r *Receipt) { r.Host.ContentDigest = strings.ToUpper(digestA) }, ErrInvalid},
 		{"zero digest", func(r *Receipt) { r.Host.ContentDigest = "sha256:" + strings.Repeat("0", 64) }, ErrInvalid},
 		{"whitespace run", func(r *Receipt) { r.Host.RunID = " run-1" }, ErrInvalid},
+		{"duplicate event", func(r *Receipt) { r.Events = append(r.Events, r.Events[0]) }, ErrInvalid},
+		{"unordered event", func(r *Receipt) {
+			r.Events = append(r.Events, Event{ID: "earlier", Kind: "instant", Name: "earlier", TimestampNS: 1})
+		}, ErrInvalid},
+		{"instant duration", func(r *Receipt) { r.Events[0].DurationNS = 1 }, ErrInvalid},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -38,6 +44,34 @@ func TestValidate(t *testing.T) {
 				t.Fatalf("Validate() error = %v, want %v", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestProject(t *testing.T) {
+	receipt := validReceipt()
+	receipt.GPU.ClockDomain = "gpu"
+	receipt.Bridge = validBridge("gpu")
+	receipt.Bridge.Scale = 2
+	receipt.Bridge.Offset = 5
+	receipt.Bridge.MaxErrorNS = 7
+	receipt.Events = []Event{{ID: "encode", Kind: "interval", Name: "Encode", TimestampNS: 10, DurationNS: 4}}
+	got, err := receipt.Project()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].TimestampNS != 25 || got[0].DurationNS != 8 || got[0].MaxErrorNS != 7 {
+		t.Fatalf("Project() = %+v, want timestamp=25 duration=8 error=7", got)
+	}
+}
+
+func TestProjectRejectsOverflow(t *testing.T) {
+	receipt := validReceipt()
+	receipt.Events[0].TimestampNS = math.MaxInt64
+	receipt.GPU.ClockDomain = "gpu"
+	receipt.Bridge = validBridge("gpu")
+	receipt.Bridge.Scale = 2
+	if _, err := receipt.Project(); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("Project() error = %v, want ErrInvalid", err)
 	}
 }
 
@@ -77,6 +111,7 @@ func validReceipt() Receipt {
 		Schema: Schema,
 		Host:   Artifact{Kind: "host-signpost", RunID: "run-1", ContentDigest: digestA, ClockDomain: "host"},
 		GPU:    Artifact{Kind: "gpu-trace", RunID: "run-1", ContentDigest: digestB, ClockDomain: "host"},
+		Events: []Event{{ID: "complete", Kind: "instant", Name: "Complete", TimestampNS: 10}},
 	}
 }
 

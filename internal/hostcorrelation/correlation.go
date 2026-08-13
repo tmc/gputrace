@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	Schema       = "gputrace.host-correlation/v1"
-	maximumBytes = 1 << 20
+	Schema        = "gputrace.host-correlation/v1"
+	maximumBytes  = 1 << 20
+	maximumEvents = 100_000
 )
 
 var (
@@ -42,12 +43,32 @@ type ClockBridge struct {
 	SourceDigest string  `json:"source_digest"`
 }
 
+// Event is one host-clock signpost observation.
+type Event struct {
+	ID          string `json:"id"`
+	Kind        string `json:"kind"`
+	Name        string `json:"name"`
+	TimestampNS int64  `json:"timestamp_ns"`
+	DurationNS  int64  `json:"duration_ns,omitempty"`
+}
+
+// ProjectedEvent is an event mapped into the GPU clock domain.
+type ProjectedEvent struct {
+	ID          string
+	Kind        string
+	Name        string
+	TimestampNS int64
+	DurationNS  int64
+	MaxErrorNS  float64
+}
+
 // Receipt records the evidence required to authorize a temporal join.
 type Receipt struct {
 	Schema string       `json:"schema"`
 	Host   Artifact     `json:"host"`
 	GPU    Artifact     `json:"gpu"`
 	Bridge *ClockBridge `json:"bridge,omitempty"`
+	Events []Event      `json:"events"`
 }
 
 // Validate reports whether the receipt authorizes a host-to-GPU temporal join.
@@ -63,6 +84,9 @@ func (r Receipt) Validate() error {
 	}
 	if r.Host.RunID != r.GPU.RunID {
 		return fmt.Errorf("%w: run identity differs", ErrUncorrelated)
+	}
+	if err := validateEvents(r.Events); err != nil {
+		return err
 	}
 	if r.Host.ClockDomain == r.GPU.ClockDomain {
 		if r.Bridge != nil {
@@ -82,6 +106,33 @@ func (r Receipt) Validate() error {
 		return fmt.Errorf("%w: malformed clock bridge", ErrInvalid)
 	}
 	return nil
+}
+
+// Project maps host events into the GPU clock domain.
+func (r Receipt) Project() ([]ProjectedEvent, error) {
+	if err := r.Validate(); err != nil {
+		return nil, err
+	}
+	scale, offset, maxError := 1.0, 0.0, 0.0
+	if r.Bridge != nil {
+		scale, offset, maxError = r.Bridge.Scale, r.Bridge.Offset, r.Bridge.MaxErrorNS
+	}
+	projected := make([]ProjectedEvent, len(r.Events))
+	for i, event := range r.Events {
+		timestamp, ok := project(event.TimestampNS, scale, offset)
+		if !ok {
+			return nil, fmt.Errorf("%w: event %q timestamp overflows projected clock", ErrInvalid, event.ID)
+		}
+		duration, ok := project(event.DurationNS, scale, 0)
+		if !ok {
+			return nil, fmt.Errorf("%w: event %q duration overflows projected clock", ErrInvalid, event.ID)
+		}
+		projected[i] = ProjectedEvent{
+			ID: event.ID, Kind: event.Kind, Name: event.Name,
+			TimestampNS: timestamp, DurationNS: duration, MaxErrorNS: maxError,
+		}
+	}
+	return projected, nil
 }
 
 // Canonical returns the canonical JSON encoding of a valid receipt.
@@ -126,8 +177,42 @@ func validateArtifact(a Artifact, kind string) error {
 	return nil
 }
 
+func validateEvents(events []Event) error {
+	if len(events) == 0 || len(events) > maximumEvents {
+		return fmt.Errorf("%w: event count must be in [1,%d]", ErrInvalid, maximumEvents)
+	}
+	seen := make(map[string]struct{}, len(events))
+	var previous int64
+	for i, event := range events {
+		if event.ID == "" || event.ID != strings.TrimSpace(event.ID) || len(event.ID) > 256 ||
+			event.Name == "" || event.Name != strings.TrimSpace(event.Name) || len(event.Name) > 4096 ||
+			(event.Kind != "instant" && event.Kind != "interval") || event.TimestampNS < 0 ||
+			event.DurationNS < 0 || (event.Kind == "instant" && event.DurationNS != 0) ||
+			(event.Kind == "interval" && event.DurationNS == 0) {
+			return fmt.Errorf("%w: malformed event at index %d", ErrInvalid, i)
+		}
+		if i > 0 && event.TimestampNS < previous {
+			return fmt.Errorf("%w: events are not timestamp ordered", ErrInvalid)
+		}
+		if _, ok := seen[event.ID]; ok {
+			return fmt.Errorf("%w: duplicate event %q", ErrInvalid, event.ID)
+		}
+		seen[event.ID] = struct{}{}
+		previous = event.TimestampNS
+	}
+	return nil
+}
+
 func validDigest(s string) bool {
 	return digestPattern.MatchString(s) && s != "sha256:"+strings.Repeat("0", 64)
 }
 
 func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
+
+func project(value int64, scale, offset float64) (int64, bool) {
+	v := float64(value)*scale + offset
+	if !finite(v) || v < 0 || v >= float64(math.MaxInt64) {
+		return 0, false
+	}
+	return int64(math.Round(v)), true
+}
