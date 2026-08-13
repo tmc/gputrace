@@ -416,6 +416,9 @@ func TestApplyStreamIdentity(t *testing.T) {
 	gpuGeneration := uint32(2)
 	version := int64(5)
 	zero := int64(0)
+	recordSize := int64(32)
+	recordCount := int64(37)
+	remainder := int64(0)
 	timeline := &Timeline{}
 	applyStreamIdentity(timeline, &counter.StreamDataStats{
 		GPUGeneration:   &gpuGeneration,
@@ -425,6 +428,9 @@ func TestApplyStreamIdentity(t *testing.T) {
 			Version:               &version,
 			ProfiledExecutionMode: &zero,
 			TraceName:             "trace.gputrace",
+			Tables: counter.StreamDataTables{CommandBuffers: &counter.StreamDataTable{
+				Bytes: 1184, RecordSize: &recordSize, RecordCount: &recordCount, RemainderBytes: &remainder,
+			}},
 		},
 	})
 	if timeline.GPUGeneration == nil || *timeline.GPUGeneration != 2 || timeline.MetalDeviceName != "Apple M4 Max" || timeline.MetalPluginName != "AGXMetalG16X" {
@@ -439,15 +445,24 @@ func TestApplyStreamIdentity(t *testing.T) {
 	if timeline.StreamMetadata.Version == &version || timeline.StreamMetadata.ProfiledExecutionMode == &zero {
 		t.Fatal("stream metadata retained source pointers")
 	}
+	if table := timeline.StreamMetadata.Tables.CommandBuffers; table == nil || table.RecordSize == &recordSize || table.RecordCount == &recordCount || table.RemainderBytes == &remainder {
+		t.Fatalf("stream table was not independently cloned: %#v", table)
+	}
 }
 
 func TestPerfettoStreamMetadataArgsPreservesZeroAndFalse(t *testing.T) {
 	zero := int64(0)
 	falseValue := false
+	recordSize := int64(4)
+	recordCount := int64(2)
+	remainder := int64(2)
 	args := perfettoStreamMetadataArgs(&counter.StreamDataMetadata{
 		ProfiledExecutionMode:        &zero,
 		DataSourceHasUnusedResources: &falseValue,
 		NumBlitCalls:                 &zero,
+		Tables: counter.StreamDataTables{Encoders: &counter.StreamDataTable{
+			Bytes: 10, RecordSize: &recordSize, RecordCount: &recordCount, RemainderBytes: &remainder,
+		}},
 	})
 	for _, key := range []string{"stream_data_profiled_execution_mode", "stream_data_has_unused_resources", "stream_data_num_blit_calls"} {
 		if _, ok := args[key]; !ok {
@@ -459,6 +474,12 @@ func TestPerfettoStreamMetadataArgsPreservesZeroAndFalse(t *testing.T) {
 	}
 	if got := perfettoStreamMetadataArgs(nil)["stream_data_metadata_availability"]; got == "" {
 		t.Fatalf("missing metadata availability = %#v", got)
+	}
+	if got, want := args["stream_data_encoder_table_integrity"], "incomplete: trailing bytes do not form a complete record"; got != want {
+		t.Fatalf("encoder table integrity = %#v, want %#v", got, want)
+	}
+	if got := args["stream_data_function_table_availability"]; got != "unavailable: archive data key is absent" {
+		t.Fatalf("function table availability = %#v", got)
 	}
 }
 

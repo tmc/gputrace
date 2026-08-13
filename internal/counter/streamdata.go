@@ -183,17 +183,37 @@ type StreamDataStats struct {
 // root. Enum and capture-range meanings are private and remain uninterpreted.
 // Pointer fields distinguish a recorded zero or false from an absent key.
 type StreamDataMetadata struct {
-	Version                      *int64 `json:"version,omitempty"`
-	UnixTimestamp                *int64 `json:"unix_timestamp,omitempty"`
-	TraceName                    string `json:"trace_name,omitempty"`
-	ProfiledExecutionMode        *int64 `json:"profiled_execution_mode,omitempty"`
-	ProfiledPerformanceState     *int64 `json:"profiled_performance_state,omitempty"`
-	ProfiledProfilerMode         *int64 `json:"profiled_profiler_mode,omitempty"`
-	CaptureRangeLocation         *int64 `json:"capture_range_location,omitempty"`
-	CaptureRangeLength           *int64 `json:"capture_range_length,omitempty"`
-	DataSourceHasUnusedResources *bool  `json:"data_source_has_unused_resources,omitempty"`
-	SupportsSeparateAPSData      *bool  `json:"supports_separate_aps_data,omitempty"`
-	NumBlitCalls                 *int64 `json:"num_blit_calls,omitempty"`
+	Version                      *int64           `json:"version,omitempty"`
+	UnixTimestamp                *int64           `json:"unix_timestamp,omitempty"`
+	TraceName                    string           `json:"trace_name,omitempty"`
+	ProfiledExecutionMode        *int64           `json:"profiled_execution_mode,omitempty"`
+	ProfiledPerformanceState     *int64           `json:"profiled_performance_state,omitempty"`
+	ProfiledProfilerMode         *int64           `json:"profiled_profiler_mode,omitempty"`
+	CaptureRangeLocation         *int64           `json:"capture_range_location,omitempty"`
+	CaptureRangeLength           *int64           `json:"capture_range_length,omitempty"`
+	DataSourceHasUnusedResources *bool            `json:"data_source_has_unused_resources,omitempty"`
+	SupportsSeparateAPSData      *bool            `json:"supports_separate_aps_data,omitempty"`
+	NumBlitCalls                 *int64           `json:"num_blit_calls,omitempty"`
+	Tables                       StreamDataTables `json:"tables"`
+}
+
+// StreamDataTables reports the byte-level integrity of fixed-record archive
+// tables. A nil table means the data key is absent. A nil record size means the
+// table exists but its schema size is absent or invalid.
+type StreamDataTables struct {
+	CommandBuffers *StreamDataTable `json:"command_buffers,omitempty"`
+	Encoders       *StreamDataTable `json:"encoders,omitempty"`
+	GPUCommands    *StreamDataTable `json:"gpu_commands,omitempty"`
+	Pipelines      *StreamDataTable `json:"pipelines,omitempty"`
+	Functions      *StreamDataTable `json:"functions,omitempty"`
+}
+
+// StreamDataTable describes one fixed-record byte table.
+type StreamDataTable struct {
+	Bytes          int64  `json:"bytes"`
+	RecordSize     *int64 `json:"record_size,omitempty"`
+	RecordCount    *int64 `json:"record_count,omitempty"`
+	RemainderBytes *int64 `json:"remainder_bytes,omitempty"`
 }
 
 // ParseStreamData parses the streamData plist from a .gpuprofiler_raw directory.
@@ -315,7 +335,42 @@ func parseStreamDataMetadata(objects []any, root map[string]any) StreamDataMetad
 		DataSourceHasUnusedResources: archivedBool(objects, root, "dataSourceHasUnusedResources"),
 		SupportsSeparateAPSData:      archivedBool(objects, root, "supportsSeparateAPSData"),
 		NumBlitCalls:                 archivedInt64(objects, root, "numBlitCalls"),
+		Tables: StreamDataTables{
+			CommandBuffers: parseStreamDataTable(objects, root, "commandBufferInfoData", "commandBufferInfoSize"),
+			Encoders:       parseStreamDataTable(objects, root, "encoderInfoData", "encoderInfoSize"),
+			GPUCommands:    parseStreamDataTable(objects, root, "gpuCommandInfoData", "gpuCommandInfoSize"),
+			Pipelines:      parseStreamDataTable(objects, root, "pipelineStateInfoData", "pipelineStateInfoSize"),
+			Functions:      parseStreamDataTable(objects, root, "functionInfoData", "functionInfoSize"),
+		},
 	}
+}
+
+func parseStreamDataTable(objects []any, root map[string]any, dataKey, sizeKey string) *StreamDataTable {
+	data, ok := archivedData(objects, root[dataKey])
+	if !ok {
+		return nil
+	}
+	table := &StreamDataTable{Bytes: int64(len(data))}
+	size := archivedInt64(objects, root, sizeKey)
+	if size == nil || *size <= 0 {
+		return table
+	}
+	table.RecordSize = size
+	count := table.Bytes / *size
+	remainder := table.Bytes % *size
+	table.RecordCount = &count
+	table.RemainderBytes = &remainder
+	return table
+}
+
+func archivedData(objects []any, value any) ([]byte, bool) {
+	value = archivedValue(objects, value)
+	object, ok := value.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	data, ok := object["NS.data"].([]byte)
+	return data, ok
 }
 
 func archivedInt64(objects []any, root map[string]any, key string) *int64 {

@@ -38,7 +38,7 @@ func TestArchivedString(t *testing.T) {
 }
 
 func TestParseStreamDataMetadataPreservesZeroAndFalse(t *testing.T) {
-	objects := []any{"$null", int64(0), int64(5), "trace.gputrace", true}
+	objects := []any{"$null", int64(0), int64(5), "trace.gputrace", true, map[string]any{"NS.data": make([]byte, 10)}}
 	metadata := parseStreamDataMetadata(objects, map[string]any{
 		"version":                      plist.UID(2),
 		"traceName":                    plist.UID(3),
@@ -46,6 +46,9 @@ func TestParseStreamDataMetadataPreservesZeroAndFalse(t *testing.T) {
 		"dataSourceHasUnusedResources": false,
 		"supportsSeparateAPSData":      plist.UID(4),
 		"numBlitCalls":                 int64(0),
+		"encoderInfoData":              plist.UID(5),
+		"encoderInfoSize":              int64(4),
+		"functionInfoData":             plist.UID(5),
 	})
 	if metadata.Version == nil || *metadata.Version != 5 || metadata.TraceName != "trace.gputrace" {
 		t.Fatalf("identity metadata = %#v", metadata)
@@ -64,6 +67,15 @@ func TestParseStreamDataMetadataPreservesZeroAndFalse(t *testing.T) {
 	}
 	if metadata.ProfiledProfilerMode != nil {
 		t.Fatalf("absent profiled profiler mode = %#v, want nil", metadata.ProfiledProfilerMode)
+	}
+	if table := metadata.Tables.Encoders; table == nil || table.Bytes != 10 || table.RecordSize == nil || *table.RecordSize != 4 || table.RecordCount == nil || *table.RecordCount != 2 || table.RemainderBytes == nil || *table.RemainderBytes != 2 {
+		t.Fatalf("encoder table = %#v", table)
+	}
+	if table := metadata.Tables.Functions; table == nil || table.Bytes != 10 || table.RecordSize != nil || table.RecordCount != nil || table.RemainderBytes != nil {
+		t.Fatalf("function table without size = %#v", table)
+	}
+	if metadata.Tables.CommandBuffers != nil {
+		t.Fatalf("absent command buffer table = %#v", metadata.Tables.CommandBuffers)
 	}
 }
 

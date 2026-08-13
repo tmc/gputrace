@@ -1531,7 +1531,13 @@ func streamDataMetadataPresent(metadata counter.StreamDataMetadata) bool {
 		metadata.ProfiledExecutionMode != nil || metadata.ProfiledPerformanceState != nil ||
 		metadata.ProfiledProfilerMode != nil || metadata.CaptureRangeLocation != nil ||
 		metadata.CaptureRangeLength != nil || metadata.DataSourceHasUnusedResources != nil ||
-		metadata.SupportsSeparateAPSData != nil || metadata.NumBlitCalls != nil
+		metadata.SupportsSeparateAPSData != nil || metadata.NumBlitCalls != nil ||
+		streamDataTablesPresent(metadata.Tables)
+}
+
+func streamDataTablesPresent(tables counter.StreamDataTables) bool {
+	return tables.CommandBuffers != nil || tables.Encoders != nil || tables.GPUCommands != nil ||
+		tables.Pipelines != nil || tables.Functions != nil
 }
 
 func cloneStreamDataMetadata(metadata counter.StreamDataMetadata) counter.StreamDataMetadata {
@@ -1546,7 +1552,23 @@ func cloneStreamDataMetadata(metadata counter.StreamDataMetadata) counter.Stream
 	result.DataSourceHasUnusedResources = cloneBool(metadata.DataSourceHasUnusedResources)
 	result.SupportsSeparateAPSData = cloneBool(metadata.SupportsSeparateAPSData)
 	result.NumBlitCalls = cloneInt64(metadata.NumBlitCalls)
+	result.Tables.CommandBuffers = cloneStreamDataTable(metadata.Tables.CommandBuffers)
+	result.Tables.Encoders = cloneStreamDataTable(metadata.Tables.Encoders)
+	result.Tables.GPUCommands = cloneStreamDataTable(metadata.Tables.GPUCommands)
+	result.Tables.Pipelines = cloneStreamDataTable(metadata.Tables.Pipelines)
+	result.Tables.Functions = cloneStreamDataTable(metadata.Tables.Functions)
 	return result
+}
+
+func cloneStreamDataTable(table *counter.StreamDataTable) *counter.StreamDataTable {
+	if table == nil {
+		return nil
+	}
+	result := *table
+	result.RecordSize = cloneInt64(table.RecordSize)
+	result.RecordCount = cloneInt64(table.RecordCount)
+	result.RemainderBytes = cloneInt64(table.RemainderBytes)
+	return &result
 }
 
 func cloneInt64(value *int64) *int64 {
@@ -2934,7 +2956,34 @@ func perfettoStreamMetadataArgs(metadata *counter.StreamDataMetadata) map[string
 	if metadata.NumBlitCalls != nil {
 		args["stream_data_num_blit_calls"] = *metadata.NumBlitCalls
 	}
+	appendStreamDataTableArgs(args, "command_buffer", metadata.Tables.CommandBuffers)
+	appendStreamDataTableArgs(args, "encoder", metadata.Tables.Encoders)
+	appendStreamDataTableArgs(args, "gpu_command", metadata.Tables.GPUCommands)
+	appendStreamDataTableArgs(args, "pipeline", metadata.Tables.Pipelines)
+	appendStreamDataTableArgs(args, "function", metadata.Tables.Functions)
 	return args
+}
+
+func appendStreamDataTableArgs(args map[string]any, name string, table *counter.StreamDataTable) {
+	prefix := "stream_data_" + name + "_table_"
+	if table == nil {
+		args[prefix+"availability"] = "unavailable: archive data key is absent"
+		return
+	}
+	args[prefix+"availability"] = "available"
+	args[prefix+"bytes"] = table.Bytes
+	if table.RecordSize == nil || table.RecordCount == nil || table.RemainderBytes == nil {
+		args[prefix+"integrity"] = "unknown: record size is absent or invalid"
+		return
+	}
+	args[prefix+"record_size"] = *table.RecordSize
+	args[prefix+"record_count"] = *table.RecordCount
+	args[prefix+"remainder_bytes"] = *table.RemainderBytes
+	if *table.RemainderBytes == 0 {
+		args[prefix+"integrity"] = "complete: byte length is divisible by record size"
+	} else {
+		args[prefix+"integrity"] = "incomplete: trailing bytes do not form a complete record"
+	}
 }
 
 func perfettoClockConversionArgs(timeline *Timeline) map[string]any {
