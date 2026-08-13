@@ -75,6 +75,10 @@ When profiler timing is unavailable, capture launch records instead appear as
 generic instant events with pipeline identity and dispatch geometry. They do
 not enter `gpu_slice`, and CS/debug labels are reported separately as observed
 annotations rather than encoder or dispatch instances.
+Dispatch details and the `gputrace_pipeline` SQL view include every static
+compiler statistic carried by the attributed pipeline record, including
+register, spill, instruction-family, threadgroup, and compilation-time facts.
+The `metrics_source` argument identifies the backing trace section.
 gputrace does not invent a mapping between these domains.
 
 See [MLX GPU Trace Rendering in Perfetto](docs/MLX_PERFETTO_RENDERING_SPEC.md)
