@@ -307,7 +307,10 @@ func TestExportChromeTracingStdoutWritesCleanJSON(t *testing.T) {
 
 func TestExportPerfettoWritesNativeProtobuf(t *testing.T) {
 	timeline := &Timeline{
-		ClockDomain: "busy",
+		ClockDomain:   "busy",
+		AbsoluteTime:  465068216775,
+		TimebaseNumer: 125,
+		TimebaseDenom: 3,
 		Timing: &TimelineTiming{
 			EncoderSpanNs:         20_000,
 			DispatchSpanNs:        5_000,
@@ -391,10 +394,44 @@ func TestExportPerfettoWritesNativeProtobuf(t *testing.T) {
 		"Unavailable evidence: APSCounterData time series",
 		"encoder_span_ns", "dispatch_span_ns", "command_buffer_active_time_ns",
 		"display_duration_source", "encoder_timing_source",
+		"clock_conversion_availability", "absolute_time", "timebase_numer", "timebase_denom",
 	} {
 		if !bytes.Contains(data, []byte(want)) {
 			t.Fatalf("native trace missing manifest value %q", want)
 		}
+	}
+}
+
+func TestPerfettoClockConversionArgs(t *testing.T) {
+	tests := []struct {
+		name      string
+		timeline  *Timeline
+		available bool
+	}{
+		{name: "nil"},
+		{name: "missing absolute time", timeline: &Timeline{TimebaseNumer: 125, TimebaseDenom: 3}},
+		{name: "missing denominator", timeline: &Timeline{AbsoluteTime: 7, TimebaseNumer: 125}},
+		{name: "available", timeline: &Timeline{AbsoluteTime: 465068216775, TimebaseNumer: 125, TimebaseDenom: 3}, available: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := perfettoClockConversionArgs(test.timeline)
+			_, hasAbsolute := got["absolute_time"]
+			if hasAbsolute != test.available {
+				t.Fatalf("absolute_time present = %v, want %v: %#v", hasAbsolute, test.available, got)
+			}
+			if got["clock_conversion_domain"] != "wall" || got["clock_conversion_availability"] == "" {
+				t.Fatalf("clock conversion receipt = %#v", got)
+			}
+			if test.available {
+				if got["timebase_numer"] != uint64(125) || got["timebase_denom"] != uint64(3) {
+					t.Fatalf("timebase = %#v, want 125/3", got)
+				}
+				if got["clock_conversion_formula"] == "" || got["clock_conversion_source"] == "" {
+					t.Fatalf("available clock conversion lacks provenance: %#v", got)
+				}
+			}
+		})
 	}
 }
 

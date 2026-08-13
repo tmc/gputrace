@@ -2510,6 +2510,9 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 		trace.Metadata["environment_device_availability"] = "unavailable"
 	}
 	if timeline != nil {
+		for key, value := range perfettoClockConversionArgs(timeline) {
+			trace.Metadata[key] = value
+		}
 		inventory := timeline.EvidenceInventory
 		if inventory == nil {
 			value := timelineEvidenceInventory(timeline)
@@ -2727,6 +2730,23 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 			receipt.SamplesRetained, receipt.SamplesConsidered, receipt.LogicalBytes)
 	}
 	return nil
+}
+
+func perfettoClockConversionArgs(timeline *Timeline) map[string]any {
+	args := map[string]any{
+		"clock_conversion_domain":       "wall",
+		"clock_conversion_availability": "unavailable: APSTimelineData absolute time and timebase are incomplete",
+	}
+	if timeline == nil || timeline.AbsoluteTime == 0 || timeline.TimebaseNumer == 0 || timeline.TimebaseDenom == 0 {
+		return args
+	}
+	args["absolute_time"] = timeline.AbsoluteTime
+	args["timebase_numer"] = timeline.TimebaseNumer
+	args["timebase_denom"] = timeline.TimebaseDenom
+	args["clock_conversion_source"] = "APSTimelineData Absolute Time and Timebase"
+	args["clock_conversion_formula"] = "wall nanoseconds = (ticks - absolute_time) * timebase_numer / timebase_denom"
+	args["clock_conversion_availability"] = "available: raw wall-domain conversion inputs; no busy-to-wall clock mapping"
+	return args
 }
 
 func includeMetalDispatchDetailProjection(timeline *Timeline, clock timelineClock, maxBytes int64) bool {
