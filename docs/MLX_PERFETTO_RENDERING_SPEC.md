@@ -18,6 +18,23 @@ exporter-owned PerfettoSQL projection is available through `--sql-out`. The
 viewer is specified separately in
 [PERFETTO_VIEWER_SPEC.md](PERFETTO_VIEWER_SPEC.md).
 
+Implementation ownership is repository-local:
+
+- `internal/perfetto` owns the pinned protobuf schema and deterministic writer;
+- `cmd/gputrace/cmd` owns canonical evidence projection and CLI integration;
+- `internal/perfettosql` owns the stable SQL projection;
+- `internal/perfettoviewer` owns local UI serving and pinned-UI admission; and
+- `tools/perfetto-native-validate.sh` owns external parser and SQL validation.
+
+Go tests exercise the writer, projection, SQL text, viewer admission, budgets,
+and loss receipts in CI. Release qualification additionally requires running
+`tools/perfetto-native-validate.sh` with the `trace_processor_shell` revision
+named by `internal/perfetto.SchemaRevision`. The current CI workflow does not
+install that external binary, so it does not satisfy the external parser and
+standard-table acceptance criteria by itself. A retained validation receipt
+must record the trace digest, SQL digest, trace-processor version, and query
+results before a release claims those criteria.
+
 Confidence markers used in this document are:
 
 - `[V]`: verified by the current implementation, a checked trace, or an
