@@ -14,6 +14,8 @@ type liveTimingProjection struct {
 	ContentDigest  string `json:"content_digest"`
 	ClockSamples   int    `json:"clock_samples"`
 	CommandBuffers int    `json:"command_buffers"`
+	Projected      int    `json:"projected_command_buffers"`
+	Unmatched      int    `json:"unmatched_command_buffers"`
 }
 
 func attachLiveTiming(timeline *Timeline, trace *gputrace.Trace, path string) error {
@@ -46,10 +48,14 @@ func attachLiveTiming(timeline *Timeline, trace *gputrace.Trace, path string) er
 
 func projectLiveTiming(timeline *Timeline, captured map[string]struct{}, sidecar livetiming.Sidecar) error {
 	observed := make(map[string]struct{}, len(sidecar.CommandBuffers))
+	projected := 0
+	unmatched := 0
 	for _, command := range sidecar.CommandBuffers {
 		if _, ok := captured[command.CaptureLabel]; !ok {
-			return fmt.Errorf("attach live timing: capture label %q is absent from trace", command.CaptureLabel)
+			unmatched++
+			continue
 		}
+		projected++
 		observed[command.CaptureLabel] = struct{}{}
 		timeline.Events = append(timeline.Events, TimelineEvent{
 			Name: command.FinalLabel, Category: "live_command_buffer", Phase: "X",
@@ -74,9 +80,13 @@ func projectLiveTiming(timeline *Timeline, captured map[string]struct{}, sidecar
 			return fmt.Errorf("attach live timing: captured command buffer %q has no completed sidecar record", label)
 		}
 	}
+	if projected == 0 {
+		return fmt.Errorf("attach live timing: no sidecar command buffer belongs to trace")
+	}
 	timeline.LiveTiming = &liveTimingProjection{
 		RunID: sidecar.RunID, ContentDigest: sidecar.ContentDigest,
 		ClockSamples: len(sidecar.ClockSamples), CommandBuffers: len(sidecar.CommandBuffers),
+		Projected: projected, Unmatched: unmatched,
 	}
 	return nil
 }

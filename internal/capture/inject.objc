@@ -25,7 +25,14 @@ static _Atomic uint64_t gputrace_command_buffer_id;
 static int gputrace_capturing;
 static id<MTLDevice> gputrace_device;
 static IMP gputrace_new_command_queue_original;
+static IMP gputrace_new_command_queue_max_original;
+static IMP gputrace_new_command_queue_descriptor_original;
 static IMP gputrace_command_buffer_original;
+static IMP gputrace_command_buffer_unretained_original;
+static IMP gputrace_command_buffer_descriptor_original;
+static char gputrace_observed_key;
+static char gputrace_queue_hooked_key;
+static char gputrace_device_hooked_key;
 
 static void gputrace_write_json(NSDictionary *record) {
 	const char *path = getenv("GT_TIMING_OUT");
@@ -71,13 +78,15 @@ static void gputrace_sample_clocks(void) {
 	});
 }
 
-static id<MTLCommandBuffer> gputrace_command_buffer(id self, SEL command) {
-	id<MTLCommandBuffer> (*original)(id, SEL) =
-	    (id<MTLCommandBuffer> (*)(id, SEL))gputrace_command_buffer_original;
-	id<MTLCommandBuffer> buffer = original(self, command);
+static id<MTLCommandBuffer> gputrace_observe_buffer(id<MTLCommandBuffer> buffer) {
 	if (buffer == nil || getenv("GT_TIMING_OUT") == NULL) {
 		return buffer;
 	}
+	if (objc_getAssociatedObject(buffer, &gputrace_observed_key) != nil) {
+		return buffer;
+	}
+	objc_setAssociatedObject(buffer, &gputrace_observed_key, @YES,
+	                         OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 	uint64_t identifier = atomic_fetch_add(&gputrace_command_buffer_id, 1) + 1;
 	NSString *label = [NSString stringWithFormat:@"gputrace.live.cb.%llu",
 	                   (unsigned long long)identifier];
@@ -100,19 +109,55 @@ static id<MTLCommandBuffer> gputrace_command_buffer(id self, SEL command) {
 	return buffer;
 }
 
-static void gputrace_hook_queue(id<MTLCommandQueue> queue) {
-	if (queue == nil || gputrace_command_buffer_original != NULL) {
-		return;
-	}
-	Class cls = object_getClass(queue);
-	SEL selector = @selector(commandBuffer);
+static id<MTLCommandBuffer> gputrace_command_buffer(id self, SEL command) {
+	id<MTLCommandBuffer> (*original)(id, SEL) =
+	    (id<MTLCommandBuffer> (*)(id, SEL))gputrace_command_buffer_original;
+	return gputrace_observe_buffer(original(self, command));
+}
+
+static id<MTLCommandBuffer> gputrace_command_buffer_unretained(id self,
+                                                               SEL command) {
+	id<MTLCommandBuffer> (*original)(id, SEL) =
+	    (id<MTLCommandBuffer> (*)(id, SEL))gputrace_command_buffer_unretained_original;
+	return gputrace_observe_buffer(original(self, command));
+}
+
+static id<MTLCommandBuffer> gputrace_command_buffer_descriptor(
+    id self, SEL command, MTLCommandBufferDescriptor *descriptor) {
+	id<MTLCommandBuffer> (*original)(id, SEL, MTLCommandBufferDescriptor *) =
+	    (id<MTLCommandBuffer> (*)(id, SEL, MTLCommandBufferDescriptor *))
+	        gputrace_command_buffer_descriptor_original;
+	return gputrace_observe_buffer(original(self, command, descriptor));
+}
+
+static void gputrace_replace(Class cls, SEL selector, IMP replacement,
+                             IMP *original) {
 	Method method = class_getInstanceMethod(cls, selector);
 	if (method == NULL) {
 		return;
 	}
-	gputrace_command_buffer_original = method_getImplementation(method);
-	class_replaceMethod(cls, selector, (IMP)gputrace_command_buffer,
-	                   method_getTypeEncoding(method));
+	*original = method_getImplementation(method);
+	class_replaceMethod(cls, selector, replacement, method_getTypeEncoding(method));
+}
+
+static void gputrace_hook_queue(id<MTLCommandQueue> queue) {
+	if (queue == nil) {
+		return;
+	}
+	Class cls = object_getClass(queue);
+	if (objc_getAssociatedObject(cls, &gputrace_queue_hooked_key) != nil) {
+		return;
+	}
+	objc_setAssociatedObject(cls, &gputrace_queue_hooked_key, @YES,
+	                         OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+	gputrace_replace(cls, @selector(commandBuffer), (IMP)gputrace_command_buffer,
+	                 &gputrace_command_buffer_original);
+	gputrace_replace(cls, @selector(commandBufferWithUnretainedReferences),
+	                 (IMP)gputrace_command_buffer_unretained,
+	                 &gputrace_command_buffer_unretained_original);
+	gputrace_replace(cls, @selector(commandBufferWithDescriptor:),
+	                 (IMP)gputrace_command_buffer_descriptor,
+	                 &gputrace_command_buffer_descriptor_original);
 }
 
 static id<MTLCommandQueue> gputrace_new_command_queue(id self, SEL command) {
@@ -123,21 +168,45 @@ static id<MTLCommandQueue> gputrace_new_command_queue(id self, SEL command) {
 	return queue;
 }
 
+static id<MTLCommandQueue> gputrace_new_command_queue_max(id self, SEL command,
+                                                          NSUInteger count) {
+	id<MTLCommandQueue> (*original)(id, SEL, NSUInteger) =
+	    (id<MTLCommandQueue> (*)(id, SEL, NSUInteger))gputrace_new_command_queue_max_original;
+	id<MTLCommandQueue> queue = original(self, command, count);
+	gputrace_hook_queue(queue);
+	return queue;
+}
+
+static id<MTLCommandQueue> gputrace_new_command_queue_descriptor(
+    id self, SEL command, MTLCommandQueueDescriptor *descriptor) {
+	id<MTLCommandQueue> (*original)(id, SEL, MTLCommandQueueDescriptor *) =
+	    (id<MTLCommandQueue> (*)(id, SEL, MTLCommandQueueDescriptor *))
+	        gputrace_new_command_queue_descriptor_original;
+	id<MTLCommandQueue> queue = original(self, command, descriptor);
+	gputrace_hook_queue(queue);
+	return queue;
+}
+
 static void gputrace_hook_device(id<MTLDevice> device) {
-	if (device == nil || getenv("GT_TIMING_OUT") == NULL ||
-	    gputrace_new_command_queue_original != NULL) {
+	if (device == nil || getenv("GT_TIMING_OUT") == NULL) {
 		return;
 	}
 	gputrace_device = device;
 	Class cls = object_getClass(device);
-	SEL selector = @selector(newCommandQueue);
-	Method method = class_getInstanceMethod(cls, selector);
-	if (method == NULL) {
+	if (objc_getAssociatedObject(cls, &gputrace_device_hooked_key) != nil) {
 		return;
 	}
-	gputrace_new_command_queue_original = method_getImplementation(method);
-	class_replaceMethod(cls, selector, (IMP)gputrace_new_command_queue,
-	                   method_getTypeEncoding(method));
+	objc_setAssociatedObject(cls, &gputrace_device_hooked_key, @YES,
+	                         OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+	gputrace_replace(cls, @selector(newCommandQueue),
+	                 (IMP)gputrace_new_command_queue,
+	                 &gputrace_new_command_queue_original);
+	gputrace_replace(cls, @selector(newCommandQueueWithMaxCommandBufferCount:),
+	                 (IMP)gputrace_new_command_queue_max,
+	                 &gputrace_new_command_queue_max_original);
+	gputrace_replace(cls, @selector(newCommandQueueWithDescriptor:),
+	                 (IMP)gputrace_new_command_queue_descriptor,
+	                 &gputrace_new_command_queue_descriptor_original);
 	gputrace_sample_clocks();
 }
 

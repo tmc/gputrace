@@ -2538,6 +2538,8 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 			trace.Metadata["live_timing_digest"] = live.ContentDigest
 			trace.Metadata["live_timing_clock_samples"] = live.ClockSamples
 			trace.Metadata["live_timing_command_buffers"] = live.CommandBuffers
+			trace.Metadata["live_timing_projected_command_buffers"] = live.Projected
+			trace.Metadata["live_timing_unmatched_command_buffers"] = live.Unmatched
 		}
 		trace.Metadata["unavailable_evidence_count"] = len(timeline.UnavailableEvidence)
 		for i, gap := range timeline.UnavailableEvidence {

@@ -70,7 +70,7 @@ func timelineHasMeasuredClock(timeline *Timeline, clock timelineClock) bool {
 		return false
 	}
 	if clock == timelineClockLive {
-		return timeline.LiveTiming != nil && timeline.LiveTiming.ClockSamples >= 3 && timeline.LiveTiming.CommandBuffers > 0
+		return timeline.LiveTiming != nil && timeline.LiveTiming.ClockSamples >= 3 && timeline.LiveTiming.Projected > 0
 	}
 	if timeline.Timing == nil {
 		return false

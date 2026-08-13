@@ -43,7 +43,7 @@ func TestProjectLiveTimingRefusesIncompleteJoins(t *testing.T) {
 		captured map[string]struct{}
 		want     string
 	}{
-		{"sidecar label absent", map[string]struct{}{}, "absent from trace"},
+		{"no intersection", map[string]struct{}{}, "no sidecar command buffer belongs"},
 		{"captured label incomplete", map[string]struct{}{"gputrace.live.cb.1": {}, "gputrace.live.cb.2": {}}, "has no completed sidecar record"},
 	}
 	for _, test := range tests {
@@ -53,5 +53,23 @@ func TestProjectLiveTimingRefusesIncompleteJoins(t *testing.T) {
 				t.Fatalf("error = %v, want %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestProjectLiveTimingRetainsUnmatchedSidecarCount(t *testing.T) {
+	sidecar := livetiming.Sidecar{
+		RunID: "run-1", ContentDigest: testDigest("a"),
+		ClockSamples: []livetiming.ClockSample{{}, {}, {}},
+		CommandBuffers: []livetiming.CommandBuffer{
+			{ID: 1, CaptureLabel: "gputrace.live.cb.1", FinalLabel: "decode"},
+			{ID: 2, CaptureLabel: "gputrace.live.cb.2", FinalLabel: "cleanup"},
+		},
+	}
+	timeline := &Timeline{}
+	if err := projectLiveTiming(timeline, map[string]struct{}{"gputrace.live.cb.1": {}}, sidecar); err != nil {
+		t.Fatal(err)
+	}
+	if timeline.LiveTiming.Projected != 1 || timeline.LiveTiming.Unmatched != 1 {
+		t.Fatalf("projection = %+v", timeline.LiveTiming)
 	}
 }
