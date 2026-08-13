@@ -2704,6 +2704,14 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 		trace.Metadata["raw_profiler_artifact_inventory_sha256"] = inventory.SHA256
 		trace.Metadata["raw_profiler_artifact_digest_algorithm"] = "sha256"
 		trace.Metadata["raw_profiler_artifact_scope"] = "regular files directly beneath the resolved .gpuprofiler_raw directory"
+		var timelineHeaders int
+		for _, artifact := range inventory.Artifacts {
+			if artifact.TimelineHeader != nil {
+				timelineHeaders++
+			}
+		}
+		trace.Metadata["raw_profiler_timeline_header_count"] = timelineHeaders
+		trace.Metadata["raw_profiler_timeline_header_semantics"] = "fixed raw file header; timestamp domain is private and unaligned"
 	} else if timeline.RawProfilerArtifactError != "" {
 		trace.Metadata["raw_counter_artifact_availability"] = "unavailable: " + timeline.RawProfilerArtifactError
 	}
@@ -3468,6 +3476,14 @@ func appendEvidenceDetailEvents(trace *perfetto.Trace, timeline *Timeline) {
 		}
 		if artifact.Index != nil {
 			args["file_index"] = *artifact.Index
+		}
+		if header := artifact.TimelineHeader; header != nil {
+			args["timeline_header_magic"] = fmt.Sprintf("0x%016x", header.Magic)
+			args["timeline_counter_count"] = header.CounterCount
+			args["timeline_data_offset_bytes"] = header.DataOffset
+			args["timeline_entry_count"] = header.EntryCount
+			args["timeline_timestamp_raw"] = header.Timestamp
+			args["timeline_timestamp_semantics"] = "raw private profiler-sampling timestamp; not command-buffer or cumulative GPU-busy time"
 		}
 		trace.Events = append(trace.Events, perfetto.Event{
 			ID:        nextID,

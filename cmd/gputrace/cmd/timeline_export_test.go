@@ -25,7 +25,8 @@ func TestAppendEvidenceDetailEventsIncludesRawProfilerArtifacts(t *testing.T) {
 	index := 2
 	timeline := &Timeline{RawProfilerArtifacts: &profilerraw.ArtifactInventory{
 		Artifacts: []profilerraw.Artifact{{
-			Name: "Counters_f_2.raw", Kind: "counters", Index: &index, Size: 17, SHA256: "abc",
+			Name: "Timeline_f_2.raw", Kind: "timeline", Index: &index, Size: 17, SHA256: "abc",
+			TimelineHeader: &profilerraw.TimelineHeader{Magic: 7, CounterCount: 8, DataOffset: 9, EntryCount: 10, Timestamp: 11},
 		}},
 	}}
 	trace := &perfetto.Trace{}
@@ -36,6 +37,9 @@ func TestAppendEvidenceDetailEventsIncludesRawProfilerArtifacts(t *testing.T) {
 	event := trace.Events[0]
 	if event.Category != "raw_profiler_artifact" || event.Kind != perfetto.EventInstant || event.Args["file_index"] != 2 || event.Args["size_bytes"] != int64(17) || event.Args["sha256"] != "abc" {
 		t.Fatalf("artifact event = %#v", event)
+	}
+	if event.Args["timeline_header_magic"] != "0x0000000000000007" || event.Args["timeline_counter_count"] != uint32(8) || event.Args["timeline_entry_count"] != uint64(10) || event.Args["timeline_timestamp_raw"] != uint64(11) {
+		t.Fatalf("timeline header args = %#v", event.Args)
 	}
 }
 

@@ -194,6 +194,8 @@ SELECT
   extract_arg(arg_set_id, 'debug.raw_profiler_artifact_inventory_sha256') AS raw_profiler_artifact_inventory_sha256,
   extract_arg(arg_set_id, 'debug.raw_profiler_artifact_digest_algorithm') AS raw_profiler_artifact_digest_algorithm,
   extract_arg(arg_set_id, 'debug.raw_profiler_artifact_scope') AS raw_profiler_artifact_scope,
+  cast(extract_arg(arg_set_id, 'debug.raw_profiler_timeline_header_count') AS INT) AS raw_profiler_timeline_header_count,
+  extract_arg(arg_set_id, 'debug.raw_profiler_timeline_header_semantics') AS raw_profiler_timeline_header_semantics,
   cast(extract_arg(arg_set_id, 'debug.packet_family_gpu_info') AS INT) AS packet_family_gpu_info,
   cast(extract_arg(arg_set_id, 'debug.packet_family_gpu_render_stage_event') AS INT) AS packet_family_gpu_render_stage_event,
   cast(extract_arg(arg_set_id, 'debug.packet_family_track_event') AS INT) AS packet_family_track_event,
@@ -791,6 +793,24 @@ SELECT
   arg_set_id
 FROM slice
 WHERE category = 'raw_profiler_artifact';
+
+CREATE PERFETTO VIEW gputrace_raw_profiler_timeline AS
+SELECT
+  id,
+  extract_arg(arg_set_id, 'debug.name') AS artifact_name,
+  cast(extract_arg(arg_set_id, 'debug.file_index') AS INT) AS file_index,
+  cast(extract_arg(arg_set_id, 'debug.size_bytes') AS INT) AS size_bytes,
+  extract_arg(arg_set_id, 'debug.sha256') AS sha256,
+  extract_arg(arg_set_id, 'debug.timeline_header_magic') AS header_magic,
+  cast(extract_arg(arg_set_id, 'debug.timeline_counter_count') AS INT) AS counter_count,
+  cast(extract_arg(arg_set_id, 'debug.timeline_data_offset_bytes') AS INT) AS data_offset_bytes,
+  cast(extract_arg(arg_set_id, 'debug.timeline_entry_count') AS INT) AS entry_count,
+  cast(extract_arg(arg_set_id, 'debug.timeline_timestamp_raw') AS INT) AS timestamp_raw,
+  extract_arg(arg_set_id, 'debug.timeline_timestamp_semantics') AS timestamp_semantics,
+  arg_set_id
+FROM slice
+WHERE category = 'raw_profiler_artifact'
+  AND extract_arg(arg_set_id, 'debug.kind') = 'timeline';
 
 CREATE PERFETTO VIEW gputrace_unmatched AS
 SELECT 'semantic_node' AS kind,

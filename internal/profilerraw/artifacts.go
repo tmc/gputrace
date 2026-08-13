@@ -2,6 +2,7 @@ package profilerraw
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -15,12 +16,25 @@ import (
 // Artifact describes one regular file in a profiler archive. Name is a
 // basename; Inventory does not retain host paths.
 type Artifact struct {
-	Name   string `json:"name"`
-	Kind   string `json:"kind"`
-	Index  *int   `json:"index,omitempty"`
-	Size   int64  `json:"size"`
-	SHA256 string `json:"sha256"`
+	Name           string          `json:"name"`
+	Kind           string          `json:"kind"`
+	Index          *int            `json:"index,omitempty"`
+	Size           int64           `json:"size"`
+	SHA256         string          `json:"sha256"`
+	TimelineHeader *TimelineHeader `json:"timeline_header,omitempty"`
 }
+
+// TimelineHeader contains the named fields in the fixed 128-byte prefix of a
+// Timeline_f raw file. Timestamp is retained in its private raw domain.
+type TimelineHeader struct {
+	Magic        uint64 `json:"magic"`
+	CounterCount uint32 `json:"counter_count"`
+	DataOffset   uint64 `json:"data_offset_bytes"`
+	EntryCount   uint64 `json:"entry_count"`
+	Timestamp    uint64 `json:"timestamp_raw"`
+}
+
+const timelineHeaderSize = 128
 
 // ArtifactInventory is a deterministic content-identified profiler archive.
 type ArtifactInventory struct {
@@ -69,15 +83,35 @@ func hashArtifact(path, name string, size int64) (Artifact, error) {
 		return Artifact{}, fmt.Errorf("open profiler artifact %s: %w", name, err)
 	}
 	defer f.Close()
+	kind, index := artifactIdentity(name)
 	h := sha256.New()
+	var header *TimelineHeader
+	if kind == "timeline" {
+		var data [timelineHeaderSize]byte
+		if _, err := io.ReadFull(f, data[:]); err != nil {
+			return Artifact{}, fmt.Errorf("read profiler artifact %s header: %w", name, err)
+		}
+		header = decodeTimelineHeader(data[:])
+		h.Write(data[:])
+	}
 	if _, err := io.Copy(h, f); err != nil {
 		return Artifact{}, fmt.Errorf("hash profiler artifact %s: %w", name, err)
 	}
-	kind, index := artifactIdentity(name)
 	return Artifact{
 		Name: name, Kind: kind, Index: index, Size: size,
-		SHA256: hex.EncodeToString(h.Sum(nil)),
+		SHA256: hex.EncodeToString(h.Sum(nil)), TimelineHeader: header,
 	}, nil
+}
+
+func decodeTimelineHeader(data []byte) *TimelineHeader {
+	magic := binary.LittleEndian.Uint64(data[0:8])
+	return &TimelineHeader{
+		Magic:        magic,
+		CounterCount: binary.LittleEndian.Uint32(data[12:16]),
+		DataOffset:   binary.LittleEndian.Uint64(data[32:40]),
+		EntryCount:   binary.LittleEndian.Uint64(data[80:88]),
+		Timestamp:    binary.LittleEndian.Uint64(data[104:112]),
+	}
 }
 
 func artifactIdentity(name string) (string, *int) {
