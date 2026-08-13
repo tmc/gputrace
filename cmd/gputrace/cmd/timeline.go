@@ -1532,12 +1532,18 @@ func streamDataMetadataPresent(metadata counter.StreamDataMetadata) bool {
 		metadata.ProfiledProfilerMode != nil || metadata.CaptureRangeLocation != nil ||
 		metadata.CaptureRangeLength != nil || metadata.DataSourceHasUnusedResources != nil ||
 		metadata.SupportsSeparateAPSData != nil || metadata.NumBlitCalls != nil ||
-		streamDataTablesPresent(metadata.Tables)
+		streamDataTablesPresent(metadata.Tables) || streamDataFamiliesPresent(metadata.Families)
 }
 
 func streamDataTablesPresent(tables counter.StreamDataTables) bool {
 	return tables.CommandBuffers != nil || tables.Encoders != nil || tables.GPUCommands != nil ||
 		tables.Pipelines != nil || tables.Functions != nil
+}
+
+func streamDataFamiliesPresent(families counter.StreamDataFamilies) bool {
+	return families.APSData != nil || families.APSTimelineData != nil || families.APSCounterData != nil ||
+		families.ShaderProfilerData != nil || families.GPUTimelineData != nil ||
+		families.BatchIDFilteredCountersData != nil
 }
 
 func cloneStreamDataMetadata(metadata counter.StreamDataMetadata) counter.StreamDataMetadata {
@@ -1557,6 +1563,12 @@ func cloneStreamDataMetadata(metadata counter.StreamDataMetadata) counter.Stream
 	result.Tables.GPUCommands = cloneStreamDataTable(metadata.Tables.GPUCommands)
 	result.Tables.Pipelines = cloneStreamDataTable(metadata.Tables.Pipelines)
 	result.Tables.Functions = cloneStreamDataTable(metadata.Tables.Functions)
+	result.Families.APSData = cloneInt64(metadata.Families.APSData)
+	result.Families.APSTimelineData = cloneInt64(metadata.Families.APSTimelineData)
+	result.Families.APSCounterData = cloneInt64(metadata.Families.APSCounterData)
+	result.Families.ShaderProfilerData = cloneInt64(metadata.Families.ShaderProfilerData)
+	result.Families.GPUTimelineData = cloneInt64(metadata.Families.GPUTimelineData)
+	result.Families.BatchIDFilteredCountersData = cloneInt64(metadata.Families.BatchIDFilteredCountersData)
 	return result
 }
 
@@ -2961,7 +2973,24 @@ func perfettoStreamMetadataArgs(metadata *counter.StreamDataMetadata) map[string
 	appendStreamDataTableArgs(args, "gpu_command", metadata.Tables.GPUCommands)
 	appendStreamDataTableArgs(args, "pipeline", metadata.Tables.Pipelines)
 	appendStreamDataTableArgs(args, "function", metadata.Tables.Functions)
+	args["stream_data_family_count_semantics"] = "top-level archive array entries; not decoded sample counts"
+	appendStreamDataFamilyArgs(args, "aps_data", metadata.Families.APSData)
+	appendStreamDataFamilyArgs(args, "aps_timeline_data", metadata.Families.APSTimelineData)
+	appendStreamDataFamilyArgs(args, "aps_counter_data", metadata.Families.APSCounterData)
+	appendStreamDataFamilyArgs(args, "shader_profiler_data", metadata.Families.ShaderProfilerData)
+	appendStreamDataFamilyArgs(args, "gpu_timeline_data", metadata.Families.GPUTimelineData)
+	appendStreamDataFamilyArgs(args, "batch_id_filtered_counters_data", metadata.Families.BatchIDFilteredCountersData)
 	return args
+}
+
+func appendStreamDataFamilyArgs(args map[string]any, name string, count *int64) {
+	prefix := "stream_data_" + name + "_"
+	if count == nil {
+		args[prefix+"availability"] = "unavailable: archive array key is absent or malformed"
+		return
+	}
+	args[prefix+"entry_count"] = *count
+	args[prefix+"availability"] = "available"
 }
 
 func appendStreamDataTableArgs(args map[string]any, name string, table *counter.StreamDataTable) {

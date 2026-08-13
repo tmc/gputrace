@@ -38,7 +38,12 @@ func TestArchivedString(t *testing.T) {
 }
 
 func TestParseStreamDataMetadataPreservesZeroAndFalse(t *testing.T) {
-	objects := []any{"$null", int64(0), int64(5), "trace.gputrace", true, map[string]any{"NS.data": make([]byte, 10)}}
+	objects := []any{
+		"$null", int64(0), int64(5), "trace.gputrace", true,
+		map[string]any{"NS.data": make([]byte, 10)},
+		map[string]any{"NS.objects": []any{plist.UID(1), plist.UID(2)}},
+		map[string]any{"NS.objects": []any{}},
+	}
 	metadata := parseStreamDataMetadata(objects, map[string]any{
 		"version":                      plist.UID(2),
 		"traceName":                    plist.UID(3),
@@ -49,6 +54,8 @@ func TestParseStreamDataMetadataPreservesZeroAndFalse(t *testing.T) {
 		"encoderInfoData":              plist.UID(5),
 		"encoderInfoSize":              int64(4),
 		"functionInfoData":             plist.UID(5),
+		"APSData":                      plist.UID(6),
+		"shaderProfilerData":           plist.UID(7),
 	})
 	if metadata.Version == nil || *metadata.Version != 5 || metadata.TraceName != "trace.gputrace" {
 		t.Fatalf("identity metadata = %#v", metadata)
@@ -76,6 +83,15 @@ func TestParseStreamDataMetadataPreservesZeroAndFalse(t *testing.T) {
 	}
 	if metadata.Tables.CommandBuffers != nil {
 		t.Fatalf("absent command buffer table = %#v", metadata.Tables.CommandBuffers)
+	}
+	if metadata.Families.APSData == nil || *metadata.Families.APSData != 2 {
+		t.Fatalf("APSData entries = %#v, want 2", metadata.Families.APSData)
+	}
+	if metadata.Families.ShaderProfilerData == nil || *metadata.Families.ShaderProfilerData != 0 {
+		t.Fatalf("shader profiler entries = %#v, want recorded zero", metadata.Families.ShaderProfilerData)
+	}
+	if metadata.Families.APSTimelineData != nil {
+		t.Fatalf("absent APSTimelineData entries = %#v, want nil", metadata.Families.APSTimelineData)
 	}
 }
 
