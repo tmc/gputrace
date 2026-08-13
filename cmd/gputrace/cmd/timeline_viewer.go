@@ -62,6 +62,13 @@ func validateTimelineViewerOptions(opts *timelineOptions, output string) error {
 	if opts.remoteUI == (opts.uiDir != "") {
 		return fmt.Errorf("choose exactly one of --ui-dir or --remote-ui")
 	}
+	if opts.uiDir != "" {
+		manifest, err := perfettoviewer.ReadUIManifest(opts.uiDir)
+		if err != nil {
+			return err
+		}
+		opts.uiRevision = manifest.Revision
+	}
 	if !loopbackListenAddress(opts.listen) {
 		return fmt.Errorf("Perfetto viewer listen address must be loopback: %s", opts.listen)
 	}
@@ -136,6 +143,7 @@ func serveTimelinePerfetto(cmd *cobra.Command, tracePath, output string, opts *t
 	handler, err := perfettoviewer.NewHandler(perfettoviewer.Config{
 		TracePath:  output,
 		UIPath:     opts.uiDir,
+		UIRevision: opts.uiRevision,
 		RemoteUI:   opts.remoteUI,
 		Title:      filepath.Base(tracePath),
 		Navigation: timelineViewerNavigation(opts),
@@ -150,6 +158,11 @@ func serveTimelinePerfetto(cmd *cobra.Command, tracePath, output string, opts *t
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second}
 	url := "http://" + listener.Addr().String() + "/"
 	fmt.Fprintf(cmd.ErrOrStderr(), "Perfetto viewer: %s\n", url)
+	if opts.remoteUI {
+		fmt.Fprintln(cmd.ErrOrStderr(), "Perfetto UI: https://ui.perfetto.dev (mutable remote release)")
+	} else {
+		fmt.Fprintf(cmd.ErrOrStderr(), "Perfetto UI revision: %s\n", opts.uiRevision)
+	}
 	if opts.openViewer {
 		if err := exec.Command("open", url).Run(); err != nil {
 			listener.Close()

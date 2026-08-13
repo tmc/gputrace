@@ -2,6 +2,7 @@
 package perfettoviewer
 
 import (
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"net/http"
@@ -12,13 +13,60 @@ import (
 	"strings"
 )
 
+const (
+	// UIManifestName is the manifest file required at the root of a local UI.
+	UIManifestName = "perfetto-ui.json"
+	// UIManifestSchema identifies the local UI manifest format.
+	UIManifestSchema = "gputrace.perfetto-ui/v1"
+)
+
+// UIManifest identifies a pinned local Perfetto UI build.
+type UIManifest struct {
+	Schema   string `json:"schema"`
+	Revision string `json:"revision"`
+}
+
 // Config configures a viewer handler.
 type Config struct {
 	TracePath  string
 	UIPath     string
+	UIRevision string
 	RemoteUI   bool
 	Title      string
 	Navigation *Navigation
+}
+
+// ReadUIManifest validates a local Perfetto UI directory and returns its
+// pinned upstream revision.
+func ReadUIManifest(path string) (UIManifest, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return UIManifest{}, fmt.Errorf("read Perfetto UI manifest: %w", err)
+	}
+	if !info.IsDir() {
+		return UIManifest{}, fmt.Errorf("read Perfetto UI manifest: UI path is not a directory")
+	}
+	index := filepath.Join(path, "index.html")
+	if info, err := os.Stat(index); err != nil {
+		return UIManifest{}, fmt.Errorf("read Perfetto UI manifest: index.html: %w", err)
+	} else if info.IsDir() {
+		return UIManifest{}, fmt.Errorf("read Perfetto UI manifest: index.html is not a file")
+	}
+	data, err := os.ReadFile(filepath.Join(path, UIManifestName))
+	if err != nil {
+		return UIManifest{}, fmt.Errorf("read Perfetto UI manifest: %w", err)
+	}
+	var manifest UIManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return UIManifest{}, fmt.Errorf("read Perfetto UI manifest: decode %s: %w", UIManifestName, err)
+	}
+	if manifest.Schema != UIManifestSchema {
+		return UIManifest{}, fmt.Errorf("read Perfetto UI manifest: schema %q, want %q", manifest.Schema, UIManifestSchema)
+	}
+	if strings.TrimSpace(manifest.Revision) == "" {
+		return UIManifest{}, fmt.Errorf("read Perfetto UI manifest: revision is required")
+	}
+	return manifest, nil
 }
 
 // Navigation selects an initial viewport and optional trace event. Values use
@@ -42,14 +90,16 @@ func NewHandler(config Config) (http.Handler, error) {
 	if _, err := os.Stat(config.TracePath); err != nil {
 		return nil, fmt.Errorf("create Perfetto viewer: %w", err)
 	}
+	uiIdentity := "https://ui.perfetto.dev (mutable)"
 	if config.UIPath != "" {
-		info, err := os.Stat(config.UIPath)
+		manifest, err := ReadUIManifest(config.UIPath)
 		if err != nil {
 			return nil, fmt.Errorf("create Perfetto viewer: %w", err)
 		}
-		if !info.IsDir() {
-			return nil, fmt.Errorf("create Perfetto viewer: UI path is not a directory")
+		if config.UIRevision != "" && config.UIRevision != manifest.Revision {
+			return nil, fmt.Errorf("create Perfetto viewer: UI revision changed from %q to %q", config.UIRevision, manifest.Revision)
 		}
+		uiIdentity = manifest.Revision
 	}
 	if config.Title == "" {
 		config.Title = filepath.Base(config.TracePath)
@@ -78,9 +128,10 @@ func NewHandler(config Config) (http.Handler, error) {
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_ = hostPage.Execute(w, struct {
-			Title string
-			UIURL string
-		}{config.Title, uiURL(config)})
+			Title      string
+			UIURL      string
+			UIIdentity string
+		}{config.Title, uiURL(config), uiIdentity})
 	})
 	return mux, nil
 }
@@ -118,7 +169,7 @@ func noListFileServer(root string) http.Handler {
 }
 
 var hostPage = template.Must(template.New("host").Parse(`<!doctype html>
-<html><head><meta charset="utf-8"><title>{{.Title}}</title>
+<html><head><meta charset="utf-8"><meta name="gputrace-perfetto-ui" content="{{.UIIdentity}}"><title>{{.Title}}</title>
 <style>html,body,iframe{border:0;height:100%;margin:0;width:100%}</style></head>
 <body><iframe title="Perfetto" src="{{.UIURL}}"></iframe><script>
 const frame = document.querySelector("iframe");

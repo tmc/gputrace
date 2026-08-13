@@ -43,6 +43,7 @@ gputrace diff A.gputrace B.gputrace --allow-cross-environment
 gputrace timeline trace.gputrace --format perfetto --open --remote-ui
 
 # Reproducible mode with a pinned local Perfetto UI build
+# The directory must contain index.html and perfetto-ui.json; see below.
 gputrace timeline trace.gputrace --format perfetto --open \
   --ui-dir /path/to/perfetto-ui
 
@@ -53,6 +54,13 @@ gputrace timeline trace.gputrace --format perfetto --open --remote-ui \
 # Write stable PerfettoSQL views for trace_processor_shell
 gputrace timeline trace.gputrace --format perfetto \
   --sql-out gputrace.sql -o trace.pftrace
+```
+
+A local Perfetto UI directory must identify the upstream build in
+`perfetto-ui.json`:
+
+```json
+{"schema":"gputrace.perfetto-ui/v1","revision":"UPSTREAM_REVISION"}
 ```
 
 Perfetto has one global time axis. `--clock busy` therefore contains encoders,

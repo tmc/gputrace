@@ -73,6 +73,8 @@ sampled counter tracks, until their clock is joined. `--sidecar` requires exact
 trace identity and explicit occurrence links; an MLX runtime receipt alone is
 not attachable. Use `--sql-out` for the stable capture, dispatch, pipeline,
 semantic, counter, and unmatched views.
+Self-hosted `--ui-dir` mode requires `index.html` and `perfetto-ui.json` with
+schema `gputrace.perfetto-ui/v1` and a non-empty upstream revision.
 
 ## Buffer analysis
 

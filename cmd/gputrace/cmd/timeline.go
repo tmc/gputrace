@@ -38,6 +38,7 @@ type timelineOptions struct {
 	openViewer          bool
 	serveViewer         bool
 	uiDir               string
+	uiRevision          string
 	remoteUI            bool
 	listen              string
 	maxOutputBytes      int64
@@ -149,7 +150,7 @@ Examples:
 	cmd.Flags().StringVar(&opts.sidecar, "sidecar", opts.sidecar, "Attach a strictly trace-identified MLX semantic sidecar")
 	cmd.Flags().BoolVar(&opts.openViewer, "open", opts.openViewer, "Serve the native trace and open it in Perfetto")
 	cmd.Flags().BoolVar(&opts.serveViewer, "serve", opts.serveViewer, "Serve the native trace without opening a browser")
-	cmd.Flags().StringVar(&opts.uiDir, "ui-dir", opts.uiDir, "Pinned local Perfetto UI directory (with --open or --serve)")
+	cmd.Flags().StringVar(&opts.uiDir, "ui-dir", opts.uiDir, "Pinned local Perfetto UI directory containing perfetto-ui.json (with --open or --serve)")
 	cmd.Flags().BoolVar(&opts.remoteUI, "remote-ui", opts.remoteUI, "Embed https://ui.perfetto.dev (with --open or --serve)")
 	cmd.Flags().StringVar(&opts.listen, "listen", "127.0.0.1:0", "Loopback viewer listen address")
 	cmd.Flags().Int64Var(&opts.maxOutputBytes, "max-output-bytes", opts.maxOutputBytes, "Maximum logical native protobuf bytes; zero is lossless")

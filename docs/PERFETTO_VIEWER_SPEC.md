@@ -229,7 +229,16 @@ iframes, one per domain.
 ## Versioning the UI
 
 Self-hosting is the reproducible mode. The UI directory must contain a complete
-Perfetto UI build and a small manifest recording its upstream revision. The
+Perfetto UI build and a `perfetto-ui.json` manifest recording its upstream
+revision:
+
+```json
+{"schema":"gputrace.perfetto-ui/v1","revision":"UPSTREAM_REVISION"}
+```
+
+The command rejects a missing entry point, missing manifest, unknown schema,
+or empty revision. The host page records the revision in its
+`gputrace-perfetto-ui` metadata. The
 gputrace repository should not commit an unreviewed generated UI tree or fetch
 one during normal command execution.
 
@@ -318,7 +327,7 @@ The local-viewer slice is complete when:
 - both pinned local UI and explicit remote UI modes open the trace;
 - the trace is posted only after `PONG`;
 - no trace bytes leave the local server in self-hosted mode;
-- interrupt closes the listener and removes generated files;
+- interrupt closes the listener; user-selected trace output remains;
 - browser automation verifies a representative trace becomes visible.
 
 The native-writer slice is complete when:

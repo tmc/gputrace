@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -72,5 +74,30 @@ func TestValidateTimelineViewerOptions(t *testing.T) {
 				t.Fatal("invalid viewer options accepted")
 			}
 		})
+	}
+}
+
+func TestValidateTimelineViewerOptionsPinsLocalUI(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"schema":"gputrace.perfetto-ui/v1","revision":"da1d152c"}`
+	if err := os.WriteFile(filepath.Join(dir, "perfetto-ui.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	opts := &timelineOptions{
+		format:           "perfetto",
+		clock:            timelineClockBusy,
+		serveViewer:      true,
+		uiDir:            dir,
+		listen:           "127.0.0.1:0",
+		kernelOccurrence: -1,
+	}
+	if err := validateTimelineViewerOptions(opts, "trace.pftrace"); err != nil {
+		t.Fatal(err)
+	}
+	if opts.uiRevision != "da1d152c" {
+		t.Fatalf("UI revision = %q, want da1d152c", opts.uiRevision)
 	}
 }

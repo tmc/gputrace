@@ -56,6 +56,9 @@ buffers. Do not place APS cycle aggregates on either axis as sampled counters;
 the CLI keeps them in encoder details until a counter-clock mapping is proven.
 `--sidecar` accepts only the strict trace-identified schema, not a semantic
 runtime receipt without explicit GPU target links.
+For reproducible `--ui-dir` serving, require `index.html` and a
+`perfetto-ui.json` manifest with schema `gputrace.perfetto-ui/v1` and a
+non-empty upstream `revision`.
 
 ## Analyze a single trace
 
