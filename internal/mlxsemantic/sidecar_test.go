@@ -21,6 +21,25 @@ func TestValidate(t *testing.T) {
 	if err := valid.Validate(identity, map[string]int{"dispatch": 2}); err != nil {
 		t.Fatal(err)
 	}
+	report, err := valid.Analyze(identity, map[string]int{"dispatch": 2, "encoder": 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Nodes != 2 || report.UsedNodes != 2 || report.UnusedNodes != 0 {
+		t.Fatalf("node coverage = %+v, want two used nodes", report)
+	}
+	if report.MatchedTargets["dispatch"] != 1 || report.UnmatchedTargets["dispatch"] != 1 || report.UnmatchedTargets["encoder"] != 3 {
+		t.Fatalf("target coverage = %+v", report)
+	}
+	withUnused := valid
+	withUnused.Nodes = append(append([]Node(nil), valid.Nodes...), Node{ID: "unused", Kind: "operation", Name: "unused"})
+	report, err = withUnused.Analyze(identity, map[string]int{"dispatch": 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.UnusedNodes != 1 {
+		t.Fatalf("unused nodes = %d, want 1", report.UnusedNodes)
+	}
 
 	tests := []struct {
 		name string
@@ -28,10 +47,16 @@ func TestValidate(t *testing.T) {
 		want string
 	}{
 		{"schema", func(s *Sidecar) { s.Schema = "v2" }, "unsupported schema"},
+		{"missing identity", func(s *Sidecar) { s.Trace.UUID = "" }, "UUID and content digest are required"},
 		{"uuid", func(s *Sidecar) { s.Trace.UUID = "other" }, "does not match"},
 		{"digest", func(s *Sidecar) { s.Trace.ContentDigest = "sha256:no" }, "digest does not match"},
+		{"duplicate node", func(s *Sidecar) { s.Nodes = append(s.Nodes, s.Nodes[0]) }, "duplicate node"},
 		{"parent", func(s *Sidecar) { s.Nodes[1].ParentID = "missing" }, "unknown parent"},
 		{"cycle", func(s *Sidecar) { s.Nodes[0].ParentID = "op" }, "hierarchy cycle"},
+		{"duplicate link", func(s *Sidecar) { s.Links = append(s.Links, s.Links[0]) }, "duplicate link"},
+		{"unknown semantic node", func(s *Sidecar) { s.Links[0].SemanticID = "missing" }, "unknown semantic node"},
+		{"unsupported target", func(s *Sidecar) { s.Links[0].Target.Kind = "native_label" }, "unsupported target kind"},
+		{"negative target", func(s *Sidecar) { s.Links[0].Target.Index = -1 }, "out of range"},
 		{"target", func(s *Sidecar) { s.Links[0].Target.Index = 2 }, "out of range"},
 		{"ambiguous", func(s *Sidecar) {
 			s.Nodes = append(s.Nodes, Node{ID: "other", Kind: "operation", Name: "other"})

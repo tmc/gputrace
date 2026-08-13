@@ -55,6 +55,16 @@ type Target struct {
 	Index int    `json:"index"`
 }
 
+// Report summarizes the semantic and GPU evidence covered by a valid sidecar.
+type Report struct {
+	Nodes            int            `json:"nodes"`
+	Links            int            `json:"links"`
+	UsedNodes        int            `json:"used_nodes"`
+	UnusedNodes      int            `json:"unused_nodes"`
+	MatchedTargets   map[string]int `json:"matched_targets"`
+	UnmatchedTargets map[string]int `json:"unmatched_targets"`
+}
+
 // Read reads one JSON sidecar and rejects trailing data.
 func Read(path string) (*Sidecar, error) {
 	f, err := os.Open(path)
@@ -80,41 +90,49 @@ func Read(path string) (*Sidecar, error) {
 
 // Validate checks schema, trace identity, hierarchy, and target references.
 func (s *Sidecar) Validate(identity Identity, targetCounts map[string]int) error {
+	_, err := s.Analyze(identity, targetCounts)
+	return err
+}
+
+// Analyze validates a sidecar and reports its coverage of semantic nodes and
+// source-backed GPU targets.
+func (s *Sidecar) Analyze(identity Identity, targetCounts map[string]int) (Report, error) {
+	var report Report
 	if s == nil {
-		return fmt.Errorf("validate MLX sidecar: nil sidecar")
+		return report, fmt.Errorf("validate MLX sidecar: nil sidecar")
 	}
 	if s.Schema != SchemaV1 {
-		return fmt.Errorf("validate MLX sidecar: unsupported schema %q", s.Schema)
+		return report, fmt.Errorf("validate MLX sidecar: unsupported schema %q", s.Schema)
 	}
 	if s.Trace.UUID == "" || s.Trace.ContentDigest == "" {
-		return fmt.Errorf("validate MLX sidecar: trace UUID and content digest are required")
+		return report, fmt.Errorf("validate MLX sidecar: trace UUID and content digest are required")
 	}
 	if s.Trace.UUID != identity.UUID {
-		return fmt.Errorf("validate MLX sidecar: trace UUID %q does not match %q", s.Trace.UUID, identity.UUID)
+		return report, fmt.Errorf("validate MLX sidecar: trace UUID %q does not match %q", s.Trace.UUID, identity.UUID)
 	}
 	if s.Trace.ContentDigest != identity.ContentDigest {
-		return fmt.Errorf("validate MLX sidecar: trace content digest does not match")
+		return report, fmt.Errorf("validate MLX sidecar: trace content digest does not match")
 	}
 
 	nodes := make(map[string]Node)
 	for _, node := range s.Nodes {
 		if node.ID == "" || node.Kind == "" || node.Name == "" {
-			return fmt.Errorf("validate MLX sidecar: node id, kind, and name are required")
+			return report, fmt.Errorf("validate MLX sidecar: node id, kind, and name are required")
 		}
 		if _, ok := nodes[node.ID]; ok {
-			return fmt.Errorf("validate MLX sidecar: duplicate node %q", node.ID)
+			return report, fmt.Errorf("validate MLX sidecar: duplicate node %q", node.ID)
 		}
 		nodes[node.ID] = node
 	}
 	for _, node := range s.Nodes {
 		if node.ParentID != "" {
 			if _, ok := nodes[node.ParentID]; !ok {
-				return fmt.Errorf("validate MLX sidecar: node %q has unknown parent %q", node.ID, node.ParentID)
+				return report, fmt.Errorf("validate MLX sidecar: node %q has unknown parent %q", node.ID, node.ParentID)
 			}
 		}
 		for parent, seen := node.ParentID, map[string]bool{node.ID: true}; parent != ""; {
 			if seen[parent] {
-				return fmt.Errorf("validate MLX sidecar: hierarchy cycle at %q", parent)
+				return report, fmt.Errorf("validate MLX sidecar: hierarchy cycle at %q", parent)
 			}
 			seen[parent] = true
 			parent = nodes[parent].ParentID
@@ -123,30 +141,48 @@ func (s *Sidecar) Validate(identity Identity, targetCounts map[string]int) error
 
 	links := make(map[string]bool)
 	targets := make(map[Target]string)
+	usedNodes := make(map[string]bool)
 	for _, link := range s.Links {
 		if link.ID == "" {
-			return fmt.Errorf("validate MLX sidecar: link id is required")
+			return report, fmt.Errorf("validate MLX sidecar: link id is required")
 		}
 		if links[link.ID] {
-			return fmt.Errorf("validate MLX sidecar: duplicate link %q", link.ID)
+			return report, fmt.Errorf("validate MLX sidecar: duplicate link %q", link.ID)
 		}
 		links[link.ID] = true
 		if _, ok := nodes[link.SemanticID]; !ok {
-			return fmt.Errorf("validate MLX sidecar: link %q has unknown semantic node %q", link.ID, link.SemanticID)
+			return report, fmt.Errorf("validate MLX sidecar: link %q has unknown semantic node %q", link.ID, link.SemanticID)
 		}
 		count, ok := targetCounts[link.Target.Kind]
 		if !ok {
-			return fmt.Errorf("validate MLX sidecar: link %q has unsupported target kind %q", link.ID, link.Target.Kind)
+			return report, fmt.Errorf("validate MLX sidecar: link %q has unsupported target kind %q", link.ID, link.Target.Kind)
 		}
 		if link.Target.Index < 0 || link.Target.Index >= count {
-			return fmt.Errorf("validate MLX sidecar: link %q target %s index %d is out of range", link.ID, link.Target.Kind, link.Target.Index)
+			return report, fmt.Errorf("validate MLX sidecar: link %q target %s index %d is out of range", link.ID, link.Target.Kind, link.Target.Index)
 		}
 		if previous, ok := targets[link.Target]; ok && previous != link.SemanticID {
-			return fmt.Errorf("validate MLX sidecar: target %s index %d is ambiguous between %q and %q", link.Target.Kind, link.Target.Index, previous, link.SemanticID)
+			return report, fmt.Errorf("validate MLX sidecar: target %s index %d is ambiguous between %q and %q", link.Target.Kind, link.Target.Index, previous, link.SemanticID)
 		}
 		targets[link.Target] = link.SemanticID
+		for id := link.SemanticID; id != ""; id = nodes[id].ParentID {
+			usedNodes[id] = true
+		}
 	}
-	return nil
+	report = Report{
+		Nodes:            len(s.Nodes),
+		Links:            len(s.Links),
+		UsedNodes:        len(usedNodes),
+		UnusedNodes:      len(s.Nodes) - len(usedNodes),
+		MatchedTargets:   make(map[string]int, len(targetCounts)),
+		UnmatchedTargets: make(map[string]int, len(targetCounts)),
+	}
+	for target := range targets {
+		report.MatchedTargets[target.Kind]++
+	}
+	for kind, count := range targetCounts {
+		report.UnmatchedTargets[kind] = count - report.MatchedTargets[kind]
+	}
+	return report, nil
 }
 
 // Digest computes a stable SHA-256 identity for a file or directory tree.

@@ -343,6 +343,13 @@ func TestExportPerfettoWritesNativeProtobuf(t *testing.T) {
 			Family: "APSCounterData time series",
 			Reason: "counter clock is not joined",
 		}},
+		MLXSemantics: &mlxsemantic.Sidecar{Schema: mlxsemantic.SchemaV1},
+		MLXSemanticReport: &mlxsemantic.Report{
+			UsedNodes:        2,
+			UnusedNodes:      1,
+			MatchedTargets:   map[string]int{"dispatch": 1},
+			UnmatchedTargets: map[string]int{"dispatch": 3},
+		},
 	}
 	out := filepath.Join(t.TempDir(), "timeline.pftrace")
 	if err := exportPerfettoForClock(timeline, out, timelineClockBusy); err != nil {
@@ -358,7 +365,7 @@ func TestExportPerfettoWritesNativeProtobuf(t *testing.T) {
 	if json.Valid(data) {
 		t.Fatal("native Perfetto output is JSON")
 	}
-	for _, want := range []string{"unavailable_evidence_0_family", "APSCounterData time series", "counter clock is not joined"} {
+	for _, want := range []string{"unavailable_evidence_0_family", "APSCounterData time series", "counter clock is not joined", "mlx_semantic_unused_nodes", "mlx_semantic_unmatched_dispatch"} {
 		if !bytes.Contains(data, []byte(want)) {
 			t.Fatalf("native trace missing manifest value %q", want)
 		}
@@ -424,6 +431,9 @@ func TestAttachMLXSidecarChecksTraceIdentity(t *testing.T) {
 	}
 	if timeline.MLXSemantics == nil || timeline.MLXSidecarDigest == "" {
 		t.Fatal("sidecar was not attached with its digest")
+	}
+	if timeline.MLXSemanticReport == nil || timeline.MLXSemanticReport.MatchedTargets["dispatch"] != 1 {
+		t.Fatalf("semantic coverage = %+v, want one matched dispatch", timeline.MLXSemanticReport)
 	}
 	if err := attachMLXSidecar(&Timeline{Events: []TimelineEvent{{Category: "kernel"}}}, traceDir, "other", sidecarPath); err == nil {
 		t.Fatal("wrong trace UUID was accepted")

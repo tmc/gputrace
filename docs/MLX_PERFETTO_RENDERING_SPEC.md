@@ -213,11 +213,13 @@ The sidecar schema should contain:
 ```
 
 Each link names a semantic id and exactly one source-backed target identity.
-A link can target a command buffer, encoder, dispatch, or native label. The
-schema does not permit time ranges as a substitute for target identity.
-Version 1 uses the zero-based source-record index within each target kind; the
-index is capture-local and is valid only with the exact UUID and content digest
-in the same sidecar. It is not presented as a native Metal identifier.
+Version 1 targets a command buffer, encoder, or dispatch. A future schema may
+target a native label after the trace decoder exposes a stable occurrence
+identity; the current label-to-string maps are not sufficient. The schema does
+not permit time ranges as a substitute for target identity. Version 1 uses the
+zero-based source-record index within each target kind; the index is
+capture-local and is valid only with the exact UUID and content digest in the
+same sidecar. It is not presented as a native Metal identifier.
 
 Validation is strict:
 
@@ -228,6 +230,9 @@ Validation is strict:
 - one source item linked to incompatible semantic nodes is reported as
   ambiguous unless the schema explicitly permits a many-to-one relationship;
 - unused semantic nodes and unmatched trace targets are counted and exposed.
+
+The JSON evidence model and native manifest expose used and unused node counts
+plus matched and unmatched target counts by target kind.
 
 `--sidecar` never silently degrades to filename matching. A future
 `--sidecar=auto` may search beside the trace, but it must apply the same trace

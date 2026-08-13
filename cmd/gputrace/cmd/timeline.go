@@ -851,6 +851,7 @@ type Timeline struct {
 	TimebaseNumer        uint64                      `json:"timebase_numer"`
 	TimebaseDenom        uint64                      `json:"timebase_denom"`
 	MLXSemantics         *mlxsemantic.Sidecar        `json:"mlx_semantics,omitempty"`
+	MLXSemanticReport    *mlxsemantic.Report         `json:"mlx_semantic_report,omitempty"`
 	MLXSidecarDigest     string                      `json:"mlx_sidecar_digest,omitempty"`
 	TraceUUID            string                      `json:"trace_uuid,omitempty"`
 	DeviceID             int                         `json:"device_id,omitempty"`
@@ -2157,7 +2158,8 @@ func attachMLXSidecar(timeline *Timeline, tracePath, uuid, sidecarPath string) e
 		"encoder":        timelineEventCount(timeline, "encoder"),
 		"command_buffer": timelineEventCount(timeline, "command_buffer"),
 	}
-	if err := sidecar.Validate(mlxsemantic.Identity{UUID: uuid, ContentDigest: digest}, counts); err != nil {
+	report, err := sidecar.Analyze(mlxsemantic.Identity{UUID: uuid, ContentDigest: digest}, counts)
+	if err != nil {
 		return err
 	}
 	sidecarDigest, err := mlxsemantic.Digest(sidecarPath)
@@ -2165,6 +2167,7 @@ func attachMLXSidecar(timeline *Timeline, tracePath, uuid, sidecarPath string) e
 		return err
 	}
 	timeline.MLXSemantics = sidecar
+	timeline.MLXSemanticReport = &report
 	timeline.MLXSidecarDigest = sidecarDigest
 	return nil
 }
@@ -2257,6 +2260,16 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 			trace.Metadata["mlx_semantic_nodes"] = len(timeline.MLXSemantics.Nodes)
 			trace.Metadata["mlx_semantic_links"] = len(timeline.MLXSemantics.Links)
 			trace.Metadata["mlx_sidecar_digest"] = timeline.MLXSidecarDigest
+			if report := timeline.MLXSemanticReport; report != nil {
+				trace.Metadata["mlx_semantic_used_nodes"] = report.UsedNodes
+				trace.Metadata["mlx_semantic_unused_nodes"] = report.UnusedNodes
+				for kind, count := range report.MatchedTargets {
+					trace.Metadata["mlx_semantic_matched_"+kind] = count
+				}
+				for kind, count := range report.UnmatchedTargets {
+					trace.Metadata["mlx_semantic_unmatched_"+kind] = count
+				}
+			}
 		}
 		trace.Metadata["unavailable_evidence_count"] = len(timeline.UnavailableEvidence)
 		for i, gap := range timeline.UnavailableEvidence {
@@ -2967,6 +2980,12 @@ func timelineXcodeMetricsArgs(timeline *Timeline) map[string]interface{} {
 		}
 		sort.Strings(families)
 		args["unavailable_evidence"] = families
+	}
+	if report := timeline.MLXSemanticReport; report != nil {
+		args["mlx_semantic_used_nodes"] = report.UsedNodes
+		args["mlx_semantic_unused_nodes"] = report.UnusedNodes
+		args["mlx_semantic_matched_targets"] = report.MatchedTargets
+		args["mlx_semantic_unmatched_targets"] = report.UnmatchedTargets
 	}
 	if timeline.Timing != nil {
 		args["display_duration_source"] = timeline.Timing.DisplayDurationSource
