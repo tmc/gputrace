@@ -27,11 +27,21 @@ Without --bench-work, measurements are honest trace totals with units such as
 dispatches/trace and dispatch_span_ns/trace. Per-work units require both a
 positive --bench-work count and --bench-work-unit.
 
+The JSON report keeps structural counts and measured profiler timing in
+separate sections with source, status, and refusal details. Benchfmt output
+records observer, payload, trace UUID, timing source, and declared work. It is
+accepted directly by golang.org/x/perf/benchfmt and benchstat.
+
+Go programs can use github.com/tmc/gputrace/tracebench instead of parsing this
+command's output. Its ReportMetrics method writes the same values through
+testing.B.ReportMetric.
+
 Examples:
   gputrace bench run.gputrace --format json
   gputrace bench run-perfdata.gputrace --format benchfmt
   gputrace bench run-perfdata.gputrace --format benchfmt \
-    --bench-name BenchmarkDecode --bench-work 32 --bench-work-unit token`,
+    --bench-name BenchmarkDecode --bench-work 32 --bench-work-unit token \
+    --bench-config arm=candidate`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runBench(cmd, args[0], opts)

@@ -101,3 +101,26 @@ if err := report.ReportMetrics(b); err != nil {
 The caller owns the meaning of `b.N` and must ensure the trace contains exactly
 that work. Capture and profiler arms should run outside the ordinary benchmark
 timer; they are evidence observations, not untraced throughput samples.
+
+For a complete Go workflow, use the public packages independently:
+
+```go
+tracePath, err := capture.Run(ctx, capture.Options{Output: "run.gputrace"}, argv...)
+if err != nil {
+	return err
+}
+profiled, err := profilereplay.Profile(ctx, tracePath, profilereplay.Options{
+	Embed: true,
+	Wait:  true,
+})
+if err != nil {
+	return err
+}
+report, err := tracebench.Analyze(profiled, tracebench.Options{
+	Work: &tracebench.Work{Count: 32, Unit: "token"},
+})
+```
+
+`profilereplay.Options.Wait` serializes separate MTLReplayer processes. It does
+not alter overlap among command buffers or encoders within the replayed trace.
+Keep this capture/profile path outside the untraced statistical benchmark arm.

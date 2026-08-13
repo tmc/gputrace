@@ -94,6 +94,11 @@ error; pass `--wait` to queue it and guarantee non-overlapping replay. Go
 programs can use `github.com/tmc/gputrace/capture` and
 `github.com/tmc/gputrace/profilereplay` for the same operations.
 
+This serializes separate MTLReplayer jobs. It does not force command buffers or
+encoders inside a captured workload to execute without overlap. The replay is
+headless: MTLReplayer is an agent process, no Xcode window opens, and the
+frontmost application does not change.
+
 The output holds the profiler payload, which is what `profiler`, `timing`,
 `timeline` and `pprof` read. Add `--embed` to copy the capture stream in as well,
 for the commands that need it — `kernels`, buffer bindings, grid and threadgroup
@@ -159,6 +164,23 @@ For new integrations, `gputrace bench` emits trace-scoped totals by default and
 normalizes only when given `--bench-work` and `--bench-work-unit`. Go programs
 can use `github.com/tmc/gputrace/tracebench` to obtain the same sectioned report
 and report values directly through `testing.B.ReportMetric`.
+
+```bash
+gputrace bench run-perfdata.gputrace \
+  --format benchfmt \
+  --bench-name BenchmarkDecode \
+  --bench-work 32 --bench-work-unit token \
+  --bench-config arm=candidate > gpu.bench
+benchstat gpu.bench
+```
+
+The Go-facing packages are deliberately separate:
+
+- `capture` runs an eligible workload under the Metal capture interposer.
+- `profilereplay` adds measured profiler data headlessly and supports queued,
+  non-overlapping replay with `Options.Wait`.
+- `tracebench` analyzes retained artifacts, writes JSON or benchfmt, and reports
+  metrics directly to `testing.B` without parsing CLI prose.
 
 See [docs/BENCHFMT.md](./docs/BENCHFMT.md) for the unit and provenance mapping.
 

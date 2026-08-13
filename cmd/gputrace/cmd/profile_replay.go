@@ -33,6 +33,11 @@ profiler payload, which is what profiler, timing, timeline and pprof read. Add
 --embed to copy the capture stream in as well, for the commands that need it:
 kernels, buffer bindings, and grid and threadgroup sizes.
 
+Only one MTLReplayer profiling job runs at a time. By default, a concurrent
+invocation fails with a busy error. Use --wait to queue behind the active job.
+This prevents separate replay processes from overlapping; it does not change
+the command-buffer or encoder concurrency recorded inside one capture.
+
 This does not produce derived counters. Utilization, limiter and occupancy
 values are not available on this GPU generation; MTLReplayer's counter flags
 reach a dispatch branch with no writer, and its raw-counter writer is preempted
@@ -41,7 +46,8 @@ by the profiler flags used here.
 Examples:
   gputrace profile-replay run.gputrace                    # run-perfdata.gputrace
   gputrace profile-replay run.gputrace -o profiled.gputrace
-  gputrace profile-replay run.gputrace --embed`,
+  gputrace profile-replay run.gputrace --embed
+  gputrace profile-replay run.gputrace --wait             # queue serially`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			out, err := profilereplay.Profile(cmd.Context(), args[0], profilereplay.Options{
