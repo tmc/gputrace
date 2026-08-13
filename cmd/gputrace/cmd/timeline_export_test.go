@@ -421,6 +421,7 @@ func TestApplyStreamIdentity(t *testing.T) {
 	remainder := int64(0)
 	twoEntries := int64(2)
 	zeroEntries := int64(0)
+	counterDecode := &counter.StreamDataCounterDecode{DecodedSamples: 20}
 	timeline := &Timeline{}
 	applyStreamIdentity(timeline, &counter.StreamDataStats{
 		GPUGeneration:   &gpuGeneration,
@@ -435,6 +436,7 @@ func TestApplyStreamIdentity(t *testing.T) {
 			}},
 			Families:        counter.StreamDataFamilies{APSData: &twoEntries, ShaderProfilerData: &zeroEntries},
 			DecodedFamilies: counter.StreamDataDecodedFamilies{APSData: &twoEntries, ShaderProfilerData: &zeroEntries},
+			CounterDecode:   counterDecode,
 		},
 	})
 	if timeline.GPUGeneration == nil || *timeline.GPUGeneration != 2 || timeline.MetalDeviceName != "Apple M4 Max" || timeline.MetalPluginName != "AGXMetalG16X" {
@@ -458,6 +460,9 @@ func TestApplyStreamIdentity(t *testing.T) {
 	if timeline.StreamMetadata.DecodedFamilies.APSData == &twoEntries || timeline.StreamMetadata.DecodedFamilies.ShaderProfilerData == &zeroEntries {
 		t.Fatal("decoded stream family counts retained source pointers")
 	}
+	if timeline.StreamMetadata.CounterDecode == nil || timeline.StreamMetadata.CounterDecode == counterDecode || timeline.StreamMetadata.CounterDecode.DecodedSamples != 20 {
+		t.Fatalf("counter decode was not independently cloned: %#v", timeline.StreamMetadata.CounterDecode)
+	}
 }
 
 func TestPerfettoStreamMetadataArgsPreservesZeroAndFalse(t *testing.T) {
@@ -477,6 +482,10 @@ func TestPerfettoStreamMetadataArgsPreservesZeroAndFalse(t *testing.T) {
 		}},
 		Families:        counter.StreamDataFamilies{APSData: &twoEntries, ShaderProfilerData: &zeroEntries},
 		DecodedFamilies: counter.StreamDataDecodedFamilies{APSData: &zeroEntries, ShaderProfilerData: &zeroEntries},
+		CounterDecode: &counter.StreamDataCounterDecode{
+			GPRWCNTRBlobs: 3, DecodedSamples: 20, AttributedSamples: 7,
+			MachineWideSamples: 11, UnattributedSamples: 2, StrideMismatchBlobs: 1,
+		},
 	})
 	for _, key := range []string{"stream_data_profiled_execution_mode", "stream_data_has_unused_resources", "stream_data_num_blit_calls"} {
 		if _, ok := args[key]; !ok {
@@ -509,6 +518,15 @@ func TestPerfettoStreamMetadataArgsPreservesZeroAndFalse(t *testing.T) {
 	}
 	if got := args["stream_data_aps_timeline_data_decode_availability"]; got != "unavailable: archive array key is absent or malformed" {
 		t.Fatalf("APSTimelineData decode availability = %#v", got)
+	}
+	if got := args["stream_data_counter_decode_decoded_samples"]; got != 20 {
+		t.Fatalf("decoded counter samples = %#v, want 20", got)
+	}
+	if got := args["stream_data_counter_decode_unattributed_samples"]; got != 2 {
+		t.Fatalf("unattributed counter samples = %#v, want 2", got)
+	}
+	if got := args["stream_data_counter_decode_stride_mismatch_blobs"]; got != 1 {
+		t.Fatalf("counter stride mismatches = %#v, want 1", got)
 	}
 	if got := args["stream_data_gpu_timeline_data_availability"]; got != "unavailable: archive array key is absent or malformed" {
 		t.Fatalf("GPU timeline availability = %#v", got)

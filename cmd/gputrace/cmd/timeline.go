@@ -1533,7 +1533,7 @@ func streamDataMetadataPresent(metadata counter.StreamDataMetadata) bool {
 		metadata.CaptureRangeLength != nil || metadata.DataSourceHasUnusedResources != nil ||
 		metadata.SupportsSeparateAPSData != nil || metadata.NumBlitCalls != nil ||
 		streamDataTablesPresent(metadata.Tables) || streamDataFamiliesPresent(metadata.Families) ||
-		streamDataDecodedFamiliesPresent(metadata.DecodedFamilies)
+		streamDataDecodedFamiliesPresent(metadata.DecodedFamilies) || metadata.CounterDecode != nil
 }
 
 func streamDataTablesPresent(tables counter.StreamDataTables) bool {
@@ -1582,6 +1582,10 @@ func cloneStreamDataMetadata(metadata counter.StreamDataMetadata) counter.Stream
 	result.DecodedFamilies.ShaderProfilerData = cloneInt64(metadata.DecodedFamilies.ShaderProfilerData)
 	result.DecodedFamilies.GPUTimelineData = cloneInt64(metadata.DecodedFamilies.GPUTimelineData)
 	result.DecodedFamilies.BatchIDFilteredCountersData = cloneInt64(metadata.DecodedFamilies.BatchIDFilteredCountersData)
+	if metadata.CounterDecode != nil {
+		counterDecode := *metadata.CounterDecode
+		result.CounterDecode = &counterDecode
+	}
 	return result
 }
 
@@ -3000,7 +3004,28 @@ func perfettoStreamMetadataArgs(metadata *counter.StreamDataMetadata) map[string
 	appendDecodedStreamDataFamilyArgs(args, "shader_profiler_data", metadata.Families.ShaderProfilerData, metadata.DecodedFamilies.ShaderProfilerData)
 	appendDecodedStreamDataFamilyArgs(args, "gpu_timeline_data", metadata.Families.GPUTimelineData, metadata.DecodedFamilies.GPUTimelineData)
 	appendDecodedStreamDataFamilyArgs(args, "batch_id_filtered_counters_data", metadata.Families.BatchIDFilteredCountersData, metadata.DecodedFamilies.BatchIDFilteredCountersData)
+	appendStreamDataCounterDecodeArgs(args, metadata.CounterDecode)
 	return args
+}
+
+func appendStreamDataCounterDecodeArgs(args map[string]any, decode *counter.StreamDataCounterDecode) {
+	const prefix = "stream_data_counter_decode_"
+	if decode == nil {
+		args[prefix+"availability"] = "unavailable: no APSCounterData counter archive was decoded"
+		return
+	}
+	args[prefix+"availability"] = "available"
+	args[prefix+"count_semantics"] = "GPRWCNTR records and archive identity tables; no timeline clock mapping"
+	args[prefix+"gprwcntr_blobs"] = decode.GPRWCNTRBlobs
+	args[prefix+"decoded_samples"] = decode.DecodedSamples
+	args[prefix+"attributed_samples"] = decode.AttributedSamples
+	args[prefix+"machine_wide_samples"] = decode.MachineWideSamples
+	args[prefix+"unattributed_samples"] = decode.UnattributedSamples
+	args[prefix+"known_encoder_ids"] = decode.KnownEncoderIDs
+	args[prefix+"encoder_aggregates"] = decode.EncoderAggregates
+	args[prefix+"pass_column_groups"] = decode.PassColumnGroups
+	args[prefix+"trace_id_rows"] = decode.TraceIDRows
+	args[prefix+"stride_mismatch_blobs"] = decode.StrideMismatchBlobs
 }
 
 func appendDecodedStreamDataFamilyArgs(args map[string]any, name string, entries, blobs *int64) {

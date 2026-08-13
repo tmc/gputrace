@@ -197,6 +197,7 @@ type StreamDataMetadata struct {
 	Tables                       StreamDataTables          `json:"tables"`
 	Families                     StreamDataFamilies        `json:"families"`
 	DecodedFamilies              StreamDataDecodedFamilies `json:"decoded_families"`
+	CounterDecode                *StreamDataCounterDecode  `json:"counter_decode,omitempty"`
 }
 
 // StreamDataFamilies reports top-level archive array entry counts. Counts are
@@ -219,6 +220,22 @@ type StreamDataDecodedFamilies struct {
 	ShaderProfilerData          *int64 `json:"shader_profiler_data,omitempty"`
 	GPUTimelineData             *int64 `json:"gpu_timeline_data,omitempty"`
 	BatchIDFilteredCountersData *int64 `json:"batch_id_filtered_counters_data,omitempty"`
+}
+
+// StreamDataCounterDecode summarizes the exact output and integrity of the
+// APSCounterData decoder. Counts describe decoded records and archive tables;
+// they do not establish a timeline clock.
+type StreamDataCounterDecode struct {
+	GPRWCNTRBlobs       int `json:"gprwcntr_blobs"`
+	DecodedSamples      int `json:"decoded_samples"`
+	AttributedSamples   int `json:"attributed_samples"`
+	MachineWideSamples  int `json:"machine_wide_samples"`
+	UnattributedSamples int `json:"unattributed_samples"`
+	KnownEncoderIDs     int `json:"known_encoder_ids"`
+	EncoderAggregates   int `json:"encoder_aggregates"`
+	PassColumnGroups    int `json:"pass_column_groups"`
+	TraceIDRows         int `json:"trace_id_rows"`
+	StrideMismatchBlobs int `json:"stride_mismatch_blobs"`
 }
 
 // StreamDataTables reports the byte-level integrity of fixed-record archive
@@ -339,12 +356,39 @@ func ParseStreamData(gpuprofilerDir string, addressToName map[uint64]string) (*S
 					numer, denom = stats.Timeline.TimebaseNumer, stats.Timeline.TimebaseDenom
 				}
 				stats.CounterArchive = ParseCounterArchive(counterBlobs, numer, denom, ParseTraceIDTable(counterBlobs))
+				stats.Metadata.CounterDecode = summarizeCounterArchive(stats.CounterArchive)
 			}
 		}
 	}
 
 	stats.setTimingSource()
 	return stats, nil
+}
+
+func summarizeCounterArchive(archive *CounterArchive) *StreamDataCounterDecode {
+	if archive == nil {
+		return nil
+	}
+	traceIDRows := 0
+	if archive.TraceIDs != nil {
+		traceIDRows = len(archive.TraceIDs.Rows)
+	}
+	unattributed := archive.TotalSamples - archive.AttributedSamples - archive.MachineWideSamples
+	if unattributed < 0 {
+		unattributed = 0
+	}
+	return &StreamDataCounterDecode{
+		GPRWCNTRBlobs:       archive.Blobs,
+		DecodedSamples:      archive.TotalSamples,
+		AttributedSamples:   archive.AttributedSamples,
+		MachineWideSamples:  archive.MachineWideSamples,
+		UnattributedSamples: unattributed,
+		KnownEncoderIDs:     archive.KnownEncoderIDs,
+		EncoderAggregates:   len(archive.Encoders),
+		PassColumnGroups:    len(archive.PassColumns),
+		TraceIDRows:         traceIDRows,
+		StrideMismatchBlobs: archive.StrideMismatches,
+	}
 }
 
 // decodedStreamDataFamilies reports NSData payloads that can be recovered

@@ -123,6 +123,26 @@ func TestDecodedStreamDataFamiliesCountsOnlyNSData(t *testing.T) {
 	}
 }
 
+func TestSummarizeCounterArchive(t *testing.T) {
+	got := summarizeCounterArchive(&CounterArchive{
+		Encoders:           []EncoderSamples{{}, {}},
+		TotalSamples:       20,
+		AttributedSamples:  7,
+		MachineWideSamples: 11,
+		KnownEncoderIDs:    4,
+		PassColumns:        [][]string{{"a"}, {"b"}},
+		TraceIDs:           &TraceIDTable{Rows: []TraceIDInfo{{}, {}, {}}},
+		Blobs:              5,
+		StrideMismatches:   1,
+	})
+	if got == nil || got.DecodedSamples != 20 || got.AttributedSamples != 7 || got.MachineWideSamples != 11 || got.UnattributedSamples != 2 || got.EncoderAggregates != 2 || got.PassColumnGroups != 2 || got.TraceIDRows != 3 || got.GPRWCNTRBlobs != 5 || got.StrideMismatchBlobs != 1 {
+		t.Fatalf("counter decode summary = %#v", got)
+	}
+	if summarizeCounterArchive(nil) != nil {
+		t.Fatal("nil counter archive produced a summary")
+	}
+}
+
 func TestParseStreamDataIntegration(t *testing.T) {
 	gpuprofDir := integrationPathFromEnv(t, streamDataIntegrationDirEnv)
 	stats, err := ParseStreamData(gpuprofDir, nil)
