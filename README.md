@@ -124,6 +124,10 @@ remain `NULL` with a `clock_conversion_availability` reason.
 The raw `continuous_time` field is retained separately with an availability
 receipt and an explicitly unverified clock relationship. gputrace does not use
 it to move or align events.
+The APSTimelineData `pstate` value is likewise retained as a raw replay
+performance-state scalar. Its unit and operating-point mapping are not assumed;
+the nullable representation preserves a recorded zero without mistaking it for
+missing evidence.
 `gputrace_manifest_arg` exposes every manifest field
 as a key/value row, including per-class loss fields added by constrained
 exports and fields introduced by newer exporters.

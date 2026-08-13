@@ -541,6 +541,11 @@ present. Its typed column carries an explicit statement that its relationship
 to exported clocks is unverified. It is raw evidence only: the exporter does
 not subtract it, convert it, or use it to align events. Missing or zero values
 remain `NULL` with an availability reason.
+The raw APSTimelineData `PState` scalar follows the same rule. Its source and
+availability are explicit, using a nullable integer so a recorded zero remains
+distinguishable from absence. The exporter does not label it as
+frequency, voltage, or a stable operating-point identifier without further
+evidence.
 `gputrace_manifest_arg` is the
 lossless key/value projection of the same manifest. It keeps dynamic
 per-evidence-class loss receipts and future manifest fields queryable without
