@@ -82,6 +82,8 @@ The `metrics_source` argument identifies the backing trace section.
 The `gputrace_dispatch` view normalizes timing provenance, attribution,
 geometry, source location, and profiler-sample coverage across measured GPU
 events and capture-only launch records; unavailable fields remain `NULL`.
+GPRWCNTR sample counts include their scaled-window attribution basis and raw
+mach-absolute tick bounds; they are not presented as measured dispatch timing.
 It also exposes capture command-buffer membership and byte offset as structural
 identity. Those fields do not imply that wall-clock command-buffer spans
 contain busy-clock dispatch intervals.
