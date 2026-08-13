@@ -36,6 +36,9 @@ gputrace timeline trace.gputrace --format perfetto --clock wall -o command-buffe
 # Compare two traces
 gputrace diff A.gputrace B.gputrace --explain
 
+# Permit descriptive deltas when exact environment evidence is unavailable
+gputrace diff A.gputrace B.gputrace --allow-cross-environment
+
 # Serve a native trace through the hosted Perfetto UI without uploading it
 gputrace timeline trace.gputrace --format perfetto --open --remote-ui
 
@@ -62,6 +65,12 @@ Trace JSON compatibility.
 The optional SQL file defines `gputrace_capture`, `gputrace_dispatch`,
 `gputrace_pipeline`, `gputrace_semantic_node`, `gputrace_counter_series`, and
 `gputrace_unmatched` views over the native trace.
+
+`diff` fails closed when workload, device/driver, runtime, capture mode, or
+timing-source gates differ or are unavailable. The explicit
+`--allow-cross-environment` override labels the result
+`cross-environment, not causally attributable`; it does not turn the result
+into a controlled regression.
 
 ## Commands
 

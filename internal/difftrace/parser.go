@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/tmc/gputrace/internal/counter"
+	"github.com/tmc/gputrace/internal/environment"
 	"github.com/tmc/gputrace/internal/profilerraw"
 	"github.com/tmc/gputrace/internal/trace"
 	"github.com/tmc/gputrace/internal/tracebundle"
@@ -23,6 +24,7 @@ func LoadTraceData(path string, onlyEncoder int, onlyFunction *regexp.Regexp) (*
 	out := &TraceData{Path: path, Label: label}
 
 	profilerDir := findProfilerDir(path)
+	out.Environment = traceEnvironment(path, "")
 	if profilerDir == "" {
 		if onlyEncoder >= 0 || onlyFunction != nil {
 			return nil, fmt.Errorf("cannot filter trace %s without profiler data", path)
@@ -95,10 +97,43 @@ func LoadTraceData(path string, onlyEncoder int, onlyFunction *regexp.Regexp) (*
 	out.CommandBufferActiveUs = int(stats.CommandBufferActiveNs / 1000)
 	out.TimingSource = stats.TimingSource
 	out.TimingAvailable = true
+	out.Environment = traceEnvironment(path, stats.TimingSource)
 	if len(out.Dispatches) == 0 {
 		out.Warnings = append(out.Warnings, fmt.Sprintf("no dispatches after filtering in %s", path))
 	}
 	return out, nil
+}
+
+func traceEnvironment(path, timingSource string) environment.Snapshot {
+	value := func(value, source, availability string) environment.Value {
+		return environment.Value{Value: value, Source: source, Parser: environment.SchemaV1, Availability: availability}
+	}
+	unavailable := func(source string) environment.Value {
+		return value("", source, "unavailable")
+	}
+	snapshot := environment.Snapshot{
+		Schema: environment.SchemaV1,
+		Exact: environment.Exact{
+			Workload:     unavailable("no workload identity in trace"),
+			Device:       unavailable("trace metadata"),
+			Driver:       unavailable("no driver identity in trace"),
+			Runtime:      unavailable("no MLX runtime identity in trace"),
+			CaptureMode:  unavailable("trace payload inspection"),
+			TimingSource: unavailable("streamData"),
+		},
+		Capabilities: map[string]environment.Value{},
+		Information:  map[string]environment.Value{},
+	}
+	if payload, err := tracebundle.InspectPayload(path); err == nil {
+		snapshot.Exact.CaptureMode = value(string(payload.Class), "trace payload inspection", "available")
+	}
+	if t, err := trace.Open(path); err == nil && t.Metadata != nil && t.Metadata.DeviceID != 0 {
+		snapshot.Exact.Device = value(fmt.Sprintf("metal-device-%d", t.Metadata.DeviceID), "trace metadata device id", "available")
+	}
+	if timingSource != "" {
+		snapshot.Exact.TimingSource = value(timingSource, "streamData timing source", "available")
+	}
+	return snapshot
 }
 
 func structuralDispatchCount(path string) (int, error) {

@@ -56,7 +56,7 @@ func Compare(left, right Snapshot, override bool) (Comparison, error) {
 	}
 	result := Comparison{Label: "controlled"}
 	compareValue := func(name string, a, b Value, destination *[]string) {
-		if a.Availability != b.Availability || a.Value != b.Value {
+		if a.Availability != "available" || b.Availability != "available" || a.Value != b.Value {
 			*destination = append(*destination, name)
 		}
 	}

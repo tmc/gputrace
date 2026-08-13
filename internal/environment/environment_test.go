@@ -1,6 +1,9 @@
 package environment
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 func TestCompareProjection(t *testing.T) {
 	available := func(value string) Value {
@@ -40,5 +43,26 @@ func TestCompareProjection(t *testing.T) {
 	}
 	if result.Label != "cross-environment, not causally attributable" {
 		t.Fatalf("override label = %q", result.Label)
+	}
+}
+
+func TestCompareRejectsMissingExactEvidence(t *testing.T) {
+	missing := Value{Source: "test", Parser: "v1", Availability: "unavailable"}
+	available := func(value string) Value {
+		return Value{Value: value, Source: "test", Parser: "v1", Availability: "available"}
+	}
+	snapshot := Snapshot{
+		Schema: SchemaV1,
+		Exact: Exact{
+			Workload: missing, Device: available("M4"), Driver: available("xcode-17"),
+			Runtime: available("mlx-1"), CaptureMode: available("replay"), TimingSource: available("APS"),
+		},
+	}
+	result, err := Compare(snapshot, snapshot, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Label != "incompatible" || !slices.Contains(result.ExactMismatches, "workload") {
+		t.Fatalf("comparison = %+v, want missing workload to fail closed", result)
 	}
 }

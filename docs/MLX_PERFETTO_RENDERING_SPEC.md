@@ -652,6 +652,13 @@ An override across exact gates labels the result `cross-environment, not
 causally attributable`. Such a comparison can answer a deliberate
 cross-device question, but it is not presented as a controlled regression.
 
+The current `diff` command applies this projection before producing deltas.
+Missing exact evidence is incompatible even when both sides omit the same
+field. `--allow-cross-environment` is the explicit override and includes the
+label and mismatch list in full and quick JSON. Workload, driver, and MLX
+runtime identity remain unavailable in ordinary captures until collection
+adapters record them.
+
 Matching proceeds from strongest to weakest stable identity:
 
 1. semantic id and operation path;

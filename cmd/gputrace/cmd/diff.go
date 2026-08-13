@@ -9,29 +9,31 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/tmc/gputrace/internal/difftrace"
+	"github.com/tmc/gputrace/internal/environment"
 )
 
 type diffOptions struct {
-	JSON          bool
-	CSV           bool
-	By            string
-	Limit         int
-	MinDeltaUs    int
-	OnlyEncoder   int
-	OnlyFunction  string
-	ShowMatches   bool
-	ShowUnmatched bool
-	ShowOccur     bool
-	Explain       bool
-	Quick         bool
-	Divergence    bool
-	DivergenceUs  int
-	ByEncoder     bool
-	MDOut         string
-	PerfettoOut   string
-	BenchDir      string
-	Left          string
-	Right         string
+	JSON                  bool
+	CSV                   bool
+	By                    string
+	Limit                 int
+	MinDeltaUs            int
+	OnlyEncoder           int
+	OnlyFunction          string
+	ShowMatches           bool
+	ShowUnmatched         bool
+	ShowOccur             bool
+	Explain               bool
+	Quick                 bool
+	Divergence            bool
+	DivergenceUs          int
+	ByEncoder             bool
+	MDOut                 string
+	PerfettoOut           string
+	BenchDir              string
+	Left                  string
+	Right                 string
+	AllowCrossEnvironment bool
 }
 
 var diffCmd = newDiffCommand(&diffOptions{Limit: 20, OnlyEncoder: -1})
@@ -80,6 +82,7 @@ Examples:
 	cmd.Flags().StringVar(&opts.BenchDir, "bench-dir", "", "Auto-discover newest Go/Python perfdata pair from benchmark directory")
 	cmd.Flags().StringVar(&opts.Left, "left", "", "Explicit left trace path (overrides auto-discovery)")
 	cmd.Flags().StringVar(&opts.Right, "right", "", "Explicit right trace path (overrides auto-discovery)")
+	cmd.Flags().BoolVar(&opts.AllowCrossEnvironment, "allow-cross-environment", false, "Show descriptive deltas when exact environment gates differ or are unavailable")
 	return cmd
 }
 
@@ -114,6 +117,15 @@ func runDiff(cmd *cobra.Command, args []string, opts diffOptions) error {
 	if err != nil {
 		return fmt.Errorf("load trace B: %w", err)
 	}
+	environmentComparison, err := environment.Compare(a.Environment, b.Environment, opts.AllowCrossEnvironment)
+	if err != nil {
+		return err
+	}
+	if environmentComparison.Label == "incompatible" {
+		mismatches := append([]string(nil), environmentComparison.ExactMismatches...)
+		mismatches = append(mismatches, environmentComparison.CapabilityMismatches...)
+		return fmt.Errorf("compare traces: incompatible or unavailable environment evidence (%s); use --allow-cross-environment for descriptive, non-causal deltas", strings.Join(mismatches, ", "))
+	}
 
 	aligned := difftrace.AlignDispatches(a, b, difftrace.AlignOptions{
 		OnlyEncoder:  opts.OnlyEncoder,
@@ -121,6 +133,10 @@ func runDiff(cmd *cobra.Command, args []string, opts diffOptions) error {
 		MinDeltaUs:   opts.MinDeltaUs,
 	})
 	report := difftrace.BuildReport(a, b, aligned, difftrace.ReportOptions{Limit: opts.Limit, MinDeltaUs: opts.MinDeltaUs})
+	report.Environment = &environmentComparison
+	if environmentComparison.Label == "cross-environment, not causally attributable" {
+		report.Warnings = append(report.Warnings, "cross-environment comparison: deltas are descriptive and not causally attributable")
+	}
 	if diffByIncludes(opts.By, "pipeline-pairs") {
 		report.PipelinePairs = difftrace.BuildPipelinePairs(a, b)
 	}

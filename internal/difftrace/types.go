@@ -1,5 +1,7 @@
 package difftrace
 
+import "github.com/tmc/gputrace/internal/environment"
+
 const SchemaVersion = "gputrace.diff.v2"
 
 // TraceData is parsed dispatch-level timing data for a single trace.
@@ -17,6 +19,7 @@ type TraceData struct {
 	StructuralFunctions   map[string]int
 	AttributionLimited    bool
 	Warnings              []string
+	Environment           environment.Snapshot
 }
 
 // Dispatch is one GPU dispatch entry from streamData.
@@ -245,26 +248,27 @@ type PipelinePair struct {
 
 // Report is the complete diff result with a stable JSON schema.
 type Report struct {
-	SchemaVersion         string                 `json:"schema_version"`
-	TraceAPath            string                 `json:"trace_a_path"`
-	TraceBPath            string                 `json:"trace_b_path"`
-	Summary               Summary                `json:"summary"`
-	TopFunctionDeltas     []FunctionDelta        `json:"top_function_deltas"`
-	TopDispatchOutliers   []MatchPair            `json:"top_dispatch_outliers"`
-	EncoderDeltas         []EncoderDelta         `json:"encoder_deltas"`
-	EncoderReports        []EncoderReport        `json:"encoder_reports"`
-	PipelineDeltas        []PipelineDelta        `json:"pipeline_deltas"`
-	UnnamedDispatchDeltas []UnnamedDispatchDelta `json:"unnamed_dispatch_deltas"`
-	TimelineSpikeWindows  []SpikeWindow          `json:"timeline_spike_windows"`
-	OccurrenceMatches     []OccurrenceMatch      `json:"occurrence_matches"`
-	MatchedPairs          []MatchPair            `json:"matched_pairs"`
-	Unmatched             []UnmatchedDispatch    `json:"unmatched"`
-	PipelinePairs         []PipelinePair         `json:"pipeline_pairs,omitempty"`
-	EncoderDivergence     *EncoderDivergence     `json:"encoder_divergence,omitempty"`
-	Comparability         ComparabilityCheck     `json:"comparability"`
-	RenamePairs           map[string]string      `json:"rename_pairs,omitempty"`
-	AmbiguousRenames      map[string]int         `json:"ambiguous_renames,omitempty"`
-	Warnings              []string               `json:"warnings,omitempty"`
+	SchemaVersion         string                  `json:"schema_version"`
+	TraceAPath            string                  `json:"trace_a_path"`
+	TraceBPath            string                  `json:"trace_b_path"`
+	Summary               Summary                 `json:"summary"`
+	TopFunctionDeltas     []FunctionDelta         `json:"top_function_deltas"`
+	TopDispatchOutliers   []MatchPair             `json:"top_dispatch_outliers"`
+	EncoderDeltas         []EncoderDelta          `json:"encoder_deltas"`
+	EncoderReports        []EncoderReport         `json:"encoder_reports"`
+	PipelineDeltas        []PipelineDelta         `json:"pipeline_deltas"`
+	UnnamedDispatchDeltas []UnnamedDispatchDelta  `json:"unnamed_dispatch_deltas"`
+	TimelineSpikeWindows  []SpikeWindow           `json:"timeline_spike_windows"`
+	OccurrenceMatches     []OccurrenceMatch       `json:"occurrence_matches"`
+	MatchedPairs          []MatchPair             `json:"matched_pairs"`
+	Unmatched             []UnmatchedDispatch     `json:"unmatched"`
+	PipelinePairs         []PipelinePair          `json:"pipeline_pairs,omitempty"`
+	EncoderDivergence     *EncoderDivergence      `json:"encoder_divergence,omitempty"`
+	Comparability         ComparabilityCheck      `json:"comparability"`
+	Environment           *environment.Comparison `json:"environment,omitempty"`
+	RenamePairs           map[string]string       `json:"rename_pairs,omitempty"`
+	AmbiguousRenames      map[string]int          `json:"ambiguous_renames,omitempty"`
+	Warnings              []string                `json:"warnings,omitempty"`
 }
 
 func safeFunctionName(name string) string {
