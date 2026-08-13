@@ -111,7 +111,10 @@ The optional SQL file defines `gputrace_capture`, `gputrace_command_buffer`, `gp
 `gputrace_counter_series`, `gputrace_unattributed_counter`, `gputrace_evidence_gap`, and
 `gputrace_unmatched` views over the native trace.
 `gputrace_capture` provides typed trace identity, environment, clock, coverage,
-and loss-receipt columns. `gputrace_manifest_arg` exposes every manifest field
+timing-summary, and loss-receipt columns. Timing columns keep encoder span,
+dispatch span, command-buffer active time, command-buffer wall span, restore
+timing, display duration, and optional Xcode Effective GPU Time distinct.
+`gputrace_manifest_arg` exposes every manifest field
 as a key/value row, including per-class loss fields added by constrained
 exports and fields introduced by newer exporters.
 With `--clock wall --include-raw-samples`, `gputrace_profiler_stream` exposes

@@ -503,7 +503,11 @@ expose command-buffer record identity and byte offset with unavailable timing.
 It does not join either representation to cumulative GPU-busy dispatch time.
 
 `gputrace_capture` provides typed columns for common identity, environment,
-clock, coverage, and retention queries. `gputrace_manifest_arg` is the
+clock, coverage, timing-summary, and retention queries. Encoder and dispatch
+spans, command-buffer active time and wall span, restore timing, display
+duration, and Xcode Effective GPU Time are separate columns with their source
+fields. Effective GPU Time remains `NULL` when Xcode did not report it.
+`gputrace_manifest_arg` is the
 lossless key/value projection of the same manifest. It keeps dynamic
 per-evidence-class loss receipts and future manifest fields queryable without
 silently dropping them from an older typed view.
