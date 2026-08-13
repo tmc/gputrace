@@ -4,9 +4,38 @@ package counter
 
 import (
 	"testing"
+
+	"github.com/tmc/apple/x/plist"
 )
 
 const streamDataIntegrationDirEnv = "GPUTRACE_COUNTER_STREAMDATA_DIR"
+
+func TestArchivedString(t *testing.T) {
+	objects := []any{
+		"$null",
+		"AGXMetalG16X",
+		map[string]any{"NS.string": "Apple M4 Max"},
+		map[string]any{"NS.string": plist.UID(1)},
+	}
+	for _, test := range []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{name: "direct", value: "G16C", want: "G16C"},
+		{name: "uid", value: plist.UID(1), want: "AGXMetalG16X"},
+		{name: "archived NSString", value: plist.UID(2), want: "Apple M4 Max"},
+		{name: "nested uid", value: plist.UID(3), want: "AGXMetalG16X"},
+		{name: "out of range", value: plist.UID(9)},
+		{name: "wrong type", value: uint64(1)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := archivedString(objects, test.value); got != test.want {
+				t.Fatalf("archivedString() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
 
 func TestParseStreamDataIntegration(t *testing.T) {
 	gpuprofDir := integrationPathFromEnv(t, streamDataIntegrationDirEnv)

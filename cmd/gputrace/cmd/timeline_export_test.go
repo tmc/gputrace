@@ -307,13 +307,17 @@ func TestExportChromeTracingStdoutWritesCleanJSON(t *testing.T) {
 
 func TestExportPerfettoWritesNativeProtobuf(t *testing.T) {
 	pstate := 500
+	gpuGeneration := uint32(2)
 	timeline := &Timeline{
-		ClockDomain:    "busy",
-		AbsoluteTime:   465068216775,
-		ContinuousTime: 123456,
-		PState:         &pstate,
-		TimebaseNumer:  125,
-		TimebaseDenom:  3,
+		ClockDomain:     "busy",
+		GPUGeneration:   &gpuGeneration,
+		MetalDeviceName: "Apple M4 Max",
+		MetalPluginName: "AGXMetalG16X",
+		AbsoluteTime:    465068216775,
+		ContinuousTime:  123456,
+		PState:          &pstate,
+		TimebaseNumer:   125,
+		TimebaseDenom:   3,
 		Timing: &TimelineTiming{
 			EncoderSpanNs:         20_000,
 			DispatchSpanNs:        5_000,
@@ -392,6 +396,7 @@ func TestExportPerfettoWritesNativeProtobuf(t *testing.T) {
 		"input_content_digest_availability", "unavailable_syscalls", "packet_family_gpu_render_stage_event",
 		"exporter_version", "capture_mode_availability", "replay_mode_availability",
 		"counter_catalog_availability", "counter_decoder_availability", "raw_counter_artifact_availability",
+		"Apple M4 Max", "AGXMetalG16X", "environment_device_name_source", "environment_gpu_generation",
 		"untimed_dispatch_count",
 		"Unattributed counter metrics: kernel0", "alu_utilization_pct",
 		"Unavailable evidence: APSCounterData time series",
@@ -404,6 +409,52 @@ func TestExportPerfettoWritesNativeProtobuf(t *testing.T) {
 		if !bytes.Contains(data, []byte(want)) {
 			t.Fatalf("native trace missing manifest value %q", want)
 		}
+	}
+}
+
+func TestApplyStreamIdentity(t *testing.T) {
+	gpuGeneration := uint32(2)
+	timeline := &Timeline{}
+	applyStreamIdentity(timeline, &counter.StreamDataStats{
+		GPUGeneration:   &gpuGeneration,
+		MetalDeviceName: "Apple M4 Max",
+		MetalPluginName: "AGXMetalG16X",
+	})
+	if timeline.GPUGeneration == nil || *timeline.GPUGeneration != 2 || timeline.MetalDeviceName != "Apple M4 Max" || timeline.MetalPluginName != "AGXMetalG16X" {
+		t.Fatalf("stream identity = %#v", timeline)
+	}
+	if timeline.GPUGeneration == &gpuGeneration {
+		t.Fatal("stream identity retained the source pointer")
+	}
+}
+
+func TestTimelineJSONDistinguishesZeroGPUGenerationFromAbsence(t *testing.T) {
+	zero := uint32(0)
+	for _, test := range []struct {
+		name        string
+		timeline    Timeline
+		wantPresent bool
+	}{
+		{name: "absent", timeline: Timeline{}},
+		{name: "zero", timeline: Timeline{GPUGeneration: &zero}, wantPresent: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			data, err := json.Marshal(test.timeline)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatal(err)
+			}
+			value, ok := got["gpu_generation"]
+			if ok != test.wantPresent {
+				t.Fatalf("gpu_generation present = %v, want %v: %s", ok, test.wantPresent, data)
+			}
+			if ok && value != float64(0) {
+				t.Fatalf("gpu_generation = %#v, want zero", value)
+			}
+		})
 	}
 }
 

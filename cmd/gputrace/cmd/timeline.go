@@ -960,6 +960,9 @@ type Timeline struct {
 	LiveTiming           *liveTimingProjection       `json:"live_timing,omitempty"`
 	TraceUUID            string                      `json:"trace_uuid,omitempty"`
 	DeviceID             int                         `json:"device_id,omitempty"`
+	GPUGeneration        *uint32                     `json:"gpu_generation,omitempty"`
+	MetalDeviceName      string                      `json:"metal_device_name,omitempty"`
+	MetalPluginName      string                      `json:"metal_plugin_name,omitempty"`
 	ObservedCSLabels     int                         `json:"observed_cs_labels,omitempty"`
 	UniqueCSLabels       int                         `json:"unique_cs_labels,omitempty"`
 	EvidenceInventory    *TimelineEvidenceInventory  `json:"evidence_inventory,omitempty"`
@@ -1098,6 +1101,7 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 	var profilerDir string
 	if stats, err := counter.ExtractPipelineStatsFromTraceStreamData(trace); err == nil {
 		streamStats = stats
+		applyStreamIdentity(timeline, streamStats)
 		counter.CorrelateDispatchSamples(streamStats)
 		profilerDir = findProfilerDir(trace.Path)
 		if profilerDir != "" {
@@ -1503,6 +1507,18 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 
 	timeline.XcodeMetrics = timelineXcodeMetricsArgs(timeline)
 	return timeline, nil
+}
+
+func applyStreamIdentity(timeline *Timeline, stats *counter.StreamDataStats) {
+	if timeline == nil || stats == nil {
+		return
+	}
+	if stats.GPUGeneration != nil {
+		generation := *stats.GPUGeneration
+		timeline.GPUGeneration = &generation
+	}
+	timeline.MetalDeviceName = stats.MetalDeviceName
+	timeline.MetalPluginName = stats.MetalPluginName
 }
 
 func populateUnprofiledEncoderEvents(timeline *Timeline, computeEncoders []*tracepkg.ComputeEncoder, timingByLabel map[string]*gputrace.EncoderTiming, metrics *gputrace.TimingMetrics) {
@@ -2517,10 +2533,15 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 		defer closeOutput()
 	}
 
+	gpuName := timeline.MetalDeviceName
+	if gpuName == "" {
+		gpuName = "Apple GPU"
+	}
 	trace := &perfetto.Trace{
 		Identity:    timeline.TraceUUID,
 		ClockDomain: string(clock),
-		GPUName:     "Apple GPU",
+		GPUName:     gpuName,
+		GPUModel:    timeline.MetalPluginName,
 		Metadata: map[string]any{
 			"schema":                                      "gputrace.perfetto/v1",
 			"exporter_version":                            buildinfo.EffectiveVersion(),
@@ -2568,11 +2589,33 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 		trace.Metadata["input_content_digest_availability"] = "unavailable: exact tree hashing is performed only for strict sidecar validation"
 	}
 	if timeline.DeviceID != 0 {
-		trace.GPUModel = fmt.Sprintf("Metal device %d", timeline.DeviceID)
 		trace.Metadata["environment_device_id"] = timeline.DeviceID
-		trace.Metadata["environment_device_availability"] = "available"
+		trace.Metadata["environment_device_id_availability"] = "available"
 	} else {
-		trace.Metadata["environment_device_availability"] = "unavailable"
+		trace.Metadata["environment_device_id_availability"] = "unavailable"
+	}
+	if timeline.MetalDeviceName != "" {
+		trace.Metadata["environment_device_name"] = timeline.MetalDeviceName
+		trace.Metadata["environment_device_name_source"] = "streamData metalDeviceName"
+		trace.Metadata["environment_device_name_availability"] = "available"
+		trace.Metadata["environment_device_availability"] = "available: streamData archive identity"
+	} else {
+		trace.Metadata["environment_device_name_availability"] = "unavailable: streamData metalDeviceName is absent"
+		trace.Metadata["environment_device_availability"] = "unavailable: streamData metalDeviceName is absent"
+	}
+	if timeline.MetalPluginName != "" {
+		trace.Metadata["environment_metal_plugin_name"] = timeline.MetalPluginName
+		trace.Metadata["environment_metal_plugin_source"] = "streamData metalPluginName"
+		trace.Metadata["environment_metal_plugin_availability"] = "available"
+	} else {
+		trace.Metadata["environment_metal_plugin_availability"] = "unavailable: streamData metalPluginName is absent"
+	}
+	if timeline.GPUGeneration != nil {
+		trace.Metadata["environment_gpu_generation"] = *timeline.GPUGeneration
+		trace.Metadata["environment_gpu_generation_source"] = "streamData gpuGeneration"
+		trace.Metadata["environment_gpu_generation_availability"] = "available"
+	} else {
+		trace.Metadata["environment_gpu_generation_availability"] = "unavailable: streamData gpuGeneration is absent"
 	}
 	if timeline != nil {
 		for key, value := range perfettoClockConversionArgs(timeline) {
@@ -4317,6 +4360,7 @@ func buildTimelineFromProfilerData(tracePath string, stats *counter.StreamDataSt
 		APICallseq: make([]APICall, 0),
 		Timing:     timelineTimingFromStats(stats),
 	}
+	applyStreamIdentity(timeline, stats)
 	if timeline.Timing == nil {
 		timeline.Timing = &TimelineTiming{}
 	}

@@ -154,6 +154,9 @@ const GPRWCNTRMagic = "GPRWCNTR"
 
 // StreamDataStats contains all parsed statistics from streamData.
 type StreamDataStats struct {
+	GPUGeneration         *uint32             `json:"gpu_generation,omitempty"`
+	MetalDeviceName       string              `json:"metal_device_name,omitempty"`
+	MetalPluginName       string              `json:"metal_plugin_name,omitempty"`
 	Pipelines             []PipelineStats     `json:"pipelines"`
 	Dispatches            []DispatchInfo      `json:"dispatches"`     // Per-dispatch timing and metadata
 	FunctionNames         []string            `json:"function_names"` // Unique function names from strings array
@@ -203,6 +206,13 @@ func ParseStreamData(gpuprofilerDir string, addressToName map[uint64]string) (*S
 	// Find pipelinePerformanceStatistics in object 1
 	if len(objects) > 1 {
 		if obj1, ok := objects[1].(map[string]any); ok {
+			if _, ok := obj1["gpuGeneration"]; ok {
+				generation := uint32(plistUint64(obj1["gpuGeneration"]))
+				stats.GPUGeneration = &generation
+			}
+			stats.MetalDeviceName = archivedString(objects, obj1["metalDeviceName"])
+			stats.MetalPluginName = archivedString(objects, obj1["metalPluginName"])
+
 			// Extract function names from strings array
 			stats.FunctionNames = extractFunctionNames(objects, obj1)
 
@@ -271,6 +281,25 @@ func ParseStreamData(gpuprofilerDir string, addressToName map[uint64]string) (*S
 
 	stats.setTimingSource()
 	return stats, nil
+}
+
+func archivedString(objects []any, value any) string {
+	for depth := 0; depth < 4; depth++ {
+		switch v := value.(type) {
+		case string:
+			return v
+		case plist.UID:
+			if int(v) >= len(objects) {
+				return ""
+			}
+			value = objects[int(v)]
+		case map[string]any:
+			value = v["NS.string"]
+		default:
+			return ""
+		}
+	}
+	return ""
 }
 
 func (stats *StreamDataStats) applyTimelineTiming() {
