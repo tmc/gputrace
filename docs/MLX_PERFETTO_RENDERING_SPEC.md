@@ -13,8 +13,9 @@ JSON. Strict MLX sidecars, dependency-closed logical-byte budgets, and the
 local viewer are implemented. APS per-encoder GPU cycles and derived cost are
 encoder details, not counter series: their counter clock has no verified
 mapping to cumulative busy time. Rolling windows, richer environment capture,
-native-label conflict handling, exporter-owned SQL views, and the MLX plugin
-remain proposed. The viewer is specified separately in
+native-label conflict handling and the MLX plugin remain proposed. A versioned
+exporter-owned PerfettoSQL projection is available through `--sql-out`. The
+viewer is specified separately in
 [PERFETTO_VIEWER_SPEC.md](PERFETTO_VIEWER_SPEC.md).
 
 Confidence markers used in this document are:
@@ -475,8 +476,9 @@ gputrace_counter_series
 gputrace_unmatched
 ```
 
-These names describe a target contract. They are not present in current
-exports.
+`gputrace timeline --format perfetto --sql-out gputrace.sql` writes these
+versioned views. They operate on the native packet tables and can be loaded by
+`trace_processor_shell` after the trace.
 
 ### Packet sequences and interning
 
@@ -723,6 +725,7 @@ gputrace timeline TRACE --format perfetto --open [--sidecar semantics.json]
 --diagnostics default|none
 --manifest FILE
 --max-output-bytes N
+--sql-out FILE
 ```
 
 `--max-output-bytes` is an explicit lossy-export request and uses the logical

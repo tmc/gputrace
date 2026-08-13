@@ -466,6 +466,25 @@ func TestTimelineOutputPath(t *testing.T) {
 	}
 }
 
+func TestTimelineSQLOutput(t *testing.T) {
+	if err := validateTimelineSQLOutput(&timelineOptions{format: "json", sqlOutput: "gputrace.sql"}); err == nil {
+		t.Fatal("JSON accepted --sql-out")
+	}
+	path := filepath.Join(t.TempDir(), "gputrace.sql")
+	if err := writeTimelinePerfettoSQL(path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, view := range []string{"gputrace_capture", "gputrace_dispatch", "gputrace_pipeline", "gputrace_counter_series", "gputrace_unmatched"} {
+		if !bytes.Contains(data, []byte("CREATE PERFETTO VIEW "+view)) {
+			t.Errorf("SQL output missing %s", view)
+		}
+	}
+}
+
 func TestTimelineDurationPhase(t *testing.T) {
 	tests := []struct {
 		name string

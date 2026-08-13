@@ -15,6 +15,7 @@ import (
 	"github.com/tmc/gputrace/internal/counter"
 	"github.com/tmc/gputrace/internal/mlxsemantic"
 	"github.com/tmc/gputrace/internal/perfetto"
+	"github.com/tmc/gputrace/internal/perfettosql"
 	"github.com/tmc/gputrace/internal/profilerraw"
 	tracepkg "github.com/tmc/gputrace/internal/trace"
 )
@@ -37,6 +38,7 @@ type timelineOptions struct {
 	remoteUI           bool
 	listen             string
 	maxOutputBytes     int64
+	sqlOutput          string
 }
 
 // timelineClock selects one measured timestamp domain. The profiler records
@@ -70,7 +72,7 @@ Output formats:
 
 Clock domains:
   - busy (default): cumulative GPU execution offsets for encoders, dispatches,
-    and archive-backed counter tracks
+    and counter series only when their clock is established
   - wall: APSTimelineData command-buffer scheduling and encoder profiles
   - both: a two-panel or two-section report containing both domains
 
@@ -105,7 +107,10 @@ Examples:
   # 3. Use keyboard shortcuts: W/S zoom, A/D pan, F fit
 
   # Generate raw JSON for custom processing
-  gputrace timeline trace.gputrace -o timeline.json --format json`,
+  gputrace timeline trace.gputrace -o timeline.json --format json
+
+  # Emit stable PerfettoSQL views beside a native trace
+  gputrace timeline trace.gputrace --format perfetto --sql-out gputrace.sql`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runTimeline(cmd, args, opts)
@@ -124,6 +129,7 @@ Examples:
 	cmd.Flags().BoolVar(&opts.remoteUI, "remote-ui", opts.remoteUI, "Embed https://ui.perfetto.dev (with --open or --serve)")
 	cmd.Flags().StringVar(&opts.listen, "listen", "127.0.0.1:0", "Loopback viewer listen address")
 	cmd.Flags().Int64Var(&opts.maxOutputBytes, "max-output-bytes", opts.maxOutputBytes, "Maximum logical native protobuf bytes; zero is lossless")
+	cmd.Flags().StringVar(&opts.sqlOutput, "sql-out", opts.sqlOutput, "Write the gputrace PerfettoSQL views (with --format perfetto)")
 	return cmd
 }
 
@@ -137,6 +143,9 @@ func runTimeline(cmd *cobra.Command, args []string, opts *timelineOptions) error
 		return err
 	}
 	if err := validateTimelineClock(opts.clock); err != nil {
+		return err
+	}
+	if err := validateTimelineSQLOutput(opts); err != nil {
 		return err
 	}
 
@@ -231,6 +240,9 @@ func runTimeline(cmd *cobra.Command, args []string, opts *timelineOptions) error
 		if err := exportPerfettoForClockWithBudget(timeline, outputPath, opts.clock, opts.maxOutputBytes); err != nil {
 			return fmt.Errorf("failed to export Perfetto tracing: %w", err)
 		}
+		if err := writeTimelinePerfettoSQL(opts.sqlOutput); err != nil {
+			return err
+		}
 	case "html":
 		if err := exportHTML(timeline, outputPath); err != nil {
 			return fmt.Errorf("failed to export HTML: %w", err)
@@ -262,6 +274,30 @@ func validateTimelineClock(clock timelineClock) error {
 	default:
 		return fmt.Errorf("invalid timeline clock %q (supported: busy, wall, both)", clock)
 	}
+}
+
+func validateTimelineSQLOutput(opts *timelineOptions) error {
+	if opts.sqlOutput != "" && opts.format != "perfetto" {
+		return fmt.Errorf("--sql-out requires --format perfetto")
+	}
+	return nil
+}
+
+func writeTimelinePerfettoSQL(path string) error {
+	if path == "" {
+		return nil
+	}
+	w, closeOutput, err := createCommandOutput(path)
+	if err != nil {
+		return fmt.Errorf("write PerfettoSQL views: %w", err)
+	}
+	if closeOutput != nil {
+		defer closeOutput()
+	}
+	if err := perfettosql.Write(w); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Set implements pflag.Value.
@@ -3472,6 +3508,9 @@ func runTimelineFromProfiler(cmd *cobra.Command, tracePath string, opts *timelin
 	if err := validateTimelineClock(opts.clock); err != nil {
 		return err
 	}
+	if err := validateTimelineSQLOutput(opts); err != nil {
+		return err
+	}
 
 	// Find .gpuprofiler_raw directory
 	profilerDir := profilerraw.FindDir(tracePath)
@@ -3524,6 +3563,9 @@ func runTimelineFromProfiler(cmd *cobra.Command, tracePath string, opts *timelin
 	case "perfetto":
 		if err := exportPerfettoForClockWithBudget(timeline, outputPath, opts.clock, opts.maxOutputBytes); err != nil {
 			return fmt.Errorf("failed to export Perfetto tracing: %w", err)
+		}
+		if err := writeTimelinePerfettoSQL(opts.sqlOutput); err != nil {
+			return err
 		}
 	case "html":
 		if err := exportHTML(timeline, outputPath); err != nil {

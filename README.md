@@ -42,6 +42,10 @@ gputrace timeline trace.gputrace --format perfetto --open --remote-ui
 # Reproducible mode with a pinned local Perfetto UI build
 gputrace timeline trace.gputrace --format perfetto --open \
   --ui-dir /path/to/perfetto-ui
+
+# Write stable PerfettoSQL views for trace_processor_shell
+gputrace timeline trace.gputrace --format perfetto \
+  --sql-out gputrace.sql -o trace.pftrace
 ```
 
 Perfetto has one global time axis. `--clock busy` therefore contains encoders,
@@ -55,6 +59,9 @@ See [MLX GPU Trace Rendering in Perfetto](docs/MLX_PERFETTO_RENDERING_SPEC.md)
 for the native Perfetto roadmap and proposed MLX semantic view.
 `--format perfetto` writes binary protobuf; `--format chrome` retains Chrome
 Trace JSON compatibility.
+The optional SQL file defines `gputrace_capture`, `gputrace_dispatch`,
+`gputrace_pipeline`, `gputrace_semantic_node`, `gputrace_counter_series`, and
+`gputrace_unmatched` views over the native trace.
 
 ## Commands
 
