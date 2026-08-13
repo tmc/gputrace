@@ -7,6 +7,28 @@ import (
 	"testing"
 )
 
+func TestParseMTSPRecordsStartsAfterFileHeader(t *testing.T) {
+	record := make([]byte, 48)
+	binary.LittleEndian.PutUint32(record, uint32(len(record)))
+	copy(record[16:], "CS\x00\x00")
+	binary.LittleEndian.PutUint64(record[20:], 0x1234)
+	copy(record[28:], "mlx/eval/B\x00")
+
+	data := make([]byte, 8, 8+len(record))
+	copy(data, MagicMTSP)
+	binary.LittleEndian.PutUint32(data[4:], 0x400)
+	data = append(data, record...)
+
+	tr := new(Trace)
+	records, err := tr.ParseMTSPFromData(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Label != "mlx/eval/B" {
+		t.Fatalf("records = %+v, want one mlx/eval/B record", records)
+	}
+}
+
 func TestParseCtRecord(t *testing.T) {
 	// Construct a synthetic Ct record
 	// Header (RecordSize=0, Flags=0) - assuming first 8 bytes.

@@ -277,14 +277,13 @@ func (t *Trace) ParseMTSPFromData(data []byte) ([]MTSPRecord, error) {
 	// Skip MTSP header if present (check magic)
 	offset := 0
 	if len(data) >= 4 && string(data[0:4]) == MagicMTSP {
-		if len(data) < 16 {
+		if len(data) < 8 {
 			return nil, fmt.Errorf("capture data too small for header")
 		}
-		_, err := ReadMTSPHeader(data)
-		if err != nil {
-			return nil, fmt.Errorf("read header: %w", err)
-		}
-		offset = 16
+		// MTSP files have an eight-byte file header: magic and version. The
+		// uint32 at offset 8 is the size of the first record, not part of the
+		// file header.
+		offset = 8
 	}
 
 	var records []MTSPRecord
