@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/tmc/gputrace/internal/tracebundle"
 )
 
 type openTraceOptions struct {
@@ -24,6 +25,9 @@ func runOpenTrace(cmd *cobra.Command, args []string, opts *openTraceOptions) err
 
 	if _, err := os.Stat(inputPath); os.IsNotExist(err) {
 		return fmt.Errorf("trace file does not exist: %s", inputPath)
+	}
+	if err := requireXcodeOpenableTrace(inputPath); err != nil {
+		return err
 	}
 
 	status := xcodeProfileStatusWriter()
@@ -113,6 +117,17 @@ func runOpenTrace(cmd *cobra.Command, args []string, opts *openTraceOptions) err
 		Evidence:         selection.Evidence,
 		TargetBound:      boolPointer(selection.Bound),
 	})
+}
+
+func requireXcodeOpenableTrace(path string) error {
+	payload, err := tracebundle.InspectPayload(path)
+	if err != nil {
+		return fmt.Errorf("inspect trace before opening in Xcode: %w", err)
+	}
+	if payload.Class == tracebundle.PayloadProfilerOnly {
+		return fmt.Errorf("cannot open %s in Xcode: profiler-only .gpuprofiler_raw data has no capture or index; use gputrace profiler/timing, or rerun profile-replay without --profiler-only", path)
+	}
+	return nil
 }
 
 func xcodeOpenArgs() []string {
