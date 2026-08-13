@@ -121,6 +121,9 @@ When APSTimelineData supplies them, the same view exposes `absolute_time`,
 conversion formula. These fields convert source ticks within the wall domain;
 they do not align the wall and cumulative GPU-busy timelines. Missing inputs
 remain `NULL` with a `clock_conversion_availability` reason.
+The raw `continuous_time` field is retained separately with an availability
+receipt and an explicitly unverified clock relationship. gputrace does not use
+it to move or align events.
 `gputrace_manifest_arg` exposes every manifest field
 as a key/value row, including per-class loss fields added by constrained
 exports and fields introduced by newer exporters.

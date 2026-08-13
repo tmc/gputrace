@@ -536,6 +536,11 @@ wall-domain tick conversion only; `clock_mapping` remains `none`, and they do
 not authorize alignment with cumulative GPU-busy offsets. If any input is
 unavailable, the scalar columns remain `NULL` and
 `clock_conversion_availability` records the refusal.
+APSTimelineData's separate `Continuous Time` scalar is also retained when
+present. Its typed column carries an explicit statement that its relationship
+to exported clocks is unverified. It is raw evidence only: the exporter does
+not subtract it, convert it, or use it to align events. Missing or zero values
+remain `NULL` with an availability reason.
 `gputrace_manifest_arg` is the
 lossless key/value projection of the same manifest. It keeps dynamic
 per-evidence-class loss receipts and future manifest fields queryable without
