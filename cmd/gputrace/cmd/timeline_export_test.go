@@ -1103,10 +1103,10 @@ func TestAddDispatchKernelEventsIncludesXcodeShaderArgs(t *testing.T) {
 			TotalDurationNs:   7000,
 		}},
 	}
-	simd := timelineDispatchSIMDStats{
+	simd := timelineDispatchCaptureStats{
 		byName:     map[string]uint64{"kernel0": 4096},
 		total:      4096,
-		dispatches: []tracepkg.DispatchThreads{{ThreadsX: 64, ThreadsY: 2, ThreadsZ: 1, ThreadsPerGroupX: 32, ThreadsPerGroupY: 1, ThreadsPerGroupZ: 1}},
+		dispatches: []tracepkg.AttributedDispatch{{CommandBuffer: 3, CaptureOffset: 4096, DispatchThreads: tracepkg.DispatchThreads{ThreadsX: 64, ThreadsY: 2, ThreadsZ: 1, ThreadsPerGroupX: 32, ThreadsPerGroupY: 1, ThreadsPerGroupZ: 1}}},
 	}
 
 	if !addDispatchKernelEvents(timeline, stats, simd, shaderReport, perfStats, nil, nil) {
@@ -1144,6 +1144,9 @@ func TestAddDispatchKernelEventsIncludesXcodeShaderArgs(t *testing.T) {
 	checkArg("grid_size", "64,2,1")
 	checkArg("threadgroup_size", "32,1,1")
 	checkArg("geometry_source", "capture dispatch record matched by dispatch order after exact count check")
+	checkArg("command_buffer_index", 3)
+	checkArg("capture_offset", int64(4096))
+	checkArg("capture_structure_source", "capture dispatch record matched by dispatch order after exact count check")
 	checkArg("allocated_registers", 17)
 	checkArg("high_register", 19)
 	checkArg("spilled_bytes", 16)
@@ -1185,7 +1188,7 @@ func TestAddDispatchKernelEventsUsesEncoderCounterFallback(t *testing.T) {
 		ComputeUtilization: 80,
 	}}
 
-	if !addDispatchKernelEvents(timeline, stats, timelineDispatchSIMDStats{}, nil, nil, encoderMetrics, nil) {
+	if !addDispatchKernelEvents(timeline, stats, timelineDispatchCaptureStats{}, nil, nil, encoderMetrics, nil) {
 		t.Fatal("addDispatchKernelEvents returned false")
 	}
 	args := timeline.Events[0].Args
@@ -1226,7 +1229,7 @@ func TestPerfettoRendersUnknownCounterMetricsAsUnattributed(t *testing.T) {
 	}}
 
 	recordUnattributedCounterMetrics(timeline, metrics)
-	if !addDispatchKernelEvents(timeline, stats, timelineDispatchSIMDStats{}, nil, nil, metrics, nil) {
+	if !addDispatchKernelEvents(timeline, stats, timelineDispatchCaptureStats{}, nil, nil, metrics, nil) {
 		t.Fatal("addDispatchKernelEvents returned false")
 	}
 	if got, ok := timeline.Events[0].Args["alu_utilization_pct"]; ok {
@@ -1284,7 +1287,7 @@ func TestAddDispatchKernelEventsMarksBoundaryDispatch(t *testing.T) {
 		DurationUs:   2,
 	}}}
 
-	if !addDispatchKernelEvents(timeline, stats, timelineDispatchSIMDStats{}, nil, nil, nil, nil) {
+	if !addDispatchKernelEvents(timeline, stats, timelineDispatchCaptureStats{}, nil, nil, nil, nil) {
 		t.Fatal("addDispatchKernelEvents returned false")
 	}
 	if got, want := timeline.Events[0].Args["encoder_containment"], "not_strictly_contained"; got != want {
@@ -1324,7 +1327,7 @@ kernel void source_backed_kernel(device float *out [[buffer(0)]],
 		}},
 	}
 
-	if !addDispatchKernelEvents(timeline, stats, timelineDispatchSIMDStats{}, nil, nil, nil, mapper) {
+	if !addDispatchKernelEvents(timeline, stats, timelineDispatchCaptureStats{}, nil, nil, nil, mapper) {
 		t.Fatal("addDispatchKernelEvents returned false")
 	}
 	args := timeline.Events[0].Args
@@ -1443,6 +1446,36 @@ func TestTimelineDispatchSIMDGroup(t *testing.T) {
 	}
 	if got, want := dispatch.SIMDGroups(), uint64(32); got != want {
 		t.Fatalf("timelineDispatchSIMDGroup = %d, want %d", got, want)
+	}
+}
+
+func TestTimelineDispatchCaptureEvidenceRequiresExactCount(t *testing.T) {
+	tracePath := "../../../testdata/traces/06-six-encoders/06-six-encoders-run1.gputrace"
+	tr, err := tracepkg.Open(tracePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tr.Close()
+	dispatches, err := tr.ParseAttributedDispatches()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dispatches) == 0 {
+		t.Fatal("fixture has no dispatches")
+	}
+	stats := &counter.StreamDataStats{Dispatches: make([]counter.DispatchInfo, len(dispatches))}
+	got := timelineDispatchCaptureEvidence(tr, stats)
+	if len(got.dispatches) != len(dispatches) {
+		t.Fatalf("matched dispatches = %d, want %d", len(got.dispatches), len(dispatches))
+	}
+	if got.dispatches[0].CaptureOffset == 0 {
+		t.Fatal("matched dispatch has no capture offset")
+	}
+
+	stats.Dispatches = stats.Dispatches[:len(stats.Dispatches)-1]
+	got = timelineDispatchCaptureEvidence(tr, stats)
+	if len(got.dispatches) != 0 || len(got.byIndex) != 0 {
+		t.Fatalf("mismatched evidence = %+v, want empty", got)
 	}
 }
 
@@ -1768,7 +1801,7 @@ func TestAddDispatchKernelEventsJoinsPipelinesByID(t *testing.T) {
 			DurationUs:    7,
 		}},
 	}
-	if !addDispatchKernelEvents(timeline, stats, timelineDispatchSIMDStats{}, nil, nil, nil, nil) {
+	if !addDispatchKernelEvents(timeline, stats, timelineDispatchCaptureStats{}, nil, nil, nil, nil) {
 		t.Fatal("addDispatchKernelEvents returned false")
 	}
 	args := timeline.Kernels[0].Args
@@ -1810,7 +1843,7 @@ func TestAddDispatchKernelEventsNamesAgreeWithPipelineID(t *testing.T) {
 			DurationUs:    1,
 		})
 	}
-	if !addDispatchKernelEvents(timeline, stats, timelineDispatchSIMDStats{}, nil, nil, nil, nil) {
+	if !addDispatchKernelEvents(timeline, stats, timelineDispatchCaptureStats{}, nil, nil, nil, nil) {
 		t.Fatal("addDispatchKernelEvents returned false")
 	}
 	if len(timeline.Kernels) != n {

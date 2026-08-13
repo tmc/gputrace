@@ -1071,7 +1071,7 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 			shaderReport = report
 		}
 	}
-	dispatchSIMD := timelineDispatchSIMDGroups(trace, streamStats)
+	dispatchCapture := timelineDispatchCaptureEvidence(trace, streamStats)
 	sourceMapper := gputrace.NewShaderSourceMapper()
 	_ = sourceMapper.IndexShaderSources()
 	_ = sourceMapper.IndexTraceBundleSources(trace.Path)
@@ -1223,7 +1223,7 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 
 	// Add shader/kernel events. Prefer streamData dispatches so the Shaders lane
 	// matches Xcode's pipeline table instead of duplicating whole encoder spans.
-	if !addDispatchKernelEvents(timeline, streamStats, dispatchSIMD, shaderReport, perfStats, encoderMetrics, sourceMapper) {
+	if !addDispatchKernelEvents(timeline, streamStats, dispatchCapture, shaderReport, perfStats, encoderMetrics, sourceMapper) {
 		if err := addCaptureDispatchEvents(timeline, trace, sourceMapper, storeStats); err != nil {
 			return nil, fmt.Errorf("add capture dispatches: %w", err)
 		}
@@ -1873,7 +1873,7 @@ func parseEncoderDispatches(trace *gputrace.Trace, encoders []*tracepkg.ComputeE
 	return dispatches
 }
 
-func addDispatchKernelEvents(timeline *Timeline, stats *counter.StreamDataStats, simd timelineDispatchSIMDStats, shaderReport *gputrace.ShaderMetricsReport, perfStats *gputrace.PerfCounterStats, encoderMetrics []counter.EncoderCounterMetrics, sourceMapper *gputrace.ShaderSourceMapper) bool {
+func addDispatchKernelEvents(timeline *Timeline, stats *counter.StreamDataStats, capture timelineDispatchCaptureStats, shaderReport *gputrace.ShaderMetricsReport, perfStats *gputrace.PerfCounterStats, encoderMetrics []counter.EncoderCounterMetrics, sourceMapper *gputrace.ShaderSourceMapper) bool {
 	if timeline == nil || stats == nil || len(stats.Dispatches) == 0 {
 		return false
 	}
@@ -1919,11 +1919,14 @@ func addDispatchKernelEvents(timeline *Timeline, stats *counter.StreamDataStats,
 		metric := metrics.find(name, pipeline)
 		shaderMetric := shaderMetrics.find(name, pipeline)
 		encoderMetric := encoderMetricByIndex[d.EncoderIndex]
-		simdGroups, simdGroupSharePct := simd.cost(name, dispatchOrdinal)
+		simdGroups, simdGroupSharePct := capture.cost(name, dispatchOrdinal)
 		args := dispatchKernelArgs(d, pipeline, simdGroups, simdGroupSharePct, shaderMetric, metric, encoderMetric, sourceMapper)
-		if geometry, ok := simd.geometry(dispatchOrdinal); ok {
-			addDispatchGeometryArgs(args, geometry)
+		if recorded, ok := capture.dispatch(dispatchOrdinal); ok {
+			addDispatchGeometryArgs(args, recorded.DispatchThreads)
 			args["geometry_source"] = "capture dispatch record matched by dispatch order after exact count check"
+			args["command_buffer_index"] = recorded.CommandBuffer
+			args["capture_offset"] = recorded.CaptureOffset
+			args["capture_structure_source"] = "capture dispatch record matched by dispatch order after exact count check"
 		}
 
 		info := KernelInfo{
@@ -2074,19 +2077,22 @@ func dispatchKernelArgs(d counter.DispatchInfo, p *counter.PipelineStats, simdGr
 	return args
 }
 
-type timelineDispatchSIMDStats struct {
+type timelineDispatchCaptureStats struct {
 	byIndex    []uint64
-	dispatches []tracepkg.DispatchThreads
+	dispatches []tracepkg.AttributedDispatch
 	byName     map[string]uint64
 	total      uint64
 }
 
-func timelineDispatchSIMDGroups(t *gputrace.Trace, stats *counter.StreamDataStats) timelineDispatchSIMDStats {
-	out := timelineDispatchSIMDStats{byName: make(map[string]uint64)}
+func timelineDispatchCaptureEvidence(t *gputrace.Trace, stats *counter.StreamDataStats) timelineDispatchCaptureStats {
+	out := timelineDispatchCaptureStats{byName: make(map[string]uint64)}
 	if t == nil || stats == nil || len(stats.Dispatches) == 0 || len(t.CaptureData) == 0 {
 		return out
 	}
-	dispatches := t.ParseDispatchInRegion(t.CaptureData, 0)
+	dispatches, err := t.ParseAttributedDispatches()
+	if err != nil {
+		return out
+	}
 	if len(dispatches) != len(stats.Dispatches) {
 		return out
 	}
@@ -2105,9 +2111,9 @@ func timelineDispatchSIMDGroups(t *gputrace.Trace, stats *counter.StreamDataStat
 	return out
 }
 
-func (s timelineDispatchSIMDStats) geometry(index int) (tracepkg.DispatchThreads, bool) {
+func (s timelineDispatchCaptureStats) dispatch(index int) (tracepkg.AttributedDispatch, bool) {
 	if index < 0 || index >= len(s.dispatches) {
-		return tracepkg.DispatchThreads{}, false
+		return tracepkg.AttributedDispatch{}, false
 	}
 	return s.dispatches[index], true
 }
@@ -2120,7 +2126,7 @@ func addDispatchGeometryArgs(args map[string]interface{}, dispatch tracepkg.Disp
 	}
 }
 
-func (s timelineDispatchSIMDStats) cost(name string, index int) (uint64, float64) {
+func (s timelineDispatchCaptureStats) cost(name string, index int) (uint64, float64) {
 	groups := s.byName[name]
 	if groups == 0 && index >= 0 && index < len(s.byIndex) {
 		groups = s.byIndex[index]
@@ -4122,7 +4128,7 @@ func buildTimelineFromProfilerData(tracePath string, stats *counter.StreamDataSt
 	}
 
 	// Add kernel events from streamData dispatches.
-	if !addDispatchKernelEvents(timeline, stats, timelineDispatchSIMDStats{}, nil, nil, nil, nil) {
+	if !addDispatchKernelEvents(timeline, stats, timelineDispatchCaptureStats{}, nil, nil, nil, nil) {
 		addEncoderKernelEvents(timeline, nil, nil, nil)
 	}
 
