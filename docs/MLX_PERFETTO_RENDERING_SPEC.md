@@ -476,11 +476,20 @@ and also provide an exporter-owned SQL module with a stable logical view:
 ```sql
 gputrace_capture
 gputrace_semantic_node
+gputrace_semantic_link
 gputrace_dispatch
 gputrace_pipeline
 gputrace_counter_series
 gputrace_unmatched
 ```
+
+Each semantic node is emitted as an explicitly untimed declaration on its
+hierarchical track. Target links are separate events and inherit timing only
+from their explicitly identified GPU target in the selected clock domain.
+Thus unused nodes remain queryable without assigning them fabricated GPU time.
+Links whose targets belong to the other measured clock domain are not placed
+on the selected axis. The manifest reports them by target kind as unprojected,
+separately from invalid, unmatched, or budget-dropped evidence.
 
 `gputrace timeline --format perfetto --sql-out gputrace.sql` writes these
 versioned views. They operate on the native packet tables and can be loaded by

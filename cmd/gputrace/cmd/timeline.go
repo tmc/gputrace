@@ -2370,6 +2370,14 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 					trace.Metadata["mlx_semantic_unmatched_"+kind] = count
 				}
 			}
+			projected, unprojected := mlxSemanticProjectionCounts(timeline)
+			for kind, count := range projected {
+				trace.Metadata["mlx_semantic_projected_"+kind] = count
+			}
+			for kind, count := range unprojected {
+				trace.Metadata["mlx_semantic_unprojected_"+kind] = count
+				trace.Metadata["mlx_semantic_unprojected_"+kind+"_reason"] = "target is outside the selected clock domain"
+			}
 		}
 		trace.Metadata["unavailable_evidence_count"] = len(timeline.UnavailableEvidence)
 		for i, gap := range timeline.UnavailableEvidence {
@@ -2478,6 +2486,27 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 	return nil
 }
 
+func mlxSemanticProjectionCounts(timeline *Timeline) (projected, unprojected map[string]int) {
+	projected = make(map[string]int)
+	unprojected = make(map[string]int)
+	if timeline == nil || timeline.MLXSemantics == nil {
+		return projected, unprojected
+	}
+	category := map[string]string{
+		"dispatch":       "kernel",
+		"encoder":        "encoder",
+		"command_buffer": "command_buffer",
+	}
+	for _, link := range timeline.MLXSemantics.Links {
+		if _, ok := timelineEventAt(timeline, category[link.Target.Kind], link.Target.Index); ok {
+			projected[link.Target.Kind]++
+		} else {
+			unprojected[link.Target.Kind]++
+		}
+	}
+	return projected, unprojected
+}
+
 func timelineUntimedDispatchCount(timeline *Timeline) int {
 	count := 0
 	for _, event := range timeline.Events {
@@ -2527,6 +2556,27 @@ func appendMLXSemanticEvents(trace *perfetto.Trace, timeline *Timeline) {
 			Description: "MLX " + node.Kind + " semantic evidence",
 		})
 	}
+	for index, node := range timeline.MLXSemantics.Nodes {
+		args := make(map[string]any, len(node.Attrs)+5)
+		for key, value := range node.Attrs {
+			args[key] = value
+		}
+		args["semantic_id"] = node.ID
+		args["semantic_kind"] = node.Kind
+		args["join_basis"] = "sidecar-declaration"
+		args["clock_domain"] = "none"
+		args["timing_source"] = "MLX semantic sidecar declaration"
+		args["timing_quality"] = "unavailable"
+		trace.Events = append(trace.Events, perfetto.Event{
+			ID:        uint64(len(timeline.Events) + index + 1),
+			TrackUUID: trackIDs[node.ID],
+			Name:      node.Name,
+			Category:  "mlx_semantic_node",
+			Kind:      perfetto.EventInstant,
+			Required:  true,
+			Args:      args,
+		})
+	}
 	category := map[string]string{
 		"dispatch":       "kernel",
 		"encoder":        "encoder",
@@ -2535,7 +2585,7 @@ func appendMLXSemanticEvents(trace *perfetto.Trace, timeline *Timeline) {
 	for index, link := range timeline.MLXSemantics.Links {
 		target, ok := timelineEventAt(timeline, category[link.Target.Kind], link.Target.Index)
 		if !ok {
-			continue // Validation made this impossible; keep projection total.
+			continue // The target belongs to another measured clock domain.
 		}
 		node := mlxSemanticNode(timeline.MLXSemantics, link.SemanticID)
 		args := make(map[string]any, len(node.Attrs)+4)
@@ -2561,7 +2611,7 @@ func appendMLXSemanticEvents(trace *perfetto.Trace, timeline *Timeline) {
 			kind = perfetto.EventInstant
 		}
 		trace.Events = append(trace.Events, perfetto.Event{
-			ID:         uint64(len(timeline.Events) + index + 1),
+			ID:         uint64(len(timeline.Events) + len(timeline.MLXSemantics.Nodes) + index + 1),
 			TrackUUID:  trackIDs[node.ID],
 			Name:       node.Name,
 			Category:   "mlx_semantic",

@@ -75,7 +75,8 @@ for the native Perfetto roadmap and proposed MLX semantic view.
 `--format perfetto` writes binary protobuf; `--format chrome` retains Chrome
 Trace JSON compatibility.
 The optional SQL file defines `gputrace_capture`, `gputrace_dispatch`,
-`gputrace_pipeline`, `gputrace_semantic_node`, `gputrace_counter_series`, and
+`gputrace_pipeline`, `gputrace_semantic_node`, `gputrace_semantic_link`,
+`gputrace_counter_series`, and
 `gputrace_unmatched` views over the native trace.
 
 `diff` fails closed when workload, device/driver, runtime, capture mode, or

@@ -422,11 +422,31 @@ func TestAppendMLXSemanticEvents(t *testing.T) {
 	if got, want := len(trace.Tracks), 2; got != want {
 		t.Fatalf("semantic tracks = %d, want %d", got, want)
 	}
-	if got, want := len(trace.Events), 1; got != want {
+	if got, want := len(trace.Events), 3; got != want {
 		t.Fatalf("semantic events = %d, want %d", got, want)
 	}
-	if got := trace.Events[0].Args["join_basis"]; got != "sidecar-explicit-id" {
+	if got := trace.Events[0].Args["join_basis"]; got != "sidecar-declaration" {
+		t.Fatalf("node declaration basis = %v", got)
+	}
+	if trace.Events[0].Kind != perfetto.EventInstant || trace.Events[0].Args["clock_domain"] != "none" || trace.Events[0].Args["timing_quality"] != "unavailable" {
+		t.Fatalf("node declaration timing = %+v", trace.Events[0])
+	}
+	if got := trace.Events[2].Args["join_basis"]; got != "sidecar-explicit-id" {
 		t.Fatalf("join basis = %v", got)
+	}
+}
+
+func TestMLXSemanticProjectionCounts(t *testing.T) {
+	timeline := &Timeline{
+		Events: []TimelineEvent{{Category: "kernel"}},
+		MLXSemantics: &mlxsemantic.Sidecar{Links: []mlxsemantic.Link{
+			{Target: mlxsemantic.Target{Kind: "dispatch", Index: 0}},
+			{Target: mlxsemantic.Target{Kind: "command_buffer", Index: 0}},
+		}},
+	}
+	projected, unprojected := mlxSemanticProjectionCounts(timeline)
+	if projected["dispatch"] != 1 || unprojected["command_buffer"] != 1 {
+		t.Fatalf("projection counts = %v, %v", projected, unprojected)
 	}
 }
 

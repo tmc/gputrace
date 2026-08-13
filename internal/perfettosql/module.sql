@@ -50,6 +50,18 @@ SELECT
   name,
   extract_arg(arg_set_id, 'debug.semantic_id') AS semantic_id,
   extract_arg(arg_set_id, 'debug.semantic_kind') AS semantic_kind,
+  extract_arg(arg_set_id, 'debug.join_basis') AS join_basis
+FROM slice
+WHERE category = 'mlx_semantic_node';
+
+CREATE PERFETTO VIEW gputrace_semantic_link AS
+SELECT
+  id,
+  ts,
+  dur,
+  name,
+  extract_arg(arg_set_id, 'debug.semantic_id') AS semantic_id,
+  extract_arg(arg_set_id, 'debug.semantic_kind') AS semantic_kind,
   extract_arg(arg_set_id, 'debug.target_kind') AS target_kind,
   extract_arg(arg_set_id, 'debug.join_basis') AS join_basis
 FROM slice

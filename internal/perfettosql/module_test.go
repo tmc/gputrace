@@ -10,6 +10,7 @@ func TestModuleDefinesStableViews(t *testing.T) {
 	for _, name := range []string{
 		"gputrace_capture",
 		"gputrace_semantic_node",
+		"gputrace_semantic_link",
 		"gputrace_dispatch",
 		"gputrace_pipeline",
 		"gputrace_counter_series",
