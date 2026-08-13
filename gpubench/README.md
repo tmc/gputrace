@@ -27,3 +27,7 @@ Capture and profiling should happen outside the untraced statistical benchmark
 timer. A trace is one evidence observation. Metrics remain `/trace` unless the
 caller declares a positive work count and one of `op`, `token`, `step`, or
 `byte`.
+
+Every collection and analysis operation executes the configured `gputrace`
+binary. Set `Client.Executable` to pin it; the package never imports or links
+the parent module. JSON decoding and `ReportMetric` emission remain local.

@@ -18,11 +18,16 @@ import (
 	"strconv"
 )
 
+// DefaultExecutable is the command used by a zero-value Client.
+const DefaultExecutable = "gputrace"
+
 // Client runs a gputrace executable. The zero value finds gputrace on PATH.
+// All trace collection and analysis crosses this process boundary; Client does
+// not link the parent gputrace module.
 type Client struct {
-	Path   string
-	Env    []string
-	Stderr io.Writer
+	Executable string
+	Env        []string
+	Stderr     io.Writer
 }
 
 // Work declares the logical work represented by one trace.
@@ -250,9 +255,9 @@ func (r *Report) ReportMetrics(dst MetricReporter) error {
 }
 
 func (c Client) run(ctx context.Context, args ...string) ([]byte, error) {
-	path := c.Path
+	path := c.Executable
 	if path == "" {
-		path = "gputrace"
+		path = DefaultExecutable
 	}
 	cmd := exec.CommandContext(ctx, path, args...)
 	if c.Env != nil {

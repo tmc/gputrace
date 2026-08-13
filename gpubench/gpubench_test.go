@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -18,7 +19,7 @@ EOF
 	if err := os.WriteFile(tool, []byte(script), 0755); err != nil {
 		t.Fatal(err)
 	}
-	report, err := (Client{Path: tool}).Analyze(context.Background(), "trace.gputrace", AnalyzeOptions{
+	report, err := (Client{Executable: tool}).Analyze(context.Background(), "trace.gputrace", AnalyzeOptions{
 		Work: &Work{Count: 4, Unit: "op"},
 	})
 	if err != nil {
@@ -36,6 +37,48 @@ EOF
 	}
 	if !reflect.DeepEqual(metrics, want) {
 		t.Fatalf("metrics = %v, want %v", metrics, want)
+	}
+}
+
+func TestClientOperationsExecConfiguredGputrace(t *testing.T) {
+	dir := t.TempDir()
+	tool := filepath.Join(dir, "gputrace")
+	log := filepath.Join(dir, "argv")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$GPUBENCH_ARGV_LOG"
+if test "$1" = bench; then
+  printf '%s\n' '{"schema_version":1,"identity":{"path":"trace","payload":"full","observer_version":"test"},"structure":{"status":"structural","dispatches":1},"timing":{"status":"unsupported"}}'
+fi
+`
+	if err := os.WriteFile(tool, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	client := Client{
+		Executable: tool,
+		Env:        []string{"GPUBENCH_ARGV_LOG=" + log},
+	}
+	ctx := context.Background()
+	if _, err := client.Capture(ctx, CaptureOptions{Output: filepath.Join(dir, "run.gputrace"), Dir: dir}, "workload", "arg"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Profile(ctx, "run.gputrace", ProfileOptions{Output: filepath.Join(dir, "profiled.gputrace"), Embed: true, Wait: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Analyze(ctx, "profiled.gputrace", AnalyzeOptions{Work: &Work{Count: 2, Unit: "op"}}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	want := []string{
+		"capture --output " + filepath.Join(dir, "run.gputrace") + " --dir " + dir + " -- workload arg",
+		"profile-replay run.gputrace --output " + filepath.Join(dir, "profiled.gputrace") + " --embed --wait",
+		"bench profiled.gputrace --format json --bench-work 2 --bench-work-unit op",
+	}
+	if !reflect.DeepEqual(lines, want) {
+		t.Fatalf("argv = %#v, want %#v", lines, want)
 	}
 }
 
