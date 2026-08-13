@@ -37,6 +37,7 @@ type timelineOptions struct {
 	rawProfilerSamples  bool
 	xcodeGPUTime        bool
 	sidecar             string
+	hostCorrelation     string
 	openViewer          bool
 	serveViewer         bool
 	uiDir               string
@@ -153,6 +154,7 @@ Examples:
 	cmd.Flags().BoolVar(&opts.rawProfilerSamples, "include-raw-samples", opts.rawProfilerSamples, "Include raw GPRWCNTR profiler records in wall-clock output (they are not decoded hardware counters)")
 	cmd.Flags().BoolVar(&opts.xcodeGPUTime, "xcode-gpu-time", opts.xcodeGPUTime, "Read Xcode Overview GPU Time through GTShaderProfiler (Darwin only; runs a private-framework model pass)")
 	cmd.Flags().StringVar(&opts.sidecar, "sidecar", opts.sidecar, "Attach a strictly trace-identified MLX semantic sidecar")
+	cmd.Flags().StringVar(&opts.hostCorrelation, "host-correlation", opts.hostCorrelation, "Attach a trace-identified host-event correlation receipt (Perfetto only)")
 	cmd.Flags().BoolVar(&opts.openViewer, "open", opts.openViewer, "Serve the native trace and open it in Perfetto")
 	cmd.Flags().BoolVar(&opts.serveViewer, "serve", opts.serveViewer, "Serve the native trace without opening a browser")
 	cmd.Flags().StringVar(&opts.uiDir, "ui-dir", opts.uiDir, "Pinned local Perfetto UI directory containing perfetto-ui.json (with --open or --serve)")
@@ -215,6 +217,14 @@ func runTimeline(cmd *cobra.Command, args []string, opts *timelineOptions) error
 			uuid = trace.Metadata.UUID
 		}
 		if err := attachMLXSidecar(timeline, tracePath, uuid, opts.sidecar); err != nil {
+			return err
+		}
+	}
+	if opts.hostCorrelation != "" {
+		if opts.format != "perfetto" {
+			return fmt.Errorf("attach host correlation: --format perfetto is required")
+		}
+		if err := attachHostCorrelation(timeline, tracePath, opts.clock, opts.hostCorrelation); err != nil {
 			return err
 		}
 	}
@@ -926,6 +936,7 @@ type Timeline struct {
 	MLXSemantics         *mlxsemantic.Sidecar        `json:"mlx_semantics,omitempty"`
 	MLXSemanticReport    *mlxsemantic.Report         `json:"mlx_semantic_report,omitempty"`
 	MLXSidecarDigest     string                      `json:"mlx_sidecar_digest,omitempty"`
+	HostCorrelation      *hostCorrelationProjection  `json:"host_correlation,omitempty"`
 	TraceUUID            string                      `json:"trace_uuid,omitempty"`
 	DeviceID             int                         `json:"device_id,omitempty"`
 	ObservedCSLabels     int                         `json:"observed_cs_labels,omitempty"`
@@ -2494,6 +2505,17 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 				trace.Metadata["mlx_semantic_unprojected_"+kind+"_reason"] = "target is outside the selected clock domain"
 			}
 		}
+		if correlation := timeline.HostCorrelation; correlation != nil {
+			trace.Metadata["host_correlation_schema"] = correlation.Schema
+			trace.Metadata["host_correlation_run_id"] = correlation.RunID
+			trace.Metadata["host_correlation_host_digest"] = correlation.HostDigest
+			trace.Metadata["host_correlation_trace_digest"] = correlation.TraceDigest
+			trace.Metadata["host_correlation_host_clock"] = correlation.HostClock
+			trace.Metadata["host_correlation_gpu_clock"] = correlation.GPUClock
+			trace.Metadata["host_correlation_bridge_digest"] = correlation.BridgeDigest
+			trace.Metadata["host_correlation_max_error_ns"] = correlation.MaxErrorNS
+			trace.Metadata["host_correlation_event_count"] = len(correlation.Events)
+		}
 		trace.Metadata["unavailable_evidence_count"] = len(timeline.UnavailableEvidence)
 		for i, gap := range timeline.UnavailableEvidence {
 			trace.Metadata[fmt.Sprintf("unavailable_evidence_%d_family", i)] = gap.Family
@@ -2578,6 +2600,7 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 		trace.Metadata["presentation_dispatch_accounting"] = reason + "; aggregate GPU totals use native gpu_slice only"
 	}
 	appendMLXSemanticEvents(trace, timeline)
+	appendHostCorrelationEvents(trace, timeline)
 
 	counterTracks := append([]CounterTrack(nil), timeline.CounterTracks...)
 	sort.SliceStable(counterTracks, func(i, j int) bool { return counterTracks[i].Name < counterTracks[j].Name })
@@ -3923,6 +3946,9 @@ func runTimelineFromProfiler(cmd *cobra.Command, tracePath string, opts *timelin
 	}
 	if opts.sidecar != "" {
 		return fmt.Errorf("attach MLX sidecar: profiler-only input has no capture UUID; use the self-contained profiled .gputrace")
+	}
+	if opts.hostCorrelation != "" {
+		return fmt.Errorf("attach host correlation: profiler-only input has no trace tree for content identity")
 	}
 	if timeline.Timing == nil || timeline.Timing.EncoderTimingApproximate || timeline.Timing.TimingSource == "" || timeline.Timing.TimingSource == "unavailable" {
 		fmt.Fprintln(os.Stderr, "Warning: trace lacks precise hardware timing data; encoder/dispatch durations are estimated.")
