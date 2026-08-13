@@ -118,6 +118,10 @@ Profiled traces also carry the archive's exact Metal device name, Metal plugin
 name, and GPU generation into canonical JSON, native GPU metadata, and typed
 SQL columns. GPU generation is nullable so a recorded zero remains distinct
 from absence. Capture-only traces report streamData identity as unavailable.
+The same projection retains streamData archive version, source trace name,
+timestamp, profiling-mode scalars, capture-range scalars, completeness flags,
+and blit-call count. Private enum and range meanings remain explicitly
+uninterpreted; recorded zero and false values remain distinct from absence.
 Source inventory counts remain stable across clock selection; separate
 projected counts report what was placed on the selected axis.
 When APSTimelineData supplies them, the same view exposes `absolute_time`,

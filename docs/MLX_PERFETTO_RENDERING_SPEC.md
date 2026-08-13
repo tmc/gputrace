@@ -531,6 +531,11 @@ For profiled traces, environment columns retain `metalDeviceName`,
 `metalPluginName`, and `gpuGeneration` directly from the streamData archive.
 GPU generation is nullable so a recorded zero remains distinct from absence.
 The fields remain `NULL` with an availability reason when streamData is absent.
+The archive projection also retains version, source trace name, Unix timestamp,
+the three raw profiling-mode values, capture-range location and length,
+data-source completeness flags, and blit-call count. Numeric and Boolean fields
+are nullable so zero and false remain evidence. The private profiling enums and
+capture-range units are not interpreted or promoted to capture/replay modes.
 Source and projected counts are also separate: source counts inventory the
 pre-filtered capture, while projected counts inventory only events placed on
 the selected clock. Clock filtering never changes source counts or copies
