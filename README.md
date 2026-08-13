@@ -82,6 +82,9 @@ The `metrics_source` argument identifies the backing trace section.
 The `gputrace_dispatch` view normalizes timing provenance, attribution,
 geometry, source location, and profiler-sample coverage across measured GPU
 events and capture-only launch records; unavailable fields remain `NULL`.
+It also exposes capture command-buffer membership and byte offset as structural
+identity. Those fields do not imply that wall-clock command-buffer spans
+contain busy-clock dispatch intervals.
 gputrace does not invent a mapping between these domains.
 
 See [MLX GPU Trace Rendering in Perfetto](docs/MLX_PERFETTO_RENDERING_SPEC.md)
