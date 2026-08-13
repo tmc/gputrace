@@ -18,6 +18,7 @@ var treeCmd = newTreeCommand(&treeOptions{
 
 type treeOptions struct {
 	groupBy string
+	records bool
 	verbose bool
 	json    bool
 	limit   int
@@ -33,6 +34,10 @@ func newTreeCommand(opts *treeOptions) *cobra.Command {
 		Short: "Display execution tree grouped by pipeline state or encoder",
 		Long: `Display a hierarchical view of GPU execution.
 
+The default encoder view shows semantic execution topology: command buffers,
+compute encoders, and their kernel dispatches. Use --records to inspect the
+decoded record stream, including individual setLabel changes.
+
 Grouping modes:
   - encoder:  Group by Encoder (Command Buffer), then Commands (default)
   - pipeline: Group by Compute Pipeline State, then Kernel`,
@@ -43,6 +48,7 @@ Grouping modes:
 	}
 
 	cmd.Flags().StringVar(&opts.groupBy, "group-by", opts.groupBy, "Grouping mode: encoder, pipeline")
+	cmd.Flags().BoolVar(&opts.records, "records", opts.records, "Show decoded records instead of semantic encoder topology")
 	cmd.Flags().BoolVarP(&opts.verbose, "verbose", "v", opts.verbose, "Show detailed information")
 	cmd.Flags().BoolVar(&opts.json, "json", opts.json, "Output in JSON format")
 	cmd.Flags().IntVar(&opts.limit, "limit", opts.limit, "Maximum primary nodes in human output")
@@ -63,6 +69,24 @@ func runTree(cmd *cobra.Command, args []string, opts *treeOptions) error {
 	defer t.Close()
 	if err := t.RequireCaptureRecords(); err != nil {
 		return err
+	}
+	if opts.records && opts.groupBy != "encoder" {
+		return fmt.Errorf("--records requires --group-by encoder")
+	}
+
+	if opts.groupBy == "encoder" && !opts.records {
+		timeline, err := generateTimeline(t)
+		if err != nil {
+			return fmt.Errorf("build execution topology: %w", err)
+		}
+		if opts.json {
+			return writeTreeTopologyJSON(cmd.OutOrStdout(), timeline)
+		}
+		limit, err := resolveHumanLimit(opts.limit, opts.all)
+		if err != nil {
+			return err
+		}
+		return writeTreeTopology(cmd.OutOrStdout(), timeline, limit)
 	}
 
 	// 1. Parse top-level MTSP records (preserving hierarchy)
@@ -121,6 +145,64 @@ func runTree(cmd *cobra.Command, args []string, opts *treeOptions) error {
 	default:
 		return fmt.Errorf("unknown group-by mode: %s", opts.groupBy)
 	}
+}
+
+func writeTreeTopology(w io.Writer, timeline *Timeline, limit int) error {
+	view := *timeline
+	if limit >= 0 && len(view.Encoders) > limit {
+		keep := make(map[int]bool, limit)
+		for _, encoder := range view.Encoders[:limit] {
+			keep[encoder.Index] = true
+		}
+		view.Encoders = view.Encoders[:limit]
+		view.Kernels = nil
+		for _, kernel := range timeline.Kernels {
+			if keep[kernel.Encoder] {
+				view.Kernels = append(view.Kernels, kernel)
+			}
+		}
+		var commandBuffers []TimelineEvent
+		for _, event := range timeline.Events {
+			if event.Category == "command_buffer" {
+				commandBuffers = append(commandBuffers, event)
+			}
+		}
+		byCommandBuffer, _ := attributeEncodersToCBs(timeline, commandBuffers)
+		keepCommandBuffer := make(map[int]bool)
+		for index, encoders := range byCommandBuffer {
+			for _, encoder := range encoders {
+				if keep[encoder.Index] {
+					keepCommandBuffer[index] = true
+				}
+			}
+		}
+		view.Events = nil
+		for _, event := range timeline.Events {
+			if event.Category != "command_buffer" {
+				view.Events = append(view.Events, event)
+				continue
+			}
+			if index, ok := timelineEventArgInt(event.Args, "index"); ok && keepCommandBuffer[index] {
+				view.Events = append(view.Events, event)
+			}
+		}
+	}
+	if err := writeTextTimeline(w, &view, timeline); err != nil {
+		return err
+	}
+	if limit >= 0 && len(timeline.Encoders) > limit {
+		fmt.Fprintf(w, "... %d more encoders omitted (use --all)\n", len(timeline.Encoders)-limit)
+	}
+	return nil
+}
+
+func writeTreeTopologyJSON(w io.Writer, timeline *Timeline) error {
+	encoder := json.NewEncoder(w)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(timeline); err != nil {
+		return fmt.Errorf("encode execution topology: %w", err)
+	}
+	return nil
 }
 
 // scanForNames recursively scans records for CS/CSuwuw labels
