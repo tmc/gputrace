@@ -567,6 +567,17 @@ and no stride mismatch. Their total decoded sample counts differ (208,392 and
 239,884), as do their machine-wide and unattributed populations. These totals
 describe decoder coverage; they neither map the counter clock to the busy or
 wall timeline nor strengthen the documented ordinal encoder attribution.
+
+The `APSData` inventory goes one level deeper without decoding private trace
+payloads. It reports how many decoded dictionaries contain exact archive keys
+for counter configuration, shader-profiler data, post-processing frame
+markers, APS trace-data files, and trace-ID tables, together with dictionary
+and malformed-blob totals. The debug fixture has 46 dictionaries: 1 counter
+configuration, 2 shader-profiler carriers, 2 frame markers, 40 trace-file
+carriers, and 1 trace-ID metadata dictionary. The release fixture has the same
+shape except for 4 shader-profiler carriers, for 48 dictionaries total. Both
+have zero malformed blobs. These are independent key-presence counts; the
+private `APSTraceDataFile` payloads remain uninterpreted.
 Source and projected counts are also separate: source counts inventory the
 pre-filtered capture, while projected counts inventory only events placed on
 the selected clock. Clock filtering never changes source counts or copies

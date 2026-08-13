@@ -88,6 +88,13 @@ are coverage and integrity evidence, not a counter time series: the archive
 does not establish a mapping from counter timestamps to the exported busy or
 wall clocks.
 
+The manifest inventories the decoded `APSData` dictionary shapes separately.
+It counts dictionaries containing `Counter Info`, `ShaderProfilerData`, `Post
+Processing Frame Marker`, `APSTraceDataFile`, and `TraceId to BatchId`, plus
+malformed blobs. The counts are independent key-presence observations rather
+than exclusive record kinds. `APSTraceDataFile` contents remain private opaque
+payloads until their schema and units are established.
+
 ## Binary Data Structures
 
 Every field below carries a confidence marker, because these layouts are read
