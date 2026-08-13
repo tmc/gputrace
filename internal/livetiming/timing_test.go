@@ -15,6 +15,13 @@ const validInput = `{"kind":"clock_sample","cpu_ticks":100,"gpu_ticks":200,"run_
 {"kind":"artifact","run_id":"run-1","trace_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
 `
 
+const timingOnlyInput = `{"kind":"clock_sample","cpu_ticks":100,"gpu_ticks":200,"run_id":"run-1"}
+{"kind":"clock_sample","cpu_ticks":200,"gpu_ticks":300,"run_id":"run-1"}
+{"kind":"clock_sample","cpu_ticks":300,"gpu_ticks":400,"run_id":"run-1"}
+{"kind":"command_buffer","id":1,"capture_label":"gputrace.live.cb.1","final_label":"decode","gpu_start_seconds":0.00000025,"gpu_end_seconds":0.00000035,"kernel_start_seconds":0.00000024,"kernel_end_seconds":0.00000034,"status":4,"run_id":"run-1"}
+{"kind":"capture_attempt","run_id":"run-1","capture_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","capture_status":"timing_only","reason":"no_command_stream"}
+`
+
 func TestRead(t *testing.T) {
 	got, err := readString(t, validInput)
 	if err != nil {
@@ -33,6 +40,19 @@ func TestReadAcceptsCompletedZeroDurationCommandBuffer(t *testing.T) {
 	input := strings.Replace(validInput, `"gpu_end_seconds":0.00000035`, `"gpu_end_seconds":0.00000025`, 1)
 	if _, err := readString(t, input); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestInspectTimingOnly(t *testing.T) {
+	got, err := inspectString(t, timingOnlyInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CaptureStatus != "timing_only" || got.CaptureDigest == "" || got.TraceDigest != "" {
+		t.Fatalf("Inspect() = %+v", got)
+	}
+	if _, err := readString(t, timingOnlyInput); !errors.Is(err, ErrNoTraceCarrier) {
+		t.Fatalf("Read() error = %v, want ErrNoTraceCarrier", err)
 	}
 }
 
@@ -75,4 +95,13 @@ func readString(t *testing.T, input string) (Sidecar, error) {
 		t.Fatal(err)
 	}
 	return Read(path)
+}
+
+func inspectString(t *testing.T, input string) (Sidecar, error) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "timing.jsonl")
+	if err := os.WriteFile(path, []byte(input), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return Inspect(path)
 }

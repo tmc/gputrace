@@ -173,6 +173,11 @@ func Run(ctx context.Context, opts Options, argv ...string) (string, error) {
 			"no capture was triggered", argv[0], opts.Output)
 	}
 	if err := recorded(opts.Output); err != nil {
+		if opts.TimingOutput != "" {
+			if finalizeErr := finalizeTimingOnly(opts.TimingOutput, opts.RunID, opts.Output); finalizeErr != nil {
+				return "", errors.Join(err, finalizeErr)
+			}
+		}
 		return "", err
 	}
 	if opts.TimingOutput != "" {
@@ -181,6 +186,27 @@ func Run(ctx context.Context, opts Options, argv ...string) (string, error) {
 		}
 	}
 	return opts.Output, nil
+}
+
+func finalizeTimingOnly(path, runID, capturePath string) error {
+	digest, err := mlxsemantic.Digest(capturePath)
+	if err != nil {
+		return fmt.Errorf("capture: finalize timing-only sidecar: %w", err)
+	}
+	record, err := json.Marshal(struct {
+		Kind          string `json:"kind"`
+		RunID         string `json:"run_id"`
+		CaptureDigest string `json:"capture_digest"`
+		CaptureStatus string `json:"capture_status"`
+		Reason        string `json:"reason"`
+	}{
+		Kind: "capture_attempt", RunID: runID, CaptureDigest: digest,
+		CaptureStatus: "timing_only", Reason: "no_command_stream",
+	})
+	if err != nil {
+		return fmt.Errorf("capture: finalize timing-only sidecar: %w", err)
+	}
+	return appendTimingRecord(path, record, "timing-only")
 }
 
 func finalizeTiming(path, runID, tracePath string) error {
@@ -196,16 +222,20 @@ func finalizeTiming(path, runID, tracePath string) error {
 	if err != nil {
 		return fmt.Errorf("capture: finalize timing sidecar: %w", err)
 	}
+	return appendTimingRecord(path, record, "timing")
+}
+
+func appendTimingRecord(path string, record []byte, kind string) error {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
 	if err != nil {
-		return fmt.Errorf("capture: finalize timing sidecar: %w", err)
+		return fmt.Errorf("capture: finalize %s sidecar: %w", kind, err)
 	}
 	defer f.Close()
 	if _, err := f.Write(append(record, '\n')); err != nil {
-		return fmt.Errorf("capture: finalize timing sidecar: %w", err)
+		return fmt.Errorf("capture: finalize %s sidecar: %w", kind, err)
 	}
 	if err := f.Sync(); err != nil {
-		return fmt.Errorf("capture: finalize timing sidecar: %w", err)
+		return fmt.Errorf("capture: finalize %s sidecar: %w", kind, err)
 	}
 	return nil
 }

@@ -25,6 +25,10 @@ const (
 // ErrInvalid reports a malformed or internally inconsistent timing sidecar.
 var ErrInvalid = errors.New("invalid live timing sidecar")
 
+// ErrNoTraceCarrier reports timing evidence whose native capture has no
+// replayable Metal command stream.
+var ErrNoTraceCarrier = errors.New("live timing sidecar has no trace carrier")
+
 // ClockSample is one simultaneously sampled CPU and GPU timestamp pair.
 type ClockSample struct {
 	CPUTimeNS int64
@@ -48,6 +52,8 @@ type Sidecar struct {
 	RunID          string
 	ContentDigest  string
 	TraceDigest    string
+	CaptureDigest  string
+	CaptureStatus  string
 	ClockSamples   []ClockSample
 	CommandBuffers []CommandBuffer
 }
@@ -66,10 +72,26 @@ type record struct {
 	KernelEndSeconds   *float64 `json:"kernel_end_seconds,omitempty"`
 	Status             *int     `json:"status,omitempty"`
 	TraceDigest        string   `json:"trace_digest,omitempty"`
+	CaptureDigest      string   `json:"capture_digest,omitempty"`
+	CaptureStatus      string   `json:"capture_status,omitempty"`
+	Reason             string   `json:"reason,omitempty"`
 }
 
 // Read reads and validates a bounded newline-delimited JSON sidecar.
 func Read(path string) (Sidecar, error) {
+	sidecar, err := Inspect(path)
+	if err != nil {
+		return Sidecar{}, err
+	}
+	if sidecar.TraceDigest == "" {
+		return Sidecar{}, fmt.Errorf("%w: capture status %q", ErrNoTraceCarrier, sidecar.CaptureStatus)
+	}
+	return sidecar, nil
+}
+
+// Inspect reads timing observations even when capture produced no replayable
+// command stream. Such observations cannot be joined to trace records.
+func Inspect(path string) (Sidecar, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return Sidecar{}, fmt.Errorf("read live timing sidecar: %w", err)
@@ -83,10 +105,10 @@ func Read(path string) (Sidecar, error) {
 	scanner.Buffer(make([]byte, 4096), maximumLine)
 	seenIDs := make(map[uint64]struct{})
 	seenLabels := make(map[string]struct{})
-	artifactSeen := false
+	terminalSeen := false
 	for scanner.Scan() {
-		if artifactSeen {
-			return Sidecar{}, fmt.Errorf("%w: artifact record is not last", ErrInvalid)
+		if terminalSeen {
+			return Sidecar{}, fmt.Errorf("%w: terminal record is not last", ErrInvalid)
 		}
 		if len(sidecar.ClockSamples)+len(sidecar.CommandBuffers) >= maximumRecords {
 			return Sidecar{}, fmt.Errorf("%w: too many records", ErrInvalid)
@@ -130,11 +152,20 @@ func Read(path string) (Sidecar, error) {
 			seenLabels[command.CaptureLabel] = struct{}{}
 			sidecar.CommandBuffers = append(sidecar.CommandBuffers, command)
 		case "artifact":
-			if raw.CPUTicks != nil || raw.GPUTicks != nil || hasNonArtifactFields(raw) || !validDigest(raw.TraceDigest) {
+			if raw.CPUTicks != nil || raw.GPUTicks != nil || hasNonArtifactFields(raw) ||
+				raw.CaptureDigest != "" || raw.CaptureStatus != "" || raw.Reason != "" || !validDigest(raw.TraceDigest) {
 				return Sidecar{}, fmt.Errorf("%w: malformed artifact record", ErrInvalid)
 			}
 			sidecar.TraceDigest = raw.TraceDigest
-			artifactSeen = true
+			terminalSeen = true
+		case "capture_attempt":
+			if raw.CPUTicks != nil || raw.GPUTicks != nil || hasNonArtifactFields(raw) || raw.TraceDigest != "" ||
+				raw.CaptureStatus != "timing_only" || raw.Reason != "no_command_stream" || !validDigest(raw.CaptureDigest) {
+				return Sidecar{}, fmt.Errorf("%w: malformed capture attempt record", ErrInvalid)
+			}
+			sidecar.CaptureDigest = raw.CaptureDigest
+			sidecar.CaptureStatus = raw.CaptureStatus
+			terminalSeen = true
 		default:
 			return Sidecar{}, fmt.Errorf("%w: unknown record kind %q", ErrInvalid, raw.Kind)
 		}
@@ -142,8 +173,8 @@ func Read(path string) (Sidecar, error) {
 	if err := scanner.Err(); err != nil {
 		return Sidecar{}, fmt.Errorf("%w: scan records: %v", ErrInvalid, err)
 	}
-	if len(sidecar.ClockSamples) < 3 || len(sidecar.CommandBuffers) == 0 || !artifactSeen {
-		return Sidecar{}, fmt.Errorf("%w: need clock samples, command buffers, and final artifact identity", ErrInvalid)
+	if len(sidecar.ClockSamples) < 3 || len(sidecar.CommandBuffers) == 0 || !terminalSeen {
+		return Sidecar{}, fmt.Errorf("%w: need clock samples, command buffers, and final capture identity", ErrInvalid)
 	}
 	for i := 1; i < len(sidecar.ClockSamples); i++ {
 		previous, current := sidecar.ClockSamples[i-1], sidecar.ClockSamples[i]
@@ -176,7 +207,8 @@ func validateRun(sidecar *Sidecar, runID string) error {
 func hasCommandFields(raw record) bool {
 	return raw.ID != nil || raw.CaptureLabel != "" || raw.FinalLabel != "" ||
 		raw.GPUStartSeconds != nil || raw.GPUEndSeconds != nil ||
-		raw.KernelStartSeconds != nil || raw.KernelEndSeconds != nil || raw.Status != nil || raw.TraceDigest != ""
+		raw.KernelStartSeconds != nil || raw.KernelEndSeconds != nil || raw.Status != nil || raw.TraceDigest != "" ||
+		raw.CaptureDigest != "" || raw.CaptureStatus != "" || raw.Reason != ""
 }
 
 func hasNonArtifactFields(raw record) bool {

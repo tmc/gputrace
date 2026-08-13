@@ -76,6 +76,33 @@ func TestRecorded(t *testing.T) {
 	}
 }
 
+func TestFinalizeTimingOnly(t *testing.T) {
+	dir := t.TempDir()
+	timing := filepath.Join(dir, "timing.jsonl")
+	capture := filepath.Join(dir, "run.gputrace")
+	if err := os.WriteFile(timing, []byte(`{"kind":"clock_sample","run_id":"run-1"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(capture, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(capture, "store0"), []byte("resource store"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := finalizeTimingOnly(timing, "run-1", capture); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(timing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"kind":"capture_attempt"`) ||
+		!strings.Contains(string(data), `"capture_status":"timing_only"`) ||
+		!strings.Contains(string(data), `"reason":"no_command_stream"`) {
+		t.Fatalf("timing sidecar = %s", data)
+	}
+}
+
 func TestEnvIncludesTimingOutputOnlyWhenRequested(t *testing.T) {
 	without := env("trace", "lock", "inject", "", "")
 	with := env("trace", "lock", "inject", "timing.jsonl", "run-1")

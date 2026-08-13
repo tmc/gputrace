@@ -241,6 +241,13 @@ gputrace profile-replay run.gputrace          # writes run-perfdata.gputrace
 gputrace profiler run-perfdata.gputrace
 ```
 
+`capture --timing-sidecar timing.jsonl --run-id ID` records command-buffer
+intervals from the original execution. If Metal writes resources but no
+replayable command stream, capture still fails and the sidecar ends with a
+`capture_attempt` record whose status is `timing_only`. That record identifies
+the attempted bundle; it does not make the intervals attributable to trace
+commands or eligible for host-to-GPU projection.
+
 Replay processes are exclusive. A second invocation normally returns a busy
 error; pass `--wait` to queue it and guarantee non-overlapping replay. Go
 programs can use `github.com/tmc/gputrace/capture` and
