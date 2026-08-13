@@ -155,63 +155,26 @@ func EnhanceTimelineWithRawData(timeline *Timeline, tracePath string) error {
 			Timestamp: timestampUs,
 			ProcessID: 1,
 			ThreadID:  10,
-			Args: map[string]interface{}{
-				"size":  rec.Size,
-				"count": rec.Count,
-				"flags": rec.Flags,
-				"index": rec.EncoderIndex,
-			},
+			Args:      gprwcntrEventArgs(rec),
 		}
 		timeline.Events = append(timeline.Events, event)
 	}
 
-	// Correlate samples to kernels
-	CorrelateSamplesToKernels(timeline)
-
 	return nil
 }
 
-// CorrelateSamplesToKernels annotates kernel events with the count of GPRWCNTR samples that fall within their duration.
-func CorrelateSamplesToKernels(timeline *Timeline) {
-	// 1. Collect all GPRWCNTR sample timestamps (in µs)
-	// We assume they are already in timeline.Events with Category="gprwcntr".
-	// Optimization: Store them in a sorted slice for binary search/ranges.
-	var sampleTs []uint64
-	for _, ev := range timeline.Events {
-		if ev.Category == "gprwcntr" {
-			sampleTs = append(sampleTs, ev.Timestamp)
-		}
-	}
-	// Note: Events should be roughly sorted, but let's ensure or just assume for now.
-	// If we append them, they might be at the end.
-	// Let's rely on iteration for now or sort sampleTs.
-	// Since we just appended them, they are at the end, but their Timestamps are mixed.
-	// Sorting sampleTs is cheap.
-	// (Import sort if needed, but manual bubble/simple sort or just iterating is fine for <10k)
-	// Actually, let's just iterate. N_kernels * M_samples might be 1000 * 10000 = 10M ops. Fast enough in Go.
-
-	// 2. Iterate kernels and count samples
-	for i := range timeline.Events {
-		ev := &timeline.Events[i]
-		if ev.Category == "kernel" {
-			count := 0
-			start := ev.Timestamp
-			end := ev.Timestamp + ev.Duration
-
-			for _, ts := range sampleTs {
-				if ts >= start && ts < end {
-					count++
-				}
-			}
-
-			if ev.Args == nil {
-				ev.Args = make(map[string]interface{})
-			}
-			ev.Args["sample_count"] = count
-
-			// Also update the struct in timeline.Kernels if mapped
-			// (This is harder to map back without index, skipping)
-		}
+func gprwcntrEventArgs(rec GPRWCNTRRecord) map[string]interface{} {
+	return map[string]interface{}{
+		"index":                 rec.EncoderIndex,
+		"stream_index":          rec.EncoderIndex,
+		"timestamp_ticks":       rec.Timestamp,
+		"timestamp_domain":      "mach absolute ticks",
+		"coordinate_basis":      "GPRWCNTR tick delta converted with the trace timebase and anchored to the first APSTimelineData command buffer",
+		"size":                  rec.Size,
+		"count":                 rec.Count,
+		"flags":                 rec.Flags,
+		"record_format":         "GPRWCNTR/168-byte record",
+		"counter_decode_status": "raw record header only; counter payload is not decoded",
 	}
 }
 

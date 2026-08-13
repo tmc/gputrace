@@ -11,6 +11,8 @@ func TestModuleDefinesStableViews(t *testing.T) {
 		"gputrace_capture",
 		"gputrace_manifest_arg",
 		"gputrace_command_buffer",
+		"gputrace_profiler_stream",
+		"gputrace_raw_profiler_sample",
 		"gputrace_semantic_node",
 		"gputrace_semantic_link",
 		"gputrace_dispatch",
@@ -68,6 +70,8 @@ func TestModuleProjectsRecordedDispatchesAndCompilerFacts(t *testing.T) {
 		"dependency_skeletons_retained",
 		"presentation_dispatch_accounting",
 		"a.display_value",
+		"raw profiler stream aggregate; not a GPU encoder interval",
+		"counter_decode_status",
 	} {
 		if !strings.Contains(Module, want) {
 			t.Errorf("module missing %q", want)

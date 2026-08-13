@@ -225,6 +225,48 @@ SELECT
 FROM slice
 WHERE category = 'command_buffer';
 
+CREATE PERFETTO VIEW gputrace_profiler_stream AS
+SELECT
+  id,
+  ts,
+  dur,
+  name,
+  cast(extract_arg(arg_set_id, 'debug.index') AS INT) AS stream_id,
+  extract_arg(arg_set_id, 'debug.source') AS source,
+  cast(extract_arg(arg_set_id, 'debug.ring_buffer_idx') AS INT) AS ring_buffer_index,
+  cast(extract_arg(arg_set_id, 'debug.sample_count') AS INT) AS sample_count,
+  cast(extract_arg(arg_set_id, 'debug.start_ticks') AS INT) AS source_start_ticks,
+  cast(extract_arg(arg_set_id, 'debug.end_ticks') AS INT) AS source_end_ticks,
+  extract_arg(arg_set_id, 'debug.clock_domain') AS clock_domain,
+  extract_arg(arg_set_id, 'debug.timing_source') AS timing_source,
+  extract_arg(arg_set_id, 'debug.timing_quality') AS timing_quality,
+  cast(extract_arg(arg_set_id, 'debug.real_timing') AS INT) AS real_timing,
+  'raw profiler stream aggregate; not a GPU encoder interval' AS evidence_kind,
+  arg_set_id
+FROM slice
+WHERE category = 'profiler_stream';
+
+CREATE PERFETTO VIEW gputrace_raw_profiler_sample AS
+SELECT
+  id,
+  ts,
+  name,
+  cast(extract_arg(arg_set_id, 'debug.stream_index') AS INT) AS stream_id,
+  cast(extract_arg(arg_set_id, 'debug.timestamp_ticks') AS INT) AS source_timestamp_ticks,
+  extract_arg(arg_set_id, 'debug.timestamp_domain') AS source_timestamp_domain,
+  extract_arg(arg_set_id, 'debug.coordinate_basis') AS coordinate_basis,
+  cast(extract_arg(arg_set_id, 'debug.size') AS INT) AS raw_size_field,
+  cast(extract_arg(arg_set_id, 'debug.count') AS INT) AS raw_count_field,
+  cast(extract_arg(arg_set_id, 'debug.flags') AS INT) AS raw_flags_field,
+  extract_arg(arg_set_id, 'debug.record_format') AS record_format,
+  extract_arg(arg_set_id, 'debug.counter_decode_status') AS counter_decode_status,
+  extract_arg(arg_set_id, 'debug.clock_domain') AS clock_domain,
+  extract_arg(arg_set_id, 'debug.timing_source') AS timing_source,
+  extract_arg(arg_set_id, 'debug.timing_quality') AS timing_quality,
+  arg_set_id
+FROM slice
+WHERE category = 'gprwcntr';
+
 CREATE PERFETTO VIEW gputrace_function AS
 SELECT
   evidence_kind,
