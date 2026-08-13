@@ -96,3 +96,14 @@ func TestDigestStable(t *testing.T) {
 		t.Fatalf("digests = %q, %q", first, second)
 	}
 }
+
+func TestReadRejectsSemanticReceiptWithoutTraceLinks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "receipt.json")
+	if err := os.WriteFile(path, []byte(`{"runtime":{"version":"0.31.1"},"receipt":{"schema_version":1}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Read(path)
+	if err == nil || !strings.Contains(err.Error(), "semantic receipt is not attachable without trace identity and explicit GPU target links") {
+		t.Fatalf("Read error = %v", err)
+	}
+}

@@ -234,6 +234,14 @@ Validation is strict:
 The JSON evidence model and native manifest expose used and unused node counts
 plus matched and unmatched target counts by target kind.
 
+An MLX runtime semantic receipt is not itself a sidecar. A receipt may describe
+arrays, evaluations, runtime libraries, and matching native label text, but it
+does not establish the trace UUID, trace content digest, or occurrence-level
+GPU targets required by this contract. `--sidecar` rejects such a receipt with
+a specific error instead of binding it by filename or label similarity. A
+producer may transform a receipt into v1 only when it can add those identities
+and explicit links.
+
 `--sidecar` never silently degrades to filename matching. A future
 `--sidecar=auto` may search beside the trace, but it must apply the same trace
 identity checks and print the selected path.

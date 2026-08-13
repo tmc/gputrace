@@ -2,6 +2,7 @@
 package mlxsemantic
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -67,12 +68,20 @@ type Report struct {
 
 // Read reads one JSON sidecar and rejects trailing data.
 func Read(path string) (*Sidecar, error) {
-	f, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read MLX sidecar: %w", err)
 	}
-	defer f.Close()
-	decoder := json.NewDecoder(f)
+	var envelope struct {
+		Schema string `json:"schema"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return nil, fmt.Errorf("read MLX sidecar: %w", err)
+	}
+	if envelope.Schema == "" {
+		return nil, fmt.Errorf("read MLX sidecar: schema is required; an MLX semantic receipt is not attachable without trace identity and explicit GPU target links")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	var sidecar Sidecar
 	if err := decoder.Decode(&sidecar); err != nil {
