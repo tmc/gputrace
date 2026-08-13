@@ -80,6 +80,14 @@ difference is reported as non-blob entries. These counts describe archive
 structure only; one blob may contain many records or samples. Missing or
 malformed arrays remain unavailable instead of appearing as empty arrays.
 
+For `APSCounterData`, the manifest additionally reports decoded GPRWCNTR
+records split into capture-attributed, machine-wide, and remaining
+unattributed populations. It also reports the decoder's blob, encoder-ID,
+per-group aggregate, pass-column, trace-ID, and stride-mismatch counts. These
+are coverage and integrity evidence, not a counter time series: the archive
+does not establish a mapping from counter timestamps to the exported busy or
+wall clocks.
+
 ## Binary Data Structures
 
 Every field below carries a confidence marker, because these layouts are read

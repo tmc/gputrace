@@ -555,6 +555,18 @@ entries/blobs; the release trace reports `48/48`, `77/77`, and `83/83`.
 The capture-only fixture reports `NULL` for both entry and blob counts because
 it has no streamData archive. A malformed family also remains unavailable;
 the exporter does not turn it into an empty family.
+
+When an `APSCounterData` archive decodes, the manifest also reports its exact
+GPRWCNTR record coverage and integrity: payload blobs, decoded samples,
+capture-attributed samples, machine-wide samples, remaining unattributed
+samples, known encoder IDs, per-group encoder aggregates, pass-column groups,
+trace-ID rows, and stride-mismatch blobs. The matched debug/release fixtures
+both decode 176 GPRWCNTR blobs, 6,992 capture-attributed samples, 736 known
+encoder IDs, 368 per-group aggregates, 25 pass-column groups, 23 trace-ID rows,
+and no stride mismatch. Their total decoded sample counts differ (208,392 and
+239,884), as do their machine-wide and unattributed populations. These totals
+describe decoder coverage; they neither map the counter clock to the busy or
+wall timeline nor strengthen the documented ordinal encoder attribution.
 Source and projected counts are also separate: source counts inventory the
 pre-filtered capture, while projected counts inventory only events placed on
 the selected clock. Clock filtering never changes source counts or copies
