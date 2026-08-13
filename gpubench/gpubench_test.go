@@ -2,12 +2,23 @@ package gpubench
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestUnavailableExecutable(t *testing.T) {
+	client := Client{Executable: filepath.Join(t.TempDir(), "missing-gputrace")}
+	if err := client.Available(); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("Available error = %v, want ErrUnavailable", err)
+	}
+	if _, err := client.Report(context.Background(), "trace.gputrace", ReportOptions{}); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("Report error = %v, want ErrUnavailable", err)
+	}
+}
 
 func TestAnalyzeAndReportMetrics(t *testing.T) {
 	tool := filepath.Join(t.TempDir(), "gputrace")
@@ -19,7 +30,7 @@ EOF
 	if err := os.WriteFile(tool, []byte(script), 0755); err != nil {
 		t.Fatal(err)
 	}
-	report, err := (Client{Executable: tool}).Analyze(context.Background(), "trace.gputrace", AnalyzeOptions{
+	report, err := (Client{Executable: tool}).Report(context.Background(), "trace.gputrace", ReportOptions{
 		Work: &Work{Count: 4, Unit: "op"},
 	})
 	if err != nil {
@@ -64,7 +75,7 @@ fi
 	if _, err := client.Profile(ctx, "run.gputrace", ProfileOptions{Output: filepath.Join(dir, "profiled.gputrace"), Embed: true, Wait: true}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.Analyze(ctx, "profiled.gputrace", AnalyzeOptions{Work: &Work{Count: 2, Unit: "op"}}); err != nil {
+	if _, err := client.Report(ctx, "profiled.gputrace", ReportOptions{Work: &Work{Count: 2, Unit: "op"}}); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(log)

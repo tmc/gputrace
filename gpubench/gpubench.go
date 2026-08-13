@@ -21,6 +21,12 @@ import (
 // DefaultExecutable is the command used by a zero-value Client.
 const DefaultExecutable = "gputrace"
 
+// ErrUnavailable reports that the configured gputrace executable cannot be
+// found or executed. Benchmarks may skip on this error. Other errors describe
+// invalid inputs, failed collection, or unreadable evidence and must not be
+// treated as an unavailable optional tool.
+var ErrUnavailable = errors.New("gpubench: gputrace executable unavailable")
+
 // Client runs a gputrace executable. The zero value finds gputrace on PATH.
 // All trace collection and analysis crosses this process boundary; Client does
 // not link the parent gputrace module.
@@ -36,8 +42,8 @@ type Work struct {
 	Unit  string `json:"unit"`
 }
 
-// AnalyzeOptions controls explicit per-work normalization.
-type AnalyzeOptions struct {
+// ReportOptions controls explicit per-work normalization.
+type ReportOptions struct {
 	Work *Work
 }
 
@@ -125,8 +131,14 @@ type attributeReporter interface {
 	Attr(key, value string)
 }
 
-// Analyze asks gputrace to produce its stable sectioned report for trace.
-func (c Client) Analyze(ctx context.Context, trace string, opts AnalyzeOptions) (*Report, error) {
+// Available reports whether the configured gputrace executable can be run.
+func (c Client) Available() error {
+	_, err := c.executable()
+	return err
+}
+
+// Report asks gputrace to produce its stable sectioned report for trace.
+func (c Client) Report(ctx context.Context, trace string, opts ReportOptions) (*Report, error) {
 	args := []string{"bench", trace, "--format", "json"}
 	if opts.Work != nil {
 		if err := validateWork(opts.Work); err != nil {
@@ -255,9 +267,9 @@ func (r *Report) ReportMetrics(dst MetricReporter) error {
 }
 
 func (c Client) run(ctx context.Context, args ...string) ([]byte, error) {
-	path := c.Executable
-	if path == "" {
-		path = DefaultExecutable
+	path, err := c.executable()
+	if err != nil {
+		return nil, err
 	}
 	cmd := exec.CommandContext(ctx, path, args...)
 	if c.Env != nil {
@@ -276,6 +288,18 @@ func (c Client) run(ctx context.Context, args ...string) ([]byte, error) {
 		return nil, fmt.Errorf("gpubench: gputrace %s: %w", args[0], err)
 	}
 	return stdout.Bytes(), nil
+}
+
+func (c Client) executable() (string, error) {
+	path := c.Executable
+	if path == "" {
+		path = DefaultExecutable
+	}
+	resolved, err := exec.LookPath(path)
+	if err != nil {
+		return "", fmt.Errorf("%w: %s: %v", ErrUnavailable, path, err)
+	}
+	return resolved, nil
 }
 
 func (r *Report) denominator() (float64, string, error) {
