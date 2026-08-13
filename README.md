@@ -90,6 +90,9 @@ contain busy-clock dispatch intervals.
 Per-launch SIMD groups remain dispatch facts. The `gputrace_function` view
 holds one row per function for aggregate duration, total SIMD work, and work
 share, avoiding repeated aggregates that produce misleading sums.
+The `gputrace_encoder` view exposes profiled encoder timing and archive-backed
+cycle aggregates, including their derivation, coverage, and unjoined counter
+clock status. Capture-only traces do not manufacture encoder rows.
 gputrace does not invent a mapping between these domains.
 
 See [MLX GPU Trace Rendering in Perfetto](docs/MLX_PERFETTO_RENDERING_SPEC.md)
@@ -97,7 +100,7 @@ for the native Perfetto roadmap and proposed MLX semantic view.
 `--format perfetto` writes binary protobuf; `--format chrome` retains Chrome
 Trace JSON compatibility.
 The optional SQL file defines `gputrace_capture`, `gputrace_dispatch`,
-`gputrace_function`, `gputrace_pipeline`, `gputrace_semantic_node`, `gputrace_semantic_link`,
+`gputrace_encoder`, `gputrace_function`, `gputrace_pipeline`, `gputrace_semantic_node`, `gputrace_semantic_link`,
 `gputrace_counter_series`, and
 `gputrace_unmatched` views over the native trace.
 
