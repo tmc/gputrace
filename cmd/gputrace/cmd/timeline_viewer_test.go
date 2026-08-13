@@ -1,10 +1,14 @@
 package cmd
 
 import (
+	"context"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 func TestLoopbackListenAddress(t *testing.T) {
@@ -100,4 +104,34 @@ func TestValidateTimelineViewerOptionsPinsLocalUI(t *testing.T) {
 	if opts.uiRevision != "da1d152c" {
 		t.Fatalf("UI revision = %q, want da1d152c", opts.uiRevision)
 	}
+}
+
+func TestServeTimelinePerfettoClosesListenerOnCancel(t *testing.T) {
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := probe.Addr().String()
+	if err := probe.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	trace := filepath.Join(t.TempDir(), "trace.pftrace")
+	if err := os.WriteFile(trace, []byte("trace"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	command := &cobra.Command{}
+	command.SetContext(ctx)
+	opts := &timelineOptions{serveViewer: true, remoteUI: true, listen: address}
+	if err := serveTimelinePerfetto(command, "input.gputrace", trace, opts); err != nil {
+		t.Fatal(err)
+	}
+
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		t.Fatalf("viewer listener remained open after cancellation: %v", err)
+	}
+	listener.Close()
 }

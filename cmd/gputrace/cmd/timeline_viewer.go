@@ -155,6 +155,7 @@ func serveTimelinePerfetto(cmd *cobra.Command, tracePath, output string, opts *t
 	if err != nil {
 		return fmt.Errorf("listen for Perfetto viewer: %w", err)
 	}
+	defer listener.Close()
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second}
 	url := "http://" + listener.Addr().String() + "/"
 	fmt.Fprintf(cmd.ErrOrStderr(), "Perfetto viewer: %s\n", url)
