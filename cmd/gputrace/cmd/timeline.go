@@ -2555,11 +2555,15 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 		if name == "" {
 			name = fmt.Sprintf("%s lane %d", event.Category, event.ThreadID)
 		}
-		trace.Tracks = append(trace.Tracks, perfetto.Track{
+		track := perfetto.Track{
 			UUID:        id,
 			Name:        name,
 			Description: fmt.Sprintf("gputrace %s-domain evidence", clock),
-		})
+		}
+		if clock == timelineClockBusy && key == [2]int{1, 1} {
+			track.ChildOrder = perfetto.ChildTrackOrderChronological
+		}
+		trace.Tracks = append(trace.Tracks, track)
 	}
 
 	for index, event := range timeline.Events {

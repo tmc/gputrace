@@ -37,7 +37,20 @@ type Track struct {
 	ParentUUID  uint64
 	Name        string
 	Description string
+	ChildOrder  ChildTrackOrder
 }
+
+// ChildTrackOrder is a hint to Perfetto for ordering a track's direct children.
+type ChildTrackOrder uint8
+
+const (
+	// ChildTrackOrderDefault leaves child ordering to Perfetto.
+	ChildTrackOrderDefault ChildTrackOrder = iota
+	// ChildTrackOrderLexicographic orders children by name.
+	ChildTrackOrderLexicographic
+	// ChildTrackOrderChronological orders children by their first event.
+	ChildTrackOrderChronological
+)
 
 // Event is one source-backed item in a single clock domain. Times are
 // nanoseconds in Trace.ClockDomain.
@@ -432,6 +445,9 @@ func trackDescriptorPacket(track Track) []byte {
 	}
 	if track.Description != "" {
 		descriptor = appendString(descriptor, 14, track.Description)
+	}
+	if track.ChildOrder != ChildTrackOrderDefault {
+		descriptor = appendUint(descriptor, 11, uint64(track.ChildOrder))
 	}
 	packet := packetHeader(0)
 	return appendBytes(packet, 60, descriptor)

@@ -62,6 +62,18 @@ func TestOrderedTracksParentsBeforeChildren(t *testing.T) {
 	}
 }
 
+func TestTrackDescriptorChildOrder(t *testing.T) {
+	packet := trackDescriptorPacket(Track{
+		UUID:       1,
+		Name:       "parent",
+		ChildOrder: ChildTrackOrderChronological,
+	})
+	// TrackDescriptor field 11 is child_ordering; value 2 is CHRONOLOGICAL.
+	if !bytes.Contains(packet, []byte{0x58, 0x02}) {
+		t.Fatalf("track descriptor = %x, want chronological child ordering", packet)
+	}
+}
+
 func TestWriteRejectsInvalidTrackHierarchy(t *testing.T) {
 	tests := []struct {
 		name   string
