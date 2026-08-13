@@ -87,14 +87,23 @@ type WriteOptions struct {
 
 // Receipt reports deterministic retention under an explicit output budget.
 type Receipt struct {
-	Policy            string
-	LogicalBytes      int64
-	EventsConsidered  int
-	EventsRetained    int
-	EventsDropped     int
-	SamplesConsidered int
-	SamplesRetained   int
-	SamplesDropped    int
+	Policy                      string
+	LogicalBytes                int64
+	EventsConsidered            int
+	EventsRetained              int
+	EventsDropped               int
+	SamplesConsidered           int
+	SamplesRetained             int
+	SamplesDropped              int
+	DependencySkeletonsRetained int
+	FirstDroppedIdentity        string
+	LastDroppedIdentity         string
+	ItemsConsideredByClass      map[string]int
+	ItemsRetainedByClass        map[string]int
+	ItemsDroppedByClass         map[string]int
+	BytesConsideredByClass      map[string]int64
+	BytesRetainedByClass        map[string]int64
+	BytesDroppedByClass         map[string]int64
 }
 
 // TrackUUID returns a deterministic non-zero track UUID for a namespace and
@@ -128,7 +137,16 @@ func WriteWithOptions(w io.Writer, trace *Trace, options WriteOptions) (Receipt,
 	if err := validate(trace); err != nil {
 		return Receipt{}, err
 	}
-	receipt := Receipt{Policy: "complete", EventsConsidered: len(trace.Events)}
+	receipt := Receipt{
+		Policy:                 "complete",
+		EventsConsidered:       len(trace.Events),
+		ItemsConsideredByClass: make(map[string]int),
+		ItemsRetainedByClass:   make(map[string]int),
+		ItemsDroppedByClass:    make(map[string]int),
+		BytesConsideredByClass: make(map[string]int64),
+		BytesRetainedByClass:   make(map[string]int64),
+		BytesDroppedByClass:    make(map[string]int64),
+	}
 	for _, counter := range trace.Counters {
 		receipt.SamplesConsidered += len(counter.Samples)
 	}
@@ -146,13 +164,14 @@ func WriteWithOptions(w io.Writer, trace *Trace, options WriteOptions) (Receipt,
 	if len(trace.Counters) > 0 {
 		required = append(required, counterDescriptorPacket(trace.Counters))
 	}
+	receipt.DependencySkeletonsRetained = len(tracks) + len(trace.Counters) + 1
 
 	groups := eventPacketGroups(trace.Identity, trace.Events, trace.Counters)
 	selected := make([]packetGroup, 0, len(groups))
 	if options.MaxBytes == 0 {
 		selected = groups
 	} else {
-		const receiptReserve = int64(2048)
+		const receiptReserve = int64(4096)
 		used := framedSize(required)
 		for _, group := range groups {
 			if group.required {
@@ -163,8 +182,9 @@ func WriteWithOptions(w io.Writer, trace *Trace, options WriteOptions) (Receipt,
 		if used+receiptReserve > options.MaxBytes {
 			return Receipt{}, fmt.Errorf("write perfetto trace: max output bytes %d cannot hold required descriptors and loss receipt", options.MaxBytes)
 		}
-		sort.SliceStable(groups, func(i, j int) bool { return groups[i].hash < groups[j].hash })
-		for _, group := range groups {
+		candidates := append([]packetGroup(nil), groups...)
+		sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].hash < candidates[j].hash })
+		for _, group := range candidates {
 			if group.required {
 				continue
 			}
@@ -177,12 +197,30 @@ func WriteWithOptions(w io.Writer, trace *Trace, options WriteOptions) (Receipt,
 		}
 		receipt.Policy = "stable-identity-hash/v1"
 	}
+	retained := make(map[string]bool, len(selected))
 	for _, group := range selected {
+		retained[group.identity] = true
 		if group.class == "event" {
 			receipt.EventsRetained++
 		} else {
 			receipt.SamplesRetained++
 		}
+	}
+	for _, group := range groups {
+		size := framedTimedSize(group.packets)
+		receipt.ItemsConsideredByClass[group.evidenceClass]++
+		receipt.BytesConsideredByClass[group.evidenceClass] += size
+		if retained[group.identity] {
+			receipt.ItemsRetainedByClass[group.evidenceClass]++
+			receipt.BytesRetainedByClass[group.evidenceClass] += size
+			continue
+		}
+		receipt.ItemsDroppedByClass[group.evidenceClass]++
+		receipt.BytesDroppedByClass[group.evidenceClass] += size
+		if receipt.FirstDroppedIdentity == "" {
+			receipt.FirstDroppedIdentity = group.identity
+		}
+		receipt.LastDroppedIdentity = group.identity
 	}
 	receipt.EventsDropped = receipt.EventsConsidered - receipt.EventsRetained
 	receipt.SamplesDropped = receipt.SamplesConsidered - receipt.SamplesRetained
@@ -197,6 +235,20 @@ func WriteWithOptions(w io.Writer, trace *Trace, options WriteOptions) (Receipt,
 	metadata["counter_samples_retained"] = receipt.SamplesRetained
 	metadata["counter_samples_dropped"] = receipt.SamplesDropped
 	metadata["output_complete"] = receipt.EventsDropped == 0 && receipt.SamplesDropped == 0
+	metadata["dependency_skeletons_retained"] = receipt.DependencySkeletonsRetained
+	if receipt.FirstDroppedIdentity != "" {
+		metadata["first_dropped_identity"] = receipt.FirstDroppedIdentity
+		metadata["last_dropped_identity"] = receipt.LastDroppedIdentity
+	}
+	for class, count := range receipt.ItemsConsideredByClass {
+		key := metadataToken(class)
+		metadata["loss_"+key+"_items_considered"] = count
+		metadata["loss_"+key+"_items_retained"] = receipt.ItemsRetainedByClass[class]
+		metadata["loss_"+key+"_items_dropped"] = receipt.ItemsDroppedByClass[class]
+		metadata["loss_"+key+"_bytes_considered"] = receipt.BytesConsideredByClass[class]
+		metadata["loss_"+key+"_bytes_retained"] = receipt.BytesRetainedByClass[class]
+		metadata["loss_"+key+"_bytes_dropped"] = receipt.BytesDroppedByClass[class]
+	}
 	manifest := trackEventPacket(Event{TrackUUID: root, Name: "gputrace evidence manifest", Category: "gputrace", Kind: EventInstant, Args: metadata}, false)
 	required = append(required, manifest)
 
@@ -338,16 +390,23 @@ type timedPacket struct {
 }
 
 type packetGroup struct {
-	class    string
-	hash     uint64
-	required bool
-	packets  []timedPacket
+	class         string
+	evidenceClass string
+	identity      string
+	hash          uint64
+	required      bool
+	packets       []timedPacket
 }
 
 func eventPacketGroups(identity string, events []Event, counters []Counter) []packetGroup {
 	groups := make([]packetGroup, 0, len(events))
 	for _, event := range events {
-		group := packetGroup{class: "event", hash: identityHash(identity, "event", strconv.FormatUint(event.ID, 10), event.Name), required: event.Required}
+		eventID := "event:" + strconv.FormatUint(event.ID, 10)
+		class := event.Category
+		if class == "" {
+			class = "event"
+		}
+		group := packetGroup{class: "event", evidenceClass: class, identity: eventID, hash: identityHash(identity, eventID, event.Name), required: event.Required}
 		switch event.Kind {
 		case EventGPUCompute:
 			group.packets = append(group.packets, timedPacket{event.StartNS, 1, gpuEventPacket(event)})
@@ -363,14 +422,34 @@ func eventPacketGroups(identity string, events []Event, counters []Counter) []pa
 	}
 	for _, counter := range counters {
 		for index, sample := range counter.Samples {
+			counterID := "counter:" + strconv.FormatUint(uint64(counter.ID), 10) + ":" + strconv.Itoa(index)
 			groups = append(groups, packetGroup{
-				class:   "sample",
-				hash:    identityHash(identity, "counter", strconv.FormatUint(uint64(counter.ID), 10), strconv.Itoa(index)),
-				packets: []timedPacket{{sample.TimestampNS, 2, counterSamplePacket(counter.ID, sample)}},
+				class:         "sample",
+				evidenceClass: "counter_sample",
+				identity:      counterID,
+				hash:          identityHash(identity, counterID),
+				packets:       []timedPacket{{sample.TimestampNS, 2, counterSamplePacket(counter.ID, sample)}},
 			})
 		}
 	}
 	return groups
+}
+
+func metadataToken(value string) string {
+	var token []byte
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+			token = append(token, c)
+		default:
+			token = append(token, '_')
+		}
+	}
+	if len(token) == 0 {
+		return "unknown"
+	}
+	return string(token)
 }
 
 func flattenGroups(groups []packetGroup) []timedPacket {

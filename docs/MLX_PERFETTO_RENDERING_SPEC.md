@@ -428,6 +428,12 @@ places those aggregates in encoder details with
 `counter_attribution_basis = Encoder Infos execution ordinal`, reports the
 clock gap in the manifest, and emits no native counter samples for them.
 
+Constrained native exports report considered, retained, and dropped item and
+framed-byte counts per evidence class. They also report retained descriptor
+skeleton count and the first and last dropped stable identities. These fields
+are ordinary manifest debug annotations, so stock Perfetto and
+`trace_processor_shell` can inspect them without a custom decoder.
+
 ## Native Perfetto representation
 
 The native writer should emit binary Perfetto protobuf. Chrome JSON remains a

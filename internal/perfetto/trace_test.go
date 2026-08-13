@@ -3,6 +3,7 @@ package perfetto
 import (
 	"bytes"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -83,7 +84,13 @@ func TestWriteWithBudget(t *testing.T) {
 	if receipt.EventsDropped == 0 || receipt.EventsRetained == 0 {
 		t.Fatalf("receipt = %+v, want partial retention", receipt)
 	}
-	if receipt != secondReceipt || !bytes.Equal(first.Bytes(), second.Bytes()) {
+	if receipt.ItemsDroppedByClass["event"] == 0 || receipt.BytesDroppedByClass["event"] == 0 {
+		t.Fatalf("receipt = %+v, want event-class loss", receipt)
+	}
+	if receipt.FirstDroppedIdentity == "" || receipt.LastDroppedIdentity == "" || receipt.DependencySkeletonsRetained == 0 {
+		t.Fatalf("receipt = %+v, want dropped identity bounds and skeleton count", receipt)
+	}
+	if !reflect.DeepEqual(receipt, secondReceipt) || !bytes.Equal(first.Bytes(), second.Bytes()) {
 		t.Fatal("budgeted export is not deterministic")
 	}
 }
@@ -119,7 +126,7 @@ func TestWriteStreamsPackets(t *testing.T) {
 			StartNS: uint64(i), Args: map[string]any{"index": i},
 		})
 	}
-	w := &boundedWriteRecorder{max: 512}
+	w := &boundedWriteRecorder{max: 2 << 10}
 	receipt, err := WriteWithOptions(w, trace, WriteOptions{})
 	if err != nil {
 		t.Fatal(err)
