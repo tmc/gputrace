@@ -38,6 +38,7 @@ type timelineOptions struct {
 	xcodeGPUTime        bool
 	sidecar             string
 	hostCorrelation     string
+	liveTiming          string
 	openViewer          bool
 	serveViewer         bool
 	uiDir               string
@@ -64,6 +65,7 @@ type timelineClock string
 const (
 	timelineClockBusy timelineClock = "busy"
 	timelineClockWall timelineClock = "wall"
+	timelineClockLive timelineClock = "live"
 	timelineClockBoth timelineClock = "both"
 )
 
@@ -97,6 +99,7 @@ Clock domains:
   - busy (default): cumulative GPU execution offsets for encoders, dispatches,
     and counter series only when their clock is established
   - wall: APSTimelineData command-buffer scheduling and encoder profiles
+  - live: original-execution command-buffer intervals from --live-timing
   - both: a two-panel or two-section report containing both domains
 
 There is no measured mapping between cumulative GPU-busy offsets and
@@ -150,11 +153,12 @@ Examples:
 
 	cmd.Flags().StringVarP(&opts.output, "output", "o", opts.output, "Output file path (default: stdout for text, timeline.html for html, timeline.pftrace for perfetto, timeline.json otherwise)")
 	cmd.Flags().StringVar(&opts.format, "format", opts.format, "Output format: chrome, perfetto, html, json, text")
-	cmd.Flags().Var(&opts.clock, "clock", "Timeline clock domain: busy (default), wall, or both (separate views; no clock mapping)")
+	cmd.Flags().Var(&opts.clock, "clock", "Timeline clock domain: busy (default), wall, live, or both")
 	cmd.Flags().BoolVar(&opts.rawProfilerSamples, "include-raw-samples", opts.rawProfilerSamples, "Include raw GPRWCNTR profiler records in wall-clock output (they are not decoded hardware counters)")
 	cmd.Flags().BoolVar(&opts.xcodeGPUTime, "xcode-gpu-time", opts.xcodeGPUTime, "Read Xcode Overview GPU Time through GTShaderProfiler (Darwin only; runs a private-framework model pass)")
 	cmd.Flags().StringVar(&opts.sidecar, "sidecar", opts.sidecar, "Attach a strictly trace-identified MLX semantic sidecar")
 	cmd.Flags().StringVar(&opts.hostCorrelation, "host-correlation", opts.hostCorrelation, "Attach a trace-identified host-event correlation receipt (Perfetto only)")
+	cmd.Flags().StringVar(&opts.liveTiming, "live-timing", opts.liveTiming, "Attach original-execution command-buffer timing from capture --timing-sidecar")
 	cmd.Flags().BoolVar(&opts.openViewer, "open", opts.openViewer, "Serve the native trace and open it in Perfetto")
 	cmd.Flags().BoolVar(&opts.serveViewer, "serve", opts.serveViewer, "Serve the native trace without opening a browser")
 	cmd.Flags().StringVar(&opts.uiDir, "ui-dir", opts.uiDir, "Pinned local Perfetto UI directory containing perfetto-ui.json (with --open or --serve)")
@@ -220,6 +224,14 @@ func runTimeline(cmd *cobra.Command, args []string, opts *timelineOptions) error
 			return err
 		}
 	}
+	if opts.liveTiming != "" {
+		if err := attachLiveTiming(timeline, trace, opts.liveTiming); err != nil {
+			return err
+		}
+	}
+	if opts.clock == timelineClockLive && opts.liveTiming == "" {
+		return fmt.Errorf("--clock live requires --live-timing")
+	}
 	if opts.hostCorrelation != "" {
 		if opts.format != "perfetto" {
 			return fmt.Errorf("attach host correlation: --format perfetto is required")
@@ -253,7 +265,7 @@ func runTimeline(cmd *cobra.Command, args []string, opts *timelineOptions) error
 	}
 
 	// Warn if trace timing data is missing or approximate
-	if timeline.Timing == nil || timeline.Timing.EncoderTimingApproximate || timeline.Timing.TimingSource == "" || timeline.Timing.TimingSource == "unavailable" {
+	if opts.clock != timelineClockLive && (timeline.Timing == nil || timeline.Timing.EncoderTimingApproximate || timeline.Timing.TimingSource == "" || timeline.Timing.TimingSource == "unavailable") {
 		fmt.Fprintf(cmd.ErrOrStderr(), "Warning: trace lacks precise hardware timing data; encoder/dispatch durations are estimated.\n")
 		fmt.Fprint(cmd.ErrOrStderr(), profileReplayHint(tracePath))
 	}
@@ -316,10 +328,10 @@ func runTimeline(cmd *cobra.Command, args []string, opts *timelineOptions) error
 
 func validateTimelineClock(clock timelineClock) error {
 	switch clock {
-	case timelineClockBusy, timelineClockWall, timelineClockBoth:
+	case timelineClockBusy, timelineClockWall, timelineClockLive, timelineClockBoth:
 		return nil
 	default:
-		return fmt.Errorf("invalid timeline clock %q (supported: busy, wall, both)", clock)
+		return fmt.Errorf("invalid timeline clock %q (supported: busy, wall, live, both)", clock)
 	}
 }
 
@@ -384,7 +396,7 @@ func timelineForClockWithRawSamples(timeline *Timeline, clock timelineClock, raw
 			selected.Events = append(selected.Events, event)
 		}
 	}
-	if clock == timelineClockWall {
+	if clock == timelineClockWall || clock == timelineClockLive {
 		selected.Encoders = []EncoderInfo{}
 		selected.Kernels = []KernelInfo{}
 		selected.CounterTracks = []CounterTrack{}
@@ -428,6 +440,8 @@ func timelineEventInClockWithRawSamples(event TimelineEvent, clock timelineClock
 		return event.Category == "encoder" || event.Category == "kernel" || event.Category == "dispatch"
 	case timelineClockWall:
 		return event.Category == "command_buffer" || (rawProfilerSamples && (event.Category == "profiler_stream" || event.Category == "gprwcntr"))
+	case timelineClockLive:
+		return event.Category == "live_command_buffer"
 	default:
 		return false
 	}
@@ -937,6 +951,7 @@ type Timeline struct {
 	MLXSemanticReport    *mlxsemantic.Report         `json:"mlx_semantic_report,omitempty"`
 	MLXSidecarDigest     string                      `json:"mlx_sidecar_digest,omitempty"`
 	HostCorrelation      *hostCorrelationProjection  `json:"host_correlation,omitempty"`
+	LiveTiming           *liveTimingProjection       `json:"live_timing,omitempty"`
 	TraceUUID            string                      `json:"trace_uuid,omitempty"`
 	DeviceID             int                         `json:"device_id,omitempty"`
 	ObservedCSLabels     int                         `json:"observed_cs_labels,omitempty"`
@@ -968,14 +983,16 @@ type TimelineTiming struct {
 
 // TimelineEvent represents a single event in the timeline.
 type TimelineEvent struct {
-	Name      string                 `json:"name"`
-	Category  string                 `json:"cat,omitempty"`
-	Phase     string                 `json:"ph"` // B, E, X, i, M
-	Timestamp uint64                 `json:"ts"`
-	Duration  uint64                 `json:"dur,omitempty"`
-	ProcessID int                    `json:"pid"`
-	ThreadID  int                    `json:"tid"`
-	Args      map[string]interface{} `json:"args,omitempty"`
+	Name        string                 `json:"name"`
+	Category    string                 `json:"cat,omitempty"`
+	Phase       string                 `json:"ph"` // B, E, X, i, M
+	Timestamp   uint64                 `json:"ts"`
+	Duration    uint64                 `json:"dur,omitempty"`
+	TimestampNS uint64                 `json:"timestamp_ns,omitempty"`
+	DurationNS  uint64                 `json:"duration_ns,omitempty"`
+	ProcessID   int                    `json:"pid"`
+	ThreadID    int                    `json:"tid"`
+	Args        map[string]interface{} `json:"args,omitempty"`
 }
 
 // EncoderInfo contains information about an encoder.
@@ -2516,6 +2533,12 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 			trace.Metadata["host_correlation_max_error_ns"] = correlation.MaxErrorNS
 			trace.Metadata["host_correlation_event_count"] = len(correlation.Events)
 		}
+		if live := timeline.LiveTiming; live != nil {
+			trace.Metadata["live_timing_run_id"] = live.RunID
+			trace.Metadata["live_timing_digest"] = live.ContentDigest
+			trace.Metadata["live_timing_clock_samples"] = live.ClockSamples
+			trace.Metadata["live_timing_command_buffers"] = live.CommandBuffers
+		}
 		trace.Metadata["unavailable_evidence_count"] = len(timeline.UnavailableEvidence)
 		for i, gap := range timeline.UnavailableEvidence {
 			trace.Metadata[fmt.Sprintf("unavailable_evidence_%d_family", i)] = gap.Family
@@ -2527,6 +2550,8 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 	if clock == timelineClockBusy {
 		trackNames[[2]int{1, 1}] = "Compute encoders and dispatches (cumulative busy)"
 		trackNames[[2]int{1, 3}] = "Unattributed compute dispatches (cumulative busy)"
+	} else if clock == timelineClockLive {
+		trackNames[[2]int{2, 0}] = "Command buffers (original live GPU clock)"
 	} else {
 		trackNames[[2]int{1, 0}] = "Command buffers (wall clock; APSTimelineData)"
 	}
@@ -2577,7 +2602,11 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 			StartNS:    event.Timestamp * 1000,
 			DurationNS: event.Duration * 1000,
 			Args:       perfettoEventArgs(timeline, event, clock),
-			Required:   event.Category == "encoder" || event.Category == "command_buffer",
+			Required:   event.Category == "encoder" || event.Category == "command_buffer" || event.Category == "live_command_buffer",
+		}
+		if event.TimestampNS != 0 {
+			converted.StartNS = event.TimestampNS
+			converted.DurationNS = event.DurationNS
 		}
 		if event.Category == "kernel" {
 			converted.Kind = perfetto.EventGPUCompute
@@ -3311,6 +3340,10 @@ func timelineClockProvenanceWithRawSamples(clock timelineClock, rawProfilerSampl
 			args["excluded_categories"] = append(args["excluded_categories"].([]string), "profiler_stream", "gprwcntr")
 			args["raw_profiler_samples"] = "excluded by default: GPRWCNTR records and their aggregate profiler streams are not decoded counters or encoder intervals; use --include-raw-samples to inspect them"
 		}
+	case timelineClockLive:
+		args["included_categories"] = []string{"live_command_buffer"}
+		args["excluded_categories"] = []string{"encoder", "kernel", "counter", "command_buffer", "profiler_stream", "gprwcntr"}
+		args["clock_mapping"] = "MTLDevice sampled CPU/GPU timestamp pairs retained by the original-execution timing sidecar"
 	}
 	return args
 }

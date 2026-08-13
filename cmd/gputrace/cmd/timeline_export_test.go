@@ -786,6 +786,9 @@ func TestTimelineClockValidation(t *testing.T) {
 	if err := validateTimelineClock(timelineClockBoth); err != nil {
 		t.Fatalf("validate both: %v", err)
 	}
+	if err := validateTimelineClock(timelineClockLive); err != nil {
+		t.Fatalf("validate live: %v", err)
+	}
 	if err := validateTimelineClock("mixed"); err == nil {
 		t.Fatal("validate mixed = nil, want error")
 	}

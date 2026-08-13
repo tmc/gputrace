@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -72,6 +73,28 @@ func TestRecorded(t *testing.T) {
 				t.Fatalf("recorded(%q) = %v, want %v", bundle, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestEnvIncludesTimingOutputOnlyWhenRequested(t *testing.T) {
+	without := env("trace", "lock", "inject", "", "")
+	with := env("trace", "lock", "inject", "timing.jsonl", "run-1")
+	for _, entry := range without {
+		if strings.HasPrefix(entry, "GT_TIMING_OUT=") {
+			t.Fatalf("env without timing output contains %q", entry)
+		}
+	}
+	found := false
+	for _, entry := range with {
+		if entry == "GT_TIMING_OUT=timing.jsonl" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("env with timing output omits GT_TIMING_OUT")
+	}
+	if !slices.Contains(with, "GPUTRACE_RUN_ID=run-1") {
+		t.Fatal("env with timing output omits GPUTRACE_RUN_ID")
 	}
 }
 

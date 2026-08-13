@@ -15,9 +15,11 @@ import (
 var captureCmd = newCaptureCommand(&captureOptions{})
 
 type captureOptions struct {
-	output string
-	dir    string
-	check  bool
+	output       string
+	timingOutput string
+	runID        string
+	dir          string
+	check        bool
 }
 
 func newCaptureCommand(opts *captureOptions) *cobra.Command {
@@ -51,11 +53,13 @@ Examples:
 			}
 			var stderr bytes.Buffer
 			out, err := capture.Run(cmd.Context(), capture.Options{
-				Output: opts.output,
-				Dir:    opts.dir,
-				Stdin:  cmd.InOrStdin(),
-				Stdout: cmd.OutOrStdout(),
-				Stderr: &stderr,
+				Output:       opts.output,
+				TimingOutput: opts.timingOutput,
+				RunID:        opts.runID,
+				Dir:          opts.dir,
+				Stdin:        cmd.InOrStdin(),
+				Stdout:       cmd.OutOrStdout(),
+				Stderr:       &stderr,
 			}, args...)
 			if err != nil {
 				if stderr.Len() > 0 {
@@ -69,6 +73,8 @@ Examples:
 	}
 	f := cmd.Flags()
 	f.StringVarP(&opts.output, "output", "o", "", "path of the .gputrace bundle to write")
+	f.StringVar(&opts.timingOutput, "timing-sidecar", "", "write live command-buffer timing and clock samples as JSON lines")
+	f.StringVar(&opts.runID, "run-id", "", "run identity shared by timing sidecar and host signposts")
 	f.StringVar(&opts.dir, "dir", "", "working directory for the target")
 	f.BoolVar(&opts.check, "check", false, "report whether the target accepts the interposer, then exit")
 	return cmd

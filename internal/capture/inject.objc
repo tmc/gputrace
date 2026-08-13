@@ -8,6 +8,7 @@
 // device is returned to its caller.
 #import <Metal/Metal.h>
 #import <Foundation/Foundation.h>
+#import <objc/runtime.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <mach-o/dyld.h>
@@ -16,10 +17,129 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
 #include <unistd.h>
 
 static _Atomic int gputrace_attempted;
+static _Atomic uint64_t gputrace_command_buffer_id;
 static int gputrace_capturing;
+static id<MTLDevice> gputrace_device;
+static IMP gputrace_new_command_queue_original;
+static IMP gputrace_command_buffer_original;
+
+static void gputrace_write_json(NSDictionary *record) {
+	const char *path = getenv("GT_TIMING_OUT");
+	if (path == NULL) {
+		return;
+	}
+	NSMutableDictionary *envelope = [record mutableCopy];
+	const char *run = getenv("GPUTRACE_RUN_ID");
+	if (run != NULL) {
+		envelope[@"run_id"] = @(run);
+	}
+	NSError *err = nil;
+	NSData *data = [NSJSONSerialization dataWithJSONObject:envelope
+	                                                options:0 error:&err];
+	if (data == nil) {
+		fprintf(stderr, "gputrace: encode timing sidecar: %s\n",
+		        err.localizedDescription.UTF8String);
+		return;
+	}
+	int fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
+	if (fd < 0) {
+		fprintf(stderr, "gputrace: open timing sidecar: %s\n", strerror(errno));
+		return;
+	}
+	(void)flock(fd, LOCK_EX);
+	(void)write(fd, data.bytes, data.length);
+	(void)write(fd, "\n", 1);
+	(void)flock(fd, LOCK_UN);
+	close(fd);
+}
+
+static void gputrace_sample_clocks(void) {
+	if (gputrace_device == nil ||
+	    ![gputrace_device respondsToSelector:@selector(sampleTimestamps:gpuTimestamp:)]) {
+		return;
+	}
+	MTLTimestamp cpu = 0, gpu = 0;
+	[gputrace_device sampleTimestamps:&cpu gpuTimestamp:&gpu];
+	gputrace_write_json(@{
+		@"kind": @"clock_sample",
+		@"cpu_ticks": @(cpu),
+		@"gpu_ticks": @(gpu),
+	});
+}
+
+static id<MTLCommandBuffer> gputrace_command_buffer(id self, SEL command) {
+	id<MTLCommandBuffer> (*original)(id, SEL) =
+	    (id<MTLCommandBuffer> (*)(id, SEL))gputrace_command_buffer_original;
+	id<MTLCommandBuffer> buffer = original(self, command);
+	if (buffer == nil || getenv("GT_TIMING_OUT") == NULL) {
+		return buffer;
+	}
+	uint64_t identifier = atomic_fetch_add(&gputrace_command_buffer_id, 1) + 1;
+	NSString *label = [NSString stringWithFormat:@"gputrace.live.cb.%llu",
+	                   (unsigned long long)identifier];
+	buffer.label = label;
+	gputrace_sample_clocks();
+	[buffer addCompletedHandler:^(id<MTLCommandBuffer> completed) {
+		gputrace_sample_clocks();
+		gputrace_write_json(@{
+			@"kind": @"command_buffer",
+			@"id": @(identifier),
+			@"capture_label": label,
+			@"final_label": completed.label ?: label,
+			@"gpu_start_seconds": @(completed.GPUStartTime),
+			@"gpu_end_seconds": @(completed.GPUEndTime),
+			@"kernel_start_seconds": @(completed.kernelStartTime),
+			@"kernel_end_seconds": @(completed.kernelEndTime),
+			@"status": @((NSInteger)completed.status),
+		});
+	}];
+	return buffer;
+}
+
+static void gputrace_hook_queue(id<MTLCommandQueue> queue) {
+	if (queue == nil || gputrace_command_buffer_original != NULL) {
+		return;
+	}
+	Class cls = object_getClass(queue);
+	SEL selector = @selector(commandBuffer);
+	Method method = class_getInstanceMethod(cls, selector);
+	if (method == NULL) {
+		return;
+	}
+	gputrace_command_buffer_original = method_getImplementation(method);
+	class_replaceMethod(cls, selector, (IMP)gputrace_command_buffer,
+	                   method_getTypeEncoding(method));
+}
+
+static id<MTLCommandQueue> gputrace_new_command_queue(id self, SEL command) {
+	id<MTLCommandQueue> (*original)(id, SEL) =
+	    (id<MTLCommandQueue> (*)(id, SEL))gputrace_new_command_queue_original;
+	id<MTLCommandQueue> queue = original(self, command);
+	gputrace_hook_queue(queue);
+	return queue;
+}
+
+static void gputrace_hook_device(id<MTLDevice> device) {
+	if (device == nil || getenv("GT_TIMING_OUT") == NULL ||
+	    gputrace_new_command_queue_original != NULL) {
+		return;
+	}
+	gputrace_device = device;
+	Class cls = object_getClass(device);
+	SEL selector = @selector(newCommandQueue);
+	Method method = class_getInstanceMethod(cls, selector);
+	if (method == NULL) {
+		return;
+	}
+	gputrace_new_command_queue_original = method_getImplementation(method);
+	class_replaceMethod(cls, selector, (IMP)gputrace_new_command_queue,
+	                   method_getTypeEncoding(method));
+	gputrace_sample_clocks();
+}
 
 static void gputrace_stop(void) {
 	if (gputrace_capturing) {
@@ -69,6 +189,7 @@ static void gputrace_start(id<MTLDevice> dev) {
 	if (!gputrace_elect()) {
 		return;
 	}
+	gputrace_hook_device(dev);
 
 	@autoreleasepool {
 		const char *out = getenv("GT_TRACE_OUT");

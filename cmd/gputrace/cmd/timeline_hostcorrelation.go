@@ -66,7 +66,13 @@ func attachHostCorrelation(timeline *Timeline, tracePath string, clock timelineC
 }
 
 func timelineHasMeasuredClock(timeline *Timeline, clock timelineClock) bool {
-	if timeline == nil || timeline.Timing == nil {
+	if timeline == nil {
+		return false
+	}
+	if clock == timelineClockLive {
+		return timeline.LiveTiming != nil && timeline.LiveTiming.ClockSamples >= 3 && timeline.LiveTiming.CommandBuffers > 0
+	}
+	if timeline.Timing == nil {
 		return false
 	}
 	switch clock {

@@ -12,6 +12,7 @@ import (
 	"context"
 	"crypto/sha256"
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -21,12 +22,23 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"github.com/tmc/gputrace/internal/mlxsemantic"
 )
 
 // Options configure a capture run.
 type Options struct {
 	// Output is the .gputrace bundle to create. It must not already exist.
 	Output string
+
+	// TimingOutput is an optional newline-delimited JSON sidecar containing
+	// live command-buffer intervals and CPU/GPU clock samples. It must not
+	// already exist.
+	TimingOutput string
+
+	// RunID binds a timing sidecar to host events from the same execution.
+	// It is required when TimingOutput is set.
+	RunID string
 
 	// Dir is the working directory for the target. Empty means inherit.
 	Dir string
@@ -102,6 +114,19 @@ func Run(ctx context.Context, opts Options, argv ...string) (string, error) {
 	if _, err := os.Stat(opts.Output); err == nil {
 		return "", fmt.Errorf("capture: %s already exists", opts.Output)
 	}
+	if opts.TimingOutput != "" {
+		if opts.RunID == "" || opts.RunID != strings.TrimSpace(opts.RunID) || len(opts.RunID) > 256 {
+			return "", errors.New("capture: timing sidecar requires a valid run ID")
+		}
+		timingOutput, err := filepath.Abs(opts.TimingOutput)
+		if err != nil {
+			return "", fmt.Errorf("capture: resolve timing output path: %w", err)
+		}
+		opts.TimingOutput = timingOutput
+		if _, err := os.Stat(opts.TimingOutput); err == nil {
+			return "", fmt.Errorf("capture: timing sidecar %s already exists", opts.TimingOutput)
+		}
+	}
 	lock := opts.Output + ".capture-lock"
 	if _, err := os.Stat(lock); err == nil {
 		// The interposer creates this file and Run removes it, so a leftover
@@ -128,7 +153,7 @@ func Run(ctx context.Context, opts Options, argv ...string) (string, error) {
 
 	cmd := exec.CommandContext(ctx, bin, argv[1:]...)
 	cmd.Dir = opts.Dir
-	cmd.Env = append(env(opts.Output, lock, dylib), opts.Env...)
+	cmd.Env = append(env(opts.Output, lock, dylib, opts.TimingOutput, opts.RunID), opts.Env...)
 	cmd.Stdin = opts.Stdin
 	if opts.Stdout != nil {
 		cmd.Stdout = opts.Stdout
@@ -150,7 +175,39 @@ func Run(ctx context.Context, opts Options, argv ...string) (string, error) {
 	if err := recorded(opts.Output); err != nil {
 		return "", err
 	}
+	if opts.TimingOutput != "" {
+		if err := finalizeTiming(opts.TimingOutput, opts.RunID, opts.Output); err != nil {
+			return "", err
+		}
+	}
 	return opts.Output, nil
+}
+
+func finalizeTiming(path, runID, tracePath string) error {
+	digest, err := mlxsemantic.Digest(tracePath)
+	if err != nil {
+		return fmt.Errorf("capture: finalize timing sidecar: %w", err)
+	}
+	record, err := json.Marshal(struct {
+		Kind        string `json:"kind"`
+		RunID       string `json:"run_id"`
+		TraceDigest string `json:"trace_digest"`
+	}{Kind: "artifact", RunID: runID, TraceDigest: digest})
+	if err != nil {
+		return fmt.Errorf("capture: finalize timing sidecar: %w", err)
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		return fmt.Errorf("capture: finalize timing sidecar: %w", err)
+	}
+	defer f.Close()
+	if _, err := f.Write(append(record, '\n')); err != nil {
+		return fmt.Errorf("capture: finalize timing sidecar: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("capture: finalize timing sidecar: %w", err)
+	}
+	return nil
 }
 
 // recorded reports whether a bundle holds captured command data. An empty
@@ -214,13 +271,20 @@ func runningAs(pid int, exe string) bool {
 	return filepath.Base(strings.TrimSpace(string(out))) == filepath.Base(exe)
 }
 
-func env(output, lock, dylib string) []string {
-	return append(os.Environ(),
+func env(output, lock, dylib, timingOutput, runID string) []string {
+	environment := append(os.Environ(),
 		"MTL_CAPTURE_ENABLED=1",
 		"DYLD_INSERT_LIBRARIES="+dylib,
 		"GT_TRACE_OUT="+output,
 		"GT_CAPTURE_LOCK="+lock,
 	)
+	if timingOutput != "" {
+		environment = append(environment,
+			"GT_TIMING_OUT="+timingOutput,
+			"GPUTRACE_RUN_ID="+runID,
+		)
+	}
+	return environment
 }
 
 //go:embed inject.objc
