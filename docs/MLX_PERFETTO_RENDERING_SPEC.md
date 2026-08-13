@@ -529,6 +529,13 @@ Source and projected counts are also separate: source counts inventory the
 pre-filtered capture, while projected counts inventory only events placed on
 the selected clock. Clock filtering never changes source counts or copies
 cross-domain events onto the selected axis.
+Raw APSTimelineData clock-conversion inputs are retained as `absolute_time`,
+`timebase_numer`, and `timebase_denom`. Their declared domain is `wall`, and
+the manifest records the source and formula. They permit reproduction of the
+wall-domain tick conversion only; `clock_mapping` remains `none`, and they do
+not authorize alignment with cumulative GPU-busy offsets. If any input is
+unavailable, the scalar columns remain `NULL` and
+`clock_conversion_availability` records the refusal.
 `gputrace_manifest_arg` is the
 lossless key/value projection of the same manifest. It keeps dynamic
 per-evidence-class loss receipts and future manifest fields queryable without

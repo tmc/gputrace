@@ -116,6 +116,11 @@ dispatch span, command-buffer active time, command-buffer wall span, restore
 timing, display duration, and optional Xcode Effective GPU Time distinct.
 Source inventory counts remain stable across clock selection; separate
 projected counts report what was placed on the selected axis.
+When APSTimelineData supplies them, the same view exposes `absolute_time`,
+`timebase_numer`, and `timebase_denom` with an explicit wall-domain source and
+conversion formula. These fields convert source ticks within the wall domain;
+they do not align the wall and cumulative GPU-busy timelines. Missing inputs
+remain `NULL` with a `clock_conversion_availability` reason.
 `gputrace_manifest_arg` exposes every manifest field
 as a key/value row, including per-class loss fields added by constrained
 exports and fields introduced by newer exporters.
