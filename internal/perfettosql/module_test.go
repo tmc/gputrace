@@ -23,6 +23,9 @@ func TestModuleDefinesStableViews(t *testing.T) {
 		"gputrace_function",
 		"gputrace_pipeline",
 		"gputrace_counter_series",
+		"gputrace_unattributed_counter",
+		"gputrace_unattributed_counter_arg",
+		"gputrace_evidence_gap",
 		"gputrace_unmatched",
 	} {
 		if !strings.Contains(Module, "CREATE PERFETTO VIEW "+name+" AS") {

@@ -343,6 +343,12 @@ func TestExportPerfettoWritesNativeProtobuf(t *testing.T) {
 			Family: "APSCounterData time series",
 			Reason: "counter clock is not joined",
 		}},
+		UnattributedCounters: []UnattributedCounterMetric{{
+			Label:       "kernel0",
+			Attribution: "unknown",
+			Source:      "PerfCounterStats pipeline row",
+			Values:      map[string]interface{}{"alu_utilization_pct": 42.5},
+		}},
 		MLXSemantics: &mlxsemantic.Sidecar{Schema: mlxsemantic.SchemaV1},
 		MLXSemanticReport: &mlxsemantic.Report{
 			UsedNodes:        2,
@@ -372,6 +378,8 @@ func TestExportPerfettoWritesNativeProtobuf(t *testing.T) {
 		"exporter_version", "capture_mode_availability", "replay_mode_availability",
 		"counter_catalog_availability", "counter_decoder_availability", "raw_counter_artifact_availability",
 		"untimed_dispatch_count",
+		"Unattributed counter metrics: kernel0", "alu_utilization_pct",
+		"Unavailable evidence: APSCounterData time series",
 	} {
 		if !bytes.Contains(data, []byte(want)) {
 			t.Fatalf("native trace missing manifest value %q", want)

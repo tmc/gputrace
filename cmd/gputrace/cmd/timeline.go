@@ -2544,6 +2544,11 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 			trace.Metadata["live_timing_unmatched_command_buffers"] = live.Unmatched
 		}
 		trace.Metadata["unavailable_evidence_count"] = len(timeline.UnavailableEvidence)
+		trace.Metadata["unattributed_counter_rows"] = len(timeline.UnattributedCounters)
+		if len(timeline.UnattributedCounters) > 0 {
+			trace.Metadata["counter_attribution"] = string(counter.CounterAttributionUnknown)
+			trace.Metadata["counter_attribution_reason"] = "no capture-backed encoder identity"
+		}
 		for i, gap := range timeline.UnavailableEvidence {
 			trace.Metadata[fmt.Sprintf("unavailable_evidence_%d_family", i)] = gap.Family
 			trace.Metadata[fmt.Sprintf("unavailable_evidence_%d_reason", i)] = gap.Reason
@@ -2638,6 +2643,7 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 	}
 	appendMLXSemanticEvents(trace, timeline)
 	appendHostCorrelationEvents(trace, timeline)
+	appendEvidenceDetailEvents(trace, timeline)
 
 	counterTracks := append([]CounterTrack(nil), timeline.CounterTracks...)
 	sort.SliceStable(counterTracks, func(i, j int) bool { return counterTracks[i].Name < counterTracks[j].Name })
@@ -2904,6 +2910,63 @@ func appendMLXSemanticEvents(trace *perfetto.Trace, timeline *Timeline) {
 			Kind:       kind,
 			Required:   true,
 			Args:       args,
+		})
+		nextID++
+	}
+}
+
+func appendEvidenceDetailEvents(trace *perfetto.Trace, timeline *Timeline) {
+	if len(timeline.UnattributedCounters) == 0 && len(timeline.UnavailableEvidence) == 0 {
+		return
+	}
+	trackID := perfetto.TrackUUID("gputrace.evidence", "details")
+	trace.Tracks = append(trace.Tracks, perfetto.Track{
+		UUID:        trackID,
+		Name:        "Evidence details (untimed)",
+		Description: "Source-backed evidence without a verified timeline coordinate",
+	})
+	nextID := nextPerfettoEventID(trace)
+	for _, metric := range timeline.UnattributedCounters {
+		label := metric.Label
+		if label == "" {
+			label = "(pipeline unknown)"
+		}
+		args := make(map[string]any, len(metric.Values)+7)
+		for key, value := range metric.Values {
+			args[key] = value
+		}
+		args["pipeline_label"] = label
+		args["attribution"] = metric.Attribution
+		args["metric_scope"] = "pipeline"
+		args["source"] = metric.Source
+		args["clock_domain"] = "none"
+		args["timing_quality"] = "unavailable"
+		args["attribution_reason"] = "no capture-backed encoder identity"
+		trace.Events = append(trace.Events, perfetto.Event{
+			ID:        nextID,
+			TrackUUID: trackID,
+			Name:      "Unattributed counter metrics: " + label,
+			Category:  "counter_attribution",
+			Kind:      perfetto.EventInstant,
+			Required:  true,
+			Args:      args,
+		})
+		nextID++
+	}
+	for _, gap := range timeline.UnavailableEvidence {
+		trace.Events = append(trace.Events, perfetto.Event{
+			ID:        nextID,
+			TrackUUID: trackID,
+			Name:      "Unavailable evidence: " + gap.Family,
+			Category:  "evidence_gap",
+			Kind:      perfetto.EventInstant,
+			Required:  true,
+			Args: map[string]any{
+				"family":         gap.Family,
+				"reason":         gap.Reason,
+				"clock_domain":   "none",
+				"timing_quality": "unavailable",
+			},
 		})
 		nextID++
 	}

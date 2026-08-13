@@ -83,6 +83,9 @@ SELECT
   extract_arg(arg_set_id, 'debug.mlx_sidecar_digest') AS mlx_sidecar_digest,
   cast(extract_arg(arg_set_id, 'debug.mlx_semantic_used_nodes') AS INT) AS mlx_semantic_used_nodes,
   cast(extract_arg(arg_set_id, 'debug.mlx_semantic_unused_nodes') AS INT) AS mlx_semantic_unused_nodes,
+  cast(extract_arg(arg_set_id, 'debug.unattributed_counter_rows') AS INT) AS unattributed_counter_rows,
+  extract_arg(arg_set_id, 'debug.counter_attribution') AS counter_attribution,
+  extract_arg(arg_set_id, 'debug.counter_attribution_reason') AS counter_attribution_reason,
   cast(extract_arg(arg_set_id, 'debug.unavailable_evidence_count') AS INT) AS unavailable_evidence_count,
   arg_set_id
 FROM slice
@@ -463,6 +466,53 @@ SELECT
 FROM counter_track AS ct
 LEFT JOIN counter AS c ON c.track_id = ct.id
 GROUP BY ct.id, ct.name, ct.unit, ct.description;
+
+CREATE PERFETTO VIEW gputrace_unattributed_counter AS
+SELECT
+  id,
+  name,
+  extract_arg(arg_set_id, 'debug.pipeline_label') AS pipeline_label,
+  extract_arg(arg_set_id, 'debug.attribution') AS attribution,
+  extract_arg(arg_set_id, 'debug.attribution_reason') AS attribution_reason,
+  extract_arg(arg_set_id, 'debug.metric_scope') AS metric_scope,
+  extract_arg(arg_set_id, 'debug.source') AS source,
+  extract_arg(arg_set_id, 'debug.clock_domain') AS clock_domain,
+  extract_arg(arg_set_id, 'debug.timing_quality') AS timing_quality,
+  arg_set_id
+FROM slice
+WHERE category = 'counter_attribution';
+
+CREATE PERFETTO VIEW gputrace_unattributed_counter_arg AS
+SELECT
+  s.id AS counter_id,
+  substr(a.key, 7) AS key,
+  substr(a.flat_key, 7) AS flat_key,
+  a.value_type,
+  a.int_value,
+  a.real_value,
+  a.string_value,
+  a.display_value
+FROM slice AS s
+JOIN args AS a USING (arg_set_id)
+WHERE s.category = 'counter_attribution'
+  AND a.key GLOB 'debug.*'
+  AND a.key NOT IN (
+    'debug.pipeline_label', 'debug.attribution', 'debug.attribution_reason',
+    'debug.metric_scope', 'debug.source', 'debug.clock_domain',
+    'debug.timing_quality'
+  );
+
+CREATE PERFETTO VIEW gputrace_evidence_gap AS
+SELECT
+  id,
+  name,
+  extract_arg(arg_set_id, 'debug.family') AS family,
+  extract_arg(arg_set_id, 'debug.reason') AS reason,
+  extract_arg(arg_set_id, 'debug.clock_domain') AS clock_domain,
+  extract_arg(arg_set_id, 'debug.timing_quality') AS timing_quality,
+  arg_set_id
+FROM slice
+WHERE category = 'evidence_gap';
 
 CREATE PERFETTO VIEW gputrace_unmatched AS
 SELECT 'semantic_node' AS kind,
