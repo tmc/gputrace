@@ -185,3 +185,26 @@ func TestAttributionWithEncoderUnchanged(t *testing.T) {
 		t.Errorf("dispatch inside the encoder should be named, got %v", got)
 	}
 }
+
+func TestParseAttributedDispatchesRequiresNamedPipeline(t *testing.T) {
+	var capture []byte
+	capture = append(capture, commandBufferHeader(1)...)
+	capture = append(capture, pipelineStateRecord(testEncoder, testPipelineA)...)
+	capture = append(capture, dispatchRecord()...)
+
+	trace := newSyntheticTrace(t, capture, nil)
+	dispatches, err := trace.ParseAttributedDispatches()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(dispatches), 1; got != want {
+		t.Fatalf("dispatches = %d, want %d", got, want)
+	}
+	got := dispatches[0]
+	if got.PipelineAddr != testPipelineA || got.FunctionName != "" || got.AttributionBasis != "unavailable" {
+		t.Fatalf("dispatch = %+v", got)
+	}
+	if got.SIMDGroups() != 2 {
+		t.Fatalf("SIMD groups = %d, want 2", got.SIMDGroups())
+	}
+}
