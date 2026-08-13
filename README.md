@@ -189,7 +189,7 @@ report:
 
 ```go
 client := gpubench.Client{}
-report, err := client.Analyze(ctx, tracePath, gpubench.AnalyzeOptions{
+report, err := client.Report(ctx, tracePath, gpubench.ReportOptions{
 	Work: &gpubench.Work{Count: 32, Unit: "token"},
 })
 if err != nil {

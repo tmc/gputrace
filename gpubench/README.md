@@ -7,7 +7,7 @@ the stable `gputrace bench --format json` contract.
 
 ```go
 client := gpubench.Client{} // finds gputrace on PATH
-report, err := client.Analyze(ctx, "decode-perfdata.gputrace", gpubench.AnalyzeOptions{
+report, err := client.Report(ctx, "decode-perfdata.gputrace", gpubench.ReportOptions{
 	Work: &gpubench.Work{Count: 32, Unit: "token"},
 })
 if err != nil {
@@ -31,3 +31,18 @@ caller declares a positive work count and one of `op`, `token`, `step`, or
 Every collection and analysis operation executes the configured `gputrace`
 binary. Set `Client.Executable` to pin it; the package never imports or links
 the parent module. JSON decoding and `ReportMetric` emission remain local.
+
+Benchmarks should skip only when the optional executable is unavailable:
+
+```go
+if err := client.Available(); err != nil {
+	if errors.Is(err, gpubench.ErrUnavailable) {
+		b.Skip(err)
+	}
+	b.Fatal(err)
+}
+report, err := client.Report(ctx, tracePath, opts)
+if err != nil {
+	b.Fatal(err) // corrupt traces and tool failures are not skips
+}
+```

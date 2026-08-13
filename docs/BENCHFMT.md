@@ -133,7 +133,7 @@ no module requirements and invokes a configured `gputrace` executable:
 
 ```go
 client := gpubench.Client{Executable: "/path/to/gputrace"}
-report, err := client.Analyze(ctx, profiled, gpubench.AnalyzeOptions{
+report, err := client.Report(ctx, profiled, gpubench.ReportOptions{
 	Work: &gpubench.Work{Count: 32, Unit: "token"},
 })
 if err != nil {
