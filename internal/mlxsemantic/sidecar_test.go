@@ -1,0 +1,73 @@
+package mlxsemantic
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestValidate(t *testing.T) {
+	identity := Identity{UUID: "trace", ContentDigest: "sha256:abc"}
+	valid := Sidecar{
+		Schema: SchemaV1,
+		Trace:  identity,
+		Nodes: []Node{
+			{ID: "run", Kind: "run", Name: "run"},
+			{ID: "op", ParentID: "run", Kind: "operation", Name: "matmul"},
+		},
+		Links: []Link{{ID: "link", SemanticID: "op", Target: Target{Kind: "dispatch", Index: 1}}},
+	}
+	if err := valid.Validate(identity, map[string]int{"dispatch": 2}); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		edit func(*Sidecar)
+		want string
+	}{
+		{"schema", func(s *Sidecar) { s.Schema = "v2" }, "unsupported schema"},
+		{"uuid", func(s *Sidecar) { s.Trace.UUID = "other" }, "does not match"},
+		{"digest", func(s *Sidecar) { s.Trace.ContentDigest = "sha256:no" }, "digest does not match"},
+		{"parent", func(s *Sidecar) { s.Nodes[1].ParentID = "missing" }, "unknown parent"},
+		{"cycle", func(s *Sidecar) { s.Nodes[0].ParentID = "op" }, "hierarchy cycle"},
+		{"target", func(s *Sidecar) { s.Links[0].Target.Index = 2 }, "out of range"},
+		{"ambiguous", func(s *Sidecar) {
+			s.Nodes = append(s.Nodes, Node{ID: "other", Kind: "operation", Name: "other"})
+			s.Links = append(s.Links, Link{ID: "other-link", SemanticID: "other", Target: Target{Kind: "dispatch", Index: 1}})
+		}, "is ambiguous"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := valid
+			got.Nodes = append([]Node(nil), valid.Nodes...)
+			got.Links = append([]Link(nil), valid.Links...)
+			test.edit(&got)
+			if err := got.Validate(identity, map[string]int{"dispatch": 2}); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Validate error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestDigestStable(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "b"), []byte("two"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a"), []byte("one"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	first, err := Digest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Digest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second || !strings.HasPrefix(first, "sha256:") {
+		t.Fatalf("digests = %q, %q", first, second)
+	}
+}
