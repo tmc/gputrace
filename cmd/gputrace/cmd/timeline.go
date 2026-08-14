@@ -1648,6 +1648,10 @@ func cloneStreamDataMetadata(metadata counter.StreamDataMetadata) counter.Stream
 	}
 	if metadata.APSDataInventory != nil {
 		inventory := *metadata.APSDataInventory
+		inventory.BlobRecords = append([]counter.APSDataBlobInventory(nil), metadata.APSDataInventory.BlobRecords...)
+		for i := range inventory.BlobRecords {
+			inventory.BlobRecords[i].Keys = append([]counter.APSDataKeyInventory(nil), metadata.APSDataInventory.BlobRecords[i].Keys...)
+		}
 		result.APSDataInventory = &inventory
 	}
 	return result
@@ -3284,6 +3288,13 @@ func appendAPSDataInventoryArgs(args map[string]any, inventory *counter.APSDataI
 	args[prefix+"with_frame_marker"] = inventory.WithFrameMarker
 	args[prefix+"with_aps_trace_data_file"] = inventory.WithAPSTraceDataFile
 	args[prefix+"with_trace_id_tables"] = inventory.WithTraceIDTables
+	args[prefix+"blob_record_count"] = len(inventory.BlobRecords)
+	var keys int
+	for _, blob := range inventory.BlobRecords {
+		keys += len(blob.Keys)
+	}
+	args[prefix+"key_record_count"] = keys
+	args[prefix+"blob_record_semantics"] = "content identity and sorted root dictionary shape; private values remain uninterpreted"
 }
 
 func appendStreamDataCounterDecodeArgs(args map[string]any, decode *counter.StreamDataCounterDecode) {
@@ -3389,6 +3400,13 @@ func streamDataTableEvidenceCount(metadata *counter.StreamDataMetadata) int {
 		}
 	}
 	return n
+}
+
+func apsDataBlobEvidenceCount(metadata *counter.StreamDataMetadata) int {
+	if metadata == nil || metadata.APSDataInventory == nil {
+		return 0
+	}
+	return len(metadata.APSDataInventory.BlobRecords)
 }
 
 func perfettoClockConversionArgs(timeline *Timeline) map[string]any {
@@ -3659,7 +3677,7 @@ func appendMLXSemanticEvents(trace *perfetto.Trace, timeline *Timeline) {
 
 func appendEvidenceDetailEvents(trace *perfetto.Trace, timeline *Timeline) {
 	if len(timeline.UnattributedCounters) == 0 && len(timeline.CounterCatalog) == 0 && len(timeline.CounterTraceIDs) == 0 && len(timeline.CounterEncoderAggregates) == 0 && len(timeline.CounterEncoderSamples) == 0 && len(timeline.UnavailableEvidence) == 0 &&
-		(timeline.RawProfilerArtifacts == nil || len(timeline.RawProfilerArtifacts.Artifacts) == 0) && streamDataTableEvidenceCount(timeline.StreamMetadata) == 0 && len(timeline.StreamDataStrings) == 0 && len(timeline.PipelineCompilerStats) == 0 {
+		(timeline.RawProfilerArtifacts == nil || len(timeline.RawProfilerArtifacts.Artifacts) == 0) && streamDataTableEvidenceCount(timeline.StreamMetadata) == 0 && apsDataBlobEvidenceCount(timeline.StreamMetadata) == 0 && len(timeline.StreamDataStrings) == 0 && len(timeline.PipelineCompilerStats) == 0 {
 		return
 	}
 	trackID := perfetto.TrackUUID("gputrace.evidence", "details")
@@ -3671,6 +3689,50 @@ func appendEvidenceDetailEvents(trace *perfetto.Trace, timeline *Timeline) {
 	})
 	defer shardUntimedEvidenceTracks(trace, trackID, eventStart)
 	nextID := nextPerfettoEventID(trace)
+	if metadata := timeline.StreamMetadata; metadata != nil && metadata.APSDataInventory != nil {
+		for _, blob := range metadata.APSDataInventory.BlobRecords {
+			args := map[string]any{
+				"blob_ordinal":   blob.Ordinal,
+				"byte_count":     blob.Bytes,
+				"blob_sha256":    blob.SHA256,
+				"dictionary":     blob.Dictionary,
+				"key_count":      len(blob.Keys),
+				"source":         "streamData APSData NSData entry",
+				"semantics":      "content identity and root dictionary shape only; private values remain uninterpreted",
+				"clock_domain":   "none",
+				"timing_quality": "unavailable",
+			}
+			if blob.DecodeError != "" {
+				args["decode_error"] = blob.DecodeError
+			}
+			trace.Events = append(trace.Events, perfetto.Event{
+				ID: nextID, TrackUUID: trackID,
+				Name:     fmt.Sprintf("APSData blob %d", blob.Ordinal),
+				Category: "aps_data_blob", Kind: perfetto.EventInstant,
+				Args: args,
+			})
+			nextID++
+			for _, key := range blob.Keys {
+				trace.Events = append(trace.Events, perfetto.Event{
+					ID: nextID, TrackUUID: trackID,
+					Name:     fmt.Sprintf("APSData blob %d key %s", blob.Ordinal, key.Name),
+					Category: "aps_data_key", Kind: perfetto.EventInstant,
+					Args: map[string]any{
+						"blob_ordinal":   blob.Ordinal,
+						"key_ordinal":    key.Ordinal,
+						"recorded_name":  key.Name,
+						"value_kind":     key.ValueKind,
+						"blob_sha256":    blob.SHA256,
+						"source":         "streamData APSData root NSDictionary",
+						"semantics":      "sorted root key identity and structural value kind only; private value remains uninterpreted",
+						"clock_domain":   "none",
+						"timing_quality": "unavailable",
+					},
+				})
+				nextID++
+			}
+		}
+	}
 	for _, sample := range timeline.CounterEncoderSamples {
 		values, _ := json.Marshal(sample.Counters)
 		trace.Events = append(trace.Events, perfetto.Event{

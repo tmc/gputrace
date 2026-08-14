@@ -508,6 +508,8 @@ gputrace_pipeline
 gputrace_profiler_stream
 gputrace_raw_profiler_sample
 gputrace_raw_profiler_sample_arg
+gputrace_aps_data_blob
+gputrace_aps_data_key
 gputrace_counter_catalog
 gputrace_counter_trace_id
 gputrace_counter_encoder_sample
@@ -674,6 +676,15 @@ sample-blob foreign key between them. Therefore values remain anonymous: the
 view does not manufacture counter names, units, Metal encoder identity, or a
 busy/wall clock coordinate. The source count remains in `gputrace_capture`
 when a constrained export retains only a representative subset.
+
+`gputrace_aps_data_blob` identifies each raw APSData NSData entry by source
+ordinal, byte count, and SHA-256 digest, then records whether its nested archive
+decoded to a root dictionary. `gputrace_aps_data_key` retains that dictionary's
+root keys in stable lexical order with structural value kinds such as data,
+array, dictionary, string, number, and bool. The full digest covers private
+values, but the projection does not interpret or copy them. This exposes exact
+debug/release archive-shape differences while keeping the native trace bounded;
+source blob and key counts remain in `gputrace_capture` under sampling.
 
 When an APSCounterData TraceId table covers an encoder execution ordinal,
 `gputrace_encoder` also exposes its recorded batch ID and sample index. This is

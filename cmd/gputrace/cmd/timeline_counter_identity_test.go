@@ -347,6 +347,61 @@ FROM gputrace_capture;
 	}
 }
 
+func TestExportAPSDataInventoryReachesPerfettoSQL(t *testing.T) {
+	processor := os.Getenv("TRACE_PROCESSOR_SHELL")
+	if processor == "" {
+		t.Skip("set TRACE_PROCESSOR_SHELL to run native PerfettoSQL integration")
+	}
+	timeline := &Timeline{StreamMetadata: &counter.StreamDataMetadata{
+		APSDataInventory: &counter.APSDataInventory{BlobRecords: []counter.APSDataBlobInventory{{
+			Ordinal: 2, Bytes: 123, SHA256: "sha256:abc", Dictionary: true,
+			Keys: []counter.APSDataKeyInventory{{Ordinal: 0, Name: "APSTraceDataFile", ValueKind: "data"}},
+		}}},
+	}}
+	trace := filepath.Join(t.TempDir(), "aps-data-inventory.pftrace")
+	if err := exportPerfettoForClock(timeline, trace, timelineClockBusy); err != nil {
+		t.Fatal(err)
+	}
+	queries := []struct {
+		query string
+		want  []string
+	}{
+		{`SELECT blob_ordinal, byte_count, blob_sha256, dictionary, key_count,
+                    decode_error, source, semantics FROM gputrace_aps_data_blob;`, []string{
+			"2", "123", "sha256:abc", "1", "1", "[NULL]",
+			"streamData APSData NSData entry",
+			"content identity and root dictionary shape only; private values remain uninterpreted",
+		}},
+		{`SELECT blob_ordinal, key_ordinal, recorded_name, value_kind, blob_sha256,
+                    source, semantics FROM gputrace_aps_data_key;`, []string{
+			"2", "0", "APSTraceDataFile", "data", "sha256:abc",
+			"streamData APSData root NSDictionary",
+			"sorted root key identity and structural value kind only; private value remains uninterpreted",
+		}},
+		{`SELECT stream_data_aps_data_inventory_blob_record_count,
+                    stream_data_aps_data_inventory_key_record_count,
+                    stream_data_aps_data_inventory_blob_record_semantics
+              FROM gputrace_capture;`, []string{
+			"1", "1", "content identity and sorted root dictionary shape; private values remain uninterpreted",
+		}},
+	}
+	for _, test := range queries {
+		command := exec.Command(processor, "query", trace)
+		command.Stdin = strings.NewReader(perfettosql.Module + test.query)
+		output, err := command.Output()
+		if err != nil {
+			t.Fatalf("trace processor APSData inventory: %v\n%s", err, output)
+		}
+		rows, err := csv.NewReader(strings.NewReader(string(output))).ReadAll()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) != 2 || !slices.Equal(rows[1], test.want) {
+			t.Fatalf("PerfettoSQL APSData inventory = %q, want header and %q", rows, test.want)
+		}
+	}
+}
+
 func TestExportStreamDataTableReachesPerfettoSQL(t *testing.T) {
 	processor := os.Getenv("TRACE_PROCESSOR_SHELL")
 	if processor == "" {

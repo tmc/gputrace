@@ -273,14 +273,33 @@ type StreamDataCounterDecode struct {
 // APSDataInventory reports the dictionary shapes recovered from APSData.
 // Key-presence counts are independent and do not interpret private payloads.
 type APSDataInventory struct {
-	Blobs                  int `json:"blobs"`
-	Dictionaries           int `json:"dictionaries"`
-	MalformedBlobs         int `json:"malformed_blobs"`
-	WithCounterInfo        int `json:"with_counter_info"`
-	WithShaderProfilerData int `json:"with_shader_profiler_data"`
-	WithFrameMarker        int `json:"with_frame_marker"`
-	WithAPSTraceDataFile   int `json:"with_aps_trace_data_file"`
-	WithTraceIDTables      int `json:"with_trace_id_tables"`
+	Blobs                  int                    `json:"blobs"`
+	Dictionaries           int                    `json:"dictionaries"`
+	MalformedBlobs         int                    `json:"malformed_blobs"`
+	WithCounterInfo        int                    `json:"with_counter_info"`
+	WithShaderProfilerData int                    `json:"with_shader_profiler_data"`
+	WithFrameMarker        int                    `json:"with_frame_marker"`
+	WithAPSTraceDataFile   int                    `json:"with_aps_trace_data_file"`
+	WithTraceIDTables      int                    `json:"with_trace_id_tables"`
+	BlobRecords            []APSDataBlobInventory `json:"blob_records,omitempty"`
+}
+
+// APSDataBlobInventory identifies one raw APSData archive blob and its root
+// dictionary shape. Keys and value kinds are structural evidence only.
+type APSDataBlobInventory struct {
+	Ordinal     int                   `json:"ordinal"`
+	Bytes       int                   `json:"bytes"`
+	SHA256      string                `json:"sha256"`
+	Dictionary  bool                  `json:"dictionary"`
+	Keys        []APSDataKeyInventory `json:"keys,omitempty"`
+	DecodeError string                `json:"decode_error,omitempty"`
+}
+
+// APSDataKeyInventory is one root dictionary key in stable lexical order.
+type APSDataKeyInventory struct {
+	Ordinal   int    `json:"ordinal"`
+	Name      string `json:"name"`
+	ValueKind string `json:"value_kind"`
 }
 
 // StreamDataTables reports the byte-level integrity of fixed-record archive
@@ -423,21 +442,76 @@ func parseAPSDataInventory(blobs [][]byte) *APSDataInventory {
 		return nil
 	}
 	inventory := &APSDataInventory{Blobs: len(blobs)}
-	for _, blob := range blobs {
+	for ordinal, blob := range blobs {
+		sum := sha256.Sum256(blob)
+		record := APSDataBlobInventory{
+			Ordinal: ordinal, Bytes: len(blob),
+			SHA256: "sha256:" + hex.EncodeToString(sum[:]),
+		}
 		root, objects, ok := archiveRoot(blob)
 		if !ok {
 			inventory.MalformedBlobs++
+			record.DecodeError = "invalid keyed archive"
+			inventory.BlobRecords = append(inventory.BlobRecords, record)
 			continue
 		}
 		dict := keyedDict(root, objects)
 		if dict == nil {
 			inventory.MalformedBlobs++
+			record.DecodeError = "root is not a dictionary"
+			inventory.BlobRecords = append(inventory.BlobRecords, record)
 			continue
+		}
+		record.Dictionary = true
+		names := make([]string, 0, len(dict))
+		for name := range dict {
+			names = append(names, name)
+		}
+		slices.Sort(names)
+		for keyOrdinal, name := range names {
+			record.Keys = append(record.Keys, APSDataKeyInventory{
+				Ordinal: keyOrdinal, Name: name,
+				ValueKind: archivedValueKind(dict[name], objects),
+			})
 		}
 		inventory.Dictionaries++
 		classifyAPSDataDictionary(inventory, dict)
+		inventory.BlobRecords = append(inventory.BlobRecords, record)
 	}
 	return inventory
+}
+
+func archivedValueKind(value any, objects []any) string {
+	switch value := deref(objects, value).(type) {
+	case []byte:
+		return "data"
+	case []any:
+		return "array"
+	case string:
+		if value == "$null" {
+			return "null"
+		}
+		return "string"
+	case bool:
+		return "bool"
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
+		return "number"
+	case map[string]any:
+		if _, ok := value["NS.data"]; ok {
+			return "data"
+		}
+		if _, ok := value["NS.keys"]; ok {
+			return "dictionary"
+		}
+		if _, ok := value["NS.objects"]; ok {
+			return "array"
+		}
+		return "object"
+	case nil:
+		return "null"
+	default:
+		return "other"
+	}
 }
 
 func classifyAPSDataDictionary(inventory *APSDataInventory, dict map[string]any) {

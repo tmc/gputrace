@@ -202,6 +202,34 @@ func TestClassifyAPSDataDictionary(t *testing.T) {
 	}
 }
 
+func TestArchivedValueKind(t *testing.T) {
+	objects := []any{
+		"$null",
+		map[string]any{"NS.data": []byte("x")},
+		map[string]any{"NS.objects": []any{}},
+		map[string]any{"NS.keys": []any{}, "NS.objects": []any{}},
+	}
+	for _, test := range []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{"data", plist.UID(1), "data"},
+		{"array", plist.UID(2), "array"},
+		{"dictionary", plist.UID(3), "dictionary"},
+		{"string", "value", "string"},
+		{"number", uint64(7), "number"},
+		{"bool", true, "bool"},
+		{"null", plist.UID(0), "null"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := archivedValueKind(test.value, objects); got != test.want {
+				t.Fatalf("archivedValueKind() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestParseStreamDataIntegration(t *testing.T) {
 	gpuprofDir := integrationPathFromEnv(t, streamDataIntegrationDirEnv)
 	stats, err := ParseStreamData(gpuprofDir, nil)

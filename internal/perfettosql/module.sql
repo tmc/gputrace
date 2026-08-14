@@ -220,6 +220,9 @@ SELECT
   cast(extract_arg(arg_set_id, 'debug.stream_data_aps_data_inventory_with_frame_marker') AS INT) AS stream_data_aps_data_inventory_with_frame_marker,
   cast(extract_arg(arg_set_id, 'debug.stream_data_aps_data_inventory_with_aps_trace_data_file') AS INT) AS stream_data_aps_data_inventory_with_aps_trace_data_file,
   cast(extract_arg(arg_set_id, 'debug.stream_data_aps_data_inventory_with_trace_id_tables') AS INT) AS stream_data_aps_data_inventory_with_trace_id_tables,
+  cast(extract_arg(arg_set_id, 'debug.stream_data_aps_data_inventory_blob_record_count') AS INT) AS stream_data_aps_data_inventory_blob_record_count,
+  cast(extract_arg(arg_set_id, 'debug.stream_data_aps_data_inventory_key_record_count') AS INT) AS stream_data_aps_data_inventory_key_record_count,
+  extract_arg(arg_set_id, 'debug.stream_data_aps_data_inventory_blob_record_semantics') AS stream_data_aps_data_inventory_blob_record_semantics,
   extract_arg(arg_set_id, 'debug.environment_driver_availability') AS environment_driver_availability,
   extract_arg(arg_set_id, 'debug.environment_mlx_runtime_availability') AS environment_mlx_runtime_availability,
   extract_arg(arg_set_id, 'debug.environment_workload_availability') AS environment_workload_availability,
@@ -713,6 +716,39 @@ JOIN args AS starts ON starts.arg_set_id = s.arg_set_id AND starts.key = 'debug.
 JOIN args AS ends ON ends.arg_set_id = s.arg_set_id AND ends.key = 'debug.counter_end_ticks'
 JOIN args AS duration ON duration.arg_set_id = s.arg_set_id AND duration.key = 'debug.counter_duration_ns'
 WHERE s.category = 'counter_encoder_aggregate';
+
+-- gputrace_aps_data_blob identifies each raw APSData keyed-archive blob. The
+-- digest covers the full source bytes; dictionary projection is shape only.
+CREATE PERFETTO VIEW gputrace_aps_data_blob AS
+SELECT
+  id,
+  cast(extract_arg(arg_set_id, 'debug.blob_ordinal') AS INT) AS blob_ordinal,
+  cast(extract_arg(arg_set_id, 'debug.byte_count') AS INT) AS byte_count,
+  extract_arg(arg_set_id, 'debug.blob_sha256') AS blob_sha256,
+  cast(extract_arg(arg_set_id, 'debug.dictionary') AS INT) AS dictionary,
+  cast(extract_arg(arg_set_id, 'debug.key_count') AS INT) AS key_count,
+  extract_arg(arg_set_id, 'debug.decode_error') AS decode_error,
+  extract_arg(arg_set_id, 'debug.source') AS source,
+  extract_arg(arg_set_id, 'debug.semantics') AS semantics,
+  arg_set_id
+FROM slice
+WHERE category = 'aps_data_blob';
+
+-- gputrace_aps_data_key retains sorted root dictionary key identity and the
+-- decoded structural kind of its value. Private values remain uninterpreted.
+CREATE PERFETTO VIEW gputrace_aps_data_key AS
+SELECT
+  id,
+  cast(extract_arg(arg_set_id, 'debug.blob_ordinal') AS INT) AS blob_ordinal,
+  cast(extract_arg(arg_set_id, 'debug.key_ordinal') AS INT) AS key_ordinal,
+  extract_arg(arg_set_id, 'debug.recorded_name') AS recorded_name,
+  extract_arg(arg_set_id, 'debug.value_kind') AS value_kind,
+  extract_arg(arg_set_id, 'debug.blob_sha256') AS blob_sha256,
+  extract_arg(arg_set_id, 'debug.source') AS source,
+  extract_arg(arg_set_id, 'debug.semantics') AS semantics,
+  arg_set_id
+FROM slice
+WHERE category = 'aps_data_key';
 
 -- gputrace_stream_data_table retains the exact bytes of the five fixed-record
 -- tables in streamData. Record boundaries follow record_size; unknown words

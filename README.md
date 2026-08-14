@@ -111,7 +111,8 @@ The optional SQL file defines `gputrace_capture`, `gputrace_command_buffer`, `gp
 `gputrace_counter_series`, `gputrace_counter_encoder_sample`,
 `gputrace_counter_encoder_aggregate`,
 `gputrace_unattributed_counter`,
-`gputrace_evidence_gap`, `gputrace_stream_data_table`,
+`gputrace_evidence_gap`, `gputrace_aps_data_blob`,
+`gputrace_aps_data_key`, `gputrace_stream_data_table`,
 `gputrace_stream_data_string`, `gputrace_pipeline_compiler`,
 `gputrace_pipeline_compiler_remark`,
 `gputrace_pipeline_compiler_remark_arg`, and
@@ -233,6 +234,13 @@ which `passList` names belong to each sample blob, so the view does not assign
 counter names, units, derived meaning, a Metal encoder foreign key, or a
 timeline coordinate. Full-range unsigned timestamps, cycles, and identifiers
 have exact decimal columns alongside Perfetto's signed projections.
+`gputrace_aps_data_blob` content-identifies every raw APSData archive entry and
+reports its byte count, dictionary status, and root-key count.
+`gputrace_aps_data_key` exposes each root key and its decoded structural value
+kind in stable lexical order. These views make capture-shape differences
+queryable without interpreting private values or duplicating the roughly
+megabyte-scale raw blobs into the Perfetto trace. The manifest retains source
+blob and key counts when an output budget samples the optional detail rows.
 `gputrace_track_event_arg` retains every argument for low-volume generic events
 such as command buffers and profiler streams; its `event_id` is a trace-local
 join key, not a persistent source identity. These are raw profiler input,

@@ -570,7 +570,12 @@ func TestApplyStreamIdentity(t *testing.T) {
 	twoEntries := int64(2)
 	zeroEntries := int64(0)
 	counterDecode := &counter.StreamDataCounterDecode{DecodedSamples: 20}
-	apsInventory := &counter.APSDataInventory{Blobs: 2, Dictionaries: 2, WithAPSTraceDataFile: 1}
+	apsInventory := &counter.APSDataInventory{
+		Blobs: 2, Dictionaries: 2, WithAPSTraceDataFile: 1,
+		BlobRecords: []counter.APSDataBlobInventory{{
+			Ordinal: 0, Keys: []counter.APSDataKeyInventory{{Name: "APSTraceDataFile"}},
+		}},
+	}
 	timeline := &Timeline{}
 	applyStreamIdentity(timeline, &counter.StreamDataStats{
 		GPUGeneration:   &gpuGeneration,
@@ -619,6 +624,10 @@ func TestApplyStreamIdentity(t *testing.T) {
 	}
 	if timeline.StreamMetadata.APSDataInventory == nil || timeline.StreamMetadata.APSDataInventory == apsInventory || timeline.StreamMetadata.APSDataInventory.WithAPSTraceDataFile != 1 {
 		t.Fatalf("APSData inventory was not independently cloned: %#v", timeline.StreamMetadata.APSDataInventory)
+	}
+	if &timeline.StreamMetadata.APSDataInventory.BlobRecords[0] == &apsInventory.BlobRecords[0] ||
+		&timeline.StreamMetadata.APSDataInventory.BlobRecords[0].Keys[0] == &apsInventory.BlobRecords[0].Keys[0] {
+		t.Fatal("APSData blob inventory retained source slices")
 	}
 }
 
