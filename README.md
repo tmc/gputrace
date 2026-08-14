@@ -156,7 +156,8 @@ exports and fields introduced by newer exporters.
 With `--clock wall --include-raw-samples`, `gputrace_profiler_stream` exposes
 raw stream aggregates and `gputrace_raw_profiler_sample` exposes GPRWCNTR
 source record ordinals, original mach-absolute ticks, the seven fixed GRC
-fields, variable record stride, and hardware-counter column count. Hardware
+fields, exact ShaderProfilerData source and ring-buffer identity, variable
+record stride, and hardware-counter column count. Hardware
 counter columns remain uninterpreted and are not exported as named metrics.
 `gputrace_raw_profiler_sample_arg` retains each payload value by its recorded
 zero-based ordinal without assigning a counter name, unit, or meaning. Its

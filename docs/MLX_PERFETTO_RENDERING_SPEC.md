@@ -653,7 +653,11 @@ IDs that normal export never observed.
 The opt-in wall export retains GPRWCNTR records in
 `gputrace_raw_profiler_sample`, including their original mach-absolute tick,
 source record ordinal, stream index, raw header fields, coordinate basis, and
-decode status. `gputrace_track_event_arg` is the lossless key/value extension
+decode status. Samples come only from exact APSTimelineData
+`ShaderProfilerData` fields and retain source, ring-buffer, stream-size, and
+machine-wide coverage metadata. They are not joined to the APSCounterData pass
+catalog because the ShaderProfilerData carrier exposes no pass-group identity.
+`gputrace_track_event_arg` is the lossless key/value extension
 surface for low-volume generic track events, including command buffers and
 profiler streams. Its `event_id` joins within one loaded trace only and is not
 a source or cross-trace identity.

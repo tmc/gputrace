@@ -244,10 +244,11 @@ func runTimeline(cmd *cobra.Command, args []string, opts *timelineOptions) error
 		}
 	}
 
-	// Enhance with raw GPRWCNTR data if available.
-	if findProfilerDir(tracePath) != "" {
-		if err := EnhanceTimelineWithRawData(timeline, tracePath); err != nil {
-			// Just warn, don't fail as this is optional/experimental
+	// Add raw GPRWCNTR records from the exact ShaderProfilerData carriers.
+	if len(timeline.rawProfilerProfiles) > 0 {
+		if err := enhanceTimelineWithRawData(timeline); err != nil {
+			// Raw samples are an optional projection. The transactional enhancer
+			// publishes none when their wall coordinate cannot be established.
 			fmt.Fprintf(os.Stderr, "Warning: failed to enhance timeline with raw data: %v\n", err)
 		} else {
 			// Check if we actually added samples
@@ -973,6 +974,7 @@ type Timeline struct {
 	EvidenceInventory        *TimelineEvidenceInventory     `json:"evidence_inventory,omitempty"`
 	RawProfilerArtifacts     *profilerraw.ArtifactInventory `json:"raw_profiler_artifacts,omitempty"`
 	RawProfilerArtifactError string                         `json:"raw_profiler_artifact_error,omitempty"`
+	rawProfilerProfiles      []counter.EncoderProfile
 }
 
 func attachRawProfilerArtifacts(timeline *Timeline, tracePath string) {
@@ -1134,6 +1136,9 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 	if stats, err := counter.ExtractPipelineStatsFromTraceStreamData(trace); err == nil {
 		streamStats = stats
 		applyStreamIdentity(timeline, streamStats)
+		if streamStats.Timeline != nil {
+			timeline.rawProfilerProfiles = streamStats.Timeline.EncoderProfiles
+		}
 		counter.CorrelateDispatchSamples(streamStats)
 		profilerDir = findProfilerDir(trace.Path)
 		if profilerDir != "" {
