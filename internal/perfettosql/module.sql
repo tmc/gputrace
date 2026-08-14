@@ -242,6 +242,7 @@ SELECT
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_limiter_group_record_count') AS INT) AS stream_data_archive_limiter_group_record_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_limiter_sample_counter_record_count') AS INT) AS stream_data_archive_limiter_sample_counter_record_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_profiling_configuration_record_count') AS INT) AS stream_data_archive_profiling_configuration_record_count,
+  cast(extract_arg(arg_set_id, 'debug.stream_data_archive_root_scalar_record_count') AS INT) AS stream_data_archive_root_scalar_record_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_profiler_carrier_record_count') AS INT) AS stream_data_archive_profiler_carrier_record_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_embedded_profiler_artifact_record_count') AS INT) AS stream_data_archive_embedded_profiler_artifact_record_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_embedded_profiler_artifact_byte_count') AS INT) AS stream_data_archive_embedded_profiler_artifact_byte_count,
@@ -249,6 +250,7 @@ SELECT
   extract_arg(arg_set_id, 'debug.stream_data_archive_limiter_catalog_semantics') AS stream_data_archive_limiter_catalog_semantics,
   extract_arg(arg_set_id, 'debug.stream_data_archive_profiling_configuration_semantics') AS stream_data_archive_profiling_configuration_semantics,
   extract_arg(arg_set_id, 'debug.stream_data_archive_profiler_carrier_semantics') AS stream_data_archive_profiler_carrier_semantics,
+  extract_arg(arg_set_id, 'debug.stream_data_archive_root_scalar_semantics') AS stream_data_archive_root_scalar_semantics,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_byte_count') AS INT) AS stream_data_archive_byte_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_malformed_blob_count') AS INT) AS stream_data_archive_malformed_blob_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_scalar_value_count') AS INT) AS stream_data_archive_scalar_value_count,
@@ -1115,6 +1117,29 @@ SELECT
   'source shape only; equality does not establish common units, clocks, or runtime behavior' AS semantics
 FROM gputrace_profiler_configuration
 GROUP BY family, blob_ordinal, section;
+
+-- gputrace_stream_data_root_scalar exhaustively retains decoded scalar keys
+-- at the root of each nested streamData archive dictionary. Timing-looking
+-- values remain untimed source facts and do not establish a clock mapping.
+CREATE PERFETTO VIEW gputrace_stream_data_root_scalar AS
+SELECT
+  s.id AS blob_event_id,
+  extract_arg(s.arg_set_id, 'debug.family') AS family,
+  cast(extract_arg(s.arg_set_id, 'debug.blob_ordinal') AS INT) AS blob_ordinal,
+  json_extract(a.string_value, '$.path') AS path,
+  json_extract(a.string_value, '$.name') AS recorded_name,
+  cast(json_extract(a.string_value, '$.ordinal') AS INT) AS key_ordinal,
+  json_extract(a.string_value, '$.scalar_type') AS scalar_type,
+  json_extract(a.string_value, '$.scalar_json') AS scalar_json,
+  json_extract(json_extract(a.string_value, '$.scalar_json'), '$') AS value,
+  extract_arg(s.arg_set_id, 'debug.blob_sha256') AS blob_sha256,
+  'exhaustive decoded root scalar; no inferred unit, clock mapping, join, or runtime effect' AS semantics,
+  'none' AS clock_domain,
+  s.arg_set_id
+FROM slice AS s
+JOIN args AS a USING (arg_set_id)
+WHERE s.category = 'stream_data_archive_blob'
+  AND a.key GLOB 'debug.root_scalar_[0-9]*_json';
 
 -- gputrace_profiler_carrier relates only fields recorded in the same nested
 -- streamData archive blob. File, source, ring, and serial values are opaque.

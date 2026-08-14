@@ -527,6 +527,11 @@ func TestExportRecordedConfigurationAndLimiterCatalogReachesPerfettoSQL(t *testi
 	artifactBytes := 12
 	blob := counter.StreamDataBlobInventory{
 		Family: "aps_data", Ordinal: 1, SHA256: "sha256:blob", Dictionary: true,
+		Keys: []counter.StreamDataKeyInventory{
+			{Ordinal: 0, Name: "APSTraceDataFile", ValueKind: "string", ScalarType: "string", ScalarJSON: `"Profiling_f_0.raw"`},
+			{Ordinal: 1, Name: "Absolute Time", ValueKind: "number", ScalarType: "int64", ScalarJSON: "435124566031"},
+			{Ordinal: 2, Name: "future/value~raw", ValueKind: "bool", ScalarType: "bool", ScalarJSON: "true"},
+		},
 		Nodes: []counter.StreamDataNodeInventory{{
 			Path: "/Configuration Variables/gpu_type", ParentPath: "/Configuration Variables",
 			Relation: "dictionary", Name: "gpu_type", ExpansionStatus: "leaf",
@@ -627,6 +632,13 @@ func TestExportRecordedConfigurationAndLimiterCatalogReachesPerfettoSQL(t *testi
 			"aps_data", "1", "Timebase", "2", "2",
 			"aps_data", "1", "apsProfilingConfig", "1", "1",
 		}},
+		{`SELECT family, blob_ordinal, path, recorded_name, key_ordinal,
+                    scalar_type, value, clock_domain
+              FROM gputrace_stream_data_root_scalar ORDER BY key_ordinal;`, []string{
+			"aps_data", "1", "/APSTraceDataFile", "APSTraceDataFile", "0", "string", "Profiling_f_0.raw", "none",
+			"aps_data", "1", "/Absolute Time", "Absolute Time", "1", "int64", "435124566031", "none",
+			"aps_data", "1", "/future~1value~0raw", "future/value~raw", "2", "bool", "1", "none",
+		}},
 		{`SELECT family, blob_ordinal, trace_data_file, recorded_source,
                     recorded_source_index, recorded_ring_buffer_index,
                     recorded_serial, embedded_artifact_count, embedded_artifact_bytes
@@ -652,9 +664,10 @@ func TestExportRecordedConfigurationAndLimiterCatalogReachesPerfettoSQL(t *testi
 					stream_data_archive_profiling_configuration_record_count,
 					stream_data_archive_profiler_carrier_record_count,
 					stream_data_archive_embedded_profiler_artifact_record_count,
-					stream_data_archive_embedded_profiler_artifact_byte_count
+					stream_data_archive_embedded_profiler_artifact_byte_count,
+					stream_data_archive_root_scalar_record_count
               FROM gputrace_capture;`, []string{
-			"2", "1", "1", "1", "1", "3", "1", "1", "12",
+			"2", "1", "1", "1", "1", "3", "1", "1", "12", "3",
 		}},
 	}
 	for _, test := range queries {

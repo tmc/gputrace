@@ -3310,11 +3310,12 @@ func appendStreamDataArchiveArgs(args map[string]any, blobs []counter.StreamData
 	args[prefix+"program_address_mapping_binary_match_count"] = programs.matches
 	args[prefix+"program_address_mapping_binary_unmatched_count"] = programs.mappings - programs.matches
 	args[prefix+"program_address_semantics"] = "recorded Binaries and Program Address Mappings fields joined by exact capture-local binaryUniqueId; no dispatch, function, source, or timing attribution"
-	var configuration, options, counterInfo, limiterGroups, limiterSamples, profiling int
+	var rootScalars, configuration, options, counterInfo, limiterGroups, limiterSamples, profiling int
 	var carriers, embeddedArtifacts int
 	var embeddedArtifactBytes int64
 	for _, blob := range blobs {
 		records := streamDataRecordedScalars(blob)
+		rootScalars += len(records.rootScalars)
 		configuration += len(records.configuration)
 		options += len(records.options)
 		counterInfo += len(records.counterInfo)
@@ -3335,6 +3336,7 @@ func appendStreamDataArchiveArgs(args map[string]any, blobs []counter.StreamData
 	args[prefix+"limiter_group_record_count"] = limiterGroups
 	args[prefix+"limiter_sample_counter_record_count"] = limiterSamples
 	args[prefix+"profiling_configuration_record_count"] = profiling
+	args[prefix+"root_scalar_record_count"] = rootScalars
 	args[prefix+"profiler_carrier_record_count"] = carriers
 	args[prefix+"embedded_profiler_artifact_record_count"] = embeddedArtifacts
 	args[prefix+"embedded_profiler_artifact_byte_count"] = embeddedArtifactBytes
@@ -3342,6 +3344,7 @@ func appendStreamDataArchiveArgs(args map[string]any, blobs []counter.StreamData
 	args[prefix+"limiter_catalog_semantics"] = "recorded Counter Info, Limiter Counter List Map, and limiter sample counters identities; no counter-value, unit, pass, or derived-limiter attribution"
 	args[prefix+"profiling_configuration_semantics"] = "recorded apsProfilingConfig, Timebase, Perf Info, Frame Consistent Perf Info, and Kick State Trigger Options scalar leaves; no inferred units, clock mapping, or runtime effects"
 	args[prefix+"profiler_carrier_semantics"] = "same-blob recorded carrier fields and embedded profiler payload identities; source indexes, ring indexes, serials, and file names remain opaque capture-local values"
+	args[prefix+"root_scalar_semantics"] = "exhaustive decoded root scalar keys with exact names, types, and canonical JSON; no inferred units, clocks, joins, or runtime effects"
 }
 
 type streamDataProgramCounts struct {
@@ -3460,6 +3463,7 @@ type streamDataScalarRecord struct {
 }
 
 type streamDataScalarRecords struct {
+	rootScalars    []streamDataScalarRecord
 	configuration  []streamDataScalarRecord
 	options        []streamDataScalarRecord
 	counterInfo    []streamDataScalarRecord
@@ -3513,6 +3517,15 @@ func streamDataCarrier(blob counter.StreamDataBlobInventory) (streamDataCarrierR
 
 func streamDataRecordedScalars(blob counter.StreamDataBlobInventory) streamDataScalarRecords {
 	var records streamDataScalarRecords
+	for _, key := range blob.Keys {
+		if key.ScalarJSON == "" {
+			continue
+		}
+		records.rootScalars = append(records.rootScalars, streamDataScalarRecord{
+			Path: "/" + streamDataJSONPointerName(key.Name), Name: key.Name,
+			Ordinal: key.Ordinal, ScalarType: key.ScalarType, ScalarJSON: key.ScalarJSON,
+		})
+	}
 	for _, node := range blob.Nodes {
 		if node.ScalarJSON == "" {
 			continue
@@ -3553,6 +3566,11 @@ func streamDataRecordedScalars(blob counter.StreamDataBlobInventory) streamDataS
 		}
 	}
 	return records
+}
+
+func streamDataJSONPointerName(name string) string {
+	name = strings.ReplaceAll(name, "~", "~0")
+	return strings.ReplaceAll(name, "/", "~1")
 }
 
 func appendStreamDataStringArgs(args map[string]any, strings []string) {
@@ -4090,6 +4108,7 @@ func appendEvidenceDetailEvents(trace *perfetto.Trace, timeline *Timeline) {
 				args[fmt.Sprintf("program_address_mapping_%06d_json", ordinal)] = string(data)
 			}
 			records := streamDataRecordedScalars(blob)
+			appendStreamDataScalarArgs(args, "root_scalar", records.rootScalars)
 			appendStreamDataScalarArgs(args, "stream_configuration", records.configuration)
 			appendStreamDataScalarArgs(args, "aps_option", records.options)
 			appendStreamDataScalarArgs(args, "counter_info", records.counterInfo)

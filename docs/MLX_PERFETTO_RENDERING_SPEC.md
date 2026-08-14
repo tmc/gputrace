@@ -767,6 +767,16 @@ these views. Equal values across archive families do not prove that clocks or
 counter streams are aligned. The manifest retains the full pre-sampling row
 count when an output budget drops the optional blob packets.
 
+`gputrace_stream_data_root_scalar` exhaustively projects every decoded scalar
+key at the root of every nested archive dictionary. It is not a whitelist:
+future private-schema keys become queryable without an exporter update. Each
+row retains the source family and blob, RFC 6901 path, lexical key ordinal,
+recorded name and scalar type, canonical JSON, typed SQL value, and blob
+digest. Timing-looking names such as `Absolute Time`, `Continuous Time`, and
+`ReplayerGPUTime` remain untimed source facts in the `none` clock domain. The
+view does not assign units, align clocks, create flows, or infer runtime
+effects. Its pre-sampling source count remains in the manifest.
+
 `gputrace_profiler_carrier` inventories fields recorded together in one nested
 archive blob: `APSTraceDataFile`, `Source`, `SourceIndex`, `RingBufferIndex`,
 and `Serial`, plus the blob byte count and digest. Missing fields remain
