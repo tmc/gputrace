@@ -170,7 +170,9 @@ value series, encoder attribution, or clock mapping.
 `gputrace_counter_trace_id` preserves each recorded APSCounterData TraceId,
 batch ID, and sample index as untimed source evidence. Only the row ordinal has
 a positional relation to encoder execution order; TraceId itself is not a GRC
-encoder or kick ID and carries no timing relationship.
+encoder or kick ID and carries no timing relationship. `trace_id_uint64`
+preserves its full unsigned decimal value; `trace_id_int64` is Perfetto's
+signed SQL projection.
 `gputrace_track_event_arg` retains every argument for low-volume generic events
 such as command buffers and profiler streams; its `event_id` is a trace-local
 join key, not a persistent source identity. These are raw profiler input,

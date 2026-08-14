@@ -639,6 +639,8 @@ APSCounterData TraceId-to-batch and TraceId-to-sample-index tables as untimed
 evidence. The row ordinal is the documented positional relationship to encoder
 execution order. The TraceId value itself is not equated with a GRC encoder or
 kick ID, and the table establishes no timing or command-buffer relationship.
+The exact unsigned decimal value is retained separately from Perfetto's signed
+SQL integer projection.
 
 When an APSCounterData TraceId table covers an encoder execution ordinal,
 `gputrace_encoder` also exposes its recorded batch ID and sample index. This is
