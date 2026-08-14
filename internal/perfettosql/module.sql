@@ -1141,6 +1141,49 @@ JOIN args AS a USING (arg_set_id)
 WHERE s.category = 'stream_data_archive_blob'
   AND a.key GLOB 'debug.root_scalar_[0-9]*_json';
 
+-- gputrace_root_scalar_equality_audit compares canonical recorded values
+-- without interpreting their names. Different values are evidence, not a
+-- clock-drift, corruption, or runtime-effect diagnosis.
+CREATE PERFETTO VIEW gputrace_root_scalar_equality_audit AS
+WITH family_values AS (
+  SELECT
+    recorded_name,
+    scalar_type,
+    family,
+    count(*) AS row_count,
+    count(DISTINCT scalar_json) AS distinct_value_count,
+    CASE WHEN count(DISTINCT scalar_json) = 1 THEN min(scalar_json) END AS single_scalar_json
+  FROM gputrace_stream_data_root_scalar
+  GROUP BY recorded_name, scalar_type, family
+)
+SELECT
+  recorded_name,
+  scalar_type,
+  count(*) AS family_count,
+  sum(row_count) AS row_count,
+  sum(CASE WHEN distinct_value_count > 1 THEN 1 ELSE 0 END) AS families_with_multiple_values,
+  max(CASE WHEN family = 'aps_data' THEN distinct_value_count END) AS aps_data_distinct_value_count,
+  max(CASE WHEN family = 'aps_data' THEN single_scalar_json END) AS aps_data_scalar_json,
+  max(CASE WHEN family = 'aps_timeline_data' THEN distinct_value_count END) AS aps_timeline_data_distinct_value_count,
+  max(CASE WHEN family = 'aps_timeline_data' THEN single_scalar_json END) AS aps_timeline_data_scalar_json,
+  max(CASE WHEN family = 'aps_counter_data' THEN distinct_value_count END) AS aps_counter_data_distinct_value_count,
+  max(CASE WHEN family = 'aps_counter_data' THEN single_scalar_json END) AS aps_counter_data_scalar_json,
+  CASE
+    WHEN count(*) = 1 THEN 'single_family'
+    WHEN sum(CASE WHEN distinct_value_count > 1 THEN 1 ELSE 0 END) > 0 THEN 'multiple_values_within_family'
+    WHEN count(DISTINCT single_scalar_json) = 1 THEN 'equal_across_families'
+    ELSE 'different_across_families'
+  END AS equality_status,
+  (SELECT output_complete FROM gputrace_capture) AS output_complete,
+  CASE
+    WHEN (SELECT output_complete FROM gputrace_capture) = 1 THEN 'complete_export'
+    ELSE 'retained_rows_only'
+  END AS audit_scope,
+  'exact scalar type and canonical JSON equality only; no unit, clock, corruption, drift, or runtime diagnosis' AS semantics,
+  'none' AS clock_domain
+FROM family_values
+GROUP BY recorded_name, scalar_type;
+
 -- gputrace_profiler_carrier relates only fields recorded in the same nested
 -- streamData archive blob. File, source, ring, and serial values are opaque.
 CREATE PERFETTO VIEW gputrace_profiler_carrier AS

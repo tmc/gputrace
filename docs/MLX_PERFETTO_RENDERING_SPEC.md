@@ -777,6 +777,17 @@ digest. Timing-looking names such as `Absolute Time`, `Continuous Time`, and
 view does not assign units, align clocks, create flows, or infer runtime
 effects. Its pre-sampling source count remains in the manifest.
 
+`gputrace_root_scalar_equality_audit` first counts distinct canonical JSON
+values within each family, then compares the single recorded values across
+families. It distinguishes `single_family`, `multiple_values_within_family`,
+`equal_across_families`, and `different_across_families`; it does not hide
+duplicates behind an aggregate representative. These are neutral equality
+states, not PASS/FAIL or diagnoses of corruption, drift, or runtime behavior.
+For example, independently recorded absolute-time values may legitimately
+differ while `PState` is equal. The view reports `complete_export` only when
+the loss receipt says the export is complete; otherwise its audit scope is
+`retained_rows_only`.
+
 `gputrace_profiler_carrier` inventories fields recorded together in one nested
 archive blob: `APSTraceDataFile`, `Source`, `SourceIndex`, `RingBufferIndex`,
 and `Serial`, plus the blob byte count and digest. Missing fields remain

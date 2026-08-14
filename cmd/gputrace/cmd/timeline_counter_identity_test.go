@@ -691,6 +691,84 @@ func TestExportRecordedConfigurationAndLimiterCatalogReachesPerfettoSQL(t *testi
 	}
 }
 
+func TestExportRootScalarEqualityAuditReachesPerfettoSQL(t *testing.T) {
+	processor := os.Getenv("TRACE_PROCESSOR_SHELL")
+	if processor == "" {
+		t.Skip("set TRACE_PROCESSOR_SHELL to run native PerfettoSQL integration")
+	}
+	key := func(ordinal int, name, scalarType, scalarJSON string) counter.StreamDataKeyInventory {
+		return counter.StreamDataKeyInventory{
+			Ordinal: ordinal, Name: name, ValueKind: "number",
+			ScalarType: scalarType, ScalarJSON: scalarJSON,
+		}
+	}
+	blobs := []counter.StreamDataBlobInventory{{
+		Family: "aps_data", Ordinal: 1, SHA256: "sha256:data-1", Dictionary: true,
+		Keys: []counter.StreamDataKeyInventory{
+			key(0, "APSTraceDataFile", "string", `"Profiling_f_0.raw"`),
+			key(1, "Absolute Time", "int64", "10"),
+			key(2, "PState", "int64", "500"),
+			key(3, "future", "bool", "true"),
+		},
+	}, {
+		Family: "aps_data", Ordinal: 2, SHA256: "sha256:data-2", Dictionary: true,
+		Keys: []counter.StreamDataKeyInventory{key(0, "Absolute Time", "int64", "11")},
+	}, {
+		Family: "aps_timeline_data", Ordinal: 1, SHA256: "sha256:timeline", Dictionary: true,
+		Keys: []counter.StreamDataKeyInventory{
+			key(0, "Absolute Time", "int64", "10"),
+			key(1, "PState", "int64", "600"),
+			key(2, "future", "bool", "true"),
+		},
+	}, {
+		Family: "aps_counter_data", Ordinal: 1, SHA256: "sha256:counter", Dictionary: true,
+		Keys: []counter.StreamDataKeyInventory{key(0, "future", "bool", "true")},
+	}}
+	timeline := &Timeline{StreamMetadata: &counter.StreamDataMetadata{ArchiveBlobs: blobs}}
+	trace := filepath.Join(t.TempDir(), "root-scalar-equality.pftrace")
+	if err := exportPerfettoForClock(timeline, trace, timelineClockBusy); err != nil {
+		t.Fatal(err)
+	}
+	queries := []struct {
+		query string
+		want  []string
+	}{
+		{`SELECT recorded_name, scalar_type, family_count, row_count,
+                    families_with_multiple_values,
+                    aps_data_distinct_value_count,
+                    aps_timeline_data_distinct_value_count,
+                    aps_counter_data_distinct_value_count,
+					equality_status, output_complete, audit_scope, clock_domain
+              FROM gputrace_root_scalar_equality_audit ORDER BY recorded_name;`, []string{
+			"APSTraceDataFile", "string", "1", "1", "0", "1", "[NULL]", "[NULL]", "single_family", "1", "complete_export", "none",
+			"Absolute Time", "int64", "2", "3", "1", "2", "1", "[NULL]", "multiple_values_within_family", "1", "complete_export", "none",
+			"PState", "int64", "2", "2", "0", "1", "1", "[NULL]", "different_across_families", "1", "complete_export", "none",
+			"future", "bool", "3", "3", "0", "1", "1", "1", "equal_across_families", "1", "complete_export", "none",
+		}},
+		{`SELECT count(*) FROM gputrace_stream_data_root_scalar;`, []string{"9"}},
+		{`SELECT stream_data_archive_root_scalar_record_count FROM gputrace_capture;`, []string{"9"}},
+	}
+	for _, test := range queries {
+		command := exec.Command(processor, "query", trace)
+		command.Stdin = strings.NewReader(perfettosql.Module + test.query)
+		output, err := command.Output()
+		if err != nil {
+			t.Fatalf("trace processor root scalar equality: %v\n%s", err, output)
+		}
+		rows, err := csv.NewReader(strings.NewReader(string(output))).ReadAll()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, row := range rows[1:] {
+			got = append(got, row...)
+		}
+		if !slices.Equal(got, test.want) {
+			t.Fatalf("PerfettoSQL root scalar equality = %q, want %q", got, test.want)
+		}
+	}
+}
+
 func TestExportStreamDataTableReachesPerfettoSQL(t *testing.T) {
 	processor := os.Getenv("TRACE_PROCESSOR_SHELL")
 	if processor == "" {
