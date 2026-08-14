@@ -719,6 +719,16 @@ blob rows while the manifest still describes the full source graph.
 capture-local unique ID, byte count, and SHA-256 digest. The binary bytes remain
 in the source archive; this view content-identifies them without treating the
 payload as a metallib, executable, or instruction stream.
+`gputrace_shader_binary_content_audit` groups those entries only by exact
+SHA-256 identity and reports occurrence, family, blob, and logical decoded-byte
+counts. It distinguishes unique entries, repetition within one family, and
+repetition across families, while independently checking that equal digests
+carry equal decoded sizes. `logical_repeated_entry_bytes` is not recoverable
+file-size savings: keyed archives may share backing objects. Content equality
+does not establish pipeline compatibility, execution-cost equality, use by a
+dispatch, or any timing relationship. Constrained exports may retain no binary
+rows at all; the manifest and loss receipt remain authoritative for the source
+count and audit completeness.
 `gputrace_program_address_mapping` pivots the nine fields recorded on each
 `/Program Address Mappings` entry and joins `binaryUniqueId` to the matching
 binary dictionary entry in the same family and blob. Unsigned source numbers

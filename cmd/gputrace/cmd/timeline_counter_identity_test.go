@@ -851,6 +851,64 @@ func TestExportProfilerCarrierSequenceAuditReachesPerfettoSQL(t *testing.T) {
 	}
 }
 
+func TestExportShaderBinaryContentAuditReachesPerfettoSQL(t *testing.T) {
+	processor := os.Getenv("TRACE_PROCESSOR_SHELL")
+	if processor == "" {
+		t.Skip("set TRACE_PROCESSOR_SHELL to run native PerfettoSQL integration")
+	}
+	binaryBlob := func(family string, blobOrdinal int, uniqueID, digest string, size int) counter.StreamDataBlobInventory {
+		return counter.StreamDataBlobInventory{
+			Family: family, Ordinal: blobOrdinal, SHA256: "sha256:" + family + "-" + strconv.Itoa(blobOrdinal), Dictionary: true,
+			Nodes: []counter.StreamDataNodeInventory{{
+				Path: "/Binaries/" + uniqueID, ParentPath: "/Binaries",
+				Relation: "dictionary", Ordinal: 0, Name: uniqueID,
+				ExpansionStatus: "leaf", ValueKind: "data",
+				DataBytes: &size, DataSHA256: digest,
+			}},
+		}
+	}
+	timeline := &Timeline{StreamMetadata: &counter.StreamDataMetadata{ArchiveBlobs: []counter.StreamDataBlobInventory{
+		binaryBlob("aps_data", 1, "a", "sha256:h1", 10),
+		binaryBlob("aps_data", 2, "b", "sha256:h1", 10),
+		binaryBlob("aps_timeline_data", 1, "c", "sha256:h1", 10),
+		binaryBlob("aps_counter_data", 1, "d", "sha256:h2", 20),
+		binaryBlob("aps_counter_data", 2, "e", "sha256:h3", 10),
+		binaryBlob("aps_counter_data", 3, "f", "sha256:h3", 11),
+	}}}
+	trace := filepath.Join(t.TempDir(), "shader-content.pftrace")
+	if err := exportPerfettoForClock(timeline, trace, timelineClockBusy); err != nil {
+		t.Fatal(err)
+	}
+	query := `SELECT binary_sha256, occurrence_count, family_count, blob_count,
+                    minimum_byte_count, maximum_byte_count,
+                    logical_recorded_bytes, logical_repeated_entry_bytes,
+                    size_status, content_status, output_complete, audit_scope,
+                    clock_domain
+              FROM gputrace_shader_binary_content_audit ORDER BY binary_sha256;`
+	command := exec.Command(processor, "query", trace)
+	command.Stdin = strings.NewReader(perfettosql.Module + query)
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("trace processor shader content: %v\n%s", err, output)
+	}
+	rows, err := csv.NewReader(strings.NewReader(string(output))).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, row := range rows[1:] {
+		got = append(got, row...)
+	}
+	want := []string{
+		"sha256:h1", "3", "2", "3", "10", "10", "30", "20", "consistent_size", "repeated_across_families", "1", "complete_export", "none",
+		"sha256:h2", "1", "1", "1", "20", "20", "20", "0", "consistent_size", "unique_entry", "1", "complete_export", "none",
+		"sha256:h3", "2", "1", "2", "10", "11", "21", "[NULL]", "size_conflict", "repeated_within_family", "1", "complete_export", "none",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("PerfettoSQL shader content = %q, want %q", got, want)
+	}
+}
+
 func TestExportStreamDataTableReachesPerfettoSQL(t *testing.T) {
 	processor := os.Getenv("TRACE_PROCESSOR_SHELL")
 	if processor == "" {

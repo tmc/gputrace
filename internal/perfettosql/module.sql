@@ -848,6 +848,41 @@ JOIN args AS a USING (arg_set_id)
 WHERE s.category = 'stream_data_archive_blob'
   AND a.key GLOB 'debug.shader_binary_[0-9]*_json';
 
+-- gputrace_shader_binary_content_audit groups only exact SHA-256 identities.
+-- Logical repeated entry bytes are not a physical file-size savings estimate:
+-- keyed archives may share backing objects.
+CREATE PERFETTO VIEW gputrace_shader_binary_content_audit AS
+SELECT
+  binary_sha256,
+  count(*) AS occurrence_count,
+  count(DISTINCT family) AS family_count,
+  count(DISTINCT family || ':' || blob_ordinal) AS blob_count,
+  min(byte_count) AS minimum_byte_count,
+  max(byte_count) AS maximum_byte_count,
+  sum(byte_count) AS logical_recorded_bytes,
+  CASE WHEN min(byte_count) = max(byte_count)
+    THEN sum(byte_count) - max(byte_count)
+  END AS logical_repeated_entry_bytes,
+  CASE
+    WHEN min(byte_count) = max(byte_count) THEN 'consistent_size'
+    ELSE 'size_conflict'
+  END AS size_status,
+  CASE
+    WHEN count(*) = 1 THEN 'unique_entry'
+    WHEN count(DISTINCT family) > 1 THEN 'repeated_across_families'
+    ELSE 'repeated_within_family'
+  END AS content_status,
+  (SELECT output_complete FROM gputrace_capture) AS output_complete,
+  CASE
+    WHEN (SELECT output_complete FROM gputrace_capture) = 1 THEN 'complete_export'
+    ELSE 'retained_rows_only'
+  END AS audit_scope,
+  'exact SHA-256 content equality and logical decoded-entry bytes only; no physical storage savings, execution-cost, compatibility, pipeline, or timing claim' AS semantics,
+  'none' AS clock_domain
+FROM gputrace_shader_binary
+WHERE binary_sha256 IS NOT NULL AND binary_sha256 != ''
+GROUP BY binary_sha256;
+
 -- gputrace_program_address_mapping retains the nine recorded fields of each
 -- Program Address Mappings entry and joins its exact capture-local binary ID.
 -- Integer JSON columns preserve the source value before SQL's signed cast.
