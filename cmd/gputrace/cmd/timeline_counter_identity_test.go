@@ -352,10 +352,14 @@ func TestExportAPSDataInventoryReachesPerfettoSQL(t *testing.T) {
 	if processor == "" {
 		t.Skip("set TRACE_PROCESSOR_SHELL to run native PerfettoSQL integration")
 	}
+	dataBytes := 3
 	blobs := []counter.StreamDataBlobInventory{{
 		Family:  "aps_data",
 		Ordinal: 2, Bytes: 123, SHA256: "sha256:abc", Dictionary: true,
-		Keys: []counter.APSDataKeyInventory{{Ordinal: 0, Name: "APSTraceDataFile", ValueKind: "data"}},
+		Keys: []counter.APSDataKeyInventory{{
+			Ordinal: 0, Name: "APSTraceDataFile", ValueKind: "data",
+			DataBytes: &dataBytes, DataSHA256: "sha256:def",
+		}},
 	}}
 	timeline := &Timeline{StreamMetadata: &counter.StreamDataMetadata{
 		APSDataInventory: &counter.APSDataInventory{BlobRecords: blobs},
@@ -373,9 +377,10 @@ func TestExportAPSDataInventoryReachesPerfettoSQL(t *testing.T) {
               FROM gputrace_stream_data_archive_blob;`, []string{
 			"aps_data", "2", "123", "sha256:abc", "1", "1",
 		}},
-		{`SELECT family, blob_ordinal, key_ordinal, recorded_name, value_kind
+		{`SELECT family, blob_ordinal, key_ordinal, recorded_name, value_kind,
+                    data_bytes, data_sha256
               FROM gputrace_stream_data_archive_key;`, []string{
-			"aps_data", "2", "0", "APSTraceDataFile", "data",
+			"aps_data", "2", "0", "APSTraceDataFile", "data", "3", "sha256:def",
 		}},
 		{`SELECT blob_ordinal, byte_count, blob_sha256, dictionary, key_count,
                     decode_error, source, semantics FROM gputrace_aps_data_blob;`, []string{
@@ -384,10 +389,13 @@ func TestExportAPSDataInventoryReachesPerfettoSQL(t *testing.T) {
 			"content identity and root dictionary shape only; private values remain uninterpreted",
 		}},
 		{`SELECT blob_ordinal, key_ordinal, recorded_name, value_kind, blob_sha256,
+                    scalar_type, scalar_json, data_bytes, data_sha256, container_count,
+                    descriptor_error,
                     source, semantics FROM gputrace_aps_data_key;`, []string{
 			"2", "0", "APSTraceDataFile", "data", "sha256:abc",
+			"[NULL]", "[NULL]", "3", "sha256:def", "[NULL]", "[NULL]",
 			"streamData nested archive root NSDictionary",
-			"sorted root key identity and structural value kind only; private value remains uninterpreted",
+			"sorted root key identity and exact non-object value descriptor; private meaning remains uninterpreted",
 		}},
 		{`SELECT stream_data_aps_data_inventory_blob_record_count,
                     stream_data_aps_data_inventory_key_record_count,
@@ -398,9 +406,13 @@ func TestExportAPSDataInventoryReachesPerfettoSQL(t *testing.T) {
 		{`SELECT stream_data_archive_blob_count, stream_data_archive_key_count,
                     stream_data_archive_byte_count,
                     stream_data_archive_aps_data_blob_count,
+                    stream_data_archive_scalar_value_count,
+                    stream_data_archive_data_value_count,
+                    stream_data_archive_container_value_count,
+                    stream_data_archive_descriptor_error_count,
                     stream_data_archive_semantics
               FROM gputrace_capture;`, []string{
-			"1", "1", "123", "1",
+			"1", "1", "123", "1", "0", "1", "0", "0",
 			"source family, ordinal, content identity, and sorted root dictionary shape; private values remain uninterpreted",
 		}},
 	}

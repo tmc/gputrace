@@ -248,6 +248,11 @@ APSTimelineData, and APSCounterData. Their `family` column makes source archive
 counts, bytes, digests, and root shapes comparable even when higher-level
 decoders produce different coverage. `gputrace_aps_data_*` are filtered views
 of this shared evidence model.
+Archive key rows also retain exact non-object value descriptors: canonical JSON
+plus the recorded scalar type, NSData byte count and digest, or array/dictionary
+cardinality. Values with an opaque representation carry `descriptor_error`
+instead of a guessed value. Manifest source counts distinguish retained scalar,
+data, container, and refused descriptors from rows sampled by an output budget.
 `gputrace_track_event_arg` retains every argument for low-volume generic events
 such as command buffers and profiler streams; its `event_id` is a trace-local
 join key, not a persistent source identity. These are raw profiler input,

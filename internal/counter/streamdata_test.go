@@ -230,6 +230,49 @@ func TestArchivedValueKind(t *testing.T) {
 	}
 }
 
+func TestDescribeArchivedValue(t *testing.T) {
+	objects := []any{
+		"$null",
+		map[string]any{"NS.data": []byte("abc")},
+		map[string]any{"NS.objects": []any{1, 2}},
+		map[string]any{"NS.keys": []any{1}, "NS.objects": []any{2}},
+		[]byte("def"),
+		map[string]any{"NS.data": plist.UID(4)},
+	}
+	for _, test := range []struct {
+		name  string
+		value any
+		check func(StreamDataKeyInventory) bool
+	}{
+		{"uint64", ^uint64(0), func(k StreamDataKeyInventory) bool {
+			return k.ValueKind == "number" && k.ScalarType == "uint64" && k.ScalarJSON == "18446744073709551615"
+		}},
+		{"string", "value", func(k StreamDataKeyInventory) bool {
+			return k.ValueKind == "string" && k.ScalarType == "string" && k.ScalarJSON == `"value"`
+		}},
+		{"data", plist.UID(1), func(k StreamDataKeyInventory) bool {
+			return k.ValueKind == "data" && k.DataBytes != nil && *k.DataBytes == 3 && k.DataSHA256 == "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+		}},
+		{"indirect data", plist.UID(5), func(k StreamDataKeyInventory) bool {
+			return k.ValueKind == "data" && k.DataBytes != nil && *k.DataBytes == 3 && k.DataSHA256 == "sha256:cb8379ac2098aa165029e3938a51da0bcecfc008fd6795f401178647f96c5b34"
+		}},
+		{"array", plist.UID(2), func(k StreamDataKeyInventory) bool {
+			return k.ValueKind == "array" && k.ContainerCount != nil && *k.ContainerCount == 2
+		}},
+		{"dictionary", plist.UID(3), func(k StreamDataKeyInventory) bool {
+			return k.ValueKind == "dictionary" && k.ContainerCount != nil && *k.ContainerCount == 1
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var got StreamDataKeyInventory
+			describeArchivedValue(&got, test.value, objects)
+			if !test.check(got) {
+				t.Fatalf("describeArchivedValue() = %#v", got)
+			}
+		})
+	}
+}
+
 func TestParseStreamDataIntegration(t *testing.T) {
 	gpuprofDir := integrationPathFromEnv(t, streamDataIntegrationDirEnv)
 	stats, err := ParseStreamData(gpuprofDir, nil)

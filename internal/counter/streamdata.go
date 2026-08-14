@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -299,9 +300,15 @@ type StreamDataBlobInventory struct {
 
 // StreamDataKeyInventory is one root dictionary key in stable lexical order.
 type StreamDataKeyInventory struct {
-	Ordinal   int    `json:"ordinal"`
-	Name      string `json:"name"`
-	ValueKind string `json:"value_kind"`
+	Ordinal         int    `json:"ordinal"`
+	Name            string `json:"name"`
+	ValueKind       string `json:"value_kind"`
+	ScalarType      string `json:"scalar_type,omitempty"`
+	ScalarJSON      string `json:"scalar_json,omitempty"`
+	DataBytes       *int   `json:"data_bytes,omitempty"`
+	DataSHA256      string `json:"data_sha256,omitempty"`
+	ContainerCount  *int   `json:"container_count,omitempty"`
+	DescriptorError string `json:"descriptor_error,omitempty"`
 }
 
 type APSDataBlobInventory = StreamDataBlobInventory
@@ -499,14 +506,111 @@ func parseStreamDataBlobInventory(family string, blobs [][]byte) []StreamDataBlo
 		}
 		slices.Sort(names)
 		for keyOrdinal, name := range names {
-			record.Keys = append(record.Keys, StreamDataKeyInventory{
-				Ordinal: keyOrdinal, Name: name,
-				ValueKind: archivedValueKind(dict[name], objects),
-			})
+			key := StreamDataKeyInventory{Ordinal: keyOrdinal, Name: name}
+			describeArchivedValue(&key, dict[name], objects)
+			record.Keys = append(record.Keys, key)
 		}
 		records = append(records, record)
 	}
 	return records
+}
+
+func describeArchivedValue(key *StreamDataKeyInventory, value any, objects []any) {
+	value = deref(objects, value)
+	key.ValueKind = archivedValueKind(value, nil)
+	if scalarType, scalarValue, ok := archivedScalar(value); ok {
+		key.ScalarType = scalarType
+		if data, err := json.Marshal(scalarValue); err == nil {
+			key.ScalarJSON = string(data)
+		}
+		return
+	}
+	if data := archivedDescriptorData(value, objects); data != nil {
+		bytes := len(data)
+		sum := sha256.Sum256(data)
+		key.DataBytes = &bytes
+		key.DataSHA256 = "sha256:" + hex.EncodeToString(sum[:])
+		return
+	}
+	if count, ok := archivedContainerCount(value); ok {
+		key.ContainerCount = &count
+		return
+	}
+	switch key.ValueKind {
+	case "data":
+		key.DescriptorError = "data payload bytes are not directly recoverable"
+	case "array", "dictionary":
+		key.DescriptorError = "container cardinality is not directly recoverable"
+	case "object", "other":
+		key.DescriptorError = "opaque archived object"
+	}
+}
+
+func archivedScalar(value any) (string, any, bool) {
+	switch value := value.(type) {
+	case string:
+		if value == "$null" {
+			return "null", nil, true
+		}
+		return "string", value, true
+	case bool:
+		return "bool", value, true
+	case int:
+		return "int", value, true
+	case int8:
+		return "int8", value, true
+	case int16:
+		return "int16", value, true
+	case int32:
+		return "int32", value, true
+	case int64:
+		return "int64", value, true
+	case uint:
+		return "uint", value, true
+	case uint8:
+		return "uint8", value, true
+	case uint16:
+		return "uint16", value, true
+	case uint32:
+		return "uint32", value, true
+	case uint64:
+		return "uint64", value, true
+	case float32:
+		return "float32", value, true
+	case float64:
+		return "float64", value, true
+	case nil:
+		return "null", nil, true
+	default:
+		return "", nil, false
+	}
+}
+
+func archivedDescriptorData(value any, objects []any) []byte {
+	switch value := value.(type) {
+	case []byte:
+		return value
+	case map[string]any:
+		data, _ := deref(objects, value["NS.data"]).([]byte)
+		return data
+	default:
+		return nil
+	}
+}
+
+func archivedContainerCount(value any) (int, bool) {
+	switch value := value.(type) {
+	case []any:
+		return len(value), true
+	case map[string]any:
+		if keys, ok := value["NS.keys"].([]any); ok {
+			return len(keys), true
+		}
+		if objects, ok := value["NS.objects"].([]any); ok {
+			return len(objects), true
+		}
+	}
+	return 0, false
 }
 
 func archivedValueKind(value any, objects []any) string {

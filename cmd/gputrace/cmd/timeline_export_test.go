@@ -570,10 +570,11 @@ func TestApplyStreamIdentity(t *testing.T) {
 	twoEntries := int64(2)
 	zeroEntries := int64(0)
 	counterDecode := &counter.StreamDataCounterDecode{DecodedSamples: 20}
+	dataBytes := 3
 	apsInventory := &counter.APSDataInventory{
 		Blobs: 2, Dictionaries: 2, WithAPSTraceDataFile: 1,
 		BlobRecords: []counter.APSDataBlobInventory{{
-			Ordinal: 0, Keys: []counter.APSDataKeyInventory{{Name: "APSTraceDataFile"}},
+			Ordinal: 0, Keys: []counter.APSDataKeyInventory{{Name: "APSTraceDataFile", DataBytes: &dataBytes}},
 		}},
 	}
 	timeline := &Timeline{}
@@ -633,6 +634,10 @@ func TestApplyStreamIdentity(t *testing.T) {
 	if &timeline.StreamMetadata.ArchiveBlobs[0] == &apsInventory.BlobRecords[0] ||
 		&timeline.StreamMetadata.ArchiveBlobs[0].Keys[0] == &apsInventory.BlobRecords[0].Keys[0] {
 		t.Fatal("streamData archive inventory retained source slices")
+	}
+	if timeline.StreamMetadata.APSDataInventory.BlobRecords[0].Keys[0].DataBytes == &dataBytes ||
+		timeline.StreamMetadata.ArchiveBlobs[0].Keys[0].DataBytes == &dataBytes {
+		t.Fatal("streamData archive key inventory retained source pointers")
 	}
 }
 

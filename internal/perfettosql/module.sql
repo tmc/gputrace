@@ -228,6 +228,10 @@ SELECT
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_key_count') AS INT) AS stream_data_archive_key_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_byte_count') AS INT) AS stream_data_archive_byte_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_malformed_blob_count') AS INT) AS stream_data_archive_malformed_blob_count,
+  cast(extract_arg(arg_set_id, 'debug.stream_data_archive_scalar_value_count') AS INT) AS stream_data_archive_scalar_value_count,
+  cast(extract_arg(arg_set_id, 'debug.stream_data_archive_data_value_count') AS INT) AS stream_data_archive_data_value_count,
+  cast(extract_arg(arg_set_id, 'debug.stream_data_archive_container_value_count') AS INT) AS stream_data_archive_container_value_count,
+  cast(extract_arg(arg_set_id, 'debug.stream_data_archive_descriptor_error_count') AS INT) AS stream_data_archive_descriptor_error_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_aps_data_blob_count') AS INT) AS stream_data_archive_aps_data_blob_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_aps_timeline_data_blob_count') AS INT) AS stream_data_archive_aps_timeline_data_blob_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_aps_counter_data_blob_count') AS INT) AS stream_data_archive_aps_counter_data_blob_count,
@@ -754,6 +758,12 @@ SELECT
   cast(extract_arg(arg_set_id, 'debug.key_ordinal') AS INT) AS key_ordinal,
   extract_arg(arg_set_id, 'debug.recorded_name') AS recorded_name,
   extract_arg(arg_set_id, 'debug.value_kind') AS value_kind,
+  extract_arg(arg_set_id, 'debug.scalar_type') AS scalar_type,
+  extract_arg(arg_set_id, 'debug.scalar_json') AS scalar_json,
+  cast(extract_arg(arg_set_id, 'debug.data_bytes') AS INT) AS data_bytes,
+  extract_arg(arg_set_id, 'debug.data_sha256') AS data_sha256,
+  cast(extract_arg(arg_set_id, 'debug.container_count') AS INT) AS container_count,
+  extract_arg(arg_set_id, 'debug.descriptor_error') AS descriptor_error,
   extract_arg(arg_set_id, 'debug.blob_sha256') AS blob_sha256,
   extract_arg(arg_set_id, 'debug.source') AS source,
   extract_arg(arg_set_id, 'debug.semantics') AS semantics,
@@ -770,6 +780,8 @@ WHERE family = 'aps_data';
 
 CREATE PERFETTO VIEW gputrace_aps_data_key AS
 SELECT id, blob_ordinal, key_ordinal, recorded_name, value_kind, blob_sha256,
+       scalar_type, scalar_json, data_bytes, data_sha256, container_count,
+       descriptor_error,
        source, semantics, arg_set_id
 FROM gputrace_stream_data_archive_key
 WHERE family = 'aps_data';

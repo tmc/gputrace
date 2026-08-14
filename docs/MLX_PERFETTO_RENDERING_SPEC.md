@@ -695,6 +695,11 @@ digest, dictionary status, key identity, and structural value kind remain
 queryable independently of higher-level decoder success. APSData-specific
 views are filtered projections of these generic rows. The manifest reports
 total and per-family source counts plus total embedded bytes before sampling.
+For root values whose archive representation is directly recoverable, key rows
+also retain the recorded scalar type and canonical JSON, NSData byte count and
+digest, or container cardinality. Opaque representations carry an explicit
+descriptor error. No field name is promoted into private semantic meaning.
+The manifest reports pre-sampling counts for each descriptor class.
 
 When an APSCounterData TraceId table covers an encoder execution ordinal,
 `gputrace_encoder` also exposes its recorded batch ID and sample index. This is
