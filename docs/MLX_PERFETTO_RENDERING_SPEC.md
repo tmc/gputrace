@@ -728,6 +728,17 @@ draw indices, addresses, or binary types into dispatch, function, source-line,
 or timing attribution. Pre-sampling binary, mapping, matched, and unmatched
 counts remain in `gputrace_capture` when an output budget drops blob packets.
 
+`gputrace_encoder_program_mapping` projects one additional relationship:
+recorded `encIndex` equality to the streamData `Encoder Infos` execution
+ordinal. It exposes the matched encoder event and timing provenance while
+retaining the separately recorded `encID` as an opaque mapping-namespace value.
+This is an encoder-level set of recorded program mappings, not proof that every
+binary or address was used by every dispatch in that encoder.
+`gputrace_program_encoder_identity_audit` reports distinct-set equality counts
+between mapping `encID`, APSCounterData encoder IDs, APSCounterData kick IDs,
+mapping `encIndex`, and encoder execution ordinals. It inventories equality; it
+does not promote equal values in the opaque ID namespaces into foreign keys.
+
 When an APSCounterData TraceId table covers an encoder execution ordinal,
 `gputrace_encoder` also exposes its recorded batch ID and sample index. This is
 the same positional relationship used for capture-backed execution-cost

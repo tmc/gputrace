@@ -869,6 +869,76 @@ JOIN args AS a USING (arg_set_id)
 WHERE s.category = 'stream_data_archive_blob'
   AND a.key GLOB 'debug.program_address_mapping_[0-9]*_json';
 
+-- gputrace_encoder_program_mapping joins only the recorded encIndex to the
+-- streamData encoder execution ordinal. The separately recorded encID remains
+-- visible and is not treated as a Metal or APSCounterData identifier.
+CREATE PERFETTO VIEW gputrace_encoder_program_mapping AS
+SELECT
+  m.family,
+  m.blob_ordinal,
+  m.mapping_ordinal,
+  m.binary_unique_id,
+  m.mapping_type,
+  m.mapped_address_json,
+  m.mapped_address,
+  m.mapped_size_json,
+  m.mapped_size,
+  m.encoder_id_json AS mapping_encoder_id_json,
+  m.encoder_index_json,
+  m.encoder_index AS encoder_execution_ordinal,
+  e.id AS encoder_event_id,
+  e.name AS encoder_name,
+  e.clock_domain AS encoder_clock_domain,
+  e.timing_source AS encoder_timing_source,
+  e.timing_quality AS encoder_timing_quality,
+  CASE WHEN e.id IS NULL THEN 'unmatched' ELSE 'matched' END AS encoder_join_status,
+  'recorded encIndex equality to streamData Encoder Infos execution ordinal; not encID equality' AS encoder_join_basis,
+  m.binary_byte_count,
+  m.binary_sha256,
+  m.binary_join_status,
+  m.blob_sha256,
+  m.arg_set_id
+FROM gputrace_program_address_mapping AS m
+LEFT JOIN gputrace_encoder AS e
+  ON e.encoder_id = m.encoder_index;
+
+-- gputrace_program_encoder_identity_audit compares identifier namespaces
+-- without asserting that equal-looking fields are foreign keys.
+CREATE PERFETTO VIEW gputrace_program_encoder_identity_audit AS
+WITH
+mapping_ids AS (
+  SELECT DISTINCT encoder_id_json AS id
+  FROM gputrace_program_address_mapping
+  WHERE encoder_id_json IS NOT NULL
+),
+mapping_indices AS (
+  SELECT DISTINCT encoder_index AS id
+  FROM gputrace_program_address_mapping
+  WHERE encoder_index IS NOT NULL
+),
+counter_encoder_ids AS (
+  SELECT DISTINCT encoder_id_uint64 AS id
+  FROM gputrace_counter_encoder_aggregate
+),
+counter_kick_ids AS (
+  SELECT DISTINCT kick_trace_id_uint64 AS id
+  FROM gputrace_counter_encoder_aggregate
+  WHERE kick_trace_id_uint64 IS NOT NULL
+),
+encoder_ordinals AS (
+  SELECT DISTINCT encoder_id AS id FROM gputrace_encoder
+)
+SELECT
+  (SELECT count(*) FROM mapping_ids) AS mapping_encoder_id_count,
+  (SELECT count(*) FROM counter_encoder_ids) AS counter_encoder_id_count,
+  (SELECT count(*) FROM mapping_ids JOIN counter_encoder_ids USING (id)) AS mapping_to_counter_encoder_id_equal_count,
+  (SELECT count(*) FROM counter_kick_ids) AS counter_kick_id_count,
+  (SELECT count(*) FROM mapping_ids JOIN counter_kick_ids USING (id)) AS mapping_to_counter_kick_id_equal_count,
+  (SELECT count(*) FROM mapping_indices) AS mapping_encoder_index_count,
+  (SELECT count(*) FROM encoder_ordinals) AS encoder_execution_ordinal_count,
+  (SELECT count(*) FROM mapping_indices JOIN encoder_ordinals USING (id)) AS mapping_index_to_encoder_ordinal_equal_count,
+  'equality inventory only; only encIndex to Encoder Infos ordinal is projected as a positional join' AS semantics;
+
 -- APSData-specific aliases keep common queries concise.
 CREATE PERFETTO VIEW gputrace_aps_data_blob AS
 SELECT id, blob_ordinal, byte_count, blob_sha256, dictionary, key_count,

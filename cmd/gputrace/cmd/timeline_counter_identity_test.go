@@ -386,15 +386,22 @@ func TestExportAPSDataInventoryReachesPerfettoSQL(t *testing.T) {
 			Relation: "dictionary", Ordinal: 1, Name: "mappedAddress",
 			ExpansionStatus: "leaf", ValueKind: "number", ScalarType: "uint64", ScalarJSON: "1099511627840",
 		}, {
+			Path: "/Program Address Mappings/0/encIndex", ParentPath: "/Program Address Mappings/0", Depth: 3,
+			Relation: "dictionary", Ordinal: 2, Name: "encIndex",
+			ExpansionStatus: "leaf", ValueKind: "number", ScalarType: "uint64", ScalarJSON: "0",
+		}, {
 			Path: "/Program Address Mappings/0/type", ParentPath: "/Program Address Mappings/0", Depth: 3,
-			Relation: "dictionary", Ordinal: 2, Name: "type",
+			Relation: "dictionary", Ordinal: 3, Name: "type",
 			ExpansionStatus: "leaf", ValueKind: "string", ScalarType: "string", ScalarJSON: `"driver"`,
 		}},
 	}}
 	timeline := &Timeline{StreamMetadata: &counter.StreamDataMetadata{
 		APSDataInventory: &counter.APSDataInventory{BlobRecords: blobs},
 		ArchiveBlobs:     blobs,
-	}}
+	}, Events: []TimelineEvent{{
+		Name: "Encoder 0", Category: "encoder", Phase: "i",
+		ProcessID: 1, ThreadID: 1, Args: map[string]any{"index": 0},
+	}}}
 	trace := filepath.Join(t.TempDir(), "aps-data-inventory.pftrace")
 	if err := exportPerfettoForClock(timeline, trace, timelineClockBusy); err != nil {
 		t.Fatal(err)
@@ -406,7 +413,7 @@ func TestExportAPSDataInventoryReachesPerfettoSQL(t *testing.T) {
 		{`SELECT family, blob_ordinal, byte_count, blob_sha256, dictionary, key_count,
                     node_count, nodes_truncated
               FROM gputrace_stream_data_archive_blob;`, []string{
-			"aps_data", "2", "123", "sha256:abc", "1", "1", "6", "0",
+			"aps_data", "2", "123", "sha256:abc", "1", "1", "7", "0",
 		}},
 		{`SELECT family, blob_ordinal, key_ordinal, recorded_name, value_kind,
                     data_bytes, data_sha256
@@ -433,12 +440,28 @@ func TestExportAPSDataInventoryReachesPerfettoSQL(t *testing.T) {
                     binary_join_status
               FROM gputrace_program_address_mapping;`, []string{
 			"aps_data", "2", "0", "bin-1", "driver",
-			"1099511627840", "1099511627840", "3", "16", "sha256:binary", "matched",
+			"1099511627840", "1099511627840", "4", "16", "sha256:binary", "matched",
+		}},
+		{`SELECT family, mapping_ordinal, binary_unique_id,
+                    mapping_encoder_id_json, encoder_execution_ordinal,
+                    encoder_name, encoder_join_status, encoder_join_basis
+              FROM gputrace_encoder_program_mapping;`, []string{
+			"aps_data", "0", "bin-1", "[NULL]", "0",
+			"Encoder 0", "matched",
+			"recorded encIndex equality to streamData Encoder Infos execution ordinal; not encID equality",
+		}},
+		{`SELECT mapping_encoder_id_count, counter_encoder_id_count,
+                    mapping_to_counter_encoder_id_equal_count, counter_kick_id_count,
+                    mapping_to_counter_kick_id_equal_count, mapping_encoder_index_count,
+                    encoder_execution_ordinal_count,
+                    mapping_index_to_encoder_ordinal_equal_count
+              FROM gputrace_program_encoder_identity_audit;`, []string{
+			"0", "0", "0", "0", "0", "1", "1", "1",
 		}},
 		{`SELECT blob_ordinal, byte_count, blob_sha256, dictionary, key_count,
                     node_count, nodes_truncated,
                     decode_error, source, semantics FROM gputrace_aps_data_blob;`, []string{
-			"2", "123", "sha256:abc", "1", "1", "6", "0", "[NULL]",
+			"2", "123", "sha256:abc", "1", "1", "7", "0", "[NULL]",
 			"streamData nested NSData archive entry",
 			"content identity and deterministic nested dictionary and array projection; private values remain uninterpreted",
 		}},
@@ -475,7 +498,7 @@ func TestExportAPSDataInventoryReachesPerfettoSQL(t *testing.T) {
                     stream_data_archive_descriptor_error_count,
                     stream_data_archive_semantics
               FROM gputrace_capture;`, []string{
-			"1", "1", "6", "2", "0", "0", "0", "1", "1", "1", "0", "123", "1", "0", "1", "0", "0",
+			"1", "1", "7", "2", "0", "0", "0", "1", "1", "1", "0", "123", "1", "0", "1", "0", "0",
 			"source family, ordinal, content identity, and deterministic nested dictionary and array projection; private values remain uninterpreted",
 		}},
 	}
