@@ -213,7 +213,34 @@ static void gputrace_hook_device(id<MTLDevice> device) {
 static void gputrace_stop(void) {
 	if (gputrace_capturing) {
 		[[MTLCaptureManager sharedCaptureManager] stopCapture];
+		gputrace_capturing = 0;
 	}
+}
+
+// Go terminates through libc _exit, which does not run handlers registered
+// with atexit. Stop the capture before that path discards the process and its
+// unfinished trace store. Terminate through the Darwin kernel trap: libc's
+// _Exit calls _exit and would recurse through this interposition.
+static void gputrace_terminate(int status) __attribute__((noreturn));
+static void gputrace_terminate(int status) {
+#if defined(__arm64__)
+	register uint64_t x0 __asm("x0") = (uint64_t)status;
+	register uint64_t x16 __asm("x16") = 1;
+	__asm__ volatile("svc #0x80" : : "r"(x0), "r"(x16) : "memory");
+#elif defined(__x86_64__)
+	register uint64_t rax __asm("rax") = 0x2000001;
+	register uint64_t rdi __asm("rdi") = (uint64_t)status;
+	__asm__ volatile("syscall" : : "r"(rax), "r"(rdi) : "rcx", "r11", "memory");
+#else
+#error unsupported macOS architecture
+#endif
+	__builtin_unreachable();
+}
+
+static void gputrace_exit(int status) __attribute__((noreturn));
+static void gputrace_exit(int status) {
+	gputrace_stop();
+	gputrace_terminate(status);
 }
 
 static int gputrace_elect(void) {
@@ -329,3 +356,4 @@ DYLD_INTERPOSE(gputrace_create_system_default_device,
 DYLD_INTERPOSE(gputrace_copy_all_devices, MTLCopyAllDevices);
 DYLD_INTERPOSE(gputrace_copy_all_devices_with_observer,
                MTLCopyAllDevicesWithObserver);
+DYLD_INTERPOSE(gputrace_exit, _exit);
