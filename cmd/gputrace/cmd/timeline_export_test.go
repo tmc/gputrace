@@ -99,6 +99,57 @@ func TestAppendEvidenceDetailEventsEmitsOneOptionalCompilerRecordPerPipeline(t *
 	}
 }
 
+func TestAppendEvidenceDetailEventsEmitsStructuredCompilerRemarks(t *testing.T) {
+	line, column := 7, 3
+	timeline := &Timeline{
+		PipelineCompilerSource: "streamData pipelinePerformanceStatistics",
+		PipelineCompilerStats: []counter.PipelineStats{{
+			PipelineID: 7, FunctionName: "kernel",
+			CompilerRemarks: []counter.PipelineCompilerRemark{
+				{Index: 0, Kind: "Passed", Pass: "loop-unroll", Name: "FullyUnrolled", Function: "agc.main", SourceFile: "kernel.h", SourceLine: &line, SourceColumn: &column, ParseStatus: "complete"},
+				{Index: 1, Kind: "Analysis", Pass: "asm-printer", Name: "InstructionCount", Function: "agc.main", ParseStatus: "no_source_location"},
+			},
+		}},
+	}
+	trace := &perfetto.Trace{}
+	appendEvidenceDetailEvents(trace, timeline)
+	if len(trace.Tracks) != 1 || len(trace.Events) != 3 {
+		t.Fatalf("compiler evidence = %d tracks, %d events, want 1 and 3", len(trace.Tracks), len(trace.Events))
+	}
+	for i, event := range trace.Events[1:] {
+		if event.Category != "pipeline_compiler_remark" || event.Required ||
+			event.Kind != perfetto.EventInstant || event.Args["clock_domain"] != "none" ||
+			event.Args["timing_quality"] != "unavailable" || event.Args["remark_index"] != i {
+			t.Fatalf("remark %d = %#v", i, event)
+		}
+	}
+	complete := trace.Events[1].Args
+	if complete["source_file"] != "kernel.h" || complete["source_line"] != 7 || complete["source_column"] != 3 {
+		t.Fatalf("complete source location = %#v", complete)
+	}
+	withoutSource := trace.Events[2].Args
+	if _, ok := withoutSource["source_file"]; ok {
+		t.Fatalf("no-source remark has source file: %#v", withoutSource)
+	}
+}
+
+func TestAppendEvidenceDetailEventsShardsUntimedRecords(t *testing.T) {
+	timeline := &Timeline{}
+	for i := 0; i < 61; i++ {
+		timeline.UnavailableEvidence = append(timeline.UnavailableEvidence, UnavailableEvidence{
+			Family: fmt.Sprintf("family-%d", i), Reason: "test",
+		})
+	}
+	trace := &perfetto.Trace{}
+	appendEvidenceDetailEvents(trace, timeline)
+	if len(trace.Tracks) != 2 || len(trace.Events) != 61 {
+		t.Fatalf("evidence = %d tracks, %d events, want 2 and 61", len(trace.Tracks), len(trace.Events))
+	}
+	if trace.Events[59].TrackUUID != trace.Tracks[0].UUID || trace.Events[60].TrackUUID != trace.Tracks[1].UUID {
+		t.Fatalf("shard boundary = tracks %d and %d, events %d and %d", trace.Tracks[0].UUID, trace.Tracks[1].UUID, trace.Events[59].TrackUUID, trace.Events[60].TrackUUID)
+	}
+}
+
 func TestExportChromeTracingIncludesTimingMetadata(t *testing.T) {
 	effective := uint64(1650625)
 	timeline := &Timeline{

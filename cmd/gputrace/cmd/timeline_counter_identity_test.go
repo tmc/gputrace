@@ -340,6 +340,7 @@ func TestExportPipelineCompilerDiagnosticsReachPerfettoSQL(t *testing.T) {
 	}
 	remarks := "--- !Passed\nDebugLoc: { File: kernel.h, Line: 7 }\n"
 	cached := false
+	line, column := 7, 3
 	minusOne := int64(-1)
 	zero := int64(0)
 	timeline := &Timeline{
@@ -347,6 +348,10 @@ func TestExportPipelineCompilerDiagnosticsReachPerfettoSQL(t *testing.T) {
 		PipelineCompilerStats: []counter.PipelineStats{{
 			PipelineID: 989, PipelineAddress: 0xfedc, FunctionName: "kernel", Remarks: &remarks,
 			RecordedStatistics: []string{"Constant calculation phase present", "Spilled bytes"},
+			CompilerRemarks: []counter.PipelineCompilerRemark{
+				{Index: 0, Kind: "Passed", Pass: "loop-unroll", Name: "FullyUnrolled", Function: "agc.main", SourceFile: "kernel.h", SourceLine: &line, SourceColumn: &column, ParseStatus: "complete"},
+				{Index: 1, Kind: "Analysis", Pass: "asm-printer", Name: "InstructionCount", Function: "agc.main", ParseStatus: "no_source_location"},
+			},
 			CompilePerformance: &counter.PipelineCompilePerformance{
 				FunctionWasCached: &cached, CompilerBackendNanoseconds: &minusOne,
 				CompilerTotalNanoseconds: &zero,
@@ -386,10 +391,45 @@ FROM gputrace_pipeline_compiler;
 		t.Fatalf("PerfettoSQL pipeline compiler = %q, want header and %q", rows, want)
 	}
 
+	remarkQuery := perfettosql.Module + `
+SELECT pipeline_id, function_name, remark_index, remark_kind, compiler_pass,
+       remark_name, remark_function, source_file, source_line, source_column,
+       parse_status, clock_domain, timing_quality
+FROM gputrace_pipeline_compiler_remark
+ORDER BY remark_index;
+`
+	command = exec.Command(processor, "query", trace)
+	command.Stdin = strings.NewReader(remarkQuery)
+	output, err = command.Output()
+	if err != nil {
+		t.Fatalf("trace processor pipeline compiler remarks: %v\n%s", err, output)
+	}
+	rows, err = csv.NewReader(strings.NewReader(string(output))).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRemarks := [][]string{
+		{"989", "kernel", "0", "Passed", "loop-unroll", "FullyUnrolled", "agc.main", "kernel.h", "7", "3", "complete", "none", "unavailable"},
+		{"989", "kernel", "1", "Analysis", "asm-printer", "InstructionCount", "agc.main", "[NULL]", "[NULL]", "[NULL]", "no_source_location", "none", "unavailable"},
+	}
+	if len(rows) != 3 || !slices.Equal(rows[1], wantRemarks[0]) || !slices.Equal(rows[2], wantRemarks[1]) {
+		t.Fatalf("PerfettoSQL pipeline compiler remarks = %q, want header and %q", rows, wantRemarks)
+	}
+
 	manifestQuery := perfettosql.Module + `
 SELECT pipeline_compiler_availability, pipeline_compiler_count,
        pipeline_compiler_count_semantics,
-       pipeline_compiler_source, pipeline_compiler_semantics
+       pipeline_compiler_source, pipeline_compiler_semantics,
+       pipeline_compiler_remark_availability, pipeline_compiler_remark_count,
+       pipeline_compiler_remark_source_location_count,
+       pipeline_compiler_remark_resolved_source_location_count,
+       pipeline_compiler_remark_unresolved_source_location_count,
+       pipeline_compiler_remark_malformed_count,
+       pipeline_compiler_remark_passed_count,
+       pipeline_compiler_remark_missed_count,
+       pipeline_compiler_remark_analysis_count,
+       pipeline_compiler_remark_count_semantics,
+       pipeline_compiler_remark_semantics
 FROM gputrace_capture;
 `
 	command = exec.Command(processor, "query", trace)
@@ -407,6 +447,9 @@ FROM gputrace_capture;
 		"decoded source records; projected SQL rows may be lower under an explicit output budget",
 		"streamData pipelinePerformanceStatistics",
 		"static compilation evidence; remarks are not measured source-line GPU cost; no clock or dispatch join",
+		"available: searchable projection of exact compiler Remarks YAML", "2", "1", "1", "0", "0", "1", "0", "1",
+		"decoded source documents; projected SQL rows may be lower under an explicit output budget",
+		"static compiler pass diagnostics; no duration, sample weight, runtime causality, or source-line GPU cost",
 	}
 	if len(rows) != 2 || !slices.Equal(rows[1], wantManifest) {
 		t.Fatalf("PerfettoSQL pipeline compiler manifest = %q, want header and %q", rows, wantManifest)

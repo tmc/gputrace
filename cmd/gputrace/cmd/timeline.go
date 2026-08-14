@@ -2777,6 +2777,7 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 			"counter_catalog_availability":                "unavailable: APSCounterData pass catalog is absent",
 			"counter_decoder_availability":                "unavailable: no clock-aligned decoded hardware counter series is retained",
 			"pipeline_compiler_availability":              "unavailable: no pipeline compiler diagnostics were decoded",
+			"pipeline_compiler_remark_availability":       "unavailable: no structured compiler remarks were decoded",
 			"raw_counter_artifact_availability":           "unavailable: no separate raw artifact identity and digest were verified",
 			"perfetto_schema_revision":                    perfetto.SchemaRevision,
 			"packet_family_gpu_info":                      true,
@@ -3181,6 +3182,43 @@ func appendPipelineCompilerArgs(args map[string]any, timeline *Timeline) {
 	args["pipeline_compiler_count_semantics"] = "decoded source records; projected SQL rows may be lower under an explicit output budget"
 	args["pipeline_compiler_source"] = timeline.PipelineCompilerSource
 	args["pipeline_compiler_semantics"] = "static compilation evidence; remarks are not measured source-line GPU cost; no clock or dispatch join"
+	var remarks, locations, resolvedLocations, unresolvedLocations, malformed, passed, missed, analysis int
+	for _, pipeline := range timeline.PipelineCompilerStats {
+		for _, remark := range pipeline.CompilerRemarks {
+			remarks++
+			switch remark.ParseStatus {
+			case "complete":
+				locations++
+				resolvedLocations++
+			case "unresolved_source_location":
+				locations++
+				unresolvedLocations++
+			case "malformed":
+				malformed++
+			}
+			switch remark.Kind {
+			case "Passed":
+				passed++
+			case "Missed":
+				missed++
+			case "Analysis":
+				analysis++
+			}
+		}
+	}
+	if remarks > 0 {
+		args["pipeline_compiler_remark_availability"] = "available: searchable projection of exact compiler Remarks YAML"
+		args["pipeline_compiler_remark_count"] = remarks
+		args["pipeline_compiler_remark_source_location_count"] = locations
+		args["pipeline_compiler_remark_resolved_source_location_count"] = resolvedLocations
+		args["pipeline_compiler_remark_unresolved_source_location_count"] = unresolvedLocations
+		args["pipeline_compiler_remark_malformed_count"] = malformed
+		args["pipeline_compiler_remark_passed_count"] = passed
+		args["pipeline_compiler_remark_missed_count"] = missed
+		args["pipeline_compiler_remark_analysis_count"] = analysis
+		args["pipeline_compiler_remark_count_semantics"] = "decoded source documents; projected SQL rows may be lower under an explicit output budget"
+		args["pipeline_compiler_remark_semantics"] = "static compiler pass diagnostics; no duration, sample weight, runtime causality, or source-line GPU cost"
+	}
 }
 
 func appendAPSDataInventoryArgs(args map[string]any, inventory *counter.APSDataInventory) {
@@ -3578,11 +3616,13 @@ func appendEvidenceDetailEvents(trace *perfetto.Trace, timeline *Timeline) {
 		return
 	}
 	trackID := perfetto.TrackUUID("gputrace.evidence", "details")
+	eventStart := len(trace.Events)
 	trace.Tracks = append(trace.Tracks, perfetto.Track{
 		UUID:        trackID,
 		Name:        "Evidence details (untimed)",
 		Description: "Source-backed evidence without a verified timeline coordinate",
 	})
+	defer shardUntimedEvidenceTracks(trace, trackID, eventStart)
 	nextID := nextPerfettoEventID(trace)
 	for _, column := range timeline.CounterCatalog {
 		trace.Events = append(trace.Events, perfetto.Event{
@@ -3679,6 +3719,39 @@ func appendEvidenceDetailEvents(trace *perfetto.Trace, timeline *Timeline) {
 			Kind: perfetto.EventInstant, Args: args,
 		})
 		nextID++
+		for _, remark := range pipeline.CompilerRemarks {
+			remarkArgs := map[string]any{
+				"pipeline_id":     pipeline.PipelineID,
+				"function_name":   pipeline.FunctionName,
+				"remark_index":    remark.Index,
+				"remark_kind":     remark.Kind,
+				"compiler_pass":   remark.Pass,
+				"remark_name":     remark.Name,
+				"remark_function": remark.Function,
+				"parse_status":    remark.ParseStatus,
+				"source":          timeline.PipelineCompilerSource + " Remarks",
+				"semantics":       "static compiler pass diagnostic; no duration, sample weight, runtime causality, or source-line GPU cost",
+				"clock_domain":    "none",
+				"timing_quality":  "unavailable",
+			}
+			if pipeline.PipelineAddress != 0 {
+				remarkArgs["pipeline_address"] = pipeline.PipelineAddress
+				remarkArgs["pipeline_identity_scope"] = "capture-local"
+			}
+			if (remark.ParseStatus == "complete" || remark.ParseStatus == "unresolved_source_location") &&
+				remark.SourceLine != nil && remark.SourceColumn != nil {
+				remarkArgs["source_file"] = remark.SourceFile
+				remarkArgs["source_line"] = *remark.SourceLine
+				remarkArgs["source_column"] = *remark.SourceColumn
+			}
+			trace.Events = append(trace.Events, perfetto.Event{
+				ID: nextID, TrackUUID: trackID,
+				Name:     "Compiler remark: " + remark.Kind + " " + remark.Pass + "/" + remark.Name,
+				Category: "pipeline_compiler_remark", Kind: perfetto.EventInstant,
+				Args: remarkArgs,
+			})
+			nextID++
+		}
 	}
 	for _, metric := range timeline.UnattributedCounters {
 		label := metric.Label
@@ -3759,6 +3832,28 @@ func appendEvidenceDetailEvents(trace *perfetto.Trace, timeline *Timeline) {
 			Args:      args,
 		})
 		nextID++
+	}
+}
+
+// shardUntimedEvidenceTracks preserves debug annotations when many untimed
+// instants share one coordinate. Trace Processor stops assigning argument sets
+// after a bounded same-timestamp depth on one track; separate tracks retain the
+// evidence without manufacturing time between static records.
+func shardUntimedEvidenceTracks(trace *perfetto.Trace, firstTrack uint64, eventStart int) {
+	const eventsPerTrack = 60
+	for index := eventStart; index < len(trace.Events); index++ {
+		shard := (index - eventStart) / eventsPerTrack
+		if shard == 0 {
+			continue
+		}
+		if (index-eventStart)%eventsPerTrack == 0 {
+			trace.Tracks = append(trace.Tracks, perfetto.Track{
+				UUID:        perfetto.TrackUUID("gputrace.evidence", fmt.Sprintf("details-%d", shard+1)),
+				Name:        fmt.Sprintf("Evidence details (untimed) %d", shard+1),
+				Description: "Source-backed evidence without a verified timeline coordinate",
+			})
+		}
+		trace.Events[index].TrackUUID = perfetto.TrackUUID("gputrace.evidence", fmt.Sprintf("details-%d", shard+1))
 	}
 }
 

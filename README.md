@@ -110,7 +110,8 @@ The optional SQL file defines `gputrace_capture`, `gputrace_command_buffer`, `gp
 `gputrace_dispatch_arg`, `gputrace_encoder`, `gputrace_encoder_arg`, `gputrace_function`, `gputrace_pipeline`, `gputrace_semantic_node`, `gputrace_semantic_link`,
 `gputrace_counter_series`, `gputrace_unattributed_counter`,
 `gputrace_evidence_gap`, `gputrace_stream_data_table`,
-`gputrace_stream_data_string`, `gputrace_pipeline_compiler`, and
+`gputrace_stream_data_string`, `gputrace_pipeline_compiler`,
+`gputrace_pipeline_compiler_remark`, and
 `gputrace_unmatched` views over the native trace.
 `gputrace_capture` provides typed trace identity, environment, clock, coverage,
 timing-summary, and loss-receipt columns. Timing columns keep encoder span,
@@ -143,6 +144,12 @@ per pipeline. It includes exact optimization remarks and nullable compile-stage
 timings and cache status from streamData or capture store sections. Compiler
 remarks may name source lines, but they are not measured instruction samples or
 source-line GPU cost and are never repeated per dispatch.
+The raw YAML remains authoritative. `gputrace_pipeline_compiler_remark` adds
+one searchable row per YAML document with its kind, pass, name, function, and
+source coordinate when recorded. A `Line: 0` sentinel is retained as
+`unresolved_source_location`, not presented as a usable source line. The
+manifest distinguishes recorded, resolved, unresolved, and malformed location
+counts.
 The manifest count is the decoded source count; under an explicit output budget
 the SQL row count may be lower, with the difference covered by the export loss
 receipt.

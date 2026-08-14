@@ -49,6 +49,7 @@ type PipelineStats struct {
 	Remarks                                   *string                     `json:"remarks,omitempty"`                             // Exact compiler optimization remarks
 	CompilePerformance                        *PipelineCompilePerformance `json:"compile_performance,omitempty"`
 	RecordedStatistics                        []string                    `json:"recorded_statistics,omitempty"`
+	CompilerRemarks                           []PipelineCompilerRemark    `json:"compiler_remarks,omitempty"`
 }
 
 // HasRecordedStatistic reports whether the source dictionary contained name.
@@ -1162,6 +1163,7 @@ func assignPipelineStatFields(ps *PipelineStats, keyMap map[string]interface{}) 
 func assignPipelineCompilerDiagnostics(ps *PipelineStats, objects []interface{}, keyMap map[string]interface{}) {
 	if remarks, ok := keyMap["Remarks"].(string); ok {
 		ps.Remarks = &remarks
+		ps.CompilerRemarks = ParseCompilerRemarks(remarks)
 	}
 	compileObject, ok := keyMap["Compile Performance"].(map[string]interface{})
 	if !ok {

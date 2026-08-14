@@ -987,6 +987,23 @@ locations; it is not measured source-line execution cost. Under an explicit
 native-export byte budget these verbose events are optional and any omission
 is reported by the normal loss receipt.
 
+The raw Remarks YAML remains authoritative. A second typed view,
+`gputrace_pipeline_compiler_remark`, projects one searchable row per YAML
+document: document index, remark kind, compiler pass, name, function, parse
+status, and recorded source coordinate. A positive line is `complete`; an
+explicit `Line: 0` compiler sentinel is retained as
+`unresolved_source_location`; absence is `no_source_location`; and a malformed
+document is isolated without aborting later documents. The manifest reports
+source document count, recorded location count, resolved count, unresolved
+count, malformed count, and Passed/Missed/Analysis counts. Source counts
+describe the input even when a constrained export retains fewer SQL rows; the
+loss receipt reports the projected-row difference exactly.
+
+Untimed detail instants are deterministically sharded across bounded evidence
+tracks. This avoids Trace Processor's same-timestamp argument-depth limit
+without assigning synthetic timestamps. Shards are a storage and presentation
+mechanism only; their track identity has no runtime or compiler meaning.
+
 Pipeline statistics preserve exact source-key presence separately from their
 legacy scalar values. A recorded zero or false is emitted; an absent key is
 omitted and becomes SQL `NULL`. The one-row-per-pipeline compiler view also
