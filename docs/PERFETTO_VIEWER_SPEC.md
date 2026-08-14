@@ -10,9 +10,20 @@ Exact kernel/occurrence focus and explicit initial time ranges are implemented.
 A packaged UI and the MLX plugin remain proposed. The same
 timeline command without `--open` writes native Perfetto protobuf and populates
 native GPU tables; `--format chrome` retains Chrome Trace JSON compatibility.
-Automated visual verification remains pending because no browser backend was
-available in the current test environment; handler, protocol, routing, and
-lifecycle behavior are tested without treating them as visual proof.
+Automated visual verification is `tools/perfetto-ui-smoke.sh`. It serves a
+trace with `--ui-dir`, drives a headless Chromium over the DevTools protocol,
+and fails when the pinned UI renders no named tracks. It needs a browser, Node,
+and a pinned UI build, so it runs during release qualification rather than in
+`go test`. Handler, protocol, routing, and lifecycle behavior are tested
+separately and are not treated as visual proof.
+
+The smoke gate proves the trace becomes visible and names the groups the UI
+renders. It does not assert on individual encoder rows or on the selection
+detail panel: Perfetto virtualizes track rows, so those assertions need
+viewport automation that this repository has not verified against a pinned
+revision. The corresponding data properties — numeric encoder ordering,
+dispatch names and pipeline identity, capture-only instants — are asserted in
+`tools/perfetto-fixture-qualify.sh` against the exported rows instead.
 
 The design has two independent deliverables:
 
@@ -331,7 +342,8 @@ The local-viewer slice is complete when:
 - the trace is posted only after `PONG`;
 - no trace bytes leave the local server in self-hosted mode;
 - interrupt closes the listener; user-selected trace output remains;
-- browser automation verifies a representative trace becomes visible.
+- browser automation verifies a representative trace becomes visible
+  (`tools/perfetto-ui-smoke.sh`).
 
 The native-writer slice is complete when:
 

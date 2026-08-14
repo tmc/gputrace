@@ -36,13 +36,22 @@ Implementation ownership is repository-local:
 - `tools/perfetto-native-validate.sh` owns external parser and SQL validation.
 
 Go tests exercise the writer, projection, SQL text, viewer admission, budgets,
-and loss receipts in CI. Release qualification additionally requires running
-`tools/perfetto-native-validate.sh` with the `trace_processor_shell` revision
-named by `internal/perfetto.SchemaRevision`. The current CI workflow does not
-install that external binary, so it does not satisfy the external parser and
-standard-table acceptance criteria by itself. A retained validation receipt
-must record the trace digest, SQL digest, trace-processor version, and query
-results before a release claims those criteria.
+and loss receipts in CI. Release qualification additionally requires two
+external gates, because CI installs neither the trace processor nor a browser:
+
+- `tools/perfetto-fixture-qualify.sh` exports each fixture losslessly and under
+  a byte budget, then reconciles the canonical JSON, the evidence manifest, and
+  the exporter-owned PerfettoSQL views against each other. It writes the
+  retained receipt with input, export, and SQL digests, the trace-processor
+  version, the exact commands, and every query result. It calls
+  `tools/perfetto-native-validate.sh`, so running it covers that gate too.
+- `tools/perfetto-ui-smoke.sh` proves a representative trace becomes visible in
+  an unmodified pinned Perfetto UI.
+
+A release must not claim the external parser, standard-table, or UI acceptance
+criteria without the receipt those tools produce. The
+`trace_processor_shell` revision must be the one named by
+`internal/perfetto.SchemaRevision`.
 
 Confidence markers used in this document are:
 
