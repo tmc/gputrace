@@ -96,6 +96,10 @@ and --sql-out to write the matching PerfettoSQL views.
 Capture-only launches with no profiler timing are instant track events, not GPU
 duration slices. CS/debug labels remain separate observed annotations.
 
+A --sidecar name that disagrees with the encoder's own Metal label is reported
+as a conflict. Both assertions stay visible and neither becomes the canonical
+name.
+
 Clock domains:
   - busy (default): cumulative GPU execution offsets for encoders, dispatches,
     and counter series only when their clock is established

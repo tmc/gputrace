@@ -1,5 +1,33 @@
 -- gputrace.perfettosql/v1
 -- Load this file after opening a native gputrace Perfetto trace.
+--
+-- Two tiers of view live here, and they carry different promises.
+--
+-- Stable. Names, columns, and meanings are part of the v1 contract. A change
+-- that removes or repurposes one of these is a schema version change:
+--
+--   gputrace_capture               gputrace_manifest_arg
+--   gputrace_dispatch              gputrace_dispatch_arg
+--   gputrace_encoder               gputrace_encoder_arg
+--   gputrace_command_buffer        gputrace_restore_interval
+--   gputrace_function              gputrace_pipeline
+--   gputrace_semantic_node         gputrace_semantic_link
+--   gputrace_semantic_label_conflict
+--   gputrace_semantic_arg          gputrace_counter_series
+--   gputrace_unattributed_counter  gputrace_unattributed_counter_arg
+--   gputrace_evidence_gap          gputrace_unmatched
+--   gputrace_live_command_buffer   gputrace_host_signpost
+--   gputrace_raw_profiler_artifact gputrace_raw_profiler_timeline
+--   gputrace_track_event_arg
+--
+-- Diagnostic. Everything else projects recorded private archive structure so
+-- it can be inspected and audited: the counter catalog and counter-sample
+-- tables, the streamData and APSData archive views, shader-binary and
+-- program-address views, compiler diagnostics, profiler configuration and
+-- carriers, and every view whose name ends in _audit. These names and columns
+-- follow what the decoder recovers and may change without a schema version
+-- change. Their values are recorded identity, not interpreted measurement; do
+-- not build a user-facing metric on them.
 
 CREATE PERFETTO VIEW gputrace_capture AS
 SELECT

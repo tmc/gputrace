@@ -1142,6 +1142,55 @@ Every saved query is tested against a pinned `trace_processor_shell` version.
 SQL results must reconcile with the JSON evidence report for counts and summed
 durations.
 
+## The v1 contract surface
+
+Not everything an export carries is promised. Two tiers exist, and a reader
+must be able to tell which one a field belongs to.
+
+Stable. The manifest keys listed below, and the PerfettoSQL views the module
+header names as stable, are the v1 contract. Removing or repurposing one is a
+schema version change:
+
+- identity and provenance: `schema`, `exporter_version`,
+  `perfetto_schema_revision`, `input_uuid`, `input_content_digest`, and each
+  key's `_availability` companion;
+- clock: `clock_domain`, `clock_mapping`, `clock_conversion_*`;
+- timing: `timing_source`, `timing_quality`, `timing_approximate`,
+  `encoder_timing_*`;
+- counts: `command_buffer_count`, `encoder_count`, `dispatch_count`,
+  `observed_cs_label_count`, `unique_cs_label_count`;
+- semantics: `mlx_semantic_*`, including the label-conflict keys;
+- budget and loss: `resource_policy`, `logical_byte_boundary`,
+  `output_complete`, `events_*`, `counter_samples_*`, `loss_*`,
+  `dependency_skeletons_retained`;
+- environment: `environment_*`.
+
+Diagnostic. Everything else — the counter catalog and sample tables, the
+streamData and APSData archive projections, shader-binary, program-address,
+compiler, profiler-configuration and carrier keys, and every `_audit` view —
+records private archive structure so it can be inspected. Those names follow
+what the decoder recovers and may change without a schema version change.
+Their `*_semantics` strings say what has and has not been established; nothing
+there is an interpreted measurement, and no user-facing metric should be built
+on one.
+
+## Deferred in v1
+
+These are deliberately not implemented. Each needs evidence this repository
+does not have, and inventing it would produce a confident wrong reading:
+
+- the MLX Perfetto UI plugin, and comparison cross-links between captures;
+- rolling-window recording;
+- driver and MLX runtime environment capture;
+- any join between the busy and wall clock domains, and any join between
+  profiler passes and counter samples, until a measured clock mapping exists;
+- source-line GPU cost attribution: compiler remarks are static diagnostics;
+- a command-buffer-to-encoder parentage relationship, which the capture does
+  not establish;
+- native Metal labels as a semantic hierarchy carrier: v1 compares an encoder
+  label against a sidecar name and reports disagreement, but does not parse a
+  label into a parent or a target link.
+
 ## Evidence manifest
 
 Every export carries a manifest containing at least:

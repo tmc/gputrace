@@ -116,8 +116,14 @@ The optional SQL file defines `gputrace_capture`, `gputrace_command_buffer`, `gp
 `gputrace_stream_data_archive_key`, `gputrace_stream_data_table`,
 `gputrace_stream_data_string`, `gputrace_pipeline_compiler`,
 `gputrace_pipeline_compiler_remark`,
-`gputrace_pipeline_compiler_remark_arg`, and
-`gputrace_unmatched` views over the native trace.
+`gputrace_pipeline_compiler_remark_arg`,
+`gputrace_semantic_label_conflict`, and
+`gputrace_unmatched` views over the native trace. The file's header splits
+every view into two tiers: the stable views named there are part of the v1
+contract, and the rest project recorded private archive structure for
+inspection and may change with the decoder. The same split applies to the
+evidence manifest; see
+[the v1 contract surface](docs/MLX_PERFETTO_RENDERING_SPEC.md#the-v1-contract-surface).
 `gputrace_capture` provides typed trace identity, environment, clock, coverage,
 timing-summary, and loss-receipt columns. Timing columns keep encoder span,
 dispatch span, command-buffer active time, command-buffer wall span, restore

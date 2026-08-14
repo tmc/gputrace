@@ -227,3 +227,68 @@ func TestModuleProjectsRecordedDispatchesAndCompilerFacts(t *testing.T) {
 		}
 	}
 }
+
+// TestModuleClassifiesEveryView keeps the stability tiers in the module header
+// honest. A new view must be listed as stable or fall into a diagnostic
+// family; neither is a default, so adding one is a deliberate choice.
+func TestModuleClassifiesEveryView(t *testing.T) {
+	header, _, ok := strings.Cut(Module, "\nCREATE PERFETTO VIEW")
+	if !ok {
+		t.Fatal("module has no views")
+	}
+	stable := make(map[string]bool)
+	for _, field := range strings.Fields(header) {
+		if strings.HasPrefix(field, "gputrace_") {
+			stable[field] = true
+		}
+	}
+	if len(stable) == 0 {
+		t.Fatal("module header lists no stable views")
+	}
+
+	// Diagnostic families project recorded private archive structure. They are
+	// named for what the decoder recovers, not for a user-facing concept.
+	diagnostic := []string{
+		"gputrace_aps_", "gputrace_counter_catalog", "gputrace_counter_encoder_",
+		"gputrace_counter_info", "gputrace_counter_trace_id",
+		"gputrace_embedded_profiler_", "gputrace_encoder_program_mapping",
+		"gputrace_limiter_", "gputrace_pipeline_compiler",
+		"gputrace_profiler_carrier", "gputrace_profiler_configuration",
+		"gputrace_profiler_stream", "gputrace_program_address_mapping",
+		"gputrace_raw_profiler_sample", "gputrace_shader_binary",
+		"gputrace_stream_data_",
+	}
+	isDiagnostic := func(name string) bool {
+		if strings.HasSuffix(name, "_audit") {
+			return true
+		}
+		for _, prefix := range diagnostic {
+			if strings.HasPrefix(name, prefix) {
+				return true
+			}
+		}
+		return false
+	}
+
+	seen := make(map[string]bool)
+	for rest := Module; ; {
+		_, after, ok := strings.Cut(rest, "CREATE PERFETTO VIEW ")
+		if !ok {
+			break
+		}
+		name, remainder, _ := strings.Cut(after, " ")
+		rest = remainder
+		seen[name] = true
+		switch {
+		case stable[name] && isDiagnostic(name):
+			t.Errorf("view %s is listed as stable and matches a diagnostic family", name)
+		case !stable[name] && !isDiagnostic(name):
+			t.Errorf("view %s is neither listed as stable nor in a diagnostic family", name)
+		}
+	}
+	for name := range stable {
+		if !seen[name] {
+			t.Errorf("module header lists stable view %s, which the module does not define", name)
+		}
+	}
+}
