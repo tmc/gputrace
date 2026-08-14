@@ -119,6 +119,7 @@ func parseStorePipelineStats(data []byte) (PipelineStats, bool) {
 
 	var ps PipelineStats
 	assignPipelineStatFields(&ps, keyMap)
+	assignPipelineCompilerDiagnostics(&ps, objects, keyMap)
 	ps.FunctionName = storeFunctionName(objects, keyMap)
 	return ps, true
 }

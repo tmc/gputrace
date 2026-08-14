@@ -28,6 +28,38 @@ func TestExtractFunctionNamesPreservesArrayShape(t *testing.T) {
 	}
 }
 
+func TestAssignPipelineCompilerDiagnosticsPreservesPresence(t *testing.T) {
+	objects := []any{"$null"}
+	add := func(value any) plist.UID {
+		objects = append(objects, value)
+		return plist.UID(len(objects) - 1)
+	}
+	compile := add(map[string]any{
+		"NS.keys": []any{
+			add("Function was cached"), add("Compiler backend pass time in ns"),
+			add("Compiler total time in ns"),
+		},
+		"NS.objects": []any{add(false), add(int64(-1)), add(int64(0))},
+	})
+	remarks := "--- !Passed\nDebugLoc: { File: kernel.h, Line: 7 }\n"
+	stats := PipelineStats{}
+	assignPipelineCompilerDiagnostics(&stats, objects, map[string]any{
+		"Remarks": remarks, "Compile Performance": objects[int(compile)],
+	})
+	if stats.Remarks == nil || *stats.Remarks != remarks {
+		t.Fatalf("remarks = %#v, want exact input", stats.Remarks)
+	}
+	performance := stats.CompilePerformance
+	if performance == nil || performance.FunctionWasCached == nil || *performance.FunctionWasCached ||
+		performance.CompilerBackendNanoseconds == nil || *performance.CompilerBackendNanoseconds != -1 ||
+		performance.CompilerTotalNanoseconds == nil || *performance.CompilerTotalNanoseconds != 0 {
+		t.Fatalf("compile performance = %#v", performance)
+	}
+	if performance.CompilerOptimizationNanoseconds != nil {
+		t.Fatalf("absent optimization time = %v, want nil", *performance.CompilerOptimizationNanoseconds)
+	}
+}
+
 // compilerNamesArchive builds the $objects slice of an archive whose
 // pipelinePerformanceStatistics dictionary carries a "Compile Performance"
 // entry per pipeline ID, mirroring the real streamData layout.

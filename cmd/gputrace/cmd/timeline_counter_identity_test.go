@@ -331,3 +331,79 @@ FROM gputrace_capture;
 		t.Fatalf("PerfettoSQL streamData string manifest = %q, want header and %q", rows, wantStringManifest)
 	}
 }
+
+func TestExportPipelineCompilerDiagnosticsReachPerfettoSQL(t *testing.T) {
+	processor := os.Getenv("TRACE_PROCESSOR_SHELL")
+	if processor == "" {
+		t.Skip("set TRACE_PROCESSOR_SHELL to run native PerfettoSQL integration")
+	}
+	remarks := "--- !Passed\nDebugLoc: { File: kernel.h, Line: 7 }\n"
+	cached := false
+	minusOne := int64(-1)
+	zero := int64(0)
+	timeline := &Timeline{
+		PipelineCompilerSource: "streamData pipelinePerformanceStatistics",
+		PipelineCompilerStats: []counter.PipelineStats{{
+			PipelineID: 989, PipelineAddress: 0xfedc, FunctionName: "kernel", Remarks: &remarks,
+			CompilePerformance: &counter.PipelineCompilePerformance{
+				FunctionWasCached: &cached, CompilerBackendNanoseconds: &minusOne,
+				CompilerTotalNanoseconds: &zero,
+			},
+		}},
+	}
+	trace := filepath.Join(t.TempDir(), "pipeline-compiler.pftrace")
+	if err := exportPerfettoForClock(timeline, trace, timelineClockBusy); err != nil {
+		t.Fatal(err)
+	}
+	query := perfettosql.Module + `
+SELECT pipeline_id, function_name, pipeline_address, pipeline_identity_scope,
+       remarks, function_was_cached, compiler_backend_ns, compiler_total_ns,
+       compiler_optimization_ns, source, semantics, clock_domain, timing_quality
+FROM gputrace_pipeline_compiler;
+`
+	command := exec.Command(processor, "query", trace)
+	command.Stdin = strings.NewReader(query)
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("trace processor pipeline compiler: %v\n%s", err, output)
+	}
+	rows, err := csv.NewReader(strings.NewReader(string(output))).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"989", "kernel", "65244", "capture-local", remarks, "0", "-1", "0", "[NULL]",
+		"streamData pipelinePerformanceStatistics",
+		"static compilation evidence; remarks are not measured source-line GPU cost; no clock or dispatch join",
+		"none", "unavailable",
+	}
+	if len(rows) != 2 || !slices.Equal(rows[1], want) {
+		t.Fatalf("PerfettoSQL pipeline compiler = %q, want header and %q", rows, want)
+	}
+
+	manifestQuery := perfettosql.Module + `
+SELECT pipeline_compiler_availability, pipeline_compiler_count,
+       pipeline_compiler_count_semantics,
+       pipeline_compiler_source, pipeline_compiler_semantics
+FROM gputrace_capture;
+`
+	command = exec.Command(processor, "query", trace)
+	command.Stdin = strings.NewReader(manifestQuery)
+	output, err = command.Output()
+	if err != nil {
+		t.Fatalf("trace processor pipeline compiler manifest: %v\n%s", err, output)
+	}
+	rows, err = csv.NewReader(strings.NewReader(string(output))).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantManifest := []string{
+		"available: recorded static compiler diagnostics", "1",
+		"decoded source records; projected SQL rows may be lower under an explicit output budget",
+		"streamData pipelinePerformanceStatistics",
+		"static compilation evidence; remarks are not measured source-line GPU cost; no clock or dispatch join",
+	}
+	if len(rows) != 2 || !slices.Equal(rows[1], wantManifest) {
+		t.Fatalf("PerfettoSQL pipeline compiler manifest = %q, want header and %q", rows, wantManifest)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 
@@ -17,33 +18,48 @@ import (
 
 // PipelineStats contains shader compilation statistics from streamData.
 type PipelineStats struct {
-	PipelineID                                int     `json:"pipeline_id"`
-	PipelineAddress                           uint64  `json:"pipeline_address,omitempty"`                    // Metal pipeline address (e.g., 0x1051ddd70)
-	FunctionName                              string  `json:"function_name,omitempty"`                       // Kernel function name
-	TemporaryRegisterCount                    int     `json:"temporary_register_count"`                      // "# Allocated Registers" in Xcode
-	UniformRegisterCount                      int     `json:"uniform_register_count"`                        // Uniform registers
-	SpilledBytes                              int     `json:"spilled_bytes"`                                 // Register spill to memory
-	ThreadInvariantSpilled                    int     `json:"thread_invariant_spilled"`                      // Thread-invariant spilled bytes
-	ThreadgroupMemory                         int     `json:"threadgroup_memory"`                            // Threadgroup memory usage
-	InstructionCount                          int     `json:"instruction_count"`                             // Total instructions
-	ALUInstructionCount                       int     `json:"alu_instruction_count"`                         // ALU instructions
-	FP32InstructionCount                      int     `json:"fp32_instruction_count"`                        // FP32 instructions
-	FP16InstructionCount                      int     `json:"fp16_instruction_count"`                        // FP16 instructions
-	INT32InstructionCount                     int     `json:"int32_instruction_count"`                       // INT32 instructions
-	INT16InstructionCount                     int     `json:"int16_instruction_count"`                       // INT16 instructions
-	BranchInstructionCount                    int     `json:"branch_instruction_count"`                      // Branch instructions
-	DeviceLoadCount                           int     `json:"device_load_instruction_count"`                 // Device memory loads
-	DeviceStoreCount                          int     `json:"device_store_instruction_count"`                // Device memory stores
-	DeviceAtomicCount                         int     `json:"device_atomic_instruction_count"`               // Device atomics
-	TextureReadCount                          int     `json:"texture_reads_instruction_count"`               // Texture reads
-	TextureWriteCount                         int     `json:"texture_writes_instruction_count"`              // Texture writes
-	ThreadgroupLoadCount                      int     `json:"threadgroup_load_instruction_count"`            // Threadgroup loads
-	ThreadgroupStoreCount                     int     `json:"threadgroup_store_instruction_count"`           // Threadgroup stores
-	ThreadgroupAtomicCount                    int     `json:"threadgroup_atomic_instruction_count"`          // Threadgroup atomics
-	WaitInstructionCount                      int     `json:"wait_instruction_count"`                        // Wait instructions
-	ConstantCalculationTemporaryRegisterCount int     `json:"constant_calculation_temporary_register_count"` // Temporary registers used by constant calculation
-	ConstantCalculationPhasePresent           bool    `json:"constant_calculation_phase_present"`            // Whether constant calculation was present
-	CompilationTimeMs                         float64 `json:"compilation_time_ms"`                           // Shader compilation time
+	PipelineID                                int                         `json:"pipeline_id"`
+	PipelineAddress                           uint64                      `json:"pipeline_address,omitempty"`                    // Metal pipeline address (e.g., 0x1051ddd70)
+	FunctionName                              string                      `json:"function_name,omitempty"`                       // Kernel function name
+	TemporaryRegisterCount                    int                         `json:"temporary_register_count"`                      // "# Allocated Registers" in Xcode
+	UniformRegisterCount                      int                         `json:"uniform_register_count"`                        // Uniform registers
+	SpilledBytes                              int                         `json:"spilled_bytes"`                                 // Register spill to memory
+	ThreadInvariantSpilled                    int                         `json:"thread_invariant_spilled"`                      // Thread-invariant spilled bytes
+	ThreadgroupMemory                         int                         `json:"threadgroup_memory"`                            // Threadgroup memory usage
+	InstructionCount                          int                         `json:"instruction_count"`                             // Total instructions
+	ALUInstructionCount                       int                         `json:"alu_instruction_count"`                         // ALU instructions
+	FP32InstructionCount                      int                         `json:"fp32_instruction_count"`                        // FP32 instructions
+	FP16InstructionCount                      int                         `json:"fp16_instruction_count"`                        // FP16 instructions
+	INT32InstructionCount                     int                         `json:"int32_instruction_count"`                       // INT32 instructions
+	INT16InstructionCount                     int                         `json:"int16_instruction_count"`                       // INT16 instructions
+	BranchInstructionCount                    int                         `json:"branch_instruction_count"`                      // Branch instructions
+	DeviceLoadCount                           int                         `json:"device_load_instruction_count"`                 // Device memory loads
+	DeviceStoreCount                          int                         `json:"device_store_instruction_count"`                // Device memory stores
+	DeviceAtomicCount                         int                         `json:"device_atomic_instruction_count"`               // Device atomics
+	TextureReadCount                          int                         `json:"texture_reads_instruction_count"`               // Texture reads
+	TextureWriteCount                         int                         `json:"texture_writes_instruction_count"`              // Texture writes
+	ThreadgroupLoadCount                      int                         `json:"threadgroup_load_instruction_count"`            // Threadgroup loads
+	ThreadgroupStoreCount                     int                         `json:"threadgroup_store_instruction_count"`           // Threadgroup stores
+	ThreadgroupAtomicCount                    int                         `json:"threadgroup_atomic_instruction_count"`          // Threadgroup atomics
+	WaitInstructionCount                      int                         `json:"wait_instruction_count"`                        // Wait instructions
+	ConstantCalculationTemporaryRegisterCount int                         `json:"constant_calculation_temporary_register_count"` // Temporary registers used by constant calculation
+	ConstantCalculationPhasePresent           bool                        `json:"constant_calculation_phase_present"`            // Whether constant calculation was present
+	CompilationTimeMs                         float64                     `json:"compilation_time_ms"`                           // Shader compilation time
+	Remarks                                   *string                     `json:"remarks,omitempty"`                             // Exact compiler optimization remarks
+	CompilePerformance                        *PipelineCompilePerformance `json:"compile_performance,omitempty"`
+}
+
+// PipelineCompilePerformance contains recorded fields from the nested
+// Compile Performance dictionary. Pointers distinguish zero, false, and -1
+// sentinel values from absent fields.
+type PipelineCompilePerformance struct {
+	FunctionWasCached               *bool  `json:"function_was_cached,omitempty"`
+	CompilerBackendNanoseconds      *int64 `json:"compiler_backend_ns,omitempty"`
+	CompilerOptimizationNanoseconds *int64 `json:"compiler_optimization_ns,omitempty"`
+	CompilerTranslatorNanoseconds   *int64 `json:"compiler_translator_ns,omitempty"`
+	CompilerTotalNanoseconds        *int64 `json:"compiler_total_ns,omitempty"`
+	DriverTotalNanoseconds          *int64 `json:"driver_total_ns,omitempty"`
+	SynchronousServiceNanoseconds   *int64 `json:"synchronous_service_ns,omitempty"`
 }
 
 // DispatchInfo contains per-dispatch timing and metadata.
@@ -1059,7 +1075,9 @@ func extractPipelineStats(objects []interface{}, ppsIdx int) []PipelineStats {
 		}
 
 		ps := PipelineStats{PipelineID: pipelineID}
-		assignPipelineStatFields(&ps, resolveKeyedDictionary(objects, statsObj))
+		keyMap := resolveKeyedDictionary(objects, statsObj)
+		assignPipelineStatFields(&ps, keyMap)
+		assignPipelineCompilerDiagnostics(&ps, objects, keyMap)
 
 		pipelines = append(pipelines, ps)
 	}
@@ -1123,6 +1141,62 @@ func assignPipelineStatFields(ps *PipelineStats, keyMap map[string]interface{}) 
 	ps.ConstantCalculationTemporaryRegisterCount = getInt(keyMap, "Constant calculation temporary register count")
 	ps.ConstantCalculationPhasePresent = getBool(keyMap, "Constant calculation phase present")
 	ps.CompilationTimeMs = getFloat(keyMap, "Compilation time in milliseconds")
+}
+
+func assignPipelineCompilerDiagnostics(ps *PipelineStats, objects []interface{}, keyMap map[string]interface{}) {
+	if remarks, ok := keyMap["Remarks"].(string); ok {
+		ps.Remarks = &remarks
+	}
+	compileObject, ok := keyMap["Compile Performance"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	compile := resolveKeyedDictionary(objects, compileObject)
+	performance := &PipelineCompilePerformance{
+		FunctionWasCached:               getBoolPointer(compile, "Function was cached"),
+		CompilerBackendNanoseconds:      getInt64Pointer(compile, "Compiler backend pass time in ns"),
+		CompilerOptimizationNanoseconds: getInt64Pointer(compile, "Compiler optimization pass time in ns"),
+		CompilerTranslatorNanoseconds:   getInt64Pointer(compile, "Compiler translator pass time in ns"),
+		CompilerTotalNanoseconds:        getInt64Pointer(compile, "Compiler total time in ns"),
+		DriverTotalNanoseconds:          getInt64Pointer(compile, "Driver total compile time in ns"),
+		SynchronousServiceNanoseconds:   getInt64Pointer(compile, "Total time for synchronous compile service in ns"),
+	}
+	if performance.FunctionWasCached != nil || performance.CompilerBackendNanoseconds != nil ||
+		performance.CompilerOptimizationNanoseconds != nil || performance.CompilerTranslatorNanoseconds != nil ||
+		performance.CompilerTotalNanoseconds != nil || performance.DriverTotalNanoseconds != nil ||
+		performance.SynchronousServiceNanoseconds != nil {
+		ps.CompilePerformance = performance
+	}
+}
+
+func getInt64Pointer(m map[string]interface{}, key string) *int64 {
+	value, ok := m[key]
+	if !ok {
+		return nil
+	}
+	var result int64
+	switch value := value.(type) {
+	case int:
+		result = int64(value)
+	case int64:
+		result = value
+	case uint64:
+		if value > math.MaxInt64 {
+			return nil
+		}
+		result = int64(value)
+	default:
+		return nil
+	}
+	return &result
+}
+
+func getBoolPointer(m map[string]interface{}, key string) *bool {
+	value, ok := m[key].(bool)
+	if !ok {
+		return nil
+	}
+	return &value
 }
 
 func getInt(m map[string]interface{}, key string) int {

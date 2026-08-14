@@ -110,7 +110,7 @@ The optional SQL file defines `gputrace_capture`, `gputrace_command_buffer`, `gp
 `gputrace_dispatch_arg`, `gputrace_encoder`, `gputrace_encoder_arg`, `gputrace_function`, `gputrace_pipeline`, `gputrace_semantic_node`, `gputrace_semantic_link`,
 `gputrace_counter_series`, `gputrace_unattributed_counter`,
 `gputrace_evidence_gap`, `gputrace_stream_data_table`,
-`gputrace_stream_data_string`, and
+`gputrace_stream_data_string`, `gputrace_pipeline_compiler`, and
 `gputrace_unmatched` views over the native trace.
 `gputrace_capture` provides typed trace identity, environment, clock, coverage,
 timing-summary, and loss-receipt columns. Timing columns keep encoder span,
@@ -138,6 +138,14 @@ The untimed `gputrace_stream_data_string` view retains the archive's complete
 ordered strings array, including empty entries and source paths. Its index is
 only the source NSArray position; the view does not classify values or infer a
 pipeline, function, source-file, clock, or timing relationship.
+`gputrace_pipeline_compiler` retains one untimed static compiler-diagnostic row
+per pipeline. It includes exact optimization remarks and nullable compile-stage
+timings and cache status from streamData or capture store sections. Compiler
+remarks may name source lines, but they are not measured instruction samples or
+source-line GPU cost and are never repeated per dispatch.
+The manifest count is the decoded source count; under an explicit output budget
+the SQL row count may be lower, with the difference covered by the export loss
+receipt.
 Archive-family inventory separately reports top-level APS, timeline, counter,
 shader-profiler, GPU-timeline, and batch-filtered array entry counts. These are
 presence counts, not decoded samples; an explicit zero differs from absence.

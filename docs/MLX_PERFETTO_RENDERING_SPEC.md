@@ -969,6 +969,7 @@ environment schema, retrieval provenance, and queried-family catalog
 resource policy and loss receipt
 retained raw-artifact identities and digests
 ordered streamData string count and source-array semantics
+pipeline compiler diagnostic count, source, and static-evidence semantics
 ```
 
 The canonical model and native trace retain the complete ordered streamData
@@ -976,6 +977,15 @@ strings NSArray, including empty values. One untimed evidence row carries each
 source index and value. The index is not classified or joined to a pipeline,
 function, source file, or clock unless an independently decoded source table
 establishes that relationship.
+
+Static pipeline compiler evidence is emitted once per pipeline on an untimed
+evidence track. The typed view retains exact optimization remarks, cached
+status, and nullable signed compile-stage nanosecond fields from streamData or
+capture store sections. A recorded `-1`, zero, or false is distinct from an
+absent field. Compiler YAML may identify optimization passes and source
+locations; it is not measured source-line execution cost. Under an explicit
+native-export byte budget these verbose events are optional and any omission
+is reported by the normal loss receipt.
 
 Native Perfetto and timeline JSON exports content-identify every regular file
 directly beneath the resolved `.gpuprofiler_raw` directory. Each untimed

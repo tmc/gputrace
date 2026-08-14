@@ -969,6 +969,8 @@ type Timeline struct {
 	GPUGeneration            *uint32                        `json:"gpu_generation,omitempty"`
 	MetalDeviceName          string                         `json:"metal_device_name,omitempty"`
 	MetalPluginName          string                         `json:"metal_plugin_name,omitempty"`
+	PipelineCompilerStats    []counter.PipelineStats        `json:"pipeline_compiler_stats,omitempty"`
+	PipelineCompilerSource   string                         `json:"pipeline_compiler_source,omitempty"`
 	StreamDataStrings        []string                       `json:"stream_data_strings,omitempty"`
 	StreamMetadata           *counter.StreamDataMetadata    `json:"stream_metadata,omitempty"`
 	ObservedCSLabels         int                            `json:"observed_cs_labels,omitempty"`
@@ -1163,6 +1165,8 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 	if streamStats == nil {
 		if stats, err := counter.ExtractStoreStats(trace, 0); err == nil {
 			storeStats = stats
+			timeline.PipelineCompilerStats = append([]counter.PipelineStats(nil), stats.Pipelines...)
+			timeline.PipelineCompilerSource = "capture bundle store sections"
 		}
 	}
 
@@ -1567,6 +1571,8 @@ func applyStreamIdentity(timeline *Timeline, stats *counter.StreamDataStats) {
 	}
 	timeline.MetalDeviceName = stats.MetalDeviceName
 	timeline.MetalPluginName = stats.MetalPluginName
+	timeline.PipelineCompilerStats = append([]counter.PipelineStats(nil), stats.Pipelines...)
+	timeline.PipelineCompilerSource = "streamData pipelinePerformanceStatistics"
 	if stats.FunctionNames != nil {
 		timeline.StreamDataStrings = make([]string, len(stats.FunctionNames))
 		copy(timeline.StreamDataStrings, stats.FunctionNames)
@@ -2760,6 +2766,7 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 			"replay_mode_availability":                    "unavailable: replay provenance is not recorded in this trace schema",
 			"counter_catalog_availability":                "unavailable: APSCounterData pass catalog is absent",
 			"counter_decoder_availability":                "unavailable: no clock-aligned decoded hardware counter series is retained",
+			"pipeline_compiler_availability":              "unavailable: no pipeline compiler diagnostics were decoded",
 			"raw_counter_artifact_availability":           "unavailable: no separate raw artifact identity and digest were verified",
 			"perfetto_schema_revision":                    perfetto.SchemaRevision,
 			"packet_family_gpu_info":                      true,
@@ -2849,6 +2856,7 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 		trace.Metadata[key] = value
 	}
 	appendStreamDataStringArgs(trace.Metadata, timeline.StreamDataStrings)
+	appendPipelineCompilerArgs(trace.Metadata, timeline)
 	if timeline != nil {
 		for key, value := range perfettoClockConversionArgs(timeline) {
 			trace.Metadata[key] = value
@@ -3152,6 +3160,17 @@ func appendStreamDataStringArgs(args map[string]any, strings []string) {
 	args["stream_data_string_count"] = len(strings)
 	args["stream_data_string_source"] = "streamData keyed archive strings NSArray"
 	args["stream_data_string_semantics"] = "source array index and value only; classification and cross-table relationships remain uninterpreted"
+}
+
+func appendPipelineCompilerArgs(args map[string]any, timeline *Timeline) {
+	if timeline == nil || len(timeline.PipelineCompilerStats) == 0 {
+		return
+	}
+	args["pipeline_compiler_availability"] = "available: recorded static compiler diagnostics"
+	args["pipeline_compiler_count"] = len(timeline.PipelineCompilerStats)
+	args["pipeline_compiler_count_semantics"] = "decoded source records; projected SQL rows may be lower under an explicit output budget"
+	args["pipeline_compiler_source"] = timeline.PipelineCompilerSource
+	args["pipeline_compiler_semantics"] = "static compilation evidence; remarks are not measured source-line GPU cost; no clock or dispatch join"
 }
 
 func appendAPSDataInventoryArgs(args map[string]any, inventory *counter.APSDataInventory) {
@@ -3545,7 +3564,7 @@ func appendMLXSemanticEvents(trace *perfetto.Trace, timeline *Timeline) {
 
 func appendEvidenceDetailEvents(trace *perfetto.Trace, timeline *Timeline) {
 	if len(timeline.UnattributedCounters) == 0 && len(timeline.CounterCatalog) == 0 && len(timeline.CounterTraceIDs) == 0 && len(timeline.UnavailableEvidence) == 0 &&
-		(timeline.RawProfilerArtifacts == nil || len(timeline.RawProfilerArtifacts.Artifacts) == 0) && streamDataTableEvidenceCount(timeline.StreamMetadata) == 0 && len(timeline.StreamDataStrings) == 0 {
+		(timeline.RawProfilerArtifacts == nil || len(timeline.RawProfilerArtifacts.Artifacts) == 0) && streamDataTableEvidenceCount(timeline.StreamMetadata) == 0 && len(timeline.StreamDataStrings) == 0 && len(timeline.PipelineCompilerStats) == 0 {
 		return
 	}
 	trackID := perfetto.TrackUUID("gputrace.evidence", "details")
@@ -3611,6 +3630,36 @@ func appendEvidenceDetailEvents(trace *perfetto.Trace, timeline *Timeline) {
 				"clock_domain":   "none",
 				"timing_quality": "unavailable",
 			},
+		})
+		nextID++
+	}
+	for _, pipeline := range timeline.PipelineCompilerStats {
+		name := pipeline.FunctionName
+		if name == "" {
+			name = fmt.Sprintf("pipeline %d", pipeline.PipelineID)
+		}
+		args := map[string]any{
+			"pipeline_id":    pipeline.PipelineID,
+			"function_name":  pipeline.FunctionName,
+			"source":         timeline.PipelineCompilerSource,
+			"semantics":      "static compilation evidence; remarks are not measured source-line GPU cost; no clock or dispatch join",
+			"clock_domain":   "none",
+			"timing_quality": "unavailable",
+		}
+		if pipeline.PipelineAddress != 0 {
+			args["pipeline_address"] = pipeline.PipelineAddress
+			args["pipeline_identity_scope"] = "capture-local"
+		}
+		if pipeline.Remarks != nil {
+			args["remarks"] = *pipeline.Remarks
+		}
+		if performance := pipeline.CompilePerformance; performance != nil {
+			appendPipelineCompilePerformanceArgs(args, performance)
+		}
+		trace.Events = append(trace.Events, perfetto.Event{
+			ID: nextID, TrackUUID: trackID,
+			Name: "Pipeline compiler: " + name, Category: "pipeline_compiler",
+			Kind: perfetto.EventInstant, Args: args,
 		})
 		nextID++
 	}
@@ -3693,6 +3742,27 @@ func appendEvidenceDetailEvents(trace *perfetto.Trace, timeline *Timeline) {
 			Args:      args,
 		})
 		nextID++
+	}
+}
+
+func appendPipelineCompilePerformanceArgs(args map[string]any, performance *counter.PipelineCompilePerformance) {
+	if performance.FunctionWasCached != nil {
+		args["function_was_cached"] = *performance.FunctionWasCached
+	}
+	for _, field := range []struct {
+		name  string
+		value *int64
+	}{
+		{"compiler_backend_ns", performance.CompilerBackendNanoseconds},
+		{"compiler_optimization_ns", performance.CompilerOptimizationNanoseconds},
+		{"compiler_translator_ns", performance.CompilerTranslatorNanoseconds},
+		{"compiler_total_ns", performance.CompilerTotalNanoseconds},
+		{"driver_total_ns", performance.DriverTotalNanoseconds},
+		{"synchronous_service_ns", performance.SynchronousServiceNanoseconds},
+	} {
+		if field.value != nil {
+			args[field.name] = *field.value
+		}
 	}
 }
 

@@ -78,6 +78,27 @@ func TestAppendEvidenceDetailEventsOmitsPresentEmptyStrings(t *testing.T) {
 	}
 }
 
+func TestAppendEvidenceDetailEventsEmitsOneOptionalCompilerRecordPerPipeline(t *testing.T) {
+	remarks := "--- !Passed\n"
+	timeline := &Timeline{
+		PipelineCompilerSource: "streamData pipelinePerformanceStatistics",
+		PipelineCompilerStats:  []counter.PipelineStats{{PipelineID: 7, FunctionName: "kernel", Remarks: &remarks}},
+		Events: []TimelineEvent{
+			{Name: "kernel", Category: "kernel"},
+			{Name: "kernel", Category: "kernel"},
+		},
+	}
+	trace := &perfetto.Trace{}
+	appendEvidenceDetailEvents(trace, timeline)
+	if len(trace.Tracks) != 1 || len(trace.Events) != 1 {
+		t.Fatalf("compiler evidence = %d tracks, %d events, want 1 and 1", len(trace.Tracks), len(trace.Events))
+	}
+	event := trace.Events[0]
+	if event.Category != "pipeline_compiler" || event.Required || event.Args["remarks"] != remarks || event.Args["clock_domain"] != "none" {
+		t.Fatalf("compiler event = %#v", event)
+	}
+}
+
 func TestExportChromeTracingIncludesTimingMetadata(t *testing.T) {
 	effective := uint64(1650625)
 	timeline := &Timeline{

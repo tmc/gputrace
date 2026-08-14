@@ -145,6 +145,11 @@ SELECT
   cast(extract_arg(arg_set_id, 'debug.stream_data_string_count') AS INT) AS stream_data_string_count,
   extract_arg(arg_set_id, 'debug.stream_data_string_source') AS stream_data_string_source,
   extract_arg(arg_set_id, 'debug.stream_data_string_semantics') AS stream_data_string_semantics,
+  extract_arg(arg_set_id, 'debug.pipeline_compiler_availability') AS pipeline_compiler_availability,
+  cast(extract_arg(arg_set_id, 'debug.pipeline_compiler_count') AS INT) AS pipeline_compiler_count,
+  extract_arg(arg_set_id, 'debug.pipeline_compiler_count_semantics') AS pipeline_compiler_count_semantics,
+  extract_arg(arg_set_id, 'debug.pipeline_compiler_source') AS pipeline_compiler_source,
+  extract_arg(arg_set_id, 'debug.pipeline_compiler_semantics') AS pipeline_compiler_semantics,
   extract_arg(arg_set_id, 'debug.stream_data_family_count_semantics') AS stream_data_family_count_semantics,
   cast(extract_arg(arg_set_id, 'debug.stream_data_aps_data_entry_count') AS INT) AS stream_data_aps_data_entry_count,
   extract_arg(arg_set_id, 'debug.stream_data_aps_data_availability') AS stream_data_aps_data_availability,
@@ -642,6 +647,32 @@ SELECT
   arg_set_id
 FROM slice
 WHERE category = 'stream_data_string';
+
+-- gputrace_pipeline_compiler retains one untimed static compiler-diagnostic
+-- record per pipeline. Remarks are exact compiler YAML, not measured
+-- instruction samples or source-line GPU cost.
+CREATE PERFETTO VIEW gputrace_pipeline_compiler AS
+SELECT
+  id,
+  cast(extract_arg(arg_set_id, 'debug.pipeline_id') AS INT) AS pipeline_id,
+  extract_arg(arg_set_id, 'debug.function_name') AS function_name,
+  cast(extract_arg(arg_set_id, 'debug.pipeline_address') AS INT) AS pipeline_address,
+  extract_arg(arg_set_id, 'debug.pipeline_identity_scope') AS pipeline_identity_scope,
+  extract_arg(arg_set_id, 'debug.remarks') AS remarks,
+  cast(extract_arg(arg_set_id, 'debug.function_was_cached') AS INT) AS function_was_cached,
+  cast(extract_arg(arg_set_id, 'debug.compiler_backend_ns') AS INT) AS compiler_backend_ns,
+  cast(extract_arg(arg_set_id, 'debug.compiler_optimization_ns') AS INT) AS compiler_optimization_ns,
+  cast(extract_arg(arg_set_id, 'debug.compiler_translator_ns') AS INT) AS compiler_translator_ns,
+  cast(extract_arg(arg_set_id, 'debug.compiler_total_ns') AS INT) AS compiler_total_ns,
+  cast(extract_arg(arg_set_id, 'debug.driver_total_ns') AS INT) AS driver_total_ns,
+  cast(extract_arg(arg_set_id, 'debug.synchronous_service_ns') AS INT) AS synchronous_service_ns,
+  extract_arg(arg_set_id, 'debug.source') AS source,
+  extract_arg(arg_set_id, 'debug.semantics') AS semantics,
+  extract_arg(arg_set_id, 'debug.clock_domain') AS clock_domain,
+  extract_arg(arg_set_id, 'debug.timing_quality') AS timing_quality,
+  arg_set_id
+FROM slice
+WHERE category = 'pipeline_compiler';
 
 -- gputrace_raw_profiler_sample_arg retains the unnamed hardware-counter
 -- payload after the seven fixed GRC columns. counter_ordinal is only its
