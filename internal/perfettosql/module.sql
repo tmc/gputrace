@@ -1332,6 +1332,42 @@ JOIN args AS a USING (arg_set_id)
 WHERE s.category = 'stream_data_archive_blob'
   AND a.key GLOB 'debug.embedded_profiler_artifact_[0-9]*_json';
 
+-- gputrace_embedded_profiler_artifact_content_audit groups only exact payload
+-- SHA-256 identities. Equal bytes do not make different structural kinds
+-- semantically interchangeable.
+CREATE PERFETTO VIEW gputrace_embedded_profiler_artifact_content_audit AS
+SELECT
+  sha256,
+  count(*) AS occurrence_count,
+  count(DISTINCT family) AS family_count,
+  count(DISTINCT family || ':' || blob_ordinal) AS blob_count,
+  count(DISTINCT artifact_kind) AS artifact_kind_count,
+  min(byte_count) AS minimum_byte_count,
+  max(byte_count) AS maximum_byte_count,
+  sum(byte_count) AS logical_recorded_bytes,
+  CASE WHEN min(byte_count) = max(byte_count)
+    THEN sum(byte_count) - max(byte_count)
+  END AS logical_repeated_entry_bytes,
+  CASE
+    WHEN min(byte_count) = max(byte_count) THEN 'consistent_size'
+    ELSE 'size_conflict'
+  END AS size_status,
+  CASE
+    WHEN count(*) = 1 THEN 'unique_entry'
+    WHEN count(DISTINCT family) > 1 THEN 'repeated_across_families'
+    ELSE 'repeated_within_family'
+  END AS content_status,
+  (SELECT output_complete FROM gputrace_capture) AS output_complete,
+  CASE
+    WHEN (SELECT output_complete FROM gputrace_capture) = 1 THEN 'complete_export'
+    ELSE 'retained_rows_only'
+  END AS audit_scope,
+  'exact SHA-256 equality and logical decoded-entry bytes only; no semantic-kind equivalence, physical storage savings, decoder, execution, counter, or timing claim' AS semantics,
+  'none' AS clock_domain
+FROM gputrace_embedded_profiler_artifact
+WHERE sha256 IS NOT NULL AND sha256 != ''
+GROUP BY sha256;
+
 -- APSData-specific aliases keep common queries concise.
 CREATE PERFETTO VIEW gputrace_aps_data_blob AS
 SELECT id, blob_ordinal, byte_count, blob_sha256, dictionary, key_count,

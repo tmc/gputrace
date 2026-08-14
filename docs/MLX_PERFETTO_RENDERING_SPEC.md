@@ -824,6 +824,15 @@ as `ShaderProfilerData` or `Derived Counter Sample Data` was recorded. Source
 carrier, payload, and payload-byte counts remain in the manifest under output
 sampling.
 
+`gputrace_embedded_profiler_artifact_content_audit` groups payload entries only
+by exact SHA-256 identity. It reports family, blob, and structural-kind
+multiplicity, logical decoded-entry bytes, and digest-size consistency. Equal
+bytes may appear under different structural kinds; that is content equality,
+not semantic interchangeability. Logical repeated-entry bytes are not physical
+storage savings, and content identity establishes no decoder success, counter
+mapping, execution use, or timing relationship. A constrained export may
+retain no artifact rows; the manifest and loss receipt remain authoritative.
+
 When an APSCounterData TraceId table covers an encoder execution ordinal,
 `gputrace_encoder` also exposes its recorded batch ID and sample index. This is
 the same positional relationship used for capture-backed execution-cost
