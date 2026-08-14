@@ -1207,6 +1207,74 @@ JOIN args AS a USING (arg_set_id)
 WHERE s.category = 'stream_data_archive_blob'
   AND a.key = 'debug.profiler_carrier_json';
 
+-- gputrace_profiler_carrier_sequence reports transitions in the recorded
+-- serial and ring-index order. A non-unit transition is not assigned time or
+-- diagnosed as loss, overflow, or a GPU stall.
+CREATE PERFETTO VIEW gputrace_profiler_carrier_sequence AS
+WITH ordered AS (
+  SELECT
+    c.*,
+    lag(recorded_serial) OVER (
+      PARTITION BY family, recorded_source
+      ORDER BY recorded_serial, blob_ordinal
+    ) AS previous_serial,
+    lag(recorded_ring_buffer_index) OVER (
+      PARTITION BY family, recorded_source
+      ORDER BY recorded_serial, blob_ordinal
+    ) AS previous_ring_buffer_index
+  FROM gputrace_profiler_carrier AS c
+  WHERE recorded_serial IS NOT NULL
+)
+SELECT
+  *,
+  recorded_serial - previous_serial AS serial_delta,
+  recorded_ring_buffer_index - previous_ring_buffer_index AS ring_buffer_delta,
+  CASE
+    WHEN previous_serial IS NULL THEN 'first_observed'
+    WHEN recorded_serial - previous_serial = 1 THEN 'unit_step'
+    WHEN recorded_serial - previous_serial = 0 THEN 'duplicate_serial'
+    ELSE 'non_unit_step'
+  END AS serial_transition,
+  CASE
+    WHEN previous_ring_buffer_index IS NULL THEN 'first_observed'
+    WHEN recorded_ring_buffer_index - previous_ring_buffer_index = 1 THEN 'unit_step'
+    ELSE 'non_unit_step'
+  END AS ring_buffer_transition,
+  'recorded ordering only; transitions have no duration and do not diagnose loss, overflow, stalls, or idle time' AS sequence_semantics,
+  'none' AS sequence_clock_domain
+FROM ordered;
+
+-- gputrace_profiler_carrier_sequence_audit summarizes exact observed
+-- transitions by archive family and recorded source.
+CREATE PERFETTO VIEW gputrace_profiler_carrier_sequence_audit AS
+SELECT
+  family,
+  recorded_source,
+  count(*) AS carrier_count,
+  count(DISTINCT recorded_serial) AS distinct_serial_count,
+  min(recorded_serial) AS first_serial,
+  max(recorded_serial) AS last_serial,
+  min(recorded_ring_buffer_index) AS minimum_ring_buffer_index,
+  max(recorded_ring_buffer_index) AS maximum_ring_buffer_index,
+  sum(CASE WHEN serial_transition = 'non_unit_step' THEN 1 ELSE 0 END) AS non_unit_serial_transition_count,
+  sum(CASE WHEN serial_transition = 'duplicate_serial' THEN 1 ELSE 0 END) AS duplicate_serial_count,
+  sum(CASE WHEN ring_buffer_transition = 'non_unit_step' THEN 1 ELSE 0 END) AS non_unit_ring_transition_count,
+  CASE
+    WHEN sum(CASE WHEN serial_transition IN ('non_unit_step', 'duplicate_serial') THEN 1 ELSE 0 END) = 0
+     AND sum(CASE WHEN ring_buffer_transition = 'non_unit_step' THEN 1 ELSE 0 END) = 0
+      THEN 'observed_unit_steps'
+    ELSE 'observed_non_unit_transition'
+  END AS sequence_status,
+  (SELECT output_complete FROM gputrace_capture) AS output_complete,
+  CASE
+    WHEN (SELECT output_complete FROM gputrace_capture) = 1 THEN 'complete_export'
+    ELSE 'retained_rows_only'
+  END AS audit_scope,
+  'exact recorded transitions only; no loss, overflow, timing, stall, or causality diagnosis' AS semantics,
+  'none' AS clock_domain
+FROM gputrace_profiler_carrier_sequence
+GROUP BY family, recorded_source;
+
 -- gputrace_embedded_profiler_artifact content-identifies NSData payloads in
 -- profiler archive blobs. Shader binaries have their own typed view and are
 -- excluded here. Payload bytes remain in the source capture.

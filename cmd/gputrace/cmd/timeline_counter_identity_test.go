@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -765,6 +766,87 @@ func TestExportRootScalarEqualityAuditReachesPerfettoSQL(t *testing.T) {
 		}
 		if !slices.Equal(got, test.want) {
 			t.Fatalf("PerfettoSQL root scalar equality = %q, want %q", got, test.want)
+		}
+	}
+}
+
+func TestExportProfilerCarrierSequenceAuditReachesPerfettoSQL(t *testing.T) {
+	processor := os.Getenv("TRACE_PROCESSOR_SHELL")
+	if processor == "" {
+		t.Skip("set TRACE_PROCESSOR_SHELL to run native PerfettoSQL integration")
+	}
+	carrier := func(family string, ordinal, serial, ring int) counter.StreamDataBlobInventory {
+		scalar := func(name, scalarType, scalarJSON string) counter.StreamDataNodeInventory {
+			return counter.StreamDataNodeInventory{
+				Path: "/" + name, Relation: "dictionary", Name: name,
+				ExpansionStatus: "leaf", ValueKind: "number",
+				ScalarType: scalarType, ScalarJSON: scalarJSON,
+			}
+		}
+		return counter.StreamDataBlobInventory{
+			Family: family, Ordinal: ordinal, SHA256: "sha256:" + family + "-" + strconv.Itoa(ordinal), Dictionary: true,
+			Nodes: []counter.StreamDataNodeInventory{
+				scalar("APSTraceDataFile", "string", `"carrier.raw"`),
+				scalar("Source", "string", `"APS_USC"`),
+				scalar("Serial", "int64", strconv.Itoa(serial)),
+				scalar("RingBufferIndex", "int64", strconv.Itoa(ring)),
+			},
+		}
+	}
+	timeline := &Timeline{StreamMetadata: &counter.StreamDataMetadata{ArchiveBlobs: []counter.StreamDataBlobInventory{
+		carrier("aps_data", 1, 10, 0),
+		carrier("aps_data", 2, 11, 1),
+		carrier("aps_data", 3, 13, 3),
+		carrier("aps_data", 4, 13, 4),
+		carrier("aps_timeline_data", 1, 20, 0),
+		carrier("aps_timeline_data", 2, 21, 1),
+	}}}
+	trace := filepath.Join(t.TempDir(), "carrier-sequence.pftrace")
+	if err := exportPerfettoForClock(timeline, trace, timelineClockBusy); err != nil {
+		t.Fatal(err)
+	}
+	queries := []struct {
+		query string
+		want  []string
+	}{
+		{`SELECT family, blob_ordinal, recorded_serial, previous_serial,
+                    serial_delta, serial_transition, recorded_ring_buffer_index,
+                    previous_ring_buffer_index, ring_buffer_delta,
+                    ring_buffer_transition, sequence_clock_domain
+              FROM gputrace_profiler_carrier_sequence
+              WHERE family = 'aps_data' ORDER BY recorded_serial, blob_ordinal;`, []string{
+			"aps_data", "1", "10", "[NULL]", "[NULL]", "first_observed", "0", "[NULL]", "[NULL]", "first_observed", "none",
+			"aps_data", "2", "11", "10", "1", "unit_step", "1", "0", "1", "unit_step", "none",
+			"aps_data", "3", "13", "11", "2", "non_unit_step", "3", "1", "2", "non_unit_step", "none",
+			"aps_data", "4", "13", "13", "0", "duplicate_serial", "4", "3", "1", "unit_step", "none",
+		}},
+		{`SELECT family, recorded_source, carrier_count, distinct_serial_count,
+                    first_serial, last_serial, minimum_ring_buffer_index,
+                    maximum_ring_buffer_index, non_unit_serial_transition_count,
+                    duplicate_serial_count, non_unit_ring_transition_count,
+                    sequence_status, output_complete, audit_scope, clock_domain
+              FROM gputrace_profiler_carrier_sequence_audit ORDER BY family;`, []string{
+			"aps_data", "APS_USC", "4", "3", "10", "13", "0", "4", "1", "1", "1", "observed_non_unit_transition", "1", "complete_export", "none",
+			"aps_timeline_data", "APS_USC", "2", "2", "20", "21", "0", "1", "0", "0", "0", "observed_unit_steps", "1", "complete_export", "none",
+		}},
+	}
+	for _, test := range queries {
+		command := exec.Command(processor, "query", trace)
+		command.Stdin = strings.NewReader(perfettosql.Module + test.query)
+		output, err := command.Output()
+		if err != nil {
+			t.Fatalf("trace processor carrier sequence: %v\n%s", err, output)
+		}
+		rows, err := csv.NewReader(strings.NewReader(string(output))).ReadAll()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, row := range rows[1:] {
+			got = append(got, row...)
+		}
+		if !slices.Equal(got, test.want) {
+			t.Fatalf("PerfettoSQL carrier sequence = %q, want %q", got, test.want)
 		}
 	}
 }

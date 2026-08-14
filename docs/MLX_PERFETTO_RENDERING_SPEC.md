@@ -795,6 +795,16 @@ and `Serial`, plus the blob byte count and digest. Missing fields remain
 join a carrier to an encoder, dispatch, or clock. The view also reports the
 count and total bytes of embedded NSData payloads in that blob.
 
+`gputrace_profiler_carrier_sequence` orders carriers with a recorded serial by
+family and recorded source, then exposes the previous serial and ring index,
+their arithmetic deltas, and neutral transition classes. The aggregate
+`gputrace_profiler_carrier_sequence_audit` reports observed cardinality,
+ranges, duplicates, and non-unit transitions. `observed_unit_steps` describes
+only the retained recorded order. A non-unit transition is not assigned a
+duration or diagnosed as lost samples, ring overflow, GPU idle time, or a
+stall. Under output sampling the audit is `retained_rows_only`, because the
+exporter's own dropped carriers necessarily create apparent gaps.
+
 `gputrace_embedded_profiler_artifact` content-identifies each such payload by
 exact archive path, structural kind, byte count, SHA-256 digest, and owning
 carrier digest. Payload bytes remain in the source capture. Shader binaries are
