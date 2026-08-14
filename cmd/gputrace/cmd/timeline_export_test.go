@@ -2263,6 +2263,33 @@ func TestAddPipelineCompilerArgs(t *testing.T) {
 	}
 }
 
+func TestAddPipelineCompilerArgsDistinguishesRecordedZero(t *testing.T) {
+	pipeline := &counter.PipelineStats{
+		RecordedStatistics: []string{"Constant calculation phase present", "Spilled bytes"},
+	}
+	args := map[string]interface{}{}
+	addPipelineCompilerArgs(args, pipeline, "test")
+	if value, ok := args["spilled_bytes"]; !ok || value != 0 {
+		t.Fatalf("recorded spilled_bytes = %#v, present %v, want 0", value, ok)
+	}
+	if value, ok := args["constant_calculation_phase_present"]; !ok || value != false {
+		t.Fatalf("recorded constant phase = %#v, present %v, want false", value, ok)
+	}
+	for _, key := range []string{"device_atomic_instruction_count", "instruction_count"} {
+		if value, ok := args[key]; ok {
+			t.Fatalf("absent %s = %#v, want omitted", key, value)
+		}
+	}
+
+	legacy := map[string]interface{}{}
+	addPipelineCompilerArgs(legacy, &counter.PipelineStats{}, "legacy")
+	for _, key := range []string{"spilled_bytes", "constant_calculation_phase_present", "compilation_time_ms"} {
+		if value, ok := legacy[key]; ok {
+			t.Fatalf("legacy absent %s = %#v, want omitted", key, value)
+		}
+	}
+}
+
 func TestAddPipelineCompilerArgsKeepsDispatchIdentity(t *testing.T) {
 	args := map[string]interface{}{"pipeline_id": 99}
 	addPipelineCompilerArgs(args, &counter.PipelineStats{PipelineID: 7}, "test")

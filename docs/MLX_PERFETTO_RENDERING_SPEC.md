@@ -987,6 +987,12 @@ locations; it is not measured source-line execution cost. Under an explicit
 native-export byte budget these verbose events are optional and any omission
 is reported by the normal loss receipt.
 
+Pipeline statistics preserve exact source-key presence separately from their
+legacy scalar values. A recorded zero or false is emitted; an absent key is
+omitted and becomes SQL `NULL`. The one-row-per-pipeline compiler view also
+retains the sorted key list as JSON so opaque dictionary members can be
+observed without decoding or classifying their payloads.
+
 Native Perfetto and timeline JSON exports content-identify every regular file
 directly beneath the resolved `.gpuprofiler_raw` directory. Each untimed
 artifact row contains only its basename, recognized family, optional file

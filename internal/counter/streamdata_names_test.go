@@ -60,6 +60,22 @@ func TestAssignPipelineCompilerDiagnosticsPreservesPresence(t *testing.T) {
 	}
 }
 
+func TestAssignPipelineStatFieldsRecordsExactKeys(t *testing.T) {
+	stats := PipelineStats{}
+	assignPipelineStatFields(&stats, map[string]any{
+		"Spilled bytes":                      int64(0),
+		"Constant calculation phase present": false,
+		"ComputeBufferPrefetch":              []any{},
+	})
+	want := []string{"ComputeBufferPrefetch", "Constant calculation phase present", "Spilled bytes"}
+	if !slices.Equal(stats.RecordedStatistics, want) {
+		t.Fatalf("recorded statistics = %q, want %q", stats.RecordedStatistics, want)
+	}
+	if !stats.HasRecordedStatistic("Spilled bytes") || stats.HasRecordedStatistic("Device atomic instruction count") {
+		t.Fatalf("recorded statistic lookup disagrees with %q", stats.RecordedStatistics)
+	}
+}
+
 // compilerNamesArchive builds the $objects slice of an archive whose
 // pipelinePerformanceStatistics dictionary carries a "Compile Performance"
 // entry per pipeline ID, mirroring the real streamData layout.

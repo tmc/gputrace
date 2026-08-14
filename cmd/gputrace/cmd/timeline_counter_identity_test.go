@@ -4,6 +4,7 @@ package cmd
 
 import (
 	"encoding/csv"
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -345,6 +346,7 @@ func TestExportPipelineCompilerDiagnosticsReachPerfettoSQL(t *testing.T) {
 		PipelineCompilerSource: "streamData pipelinePerformanceStatistics",
 		PipelineCompilerStats: []counter.PipelineStats{{
 			PipelineID: 989, PipelineAddress: 0xfedc, FunctionName: "kernel", Remarks: &remarks,
+			RecordedStatistics: []string{"Constant calculation phase present", "Spilled bytes"},
 			CompilePerformance: &counter.PipelineCompilePerformance{
 				FunctionWasCached: &cached, CompilerBackendNanoseconds: &minusOne,
 				CompilerTotalNanoseconds: &zero,
@@ -358,7 +360,9 @@ func TestExportPipelineCompilerDiagnosticsReachPerfettoSQL(t *testing.T) {
 	query := perfettosql.Module + `
 SELECT pipeline_id, function_name, pipeline_address, pipeline_identity_scope,
        remarks, function_was_cached, compiler_backend_ns, compiler_total_ns,
-       compiler_optimization_ns, source, semantics, clock_domain, timing_quality
+       compiler_optimization_ns, spilled_bytes, device_atomic_instruction_count,
+       constant_calculation_phase_present, recorded_statistic_count,
+       hex(recorded_statistics_json), source, semantics, clock_domain, timing_quality
 FROM gputrace_pipeline_compiler;
 `
 	command := exec.Command(processor, "query", trace)
@@ -373,6 +377,7 @@ FROM gputrace_pipeline_compiler;
 	}
 	want := []string{
 		"989", "kernel", "65244", "capture-local", remarks, "0", "-1", "0", "[NULL]",
+		"0", "[NULL]", "0", "2", strings.ToUpper(hex.EncodeToString([]byte(`["Constant calculation phase present","Spilled bytes"]`))),
 		"streamData pipelinePerformanceStatistics",
 		"static compilation evidence; remarks are not measured source-line GPU cost; no clock or dispatch join",
 		"none", "unavailable",

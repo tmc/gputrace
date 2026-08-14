@@ -1975,31 +1975,41 @@ func addPipelineCompilerArgs(args map[string]interface{}, p *counter.PipelineSta
 		args["pipeline_state"] = fmt.Sprintf("0x%x", p.PipelineAddress)
 		args["pipeline_address"] = p.PipelineAddress
 	}
-	args["allocated_registers"] = p.TemporaryRegisterCount
-	args["uniform_registers"] = p.UniformRegisterCount
-	args["spilled_bytes"] = p.SpilledBytes
-	args["thread_invariant_spilled"] = p.ThreadInvariantSpilled
-	args["threadgroup_memory"] = p.ThreadgroupMemory
-	args["instruction_count"] = p.InstructionCount
-	args["alu_instruction_count"] = p.ALUInstructionCount
-	args["fp32_instruction_count"] = p.FP32InstructionCount
-	args["fp16_instruction_count"] = p.FP16InstructionCount
-	args["int32_instruction_count"] = p.INT32InstructionCount
-	args["int16_instruction_count"] = p.INT16InstructionCount
-	args["branch_instruction_count"] = p.BranchInstructionCount
-	args["device_load_instruction_count"] = p.DeviceLoadCount
-	args["device_store_instruction_count"] = p.DeviceStoreCount
-	args["device_atomic_instruction_count"] = p.DeviceAtomicCount
-	args["texture_reads_instruction_count"] = p.TextureReadCount
-	args["texture_writes_instruction_count"] = p.TextureWriteCount
-	args["threadgroup_load_instruction_count"] = p.ThreadgroupLoadCount
-	args["threadgroup_store_instruction_count"] = p.ThreadgroupStoreCount
-	args["threadgroup_atomic_instruction_count"] = p.ThreadgroupAtomicCount
-	args["wait_instruction_count"] = p.WaitInstructionCount
-	args["constant_calculation_temporary_register_count"] = p.ConstantCalculationTemporaryRegisterCount
-	args["constant_calculation_phase_present"] = p.ConstantCalculationPhasePresent
-	args["compilation_time_ms"] = p.CompilationTimeMs
+	addRecordedPipelineInt(args, p, "Temporary register count", "allocated_registers", p.TemporaryRegisterCount)
+	addRecordedPipelineInt(args, p, "Uniform register count", "uniform_registers", p.UniformRegisterCount)
+	addRecordedPipelineInt(args, p, "Spilled bytes", "spilled_bytes", p.SpilledBytes)
+	addRecordedPipelineInt(args, p, "Thread invariant spilled bytes", "thread_invariant_spilled", p.ThreadInvariantSpilled)
+	addRecordedPipelineInt(args, p, "Threadgroup memory", "threadgroup_memory", p.ThreadgroupMemory)
+	addRecordedPipelineInt(args, p, "Instruction count", "instruction_count", p.InstructionCount)
+	addRecordedPipelineInt(args, p, "ALU instruction count", "alu_instruction_count", p.ALUInstructionCount)
+	addRecordedPipelineInt(args, p, "FP32 instruction count", "fp32_instruction_count", p.FP32InstructionCount)
+	addRecordedPipelineInt(args, p, "FP16 instruction count", "fp16_instruction_count", p.FP16InstructionCount)
+	addRecordedPipelineInt(args, p, "INT32 instruction count", "int32_instruction_count", p.INT32InstructionCount)
+	addRecordedPipelineInt(args, p, "INT16 instruction count", "int16_instruction_count", p.INT16InstructionCount)
+	addRecordedPipelineInt(args, p, "Branch instruction count", "branch_instruction_count", p.BranchInstructionCount)
+	addRecordedPipelineInt(args, p, "Device load instruction count", "device_load_instruction_count", p.DeviceLoadCount)
+	addRecordedPipelineInt(args, p, "Device store instruction count", "device_store_instruction_count", p.DeviceStoreCount)
+	addRecordedPipelineInt(args, p, "Device atomic instruction count", "device_atomic_instruction_count", p.DeviceAtomicCount)
+	addRecordedPipelineInt(args, p, "Texture reads instruction count", "texture_reads_instruction_count", p.TextureReadCount)
+	addRecordedPipelineInt(args, p, "Texture writes instruction count", "texture_writes_instruction_count", p.TextureWriteCount)
+	addRecordedPipelineInt(args, p, "Threadgroup load instruction count", "threadgroup_load_instruction_count", p.ThreadgroupLoadCount)
+	addRecordedPipelineInt(args, p, "Threadgroup store instruction count", "threadgroup_store_instruction_count", p.ThreadgroupStoreCount)
+	addRecordedPipelineInt(args, p, "Threadgroup atomic instruction count", "threadgroup_atomic_instruction_count", p.ThreadgroupAtomicCount)
+	addRecordedPipelineInt(args, p, "Wait instruction count", "wait_instruction_count", p.WaitInstructionCount)
+	addRecordedPipelineInt(args, p, "Constant calculation temporary register count", "constant_calculation_temporary_register_count", p.ConstantCalculationTemporaryRegisterCount)
+	if p.HasRecordedStatistic("Constant calculation phase present") || p.ConstantCalculationPhasePresent {
+		args["constant_calculation_phase_present"] = p.ConstantCalculationPhasePresent
+	}
+	if p.HasRecordedStatistic("Compilation time in milliseconds") || p.CompilationTimeMs != 0 {
+		args["compilation_time_ms"] = p.CompilationTimeMs
+	}
 	args["metrics_source"] = source
+}
+
+func addRecordedPipelineInt(args map[string]interface{}, pipeline *counter.PipelineStats, sourceName, argName string, value int) {
+	if pipeline.HasRecordedStatistic(sourceName) || value != 0 {
+		args[argName] = value
+	}
 }
 
 func addEncoderKernelEvents(timeline *Timeline, trace *gputrace.Trace, sourceMapper *gputrace.ShaderSourceMapper, storeStats *counter.StoreStats) {
@@ -3655,6 +3665,13 @@ func appendEvidenceDetailEvents(trace *perfetto.Trace, timeline *Timeline) {
 		}
 		if performance := pipeline.CompilePerformance; performance != nil {
 			appendPipelineCompilePerformanceArgs(args, performance)
+		}
+		addPipelineCompilerArgs(args, &pipeline, timeline.PipelineCompilerSource)
+		if pipeline.RecordedStatistics != nil {
+			names, _ := json.Marshal(pipeline.RecordedStatistics)
+			args["recorded_statistic_count"] = len(pipeline.RecordedStatistics)
+			args["recorded_statistics_json"] = string(names)
+			args["recorded_statistics_semantics"] = "exact sorted top-level source keys; presence only for opaque values"
 		}
 		trace.Events = append(trace.Events, perfetto.Event{
 			ID: nextID, TrackUUID: trackID,

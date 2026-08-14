@@ -11,6 +11,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/tmc/apple/x/plist"
 	"github.com/tmc/gputrace/internal/trace"
@@ -47,6 +48,16 @@ type PipelineStats struct {
 	CompilationTimeMs                         float64                     `json:"compilation_time_ms"`                           // Shader compilation time
 	Remarks                                   *string                     `json:"remarks,omitempty"`                             // Exact compiler optimization remarks
 	CompilePerformance                        *PipelineCompilePerformance `json:"compile_performance,omitempty"`
+	RecordedStatistics                        []string                    `json:"recorded_statistics,omitempty"`
+}
+
+// HasRecordedStatistic reports whether the source dictionary contained name.
+func (p *PipelineStats) HasRecordedStatistic(name string) bool {
+	if p == nil {
+		return false
+	}
+	_, ok := slices.BinarySearch(p.RecordedStatistics, name)
+	return ok
 }
 
 // PipelineCompilePerformance contains recorded fields from the nested
@@ -1117,6 +1128,11 @@ func resolveKeyedDictionary(objects []interface{}, dict map[string]interface{}) 
 // archives under well-known names. Both .gpuprofiler_raw streamData and the
 // store sections of a capture bundle use these names.
 func assignPipelineStatFields(ps *PipelineStats, keyMap map[string]interface{}) {
+	ps.RecordedStatistics = ps.RecordedStatistics[:0]
+	for key := range keyMap {
+		ps.RecordedStatistics = append(ps.RecordedStatistics, key)
+	}
+	slices.Sort(ps.RecordedStatistics)
 	ps.TemporaryRegisterCount = getInt(keyMap, "Temporary register count")
 	ps.UniformRegisterCount = getInt(keyMap, "Uniform register count")
 	ps.SpilledBytes = getInt(keyMap, "Spilled bytes")

@@ -146,6 +146,10 @@ source-line GPU cost and are never repeated per dispatch.
 The manifest count is the decoded source count; under an explicit output budget
 the SQL row count may be lower, with the difference covered by the export loss
 receipt.
+Each pipeline also carries the sorted exact names of all recorded top-level
+statistics. SQL and dispatch details omit an absent metric, while preserving a
+recorded zero or false. Opaque keys such as `ComputeBufferPrefetch` remain
+presence-only evidence and are not assigned a meaning.
 Archive-family inventory separately reports top-level APS, timeline, counter,
 shader-profiler, GPU-timeline, and batch-filtered array entry counts. These are
 presence counts, not decoded samples; an explicit zero differs from absence.

@@ -108,6 +108,7 @@ func TestModuleProjectsRecordedDispatchesAndCompilerFacts(t *testing.T) {
 		"pipeline_compiler_availability",
 		"pipeline_compiler_count_semantics",
 		"compiler_backend_ns",
+		"recorded_statistics_json",
 		"stream_data_family_count_semantics",
 		"stream_data_aps_data_entry_count",
 		"stream_data_aps_timeline_data_availability",
