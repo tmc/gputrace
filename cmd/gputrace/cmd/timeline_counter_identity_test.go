@@ -519,6 +519,107 @@ func TestExportAPSDataInventoryReachesPerfettoSQL(t *testing.T) {
 	}
 }
 
+func TestExportRecordedConfigurationAndLimiterCatalogReachesPerfettoSQL(t *testing.T) {
+	processor := os.Getenv("TRACE_PROCESSOR_SHELL")
+	if processor == "" {
+		t.Skip("set TRACE_PROCESSOR_SHELL to run native PerfettoSQL integration")
+	}
+	blob := counter.StreamDataBlobInventory{
+		Family: "aps_data", Ordinal: 1, SHA256: "sha256:blob", Dictionary: true,
+		Nodes: []counter.StreamDataNodeInventory{{
+			Path: "/Configuration Variables/gpu_type", ParentPath: "/Configuration Variables",
+			Relation: "dictionary", Name: "gpu_type", ExpansionStatus: "leaf",
+			ValueKind: "string", ScalarType: "string", ScalarJSON: `"G16C"`,
+		}, {
+			Path: "/Configuration Variables/core_mask_list/0", ParentPath: "/Configuration Variables/core_mask_list",
+			Relation: "array", Ordinal: 0, ExpansionStatus: "leaf",
+			ValueKind: "number", ScalarType: "int64", ScalarJSON: "1023",
+		}, {
+			Path: "/APS Options/KickAndStateTracing/CountPeriod", ParentPath: "/APS Options/KickAndStateTracing",
+			Relation: "dictionary", Name: "CountPeriod", ExpansionStatus: "leaf",
+			ValueKind: "number", ScalarType: "int64", ScalarJSON: "4096",
+		}, {
+			Path: "/Counter Info/counter-a", ParentPath: "/Counter Info",
+			Relation: "dictionary", Name: "counter-a", ExpansionStatus: "leaf",
+			ValueKind: "number", ScalarType: "int64", ScalarJSON: "1",
+		}, {
+			Path: "/Limiter Counter List Map/APS_USC/0", ParentPath: "/Limiter Counter List Map/APS_USC",
+			Relation: "array", Ordinal: 0, ExpansionStatus: "leaf",
+			ValueKind: "string", ScalarType: "string", ScalarJSON: `"counter-a"`,
+		}, {
+			Path: "/limiter sample counters/0", ParentPath: "/limiter sample counters",
+			Relation: "array", Ordinal: 0, ExpansionStatus: "leaf",
+			ValueKind: "string", ScalarType: "string", ScalarJSON: `"counter-a"`,
+		}},
+	}
+	timeline := &Timeline{
+		StreamMetadata: &counter.StreamDataMetadata{ArchiveBlobs: []counter.StreamDataBlobInventory{blob}},
+		CounterCatalog: []CounterCatalogEntry{{RecordedName: "counter-a"}},
+	}
+	trace := filepath.Join(t.TempDir(), "recorded-configuration.pftrace")
+	if err := exportPerfettoForClock(timeline, trace, timelineClockBusy); err != nil {
+		t.Fatal(err)
+	}
+	queries := []struct {
+		query string
+		want  []string
+	}{
+		{`SELECT family, path, recorded_name, scalar_type, hex(scalar_json), value
+              FROM gputrace_stream_data_configuration ORDER BY path;`, []string{
+			"aps_data", "/Configuration Variables/core_mask_list/0", "[NULL]", "int64", "31303233", "1023",
+			"aps_data", "/Configuration Variables/gpu_type", "gpu_type", "string", "224731364322", "G16C",
+		}},
+		{`SELECT family, path, recorded_name, scalar_json, value
+              FROM gputrace_aps_option;`, []string{
+			"aps_data", "/APS Options/KickAndStateTracing/CountPeriod", "CountPeriod", "4096", "4096",
+		}},
+		{`SELECT family, recorded_name, scalar_json, value FROM gputrace_counter_info;`, []string{
+			"aps_data", "counter-a", "1", "1",
+		}},
+		{`SELECT family, recorded_group, counter_ordinal, recorded_name
+              FROM gputrace_limiter_counter_group;`, []string{
+			"aps_data", "APS_USC", "0", "counter-a",
+		}},
+		{`SELECT family, counter_ordinal, recorded_name
+              FROM gputrace_limiter_sample_counter;`, []string{
+			"aps_data", "0", "counter-a",
+		}},
+		{`SELECT family, sample_counter_count, grouped_counter_count,
+                    sample_to_group_equal_count, sample_to_counter_info_equal_count,
+                    sample_to_pass_catalog_equal_count
+              FROM gputrace_limiter_catalog_audit;`, []string{
+			"aps_data", "1", "1", "1", "1", "1",
+		}},
+		{`SELECT stream_data_archive_configuration_record_count,
+                    stream_data_archive_aps_option_record_count,
+                    stream_data_archive_counter_info_record_count,
+                    stream_data_archive_limiter_group_record_count,
+                    stream_data_archive_limiter_sample_counter_record_count
+              FROM gputrace_capture;`, []string{
+			"2", "1", "1", "1", "1",
+		}},
+	}
+	for _, test := range queries {
+		command := exec.Command(processor, "query", trace)
+		command.Stdin = strings.NewReader(perfettosql.Module + test.query)
+		output, err := command.Output()
+		if err != nil {
+			t.Fatalf("trace processor recorded configuration: %v\n%s", err, output)
+		}
+		rows, err := csv.NewReader(strings.NewReader(string(output))).ReadAll()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, row := range rows[1:] {
+			got = append(got, row...)
+		}
+		if !slices.Equal(got, test.want) {
+			t.Fatalf("PerfettoSQL recorded configuration = %q, want %q", got, test.want)
+		}
+	}
+}
+
 func TestExportStreamDataTableReachesPerfettoSQL(t *testing.T) {
 	processor := os.Getenv("TRACE_PROCESSOR_SHELL")
 	if processor == "" {

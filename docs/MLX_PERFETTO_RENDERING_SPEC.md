@@ -739,6 +739,23 @@ between mapping `encID`, APSCounterData encoder IDs, APSCounterData kick IDs,
 mapping `encIndex`, and encoder execution ordinals. It inventories equality; it
 does not promote equal values in the opaque ID namespaces into foreign keys.
 
+Recorded profiling configuration is available without scanning the complete
+recursive archive projection. `gputrace_stream_data_configuration` and
+`gputrace_aps_option` retain scalar leaves, exact archive paths, source types,
+and canonical JSON. In particular, recorded time offsets remain configuration
+values; they are not a verified clock mapping. `gputrace_counter_info`,
+`gputrace_limiter_counter_group`, and `gputrace_limiter_sample_counter` retain
+the source counter flags, ordered limiter groups, and ordered sampling list.
+They assign no units, values, pass columns, or limiter formulas.
+
+`gputrace_limiter_catalog_audit` reports exact name equality between the
+sampling list, group map, Counter Info, and the separately decoded pass-list
+catalog. A match is only a spelling match. An unmatched pass-list name remains
+explicit and is not treated as missing or zero counter data. The manifest
+keeps pre-sampling counts for all five projections; under an output budget the
+ordinary loss receipt remains authoritative for which optional blob packets
+were retained.
+
 When an APSCounterData TraceId table covers an encoder execution ordinal,
 `gputrace_encoder` also exposes its recorded batch ID and sample index. This is
 the same positional relationship used for capture-backed execution-cost

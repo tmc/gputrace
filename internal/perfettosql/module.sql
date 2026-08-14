@@ -236,6 +236,13 @@ SELECT
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_program_address_mapping_binary_match_count') AS INT) AS stream_data_archive_program_address_mapping_binary_match_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_program_address_mapping_binary_unmatched_count') AS INT) AS stream_data_archive_program_address_mapping_binary_unmatched_count,
   extract_arg(arg_set_id, 'debug.stream_data_archive_program_address_semantics') AS stream_data_archive_program_address_semantics,
+  cast(extract_arg(arg_set_id, 'debug.stream_data_archive_configuration_record_count') AS INT) AS stream_data_archive_configuration_record_count,
+  cast(extract_arg(arg_set_id, 'debug.stream_data_archive_aps_option_record_count') AS INT) AS stream_data_archive_aps_option_record_count,
+  cast(extract_arg(arg_set_id, 'debug.stream_data_archive_counter_info_record_count') AS INT) AS stream_data_archive_counter_info_record_count,
+  cast(extract_arg(arg_set_id, 'debug.stream_data_archive_limiter_group_record_count') AS INT) AS stream_data_archive_limiter_group_record_count,
+  cast(extract_arg(arg_set_id, 'debug.stream_data_archive_limiter_sample_counter_record_count') AS INT) AS stream_data_archive_limiter_sample_counter_record_count,
+  extract_arg(arg_set_id, 'debug.stream_data_archive_configuration_semantics') AS stream_data_archive_configuration_semantics,
+  extract_arg(arg_set_id, 'debug.stream_data_archive_limiter_catalog_semantics') AS stream_data_archive_limiter_catalog_semantics,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_byte_count') AS INT) AS stream_data_archive_byte_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_malformed_blob_count') AS INT) AS stream_data_archive_malformed_blob_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_scalar_value_count') AS INT) AS stream_data_archive_scalar_value_count,
@@ -938,6 +945,131 @@ SELECT
   (SELECT count(*) FROM encoder_ordinals) AS encoder_execution_ordinal_count,
   (SELECT count(*) FROM mapping_indices JOIN encoder_ordinals USING (id)) AS mapping_index_to_encoder_ordinal_equal_count,
   'equality inventory only; only encIndex to Encoder Infos ordinal is projected as a positional join' AS semantics;
+
+-- gputrace_stream_data_configuration retains scalar leaves beneath the
+-- recorded Configuration Variables dictionary. Values have no inferred unit.
+CREATE PERFETTO VIEW gputrace_stream_data_configuration AS
+SELECT
+  s.id AS blob_event_id,
+  extract_arg(s.arg_set_id, 'debug.family') AS family,
+  cast(extract_arg(s.arg_set_id, 'debug.blob_ordinal') AS INT) AS blob_ordinal,
+  json_extract(a.string_value, '$.path') AS path,
+  json_extract(a.string_value, '$.parent_path') AS parent_path,
+  json_extract(a.string_value, '$.name') AS recorded_name,
+  cast(json_extract(a.string_value, '$.ordinal') AS INT) AS recorded_ordinal,
+  json_extract(a.string_value, '$.scalar_type') AS scalar_type,
+  json_extract(a.string_value, '$.scalar_json') AS scalar_json,
+  json_extract(json_extract(a.string_value, '$.scalar_json'), '$') AS value,
+  extract_arg(s.arg_set_id, 'debug.blob_sha256') AS blob_sha256,
+  'recorded configuration scalar; no inferred unit, clock mapping, or runtime effect' AS semantics,
+  s.arg_set_id
+FROM slice AS s
+JOIN args AS a USING (arg_set_id)
+WHERE s.category = 'stream_data_archive_blob'
+  AND a.key GLOB 'debug.stream_configuration_[0-9]*_json';
+
+-- gputrace_aps_option retains scalar leaves beneath the recorded APS Options
+-- dictionary. Nested option paths remain exact archive paths.
+CREATE PERFETTO VIEW gputrace_aps_option AS
+SELECT
+  s.id AS blob_event_id,
+  extract_arg(s.arg_set_id, 'debug.family') AS family,
+  cast(extract_arg(s.arg_set_id, 'debug.blob_ordinal') AS INT) AS blob_ordinal,
+  json_extract(a.string_value, '$.path') AS path,
+  json_extract(a.string_value, '$.parent_path') AS parent_path,
+  json_extract(a.string_value, '$.name') AS recorded_name,
+  cast(json_extract(a.string_value, '$.ordinal') AS INT) AS recorded_ordinal,
+  json_extract(a.string_value, '$.scalar_type') AS scalar_type,
+  json_extract(a.string_value, '$.scalar_json') AS scalar_json,
+  json_extract(json_extract(a.string_value, '$.scalar_json'), '$') AS value,
+  extract_arg(s.arg_set_id, 'debug.blob_sha256') AS blob_sha256,
+  'recorded profiling option scalar; no inferred unit or runtime effect' AS semantics,
+  s.arg_set_id
+FROM slice AS s
+JOIN args AS a USING (arg_set_id)
+WHERE s.category = 'stream_data_archive_blob'
+  AND a.key GLOB 'debug.aps_option_[0-9]*_json';
+
+-- gputrace_counter_info retains recorded Counter Info dictionary entries.
+-- Values remain source flags; this view does not assign counter units.
+CREATE PERFETTO VIEW gputrace_counter_info AS
+SELECT
+  s.id AS blob_event_id,
+  extract_arg(s.arg_set_id, 'debug.family') AS family,
+  cast(extract_arg(s.arg_set_id, 'debug.blob_ordinal') AS INT) AS blob_ordinal,
+  json_extract(a.string_value, '$.name') AS recorded_name,
+  json_extract(a.string_value, '$.scalar_type') AS scalar_type,
+  json_extract(a.string_value, '$.scalar_json') AS scalar_json,
+  json_extract(json_extract(a.string_value, '$.scalar_json'), '$') AS value,
+  extract_arg(s.arg_set_id, 'debug.blob_sha256') AS blob_sha256,
+  'recorded Counter Info entry; no counter-value, unit, pass, or derived meaning' AS semantics,
+  s.arg_set_id
+FROM slice AS s
+JOIN args AS a USING (arg_set_id)
+WHERE s.category = 'stream_data_archive_blob'
+  AND a.key GLOB 'debug.counter_info_[0-9]*_json';
+
+-- gputrace_limiter_counter_group retains each ordered counter identity in the
+-- recorded Limiter Counter List Map.
+CREATE PERFETTO VIEW gputrace_limiter_counter_group AS
+SELECT
+  s.id AS blob_event_id,
+  extract_arg(s.arg_set_id, 'debug.family') AS family,
+  cast(extract_arg(s.arg_set_id, 'debug.blob_ordinal') AS INT) AS blob_ordinal,
+  json_extract(a.string_value, '$.group') AS recorded_group,
+  cast(json_extract(a.string_value, '$.ordinal') AS INT) AS counter_ordinal,
+  json_extract(json_extract(a.string_value, '$.scalar_json'), '$') AS recorded_name,
+  extract_arg(s.arg_set_id, 'debug.blob_sha256') AS blob_sha256,
+  'recorded limiter group membership and order; no counter values, units, or limiter formula' AS semantics,
+  s.arg_set_id
+FROM slice AS s
+JOIN args AS a USING (arg_set_id)
+WHERE s.category = 'stream_data_archive_blob'
+  AND a.key GLOB 'debug.limiter_group_counter_[0-9]*_json';
+
+-- gputrace_limiter_sample_counter retains the ordered source list named
+-- limiter sample counters.
+CREATE PERFETTO VIEW gputrace_limiter_sample_counter AS
+SELECT
+  s.id AS blob_event_id,
+  extract_arg(s.arg_set_id, 'debug.family') AS family,
+  cast(extract_arg(s.arg_set_id, 'debug.blob_ordinal') AS INT) AS blob_ordinal,
+  cast(json_extract(a.string_value, '$.ordinal') AS INT) AS counter_ordinal,
+  json_extract(json_extract(a.string_value, '$.scalar_json'), '$') AS recorded_name,
+  extract_arg(s.arg_set_id, 'debug.blob_sha256') AS blob_sha256,
+  'recorded limiter sampling identity and order; no sample-value or pass-column join' AS semantics,
+  s.arg_set_id
+FROM slice AS s
+JOIN args AS a USING (arg_set_id)
+WHERE s.category = 'stream_data_archive_blob'
+  AND a.key GLOB 'debug.limiter_sample_counter_[0-9]*_json';
+
+-- gputrace_limiter_catalog_audit inventories exact name equality between the
+-- limiter sample list, limiter group map, Counter Info, and pass-list catalog.
+CREATE PERFETTO VIEW gputrace_limiter_catalog_audit AS
+WITH families AS (
+  SELECT DISTINCT family FROM gputrace_limiter_sample_counter
+)
+SELECT
+  f.family,
+  (SELECT count(*) FROM gputrace_limiter_sample_counter s
+    WHERE s.family = f.family) AS sample_counter_count,
+  (SELECT count(DISTINCT recorded_name) FROM gputrace_limiter_counter_group g
+    WHERE g.family = f.family) AS grouped_counter_count,
+  (SELECT count(DISTINCT s.recorded_name)
+    FROM gputrace_limiter_sample_counter s
+    JOIN gputrace_limiter_counter_group g USING (family, recorded_name)
+    WHERE s.family = f.family) AS sample_to_group_equal_count,
+  (SELECT count(DISTINCT s.recorded_name)
+    FROM gputrace_limiter_sample_counter s
+    JOIN gputrace_counter_info i USING (family, recorded_name)
+    WHERE s.family = f.family) AS sample_to_counter_info_equal_count,
+  (SELECT count(DISTINCT s.recorded_name)
+    FROM gputrace_limiter_sample_counter s
+    JOIN gputrace_counter_catalog c ON c.recorded_name = s.recorded_name
+    WHERE s.family = f.family) AS sample_to_pass_catalog_equal_count,
+  'exact name equality only; no sample-value, pass-column, unit, or limiter-formula attribution' AS semantics
+FROM families AS f;
 
 -- APSData-specific aliases keep common queries concise.
 CREATE PERFETTO VIEW gputrace_aps_data_blob AS
