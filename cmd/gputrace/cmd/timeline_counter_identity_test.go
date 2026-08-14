@@ -353,6 +353,7 @@ func TestExportAPSDataInventoryReachesPerfettoSQL(t *testing.T) {
 		t.Skip("set TRACE_PROCESSOR_SHELL to run native PerfettoSQL integration")
 	}
 	dataBytes := 3
+	binaryBytes := 16
 	objectIndex := uint64(9)
 	containerCount := 1
 	blobs := []counter.StreamDataBlobInventory{{
@@ -367,6 +368,27 @@ func TestExportAPSDataInventoryReachesPerfettoSQL(t *testing.T) {
 			Relation: "dictionary", Ordinal: 0, Name: "APSTraceDataFile",
 			ObjectIndex: &objectIndex, ExpansionStatus: "expanded", ValueKind: "dictionary",
 			ContainerCount: &containerCount,
+		}, {
+			Path: "/Binaries/bin-1", ParentPath: "/Binaries", Depth: 2,
+			Relation: "dictionary", Ordinal: 0, Name: "bin-1",
+			ExpansionStatus: "leaf", ValueKind: "data",
+			DataBytes: &binaryBytes, DataSHA256: "sha256:binary",
+		}, {
+			Path: "/Program Address Mappings/0", ParentPath: "/Program Address Mappings", Depth: 2,
+			Relation: "array", Ordinal: 0, ExpansionStatus: "expanded", ValueKind: "dictionary",
+			ContainerCount: &containerCount,
+		}, {
+			Path: "/Program Address Mappings/0/binaryUniqueId", ParentPath: "/Program Address Mappings/0", Depth: 3,
+			Relation: "dictionary", Ordinal: 0, Name: "binaryUniqueId",
+			ExpansionStatus: "leaf", ValueKind: "string", ScalarType: "string", ScalarJSON: `"bin-1"`,
+		}, {
+			Path: "/Program Address Mappings/0/mappedAddress", ParentPath: "/Program Address Mappings/0", Depth: 3,
+			Relation: "dictionary", Ordinal: 1, Name: "mappedAddress",
+			ExpansionStatus: "leaf", ValueKind: "number", ScalarType: "uint64", ScalarJSON: "1099511627840",
+		}, {
+			Path: "/Program Address Mappings/0/type", ParentPath: "/Program Address Mappings/0", Depth: 3,
+			Relation: "dictionary", Ordinal: 2, Name: "type",
+			ExpansionStatus: "leaf", ValueKind: "string", ScalarType: "string", ScalarJSON: `"driver"`,
 		}},
 	}}
 	timeline := &Timeline{StreamMetadata: &counter.StreamDataMetadata{
@@ -384,7 +406,7 @@ func TestExportAPSDataInventoryReachesPerfettoSQL(t *testing.T) {
 		{`SELECT family, blob_ordinal, byte_count, blob_sha256, dictionary, key_count,
                     node_count, nodes_truncated
               FROM gputrace_stream_data_archive_blob;`, []string{
-			"aps_data", "2", "123", "sha256:abc", "1", "1", "1", "0",
+			"aps_data", "2", "123", "sha256:abc", "1", "1", "6", "0",
 		}},
 		{`SELECT family, blob_ordinal, key_ordinal, recorded_name, value_kind,
                     data_bytes, data_sha256
@@ -394,15 +416,29 @@ func TestExportAPSDataInventoryReachesPerfettoSQL(t *testing.T) {
 		{`SELECT family, blob_ordinal, node_ordinal, path, parent_path, depth,
                     relation, child_ordinal, recorded_name, object_index,
                     expansion_status, value_kind, container_count, blob_sha256
-              FROM gputrace_stream_data_archive_node;`, []string{
+              FROM gputrace_stream_data_archive_node
+              WHERE path = '/APSTraceDataFile';`, []string{
 			"aps_data", "2", "0", "/APSTraceDataFile", "", "1",
 			"dictionary", "0", "APSTraceDataFile", "9",
 			"expanded", "dictionary", "1", "sha256:abc",
 		}},
+		{`SELECT family, blob_ordinal, binary_ordinal, binary_unique_id,
+                    byte_count, binary_sha256
+              FROM gputrace_shader_binary;`, []string{
+			"aps_data", "2", "0", "bin-1", "16", "sha256:binary",
+		}},
+		{`SELECT family, blob_ordinal, mapping_ordinal, binary_unique_id,
+                    mapping_type, mapped_address_json, mapped_address,
+                    recorded_field_count, binary_byte_count, binary_sha256,
+                    binary_join_status
+              FROM gputrace_program_address_mapping;`, []string{
+			"aps_data", "2", "0", "bin-1", "driver",
+			"1099511627840", "1099511627840", "3", "16", "sha256:binary", "matched",
+		}},
 		{`SELECT blob_ordinal, byte_count, blob_sha256, dictionary, key_count,
                     node_count, nodes_truncated,
                     decode_error, source, semantics FROM gputrace_aps_data_blob;`, []string{
-			"2", "123", "sha256:abc", "1", "1", "1", "0", "[NULL]",
+			"2", "123", "sha256:abc", "1", "1", "6", "0", "[NULL]",
 			"streamData nested NSData archive entry",
 			"content identity and deterministic nested dictionary and array projection; private values remain uninterpreted",
 		}},
@@ -427,6 +463,10 @@ func TestExportAPSDataInventoryReachesPerfettoSQL(t *testing.T) {
                     stream_data_archive_reference_node_count,
                     stream_data_archive_depth_limited_node_count,
                     stream_data_archive_node_truncated_blob_count,
+                    stream_data_archive_shader_binary_count,
+                    stream_data_archive_program_address_mapping_count,
+                    stream_data_archive_program_address_mapping_binary_match_count,
+                    stream_data_archive_program_address_mapping_binary_unmatched_count,
                     stream_data_archive_byte_count,
                     stream_data_archive_aps_data_blob_count,
                     stream_data_archive_scalar_value_count,
@@ -435,7 +475,7 @@ func TestExportAPSDataInventoryReachesPerfettoSQL(t *testing.T) {
                     stream_data_archive_descriptor_error_count,
                     stream_data_archive_semantics
               FROM gputrace_capture;`, []string{
-			"1", "1", "1", "1", "0", "0", "0", "123", "1", "0", "1", "0", "0",
+			"1", "1", "6", "2", "0", "0", "0", "1", "1", "1", "0", "123", "1", "0", "1", "0", "0",
 			"source family, ordinal, content identity, and deterministic nested dictionary and array projection; private values remain uninterpreted",
 		}},
 	}

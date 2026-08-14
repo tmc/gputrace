@@ -72,6 +72,31 @@ func TestAppendEvidenceDetailEventsEmbedsArchiveNodesOnBlob(t *testing.T) {
 	}
 }
 
+func TestStreamDataProgramsPreservesExactValuesAndUnmatched(t *testing.T) {
+	count := 1
+	blob := counter.StreamDataBlobInventory{Nodes: []counter.StreamDataNodeInventory{{
+		Path: "/Program Address Mappings/0", ParentPath: "/Program Address Mappings",
+		Relation: "array", Ordinal: 0, ExpansionStatus: "expanded",
+		ValueKind: "dictionary", ContainerCount: &count,
+	}, {
+		Path: "/Program Address Mappings/0/binaryUniqueId", ParentPath: "/Program Address Mappings/0",
+		Relation: "dictionary", Name: "binaryUniqueId", ExpansionStatus: "leaf",
+		ValueKind: "string", ScalarType: "string", ScalarJSON: `"missing"`,
+	}, {
+		Path: "/Program Address Mappings/0/mappedAddress", ParentPath: "/Program Address Mappings/0",
+		Relation: "dictionary", Name: "mappedAddress", ExpansionStatus: "leaf",
+		ValueKind: "number", ScalarType: "uint64", ScalarJSON: "18446744073709551615",
+	}}}
+	binaries, mappings := streamDataPrograms(blob)
+	if len(binaries) != 0 || len(mappings) != 1 {
+		t.Fatalf("program records = %d binaries, %d mappings", len(binaries), len(mappings))
+	}
+	mapping := mappings[0]
+	if mapping.BinaryUniqueID != "missing" || mapping.MappedAddressJSON != "18446744073709551615" || mapping.BinaryJoinStatus != "unmatched" || mapping.BinaryBytes != nil || mapping.BinarySHA256 != "" {
+		t.Fatalf("program mapping = %#v", mapping)
+	}
+}
+
 func TestApplyStreamIdentityPreservesOrderedStrings(t *testing.T) {
 	timeline := &Timeline{}
 	stats := &counter.StreamDataStats{FunctionNames: []string{"kernel", "", "/source.metal"}}

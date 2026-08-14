@@ -3303,6 +3303,116 @@ func appendStreamDataArchiveArgs(args map[string]any, blobs []counter.StreamData
 	for family, count := range byFamily {
 		args[prefix+family+"_blob_count"] = count
 	}
+	programs := countStreamDataPrograms(blobs)
+	args[prefix+"shader_binary_count"] = programs.binaries
+	args[prefix+"program_address_mapping_count"] = programs.mappings
+	args[prefix+"program_address_mapping_binary_match_count"] = programs.matches
+	args[prefix+"program_address_mapping_binary_unmatched_count"] = programs.mappings - programs.matches
+	args[prefix+"program_address_semantics"] = "recorded Binaries and Program Address Mappings fields joined by exact capture-local binaryUniqueId; no dispatch, function, source, or timing attribution"
+}
+
+type streamDataProgramCounts struct {
+	binaries int
+	mappings int
+	matches  int
+}
+
+func countStreamDataPrograms(blobs []counter.StreamDataBlobInventory) streamDataProgramCounts {
+	var total streamDataProgramCounts
+	for _, blob := range blobs {
+		binaries, mappings := streamDataPrograms(blob)
+		total.binaries += len(binaries)
+		total.mappings += len(mappings)
+		for _, mapping := range mappings {
+			if mapping.BinaryJoinStatus == "matched" {
+				total.matches++
+			}
+		}
+	}
+	return total
+}
+
+type streamDataShaderBinary struct {
+	Ordinal  int    `json:"ordinal"`
+	UniqueID string `json:"unique_id"`
+	Bytes    int    `json:"bytes"`
+	SHA256   string `json:"sha256"`
+}
+
+type streamDataProgramMapping struct {
+	Ordinal               int    `json:"ordinal"`
+	BinaryUniqueID        string `json:"binary_unique_id,omitempty"`
+	Type                  string `json:"type,omitempty"`
+	MappedAddressJSON     string `json:"mapped_address_json,omitempty"`
+	MappedSizeJSON        string `json:"mapped_size_json,omitempty"`
+	EncoderIDJSON         string `json:"encoder_id_json,omitempty"`
+	EncoderIndexJSON      string `json:"encoder_index_json,omitempty"`
+	DrawCallIndexJSON     string `json:"draw_call_index_json,omitempty"`
+	DrawFunctionIndexJSON string `json:"draw_function_index_json,omitempty"`
+	RecordedIndexJSON     string `json:"recorded_index_json,omitempty"`
+	RecordedFieldCount    int    `json:"recorded_field_count"`
+	BinaryBytes           *int   `json:"binary_bytes,omitempty"`
+	BinarySHA256          string `json:"binary_sha256,omitempty"`
+	BinaryJoinStatus      string `json:"binary_join_status"`
+}
+
+func streamDataPrograms(blob counter.StreamDataBlobInventory) ([]streamDataShaderBinary, []streamDataProgramMapping) {
+	var binaries []streamDataShaderBinary
+	byID := make(map[string]int)
+	var mappings []streamDataProgramMapping
+	byPath := make(map[string]int)
+	for _, node := range blob.Nodes {
+		if node.ParentPath == "/Binaries" && node.Name != "" && node.ValueKind == "data" && node.DataBytes != nil {
+			byID[node.Name] = len(binaries)
+			binaries = append(binaries, streamDataShaderBinary{
+				Ordinal: node.Ordinal, UniqueID: node.Name,
+				Bytes: *node.DataBytes, SHA256: node.DataSHA256,
+			})
+		}
+		if node.ParentPath == "/Program Address Mappings" && node.Relation == "array" && node.ValueKind == "dictionary" {
+			byPath[node.Path] = len(mappings)
+			mappings = append(mappings, streamDataProgramMapping{Ordinal: node.Ordinal})
+			continue
+		}
+		index, ok := byPath[node.ParentPath]
+		if !ok || node.ScalarJSON == "" {
+			continue
+		}
+		mapping := &mappings[index]
+		mapping.RecordedFieldCount++
+		switch node.Name {
+		case "binaryUniqueId":
+			_ = json.Unmarshal([]byte(node.ScalarJSON), &mapping.BinaryUniqueID)
+		case "type":
+			_ = json.Unmarshal([]byte(node.ScalarJSON), &mapping.Type)
+		case "mappedAddress":
+			mapping.MappedAddressJSON = node.ScalarJSON
+		case "mappedSize":
+			mapping.MappedSizeJSON = node.ScalarJSON
+		case "encID":
+			mapping.EncoderIDJSON = node.ScalarJSON
+		case "encIndex":
+			mapping.EncoderIndexJSON = node.ScalarJSON
+		case "drawCallIndex":
+			mapping.DrawCallIndexJSON = node.ScalarJSON
+		case "drawFunctionIndex":
+			mapping.DrawFunctionIndexJSON = node.ScalarJSON
+		case "index":
+			mapping.RecordedIndexJSON = node.ScalarJSON
+		}
+	}
+	for i := range mappings {
+		mapping := &mappings[i]
+		mapping.BinaryJoinStatus = "unmatched"
+		if index, ok := byID[mapping.BinaryUniqueID]; ok {
+			binary := &binaries[index]
+			bytes := binary.Bytes
+			mapping.BinaryBytes = &bytes
+			mapping.BinarySHA256 = binary.SHA256
+			mapping.BinaryJoinStatus = "matched"
+		}
+	}
+	return binaries, mappings
 }
 
 func appendStreamDataStringArgs(args map[string]any, strings []string) {
@@ -3821,6 +3931,23 @@ func appendEvidenceDetailEvents(trace *perfetto.Trace, timeline *Timeline) {
 					continue
 				}
 				args[fmt.Sprintf("archive_node_%06d_json", ordinal)] = string(data)
+			}
+			binaries, mappings := streamDataPrograms(blob)
+			for ordinal, binary := range binaries {
+				data, err := json.Marshal(binary)
+				if err != nil {
+					args[fmt.Sprintf("shader_binary_%06d_error", ordinal)] = err.Error()
+					continue
+				}
+				args[fmt.Sprintf("shader_binary_%06d_json", ordinal)] = string(data)
+			}
+			for ordinal, mapping := range mappings {
+				data, err := json.Marshal(mapping)
+				if err != nil {
+					args[fmt.Sprintf("program_address_mapping_%06d_error", ordinal)] = err.Error()
+					continue
+				}
+				args[fmt.Sprintf("program_address_mapping_%06d_json", ordinal)] = string(data)
 			}
 			trace.Events = append(trace.Events, perfetto.Event{
 				ID: nextID, TrackUUID: trackID,

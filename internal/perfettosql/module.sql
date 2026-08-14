@@ -231,6 +231,11 @@ SELECT
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_reference_node_count') AS INT) AS stream_data_archive_reference_node_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_depth_limited_node_count') AS INT) AS stream_data_archive_depth_limited_node_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_node_truncated_blob_count') AS INT) AS stream_data_archive_node_truncated_blob_count,
+  cast(extract_arg(arg_set_id, 'debug.stream_data_archive_shader_binary_count') AS INT) AS stream_data_archive_shader_binary_count,
+  cast(extract_arg(arg_set_id, 'debug.stream_data_archive_program_address_mapping_count') AS INT) AS stream_data_archive_program_address_mapping_count,
+  cast(extract_arg(arg_set_id, 'debug.stream_data_archive_program_address_mapping_binary_match_count') AS INT) AS stream_data_archive_program_address_mapping_binary_match_count,
+  cast(extract_arg(arg_set_id, 'debug.stream_data_archive_program_address_mapping_binary_unmatched_count') AS INT) AS stream_data_archive_program_address_mapping_binary_unmatched_count,
+  extract_arg(arg_set_id, 'debug.stream_data_archive_program_address_semantics') AS stream_data_archive_program_address_semantics,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_byte_count') AS INT) AS stream_data_archive_byte_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_malformed_blob_count') AS INT) AS stream_data_archive_malformed_blob_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_scalar_value_count') AS INT) AS stream_data_archive_scalar_value_count,
@@ -808,6 +813,61 @@ FROM slice AS s
 JOIN args AS a USING (arg_set_id)
 WHERE s.category = 'stream_data_archive_blob'
   AND a.key GLOB 'debug.archive_node_[0-9]*_json';
+
+-- gputrace_shader_binary identifies recorded program binaries without copying
+-- their bytes into SQL. binary_unique_id is capture-local.
+CREATE PERFETTO VIEW gputrace_shader_binary AS
+SELECT
+  s.id AS blob_event_id,
+  extract_arg(s.arg_set_id, 'debug.family') AS family,
+  cast(extract_arg(s.arg_set_id, 'debug.blob_ordinal') AS INT) AS blob_ordinal,
+  cast(json_extract(a.string_value, '$.ordinal') AS INT) AS binary_ordinal,
+  json_extract(a.string_value, '$.unique_id') AS binary_unique_id,
+  cast(json_extract(a.string_value, '$.bytes') AS INT) AS byte_count,
+  json_extract(a.string_value, '$.sha256') AS binary_sha256,
+  extract_arg(s.arg_set_id, 'debug.blob_sha256') AS blob_sha256,
+  'recorded Binaries dictionary entry; bytes are content-identified but not interpreted' AS semantics,
+  s.arg_set_id
+FROM slice AS s
+JOIN args AS a USING (arg_set_id)
+WHERE s.category = 'stream_data_archive_blob'
+  AND a.key GLOB 'debug.shader_binary_[0-9]*_json';
+
+-- gputrace_program_address_mapping retains the nine recorded fields of each
+-- Program Address Mappings entry and joins its exact capture-local binary ID.
+-- Integer JSON columns preserve the source value before SQL's signed cast.
+CREATE PERFETTO VIEW gputrace_program_address_mapping AS
+SELECT
+  extract_arg(s.arg_set_id, 'debug.family') AS family,
+  cast(extract_arg(s.arg_set_id, 'debug.blob_ordinal') AS INT) AS blob_ordinal,
+  cast(json_extract(a.string_value, '$.ordinal') AS INT) AS mapping_ordinal,
+  json_extract(a.string_value, '$.binary_unique_id') AS binary_unique_id,
+  json_extract(a.string_value, '$.type') AS mapping_type,
+  json_extract(a.string_value, '$.mapped_address_json') AS mapped_address_json,
+  cast(json_extract(a.string_value, '$.mapped_address_json') AS INT) AS mapped_address,
+  json_extract(a.string_value, '$.mapped_size_json') AS mapped_size_json,
+  cast(json_extract(a.string_value, '$.mapped_size_json') AS INT) AS mapped_size,
+  json_extract(a.string_value, '$.encoder_id_json') AS encoder_id_json,
+  cast(json_extract(a.string_value, '$.encoder_id_json') AS INT) AS encoder_id,
+  json_extract(a.string_value, '$.encoder_index_json') AS encoder_index_json,
+  cast(json_extract(a.string_value, '$.encoder_index_json') AS INT) AS encoder_index,
+  json_extract(a.string_value, '$.draw_call_index_json') AS draw_call_index_json,
+  cast(json_extract(a.string_value, '$.draw_call_index_json') AS INT) AS draw_call_index,
+  json_extract(a.string_value, '$.draw_function_index_json') AS draw_function_index_json,
+  cast(json_extract(a.string_value, '$.draw_function_index_json') AS INT) AS draw_function_index,
+  json_extract(a.string_value, '$.recorded_index_json') AS recorded_index_json,
+  cast(json_extract(a.string_value, '$.recorded_index_json') AS INT) AS recorded_index,
+  cast(json_extract(a.string_value, '$.recorded_field_count') AS INT) AS recorded_field_count,
+  cast(json_extract(a.string_value, '$.binary_bytes') AS INT) AS binary_byte_count,
+  json_extract(a.string_value, '$.binary_sha256') AS binary_sha256,
+  json_extract(a.string_value, '$.binary_join_status') AS binary_join_status,
+  extract_arg(s.arg_set_id, 'debug.blob_sha256') AS blob_sha256,
+  'recorded capture-local address mapping; no dispatch, function, source, or timing attribution' AS semantics,
+  s.arg_set_id
+FROM slice AS s
+JOIN args AS a USING (arg_set_id)
+WHERE s.category = 'stream_data_archive_blob'
+  AND a.key GLOB 'debug.program_address_mapping_[0-9]*_json';
 
 -- APSData-specific aliases keep common queries concise.
 CREATE PERFETTO VIEW gputrace_aps_data_blob AS

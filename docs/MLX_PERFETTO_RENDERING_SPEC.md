@@ -715,6 +715,19 @@ can expand every retained node. Under an explicit byte budget the whole blob
 packet is the atomic optional unit, and the normal loss receipt reports dropped
 blob rows while the manifest still describes the full source graph.
 
+`gputrace_shader_binary` gives every recorded `/Binaries` entry its
+capture-local unique ID, byte count, and SHA-256 digest. The binary bytes remain
+in the source archive; this view content-identifies them without treating the
+payload as a metallib, executable, or instruction stream.
+`gputrace_program_address_mapping` pivots the nine fields recorded on each
+`/Program Address Mappings` entry and joins `binaryUniqueId` to the matching
+binary dictionary entry in the same family and blob. Unsigned source numbers
+remain available as exact JSON beside convenient SQL integer projections. The
+view reports the join as `matched` or `unmatched`; it does not turn encoder IDs,
+draw indices, addresses, or binary types into dispatch, function, source-line,
+or timing attribution. Pre-sampling binary, mapping, matched, and unmatched
+counts remain in `gputrace_capture` when an output budget drops blob packets.
+
 When an APSCounterData TraceId table covers an encoder execution ordinal,
 `gputrace_encoder` also exposes its recorded batch ID and sample index. This is
 the same positional relationship used for capture-backed execution-cost
