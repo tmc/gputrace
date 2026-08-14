@@ -965,6 +965,7 @@ type Timeline struct {
 	MLXSemantics             *mlxsemantic.Sidecar              `json:"mlx_semantics,omitempty"`
 	MLXSemanticReport        *mlxsemantic.Report               `json:"mlx_semantic_report,omitempty"`
 	MLXSidecarDigest         string                            `json:"mlx_sidecar_digest,omitempty"`
+	MLXSemanticLabelConflict []MLXLabelConflict                `json:"mlx_semantic_label_conflicts,omitempty"`
 	HostCorrelation          *hostCorrelationProjection        `json:"host_correlation,omitempty"`
 	LiveTiming               *liveTimingProjection             `json:"live_timing,omitempty"`
 	TraceUUID                string                            `json:"trace_uuid,omitempty"`
@@ -2761,7 +2762,58 @@ func attachMLXSidecar(timeline *Timeline, tracePath, uuid, sidecarPath string) e
 	timeline.MLXSemantics = sidecar
 	timeline.MLXSemanticReport = &report
 	timeline.MLXSidecarDigest = sidecarDigest
+	timeline.MLXSemanticLabelConflict = mlxSemanticLabelConflicts(timeline, sidecar)
 	return nil
+}
+
+// mlxLabelConflictPolicy states what a conflicting pair does and does not
+// produce. It is exported into the evidence manifest so a reader does not have
+// to infer the rule from the absence of a merged name.
+const mlxLabelConflictPolicy = "both assertions retained; no canonical name, parent, or target link is derived from a conflicted pair"
+
+// MLXLabelConflict records a native Metal label and a sidecar semantic name
+// that assert different names for the same source item.
+type MLXLabelConflict struct {
+	LinkID       string `json:"link_id"`
+	SemanticID   string `json:"semantic_id"`
+	TargetKind   string `json:"target_kind"`
+	TargetIndex  int    `json:"target_index"`
+	NativeLabel  string `json:"native_label"`
+	SemanticName string `json:"semantic_name"`
+}
+
+// mlxSemanticLabelConflicts reports sidecar links whose semantic name
+// disagrees with the native Metal label observed on the same source item.
+// Only encoder labels are native semantic carriers: dispatch names come from
+// streamData function records and command-buffer names from capture ordering,
+// neither of which is an application assertion.
+func mlxSemanticLabelConflicts(timeline *Timeline, sidecar *mlxsemantic.Sidecar) []MLXLabelConflict {
+	if sidecar == nil {
+		return nil
+	}
+	var conflicts []MLXLabelConflict
+	for _, link := range sidecar.Links {
+		if link.Target.Kind != "encoder" {
+			continue
+		}
+		target, ok := timelineEventAt(timeline, "encoder", link.Target.Index)
+		if !ok || target.Name == "" {
+			continue
+		}
+		node := mlxSemanticNode(sidecar, link.SemanticID)
+		if node.Name == "" || node.Name == target.Name {
+			continue
+		}
+		conflicts = append(conflicts, MLXLabelConflict{
+			LinkID:       link.ID,
+			SemanticID:   node.ID,
+			TargetKind:   link.Target.Kind,
+			TargetIndex:  link.Target.Index,
+			NativeLabel:  target.Name,
+			SemanticName: node.Name,
+		})
+	}
+	return conflicts
 }
 
 func timelineEventCount(timeline *Timeline, category string) int {
@@ -3007,6 +3059,9 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 					trace.Metadata["mlx_semantic_unmatched_"+kind] = count
 				}
 			}
+			trace.Metadata["mlx_semantic_label_conflicts"] = len(timeline.MLXSemanticLabelConflict)
+			trace.Metadata["mlx_semantic_label_conflict_policy"] = mlxLabelConflictPolicy
+			trace.Metadata["mlx_semantic_label_carrier"] = "Metal encoder labels are the only native semantic carrier compared in v1; dispatch and command-buffer names are source records, not application assertions"
 			projected, unprojected := mlxSemanticProjectionCounts(timeline)
 			for kind, count := range projected {
 				trace.Metadata["mlx_semantic_projected_"+kind] = count
@@ -3980,6 +4035,10 @@ func appendMLXSemanticEvents(trace *perfetto.Trace, timeline *Timeline) {
 			Description: "MLX " + node.Kind + " semantic evidence",
 		})
 	}
+	conflicts := make(map[string]MLXLabelConflict, len(timeline.MLXSemanticLabelConflict))
+	for _, conflict := range timeline.MLXSemanticLabelConflict {
+		conflicts[conflict.LinkID] = conflict
+	}
 	nextID := nextPerfettoEventID(trace)
 	for _, node := range timeline.MLXSemantics.Nodes {
 		args := make(map[string]any, len(node.Attrs)+5)
@@ -4020,6 +4079,16 @@ func appendMLXSemanticEvents(trace *perfetto.Trace, timeline *Timeline) {
 		args["join_basis"] = "sidecar-explicit-id"
 		args["target_kind"] = link.Target.Kind
 		args["target_index"] = link.Target.Index
+		if conflict, ok := conflicts[link.ID]; ok {
+			args["native_label"] = conflict.NativeLabel
+			args["native_label_source"] = "Metal encoder label"
+			args["label_conflict"] = "conflicting_name_assertion"
+			args["label_conflict_policy"] = mlxLabelConflictPolicy
+		} else if link.Target.Kind == "encoder" && target.Name != "" {
+			args["native_label"] = target.Name
+			args["native_label_source"] = "Metal encoder label"
+			args["label_conflict"] = "none"
+		}
 		args["clock_domain"] = timeline.ClockDomain
 		args["timing_quality"] = perfettoTimingQuality(timeline)
 		if target.Args != nil {

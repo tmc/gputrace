@@ -15,7 +15,14 @@ encoder details, not counter series: their counter clock has no verified
 mapping to cumulative busy time. The streamData Metal device name, plugin, and
 GPU generation are retained with archive provenance. Rolling windows, driver
 and MLX runtime environment capture,
-native-label conflict handling and the MLX plugin remain proposed. A versioned
+and the MLX plugin remain proposed. Native-label conflict handling is
+implemented for the one native carrier the decoder exposes: a Metal encoder
+label. A sidecar name that disagrees with the encoder's label is reported
+through `mlx_semantic_label_conflicts` and
+`gputrace_semantic_label_conflict`; both assertions stay visible and no
+canonical name is derived from the pair. Native labels are not parsed into
+semantic hierarchy in v1, so they cannot assert a parent or a target link.
+A versioned
 exporter-owned PerfettoSQL projection is available through `--sql-out`. The
 viewer is specified separately in
 [PERFETTO_VIEWER_SPEC.md](PERFETTO_VIEWER_SPEC.md).

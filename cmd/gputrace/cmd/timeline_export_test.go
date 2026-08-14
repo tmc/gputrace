@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -1063,6 +1064,101 @@ func TestAppendMLXSemanticEvents(t *testing.T) {
 	}
 	if got := trace.Events[2].Args["target_index"]; got != 0 {
 		t.Fatalf("semantic target index = %v, want 0", got)
+	}
+}
+
+func TestMLXSemanticLabelConflicts(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		targetKind   string
+		nativeLabel  string
+		semanticName string
+		want         []MLXLabelConflict
+	}{{
+		name:         "agreeing encoder label",
+		targetKind:   "encoder",
+		nativeLabel:  "attention.qkv",
+		semanticName: "attention.qkv",
+	}, {
+		name:         "absent encoder label",
+		targetKind:   "encoder",
+		semanticName: "attention.qkv",
+	}, {
+		name:         "dispatch name is not a native assertion",
+		targetKind:   "dispatch",
+		nativeLabel:  "rmsbfloat16",
+		semanticName: "attention.qkv",
+	}, {
+		name:         "conflicting encoder label",
+		targetKind:   "encoder",
+		nativeLabel:  "main.main.func8 main.go:278",
+		semanticName: "attention.qkv",
+		want: []MLXLabelConflict{{
+			LinkID:       "link",
+			SemanticID:   "op",
+			TargetKind:   "encoder",
+			TargetIndex:  0,
+			NativeLabel:  "main.main.func8 main.go:278",
+			SemanticName: "attention.qkv",
+		}},
+	}} {
+		t.Run(test.name, func(t *testing.T) {
+			category := "encoder"
+			if test.targetKind == "dispatch" {
+				category = "kernel"
+			}
+			timeline := &Timeline{
+				Events: []TimelineEvent{{
+					Name: test.nativeLabel, Category: category, Phase: "X", Timestamp: 10, Duration: 5,
+				}},
+				MLXSemantics: &mlxsemantic.Sidecar{
+					Schema: mlxsemantic.SchemaV1,
+					Nodes:  []mlxsemantic.Node{{ID: "op", Kind: "operation", Name: test.semanticName}},
+					Links: []mlxsemantic.Link{{
+						ID: "link", SemanticID: "op",
+						Target: mlxsemantic.Target{Kind: test.targetKind, Index: 0},
+					}},
+				},
+			}
+			got := mlxSemanticLabelConflicts(timeline, timeline.MLXSemantics)
+			if !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("conflicts = %+v, want %+v", got, test.want)
+			}
+
+			timeline.MLXSemanticLabelConflict = got
+			trace := &perfetto.Trace{}
+			appendMLXSemanticEvents(trace, timeline)
+			link := trace.Events[len(trace.Events)-1]
+			if link.Category != "mlx_semantic" {
+				t.Fatalf("last event category = %q, want mlx_semantic", link.Category)
+			}
+			// The semantic name stays on the semantic track and the native
+			// label stays on its own slice, so a conflict never merges into
+			// one canonical name.
+			if link.Name != test.semanticName {
+				t.Fatalf("semantic slice name = %q, want %q", link.Name, test.semanticName)
+			}
+			switch {
+			case len(test.want) > 0:
+				if link.Args["label_conflict"] != "conflicting_name_assertion" {
+					t.Fatalf("label_conflict = %v", link.Args["label_conflict"])
+				}
+				if link.Args["native_label"] != test.nativeLabel {
+					t.Fatalf("native_label = %v, want %q", link.Args["native_label"], test.nativeLabel)
+				}
+				if link.Args["label_conflict_policy"] != mlxLabelConflictPolicy {
+					t.Fatalf("label_conflict_policy = %v", link.Args["label_conflict_policy"])
+				}
+			case test.targetKind == "encoder" && test.nativeLabel != "":
+				if link.Args["label_conflict"] != "none" {
+					t.Fatalf("label_conflict = %v, want none", link.Args["label_conflict"])
+				}
+			default:
+				if _, ok := link.Args["label_conflict"]; ok {
+					t.Fatalf("label_conflict reported for %s target without a native label", test.targetKind)
+				}
+			}
+		})
 	}
 }
 

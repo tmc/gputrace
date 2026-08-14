@@ -1710,6 +1710,25 @@ SELECT
 FROM slice
 WHERE category = 'mlx_semantic';
 
+-- gputrace_semantic_label_conflict lists links whose sidecar semantic name
+-- disagrees with the native Metal label observed on the same source item.
+-- Both assertions stay visible: the native label remains the encoder slice
+-- name and the semantic name remains on the semantic track. No canonical name
+-- is derived from a conflicted pair.
+CREATE PERFETTO VIEW gputrace_semantic_label_conflict AS
+SELECT
+  extract_arg(arg_set_id, 'debug.semantic_link_id') AS semantic_link_id,
+  extract_arg(arg_set_id, 'debug.semantic_id') AS semantic_id,
+  extract_arg(arg_set_id, 'debug.target_kind') AS target_kind,
+  cast(extract_arg(arg_set_id, 'debug.target_index') AS INT) AS target_index,
+  extract_arg(arg_set_id, 'debug.native_label') AS native_label,
+  extract_arg(arg_set_id, 'debug.native_label_source') AS native_label_source,
+  name AS semantic_name,
+  extract_arg(arg_set_id, 'debug.label_conflict_policy') AS policy
+FROM slice
+WHERE category = 'mlx_semantic'
+  AND extract_arg(arg_set_id, 'debug.label_conflict') = 'conflicting_name_assertion';
+
 -- gputrace_semantic_arg retains arbitrary sidecar attributes without making
 -- their names part of the stable typed schema. Structural fields remain in
 -- gputrace_semantic_node and gputrace_semantic_link.
@@ -1733,7 +1752,8 @@ WHERE s.category IN ('mlx_semantic_node', 'mlx_semantic')
     'debug.semantic_id', 'debug.semantic_parent_id', 'debug.semantic_kind',
     'debug.semantic_link_id', 'debug.join_basis', 'debug.target_kind',
     'debug.target_index', 'debug.clock_domain', 'debug.timing_source',
-    'debug.timing_quality'
+    'debug.timing_quality', 'debug.native_label', 'debug.native_label_source',
+    'debug.label_conflict', 'debug.label_conflict_policy'
   );
 
 CREATE PERFETTO VIEW gputrace_counter_series AS
