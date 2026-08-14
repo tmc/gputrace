@@ -223,6 +223,15 @@ SELECT
   cast(extract_arg(arg_set_id, 'debug.stream_data_aps_data_inventory_blob_record_count') AS INT) AS stream_data_aps_data_inventory_blob_record_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_aps_data_inventory_key_record_count') AS INT) AS stream_data_aps_data_inventory_key_record_count,
   extract_arg(arg_set_id, 'debug.stream_data_aps_data_inventory_blob_record_semantics') AS stream_data_aps_data_inventory_blob_record_semantics,
+  extract_arg(arg_set_id, 'debug.stream_data_archive_availability') AS stream_data_archive_availability,
+  cast(extract_arg(arg_set_id, 'debug.stream_data_archive_blob_count') AS INT) AS stream_data_archive_blob_count,
+  cast(extract_arg(arg_set_id, 'debug.stream_data_archive_key_count') AS INT) AS stream_data_archive_key_count,
+  cast(extract_arg(arg_set_id, 'debug.stream_data_archive_byte_count') AS INT) AS stream_data_archive_byte_count,
+  cast(extract_arg(arg_set_id, 'debug.stream_data_archive_malformed_blob_count') AS INT) AS stream_data_archive_malformed_blob_count,
+  cast(extract_arg(arg_set_id, 'debug.stream_data_archive_aps_data_blob_count') AS INT) AS stream_data_archive_aps_data_blob_count,
+  cast(extract_arg(arg_set_id, 'debug.stream_data_archive_aps_timeline_data_blob_count') AS INT) AS stream_data_archive_aps_timeline_data_blob_count,
+  cast(extract_arg(arg_set_id, 'debug.stream_data_archive_aps_counter_data_blob_count') AS INT) AS stream_data_archive_aps_counter_data_blob_count,
+  extract_arg(arg_set_id, 'debug.stream_data_archive_semantics') AS stream_data_archive_semantics,
   extract_arg(arg_set_id, 'debug.environment_driver_availability') AS environment_driver_availability,
   extract_arg(arg_set_id, 'debug.environment_mlx_runtime_availability') AS environment_mlx_runtime_availability,
   extract_arg(arg_set_id, 'debug.environment_workload_availability') AS environment_workload_availability,
@@ -717,11 +726,12 @@ JOIN args AS ends ON ends.arg_set_id = s.arg_set_id AND ends.key = 'debug.counte
 JOIN args AS duration ON duration.arg_set_id = s.arg_set_id AND duration.key = 'debug.counter_duration_ns'
 WHERE s.category = 'counter_encoder_aggregate';
 
--- gputrace_aps_data_blob identifies each raw APSData keyed-archive blob. The
--- digest covers the full source bytes; dictionary projection is shape only.
-CREATE PERFETTO VIEW gputrace_aps_data_blob AS
+-- gputrace_stream_data_archive_blob identifies each nested keyed-archive blob
+-- in APSData, APSTimelineData, and APSCounterData.
+CREATE PERFETTO VIEW gputrace_stream_data_archive_blob AS
 SELECT
   id,
+  extract_arg(arg_set_id, 'debug.family') AS family,
   cast(extract_arg(arg_set_id, 'debug.blob_ordinal') AS INT) AS blob_ordinal,
   cast(extract_arg(arg_set_id, 'debug.byte_count') AS INT) AS byte_count,
   extract_arg(arg_set_id, 'debug.blob_sha256') AS blob_sha256,
@@ -732,13 +742,14 @@ SELECT
   extract_arg(arg_set_id, 'debug.semantics') AS semantics,
   arg_set_id
 FROM slice
-WHERE category = 'aps_data_blob';
+WHERE category = 'stream_data_archive_blob';
 
--- gputrace_aps_data_key retains sorted root dictionary key identity and the
--- decoded structural kind of its value. Private values remain uninterpreted.
-CREATE PERFETTO VIEW gputrace_aps_data_key AS
+-- gputrace_stream_data_archive_key retains sorted root dictionary key identity
+-- and the decoded structural kind of its value.
+CREATE PERFETTO VIEW gputrace_stream_data_archive_key AS
 SELECT
   id,
+  extract_arg(arg_set_id, 'debug.family') AS family,
   cast(extract_arg(arg_set_id, 'debug.blob_ordinal') AS INT) AS blob_ordinal,
   cast(extract_arg(arg_set_id, 'debug.key_ordinal') AS INT) AS key_ordinal,
   extract_arg(arg_set_id, 'debug.recorded_name') AS recorded_name,
@@ -748,7 +759,20 @@ SELECT
   extract_arg(arg_set_id, 'debug.semantics') AS semantics,
   arg_set_id
 FROM slice
-WHERE category = 'aps_data_key';
+WHERE category = 'stream_data_archive_key';
+
+-- APSData-specific aliases keep common queries concise.
+CREATE PERFETTO VIEW gputrace_aps_data_blob AS
+SELECT id, blob_ordinal, byte_count, blob_sha256, dictionary, key_count,
+       decode_error, source, semantics, arg_set_id
+FROM gputrace_stream_data_archive_blob
+WHERE family = 'aps_data';
+
+CREATE PERFETTO VIEW gputrace_aps_data_key AS
+SELECT id, blob_ordinal, key_ordinal, recorded_name, value_kind, blob_sha256,
+       source, semantics, arg_set_id
+FROM gputrace_stream_data_archive_key
+WHERE family = 'aps_data';
 
 -- gputrace_stream_data_table retains the exact bytes of the five fixed-record
 -- tables in streamData. Record boundaries follow record_size; unknown words

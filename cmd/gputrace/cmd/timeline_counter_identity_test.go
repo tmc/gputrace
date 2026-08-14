@@ -352,11 +352,14 @@ func TestExportAPSDataInventoryReachesPerfettoSQL(t *testing.T) {
 	if processor == "" {
 		t.Skip("set TRACE_PROCESSOR_SHELL to run native PerfettoSQL integration")
 	}
+	blobs := []counter.StreamDataBlobInventory{{
+		Family:  "aps_data",
+		Ordinal: 2, Bytes: 123, SHA256: "sha256:abc", Dictionary: true,
+		Keys: []counter.APSDataKeyInventory{{Ordinal: 0, Name: "APSTraceDataFile", ValueKind: "data"}},
+	}}
 	timeline := &Timeline{StreamMetadata: &counter.StreamDataMetadata{
-		APSDataInventory: &counter.APSDataInventory{BlobRecords: []counter.APSDataBlobInventory{{
-			Ordinal: 2, Bytes: 123, SHA256: "sha256:abc", Dictionary: true,
-			Keys: []counter.APSDataKeyInventory{{Ordinal: 0, Name: "APSTraceDataFile", ValueKind: "data"}},
-		}}},
+		APSDataInventory: &counter.APSDataInventory{BlobRecords: blobs},
+		ArchiveBlobs:     blobs,
 	}}
 	trace := filepath.Join(t.TempDir(), "aps-data-inventory.pftrace")
 	if err := exportPerfettoForClock(timeline, trace, timelineClockBusy); err != nil {
@@ -366,16 +369,24 @@ func TestExportAPSDataInventoryReachesPerfettoSQL(t *testing.T) {
 		query string
 		want  []string
 	}{
+		{`SELECT family, blob_ordinal, byte_count, blob_sha256, dictionary, key_count
+              FROM gputrace_stream_data_archive_blob;`, []string{
+			"aps_data", "2", "123", "sha256:abc", "1", "1",
+		}},
+		{`SELECT family, blob_ordinal, key_ordinal, recorded_name, value_kind
+              FROM gputrace_stream_data_archive_key;`, []string{
+			"aps_data", "2", "0", "APSTraceDataFile", "data",
+		}},
 		{`SELECT blob_ordinal, byte_count, blob_sha256, dictionary, key_count,
                     decode_error, source, semantics FROM gputrace_aps_data_blob;`, []string{
 			"2", "123", "sha256:abc", "1", "1", "[NULL]",
-			"streamData APSData NSData entry",
+			"streamData nested NSData archive entry",
 			"content identity and root dictionary shape only; private values remain uninterpreted",
 		}},
 		{`SELECT blob_ordinal, key_ordinal, recorded_name, value_kind, blob_sha256,
                     source, semantics FROM gputrace_aps_data_key;`, []string{
 			"2", "0", "APSTraceDataFile", "data", "sha256:abc",
-			"streamData APSData root NSDictionary",
+			"streamData nested archive root NSDictionary",
 			"sorted root key identity and structural value kind only; private value remains uninterpreted",
 		}},
 		{`SELECT stream_data_aps_data_inventory_blob_record_count,
@@ -383,6 +394,14 @@ func TestExportAPSDataInventoryReachesPerfettoSQL(t *testing.T) {
                     stream_data_aps_data_inventory_blob_record_semantics
               FROM gputrace_capture;`, []string{
 			"1", "1", "content identity and sorted root dictionary shape; private values remain uninterpreted",
+		}},
+		{`SELECT stream_data_archive_blob_count, stream_data_archive_key_count,
+                    stream_data_archive_byte_count,
+                    stream_data_archive_aps_data_blob_count,
+                    stream_data_archive_semantics
+              FROM gputrace_capture;`, []string{
+			"1", "1", "123", "1",
+			"source family, ordinal, content identity, and sorted root dictionary shape; private values remain uninterpreted",
 		}},
 	}
 	for _, test := range queries {

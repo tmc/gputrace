@@ -593,6 +593,7 @@ func TestApplyStreamIdentity(t *testing.T) {
 			DecodedFamilies:  counter.StreamDataDecodedFamilies{APSData: &twoEntries, ShaderProfilerData: &zeroEntries},
 			CounterDecode:    counterDecode,
 			APSDataInventory: apsInventory,
+			ArchiveBlobs:     apsInventory.BlobRecords,
 		},
 	})
 	if timeline.GPUGeneration == nil || *timeline.GPUGeneration != 2 || timeline.MetalDeviceName != "Apple M4 Max" || timeline.MetalPluginName != "AGXMetalG16X" {
@@ -628,6 +629,10 @@ func TestApplyStreamIdentity(t *testing.T) {
 	if &timeline.StreamMetadata.APSDataInventory.BlobRecords[0] == &apsInventory.BlobRecords[0] ||
 		&timeline.StreamMetadata.APSDataInventory.BlobRecords[0].Keys[0] == &apsInventory.BlobRecords[0].Keys[0] {
 		t.Fatal("APSData blob inventory retained source slices")
+	}
+	if &timeline.StreamMetadata.ArchiveBlobs[0] == &apsInventory.BlobRecords[0] ||
+		&timeline.StreamMetadata.ArchiveBlobs[0].Keys[0] == &apsInventory.BlobRecords[0].Keys[0] {
+		t.Fatal("streamData archive inventory retained source slices")
 	}
 }
 

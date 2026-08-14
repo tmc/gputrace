@@ -510,6 +510,8 @@ gputrace_raw_profiler_sample
 gputrace_raw_profiler_sample_arg
 gputrace_aps_data_blob
 gputrace_aps_data_key
+gputrace_stream_data_archive_blob
+gputrace_stream_data_archive_key
 gputrace_counter_catalog
 gputrace_counter_trace_id
 gputrace_counter_encoder_sample
@@ -685,6 +687,14 @@ array, dictionary, string, number, and bool. The full digest covers private
 values, but the projection does not interpret or copy them. This exposes exact
 debug/release archive-shape differences while keeping the native trace bounded;
 source blob and key counts remain in `gputrace_capture` under sampling.
+
+`gputrace_stream_data_archive_blob` and
+`gputrace_stream_data_archive_key` generalize that evidence contract across
+APSData, APSTimelineData, and APSCounterData. Family, ordinal, byte count,
+digest, dictionary status, key identity, and structural value kind remain
+queryable independently of higher-level decoder success. APSData-specific
+views are filtered projections of these generic rows. The manifest reports
+total and per-family source counts plus total embedded bytes before sampling.
 
 When an APSCounterData TraceId table covers an encoder execution ordinal,
 `gputrace_encoder` also exposes its recorded batch ID and sample index. This is

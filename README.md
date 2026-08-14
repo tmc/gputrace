@@ -112,7 +112,8 @@ The optional SQL file defines `gputrace_capture`, `gputrace_command_buffer`, `gp
 `gputrace_counter_encoder_aggregate`,
 `gputrace_unattributed_counter`,
 `gputrace_evidence_gap`, `gputrace_aps_data_blob`,
-`gputrace_aps_data_key`, `gputrace_stream_data_table`,
+`gputrace_aps_data_key`, `gputrace_stream_data_archive_blob`,
+`gputrace_stream_data_archive_key`, `gputrace_stream_data_table`,
 `gputrace_stream_data_string`, `gputrace_pipeline_compiler`,
 `gputrace_pipeline_compiler_remark`,
 `gputrace_pipeline_compiler_remark_arg`, and
@@ -241,6 +242,12 @@ kind in stable lexical order. These views make capture-shape differences
 queryable without interpreting private values or duplicating the roughly
 megabyte-scale raw blobs into the Perfetto trace. The manifest retains source
 blob and key counts when an output budget samples the optional detail rows.
+The generic `gputrace_stream_data_archive_blob` and
+`gputrace_stream_data_archive_key` views apply the same contract to APSData,
+APSTimelineData, and APSCounterData. Their `family` column makes source archive
+counts, bytes, digests, and root shapes comparable even when higher-level
+decoders produce different coverage. `gputrace_aps_data_*` are filtered views
+of this shared evidence model.
 `gputrace_track_event_arg` retains every argument for low-volume generic events
 such as command buffers and profiler streams; its `event_id` is a trace-local
 join key, not a persistent source identity. These are raw profiler input,

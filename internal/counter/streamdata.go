@@ -230,6 +230,7 @@ type StreamDataMetadata struct {
 	DecodedFamilies              StreamDataDecodedFamilies `json:"decoded_families"`
 	CounterDecode                *StreamDataCounterDecode  `json:"counter_decode,omitempty"`
 	APSDataInventory             *APSDataInventory         `json:"aps_data_inventory,omitempty"`
+	ArchiveBlobs                 []StreamDataBlobInventory `json:"archive_blobs,omitempty"`
 }
 
 // StreamDataFamilies reports top-level archive array entry counts. Counts are
@@ -284,23 +285,27 @@ type APSDataInventory struct {
 	BlobRecords            []APSDataBlobInventory `json:"blob_records,omitempty"`
 }
 
-// APSDataBlobInventory identifies one raw APSData archive blob and its root
-// dictionary shape. Keys and value kinds are structural evidence only.
-type APSDataBlobInventory struct {
-	Ordinal     int                   `json:"ordinal"`
-	Bytes       int                   `json:"bytes"`
-	SHA256      string                `json:"sha256"`
-	Dictionary  bool                  `json:"dictionary"`
-	Keys        []APSDataKeyInventory `json:"keys,omitempty"`
-	DecodeError string                `json:"decode_error,omitempty"`
+// StreamDataBlobInventory identifies one nested keyed-archive blob and its
+// root dictionary shape. Keys and value kinds are structural evidence only.
+type StreamDataBlobInventory struct {
+	Family      string                   `json:"family"`
+	Ordinal     int                      `json:"ordinal"`
+	Bytes       int                      `json:"bytes"`
+	SHA256      string                   `json:"sha256"`
+	Dictionary  bool                     `json:"dictionary"`
+	Keys        []StreamDataKeyInventory `json:"keys,omitempty"`
+	DecodeError string                   `json:"decode_error,omitempty"`
 }
 
-// APSDataKeyInventory is one root dictionary key in stable lexical order.
-type APSDataKeyInventory struct {
+// StreamDataKeyInventory is one root dictionary key in stable lexical order.
+type StreamDataKeyInventory struct {
 	Ordinal   int    `json:"ordinal"`
 	Name      string `json:"name"`
 	ValueKind string `json:"value_kind"`
 }
+
+type APSDataBlobInventory = StreamDataBlobInventory
+type APSDataKeyInventory = StreamDataKeyInventory
 
 // StreamDataTables reports the byte-level integrity of fixed-record archive
 // tables. A nil table means the data key is absent. A nil record size means the
@@ -410,11 +415,15 @@ func ParseStreamData(gpuprofilerDir string, addressToName map[uint64]string) (*S
 			stats.APSData = extractDataArray(objects, obj1, "APSData")
 			if len(stats.APSData) > 0 {
 				stats.Metadata.APSDataInventory = parseAPSDataInventory(stats.APSData)
+				stats.Metadata.ArchiveBlobs = append(stats.Metadata.ArchiveBlobs,
+					stats.Metadata.APSDataInventory.BlobRecords...)
 			}
 
 			// Extract APSTimelineData blobs (nested plists with CB timestamps)
 			stats.APSTimelineData = extractDataArray(objects, obj1, "APSTimelineData")
 			if len(stats.APSTimelineData) > 0 {
+				stats.Metadata.ArchiveBlobs = append(stats.Metadata.ArchiveBlobs,
+					parseStreamDataBlobInventory("aps_timeline_data", stats.APSTimelineData)...)
 				stats.Timeline = parseAPSTimelineData(stats.APSTimelineData)
 				stats.applyTimelineTiming()
 			}
@@ -423,6 +432,8 @@ func ParseStreamData(gpuprofilerDir string, addressToName map[uint64]string) (*S
 			// in the ShaderProfilerData blobs above.
 			if counterBlobs := extractDataArray(objects, obj1, "APSCounterData"); len(counterBlobs) > 0 {
 				stats.APSCounterData = counterBlobs
+				stats.Metadata.ArchiveBlobs = append(stats.Metadata.ArchiveBlobs,
+					parseStreamDataBlobInventory("aps_counter_data", counterBlobs)...)
 				numer, denom := uint64(1), uint64(1)
 				if stats.Timeline != nil {
 					numer, denom = stats.Timeline.TimebaseNumer, stats.Timeline.TimebaseDenom
@@ -441,25 +452,44 @@ func parseAPSDataInventory(blobs [][]byte) *APSDataInventory {
 	if len(blobs) == 0 {
 		return nil
 	}
-	inventory := &APSDataInventory{Blobs: len(blobs)}
-	for ordinal, blob := range blobs {
-		sum := sha256.Sum256(blob)
-		record := APSDataBlobInventory{
-			Ordinal: ordinal, Bytes: len(blob),
-			SHA256: "sha256:" + hex.EncodeToString(sum[:]),
-		}
+	inventory := &APSDataInventory{
+		Blobs: len(blobs), BlobRecords: parseStreamDataBlobInventory("aps_data", blobs),
+	}
+	for _, blob := range blobs {
 		root, objects, ok := archiveRoot(blob)
 		if !ok {
 			inventory.MalformedBlobs++
-			record.DecodeError = "invalid keyed archive"
-			inventory.BlobRecords = append(inventory.BlobRecords, record)
 			continue
 		}
 		dict := keyedDict(root, objects)
 		if dict == nil {
 			inventory.MalformedBlobs++
+			continue
+		}
+		inventory.Dictionaries++
+		classifyAPSDataDictionary(inventory, dict)
+	}
+	return inventory
+}
+
+func parseStreamDataBlobInventory(family string, blobs [][]byte) []StreamDataBlobInventory {
+	records := make([]StreamDataBlobInventory, 0, len(blobs))
+	for ordinal, blob := range blobs {
+		sum := sha256.Sum256(blob)
+		record := StreamDataBlobInventory{
+			Family: family, Ordinal: ordinal, Bytes: len(blob),
+			SHA256: "sha256:" + hex.EncodeToString(sum[:]),
+		}
+		root, objects, ok := archiveRoot(blob)
+		if !ok {
+			record.DecodeError = "invalid keyed archive"
+			records = append(records, record)
+			continue
+		}
+		dict := keyedDict(root, objects)
+		if dict == nil {
 			record.DecodeError = "root is not a dictionary"
-			inventory.BlobRecords = append(inventory.BlobRecords, record)
+			records = append(records, record)
 			continue
 		}
 		record.Dictionary = true
@@ -469,16 +499,14 @@ func parseAPSDataInventory(blobs [][]byte) *APSDataInventory {
 		}
 		slices.Sort(names)
 		for keyOrdinal, name := range names {
-			record.Keys = append(record.Keys, APSDataKeyInventory{
+			record.Keys = append(record.Keys, StreamDataKeyInventory{
 				Ordinal: keyOrdinal, Name: name,
 				ValueKind: archivedValueKind(dict[name], objects),
 			})
 		}
-		inventory.Dictionaries++
-		classifyAPSDataDictionary(inventory, dict)
-		inventory.BlobRecords = append(inventory.BlobRecords, record)
+		records = append(records, record)
 	}
-	return inventory
+	return records
 }
 
 func archivedValueKind(value any, objects []any) string {
