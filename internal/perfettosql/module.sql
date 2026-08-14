@@ -241,8 +241,10 @@ SELECT
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_counter_info_record_count') AS INT) AS stream_data_archive_counter_info_record_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_limiter_group_record_count') AS INT) AS stream_data_archive_limiter_group_record_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_limiter_sample_counter_record_count') AS INT) AS stream_data_archive_limiter_sample_counter_record_count,
+  cast(extract_arg(arg_set_id, 'debug.stream_data_archive_profiling_configuration_record_count') AS INT) AS stream_data_archive_profiling_configuration_record_count,
   extract_arg(arg_set_id, 'debug.stream_data_archive_configuration_semantics') AS stream_data_archive_configuration_semantics,
   extract_arg(arg_set_id, 'debug.stream_data_archive_limiter_catalog_semantics') AS stream_data_archive_limiter_catalog_semantics,
+  extract_arg(arg_set_id, 'debug.stream_data_archive_profiling_configuration_semantics') AS stream_data_archive_profiling_configuration_semantics,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_byte_count') AS INT) AS stream_data_archive_byte_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_malformed_blob_count') AS INT) AS stream_data_archive_malformed_blob_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_scalar_value_count') AS INT) AS stream_data_archive_scalar_value_count,
@@ -1070,6 +1072,45 @@ SELECT
     WHERE s.family = f.family) AS sample_to_pass_catalog_equal_count,
   'exact name equality only; no sample-value, pass-column, unit, or limiter-formula attribution' AS semantics
 FROM families AS f;
+
+-- gputrace_profiler_configuration retains scalar leaves from the recorded
+-- profiler setup dictionaries. Timebase and period values remain source
+-- values: this view does not assign units or establish a clock relationship.
+CREATE PERFETTO VIEW gputrace_profiler_configuration AS
+SELECT
+  s.id AS blob_event_id,
+  extract_arg(s.arg_set_id, 'debug.family') AS family,
+  cast(extract_arg(s.arg_set_id, 'debug.blob_ordinal') AS INT) AS blob_ordinal,
+  json_extract(a.string_value, '$.section') AS section,
+  json_extract(a.string_value, '$.path') AS path,
+  json_extract(a.string_value, '$.parent_path') AS parent_path,
+  json_extract(a.string_value, '$.name') AS recorded_name,
+  cast(json_extract(a.string_value, '$.ordinal') AS INT) AS recorded_ordinal,
+  json_extract(a.string_value, '$.scalar_type') AS scalar_type,
+  json_extract(a.string_value, '$.scalar_json') AS scalar_json,
+  json_extract(json_extract(a.string_value, '$.scalar_json'), '$') AS value,
+  extract_arg(s.arg_set_id, 'debug.blob_sha256') AS blob_sha256,
+  'recorded profiler setup scalar; no inferred unit, clock mapping, or runtime effect' AS semantics,
+  s.arg_set_id
+FROM slice AS s
+JOIN args AS a USING (arg_set_id)
+WHERE s.category = 'stream_data_archive_blob'
+  AND a.key GLOB 'debug.profiling_configuration_[0-9]*_json';
+
+-- gputrace_profiler_configuration_audit reports the recorded shape by source
+-- blob. Equality across families is not a clock-alignment claim.
+CREATE PERFETTO VIEW gputrace_profiler_configuration_audit AS
+SELECT
+  family,
+  blob_ordinal,
+  section,
+  count(*) AS scalar_count,
+  count(DISTINCT path) AS distinct_path_count,
+  min(path) AS first_path,
+  max(path) AS last_path,
+  'source shape only; equality does not establish common units, clocks, or runtime behavior' AS semantics
+FROM gputrace_profiler_configuration
+GROUP BY family, blob_ordinal, section;
 
 -- APSData-specific aliases keep common queries concise.
 CREATE PERFETTO VIEW gputrace_aps_data_blob AS

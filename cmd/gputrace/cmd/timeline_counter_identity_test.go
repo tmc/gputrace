@@ -550,6 +550,18 @@ func TestExportRecordedConfigurationAndLimiterCatalogReachesPerfettoSQL(t *testi
 			Path: "/limiter sample counters/0", ParentPath: "/limiter sample counters",
 			Relation: "array", Ordinal: 0, ExpansionStatus: "leaf",
 			ValueKind: "string", ScalarType: "string", ScalarJSON: `"counter-a"`,
+		}, {
+			Path: "/apsProfilingConfig/version", ParentPath: "/apsProfilingConfig",
+			Relation: "dictionary", Name: "version", ExpansionStatus: "leaf",
+			ValueKind: "number", ScalarType: "int64", ScalarJSON: "2",
+		}, {
+			Path: "/Timebase/0", ParentPath: "/Timebase",
+			Relation: "array", Ordinal: 0, ExpansionStatus: "leaf",
+			ValueKind: "number", ScalarType: "int64", ScalarJSON: "125",
+		}, {
+			Path: "/Timebase/1", ParentPath: "/Timebase",
+			Relation: "array", Ordinal: 1, ExpansionStatus: "leaf",
+			ValueKind: "number", ScalarType: "int64", ScalarJSON: "3",
 		}},
 	}
 	timeline := &Timeline{
@@ -584,6 +596,18 @@ func TestExportRecordedConfigurationAndLimiterCatalogReachesPerfettoSQL(t *testi
               FROM gputrace_limiter_sample_counter;`, []string{
 			"aps_data", "0", "counter-a",
 		}},
+		{`SELECT family, section, path, recorded_name, recorded_ordinal,
+                    scalar_type, scalar_json, value
+              FROM gputrace_profiler_configuration ORDER BY path;`, []string{
+			"aps_data", "Timebase", "/Timebase/0", "[NULL]", "0", "int64", "125", "125",
+			"aps_data", "Timebase", "/Timebase/1", "[NULL]", "1", "int64", "3", "3",
+			"aps_data", "apsProfilingConfig", "/apsProfilingConfig/version", "version", "0", "int64", "2", "2",
+		}},
+		{`SELECT family, blob_ordinal, section, scalar_count, distinct_path_count
+              FROM gputrace_profiler_configuration_audit ORDER BY section;`, []string{
+			"aps_data", "1", "Timebase", "2", "2",
+			"aps_data", "1", "apsProfilingConfig", "1", "1",
+		}},
 		{`SELECT family, sample_counter_count, grouped_counter_count,
                     sample_to_group_equal_count, sample_to_counter_info_equal_count,
                     sample_to_pass_catalog_equal_count
@@ -594,9 +618,10 @@ func TestExportRecordedConfigurationAndLimiterCatalogReachesPerfettoSQL(t *testi
                     stream_data_archive_aps_option_record_count,
                     stream_data_archive_counter_info_record_count,
                     stream_data_archive_limiter_group_record_count,
-                    stream_data_archive_limiter_sample_counter_record_count
+					stream_data_archive_limiter_sample_counter_record_count,
+					stream_data_archive_profiling_configuration_record_count
               FROM gputrace_capture;`, []string{
-			"2", "1", "1", "1", "1",
+			"2", "1", "1", "1", "1", "3",
 		}},
 	}
 	for _, test := range queries {

@@ -3310,7 +3310,7 @@ func appendStreamDataArchiveArgs(args map[string]any, blobs []counter.StreamData
 	args[prefix+"program_address_mapping_binary_match_count"] = programs.matches
 	args[prefix+"program_address_mapping_binary_unmatched_count"] = programs.mappings - programs.matches
 	args[prefix+"program_address_semantics"] = "recorded Binaries and Program Address Mappings fields joined by exact capture-local binaryUniqueId; no dispatch, function, source, or timing attribution"
-	var configuration, options, counterInfo, limiterGroups, limiterSamples int
+	var configuration, options, counterInfo, limiterGroups, limiterSamples, profiling int
 	for _, blob := range blobs {
 		records := streamDataRecordedScalars(blob)
 		configuration += len(records.configuration)
@@ -3318,14 +3318,17 @@ func appendStreamDataArchiveArgs(args map[string]any, blobs []counter.StreamData
 		counterInfo += len(records.counterInfo)
 		limiterGroups += len(records.limiterGroups)
 		limiterSamples += len(records.limiterSamples)
+		profiling += len(records.profiling)
 	}
 	args[prefix+"configuration_record_count"] = configuration
 	args[prefix+"aps_option_record_count"] = options
 	args[prefix+"counter_info_record_count"] = counterInfo
 	args[prefix+"limiter_group_record_count"] = limiterGroups
 	args[prefix+"limiter_sample_counter_record_count"] = limiterSamples
+	args[prefix+"profiling_configuration_record_count"] = profiling
 	args[prefix+"configuration_semantics"] = "recorded streamData configuration and profiling options; names and values are preserved without assigning units, clock mappings, or runtime effects"
 	args[prefix+"limiter_catalog_semantics"] = "recorded Counter Info, Limiter Counter List Map, and limiter sample counters identities; no counter-value, unit, pass, or derived-limiter attribution"
+	args[prefix+"profiling_configuration_semantics"] = "recorded apsProfilingConfig, Timebase, Perf Info, Frame Consistent Perf Info, and Kick State Trigger Options scalar leaves; no inferred units, clock mapping, or runtime effects"
 }
 
 type streamDataProgramCounts struct {
@@ -3440,6 +3443,7 @@ type streamDataScalarRecord struct {
 	ScalarType string `json:"scalar_type"`
 	ScalarJSON string `json:"scalar_json"`
 	Group      string `json:"group,omitempty"`
+	Section    string `json:"section,omitempty"`
 }
 
 type streamDataScalarRecords struct {
@@ -3448,6 +3452,7 @@ type streamDataScalarRecords struct {
 	counterInfo    []streamDataScalarRecord
 	limiterGroups  []streamDataScalarRecord
 	limiterSamples []streamDataScalarRecord
+	profiling      []streamDataScalarRecord
 }
 
 func streamDataRecordedScalars(blob counter.StreamDataBlobInventory) streamDataScalarRecords {
@@ -3474,6 +3479,20 @@ func streamDataRecordedScalars(blob counter.StreamDataBlobInventory) streamDataS
 			if group != "" && !strings.Contains(group, "/") {
 				record.Group = group
 				records.limiterGroups = append(records.limiterGroups, record)
+			}
+		}
+		for _, section := range []string{
+			"apsProfilingConfig",
+			"Kick State Trigger Options",
+			"Perf Info",
+			"Frame Consistent Perf Info",
+			"Timebase",
+		} {
+			prefix := "/" + section + "/"
+			if strings.HasPrefix(node.Path, prefix) {
+				record.Section = section
+				records.profiling = append(records.profiling, record)
+				break
 			}
 		}
 	}
@@ -4020,6 +4039,7 @@ func appendEvidenceDetailEvents(trace *perfetto.Trace, timeline *Timeline) {
 			appendStreamDataScalarArgs(args, "counter_info", records.counterInfo)
 			appendStreamDataScalarArgs(args, "limiter_group_counter", records.limiterGroups)
 			appendStreamDataScalarArgs(args, "limiter_sample_counter", records.limiterSamples)
+			appendStreamDataScalarArgs(args, "profiling_configuration", records.profiling)
 			trace.Events = append(trace.Events, perfetto.Event{
 				ID: nextID, TrackUUID: trackID,
 				Name:     fmt.Sprintf("%s blob %d", blob.Family, blob.Ordinal),

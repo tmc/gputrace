@@ -756,6 +756,17 @@ keeps pre-sampling counts for all five projections; under an output budget the
 ordinary loss receipt remains authoritative for which optional blob packets
 were retained.
 
+`gputrace_profiler_configuration` provides a compact projection of scalar
+leaves recorded beneath `apsProfilingConfig`, `Timebase`, `Perf Info`,
+`Frame Consistent Perf Info`, and `Kick State Trigger Options`. Every row keeps
+its source family, blob ordinal, exact archive path, source type, and canonical
+JSON. `gputrace_profiler_configuration_audit` reports the recorded row and
+distinct-path shape by blob and section. Recorded periods, masks, timebase
+components, and feature flags are not assigned units or runtime effects by
+these views. Equal values across archive families do not prove that clocks or
+counter streams are aligned. The manifest retains the full pre-sampling row
+count when an output budget drops the optional blob packets.
+
 When an APSCounterData TraceId table covers an encoder execution ordinal,
 `gputrace_encoder` also exposes its recorded batch ID and sample index. This is
 the same positional relationship used for capture-backed execution-cost
