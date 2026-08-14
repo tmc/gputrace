@@ -102,30 +102,40 @@ SELECT
   cast(extract_arg(arg_set_id, 'debug.stream_data_command_buffer_table_remainder_bytes') AS INT) AS stream_data_command_buffer_table_remainder_bytes,
   extract_arg(arg_set_id, 'debug.stream_data_command_buffer_table_availability') AS stream_data_command_buffer_table_availability,
   extract_arg(arg_set_id, 'debug.stream_data_command_buffer_table_integrity') AS stream_data_command_buffer_table_integrity,
+  extract_arg(arg_set_id, 'debug.stream_data_command_buffer_table_sha256') AS stream_data_command_buffer_table_sha256,
+  extract_arg(arg_set_id, 'debug.stream_data_command_buffer_table_raw_bytes_availability') AS stream_data_command_buffer_table_raw_bytes_availability,
   cast(extract_arg(arg_set_id, 'debug.stream_data_encoder_table_bytes') AS INT) AS stream_data_encoder_table_bytes,
   cast(extract_arg(arg_set_id, 'debug.stream_data_encoder_table_record_size') AS INT) AS stream_data_encoder_table_record_size,
   cast(extract_arg(arg_set_id, 'debug.stream_data_encoder_table_record_count') AS INT) AS stream_data_encoder_table_record_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_encoder_table_remainder_bytes') AS INT) AS stream_data_encoder_table_remainder_bytes,
   extract_arg(arg_set_id, 'debug.stream_data_encoder_table_availability') AS stream_data_encoder_table_availability,
   extract_arg(arg_set_id, 'debug.stream_data_encoder_table_integrity') AS stream_data_encoder_table_integrity,
+  extract_arg(arg_set_id, 'debug.stream_data_encoder_table_sha256') AS stream_data_encoder_table_sha256,
+  extract_arg(arg_set_id, 'debug.stream_data_encoder_table_raw_bytes_availability') AS stream_data_encoder_table_raw_bytes_availability,
   cast(extract_arg(arg_set_id, 'debug.stream_data_gpu_command_table_bytes') AS INT) AS stream_data_gpu_command_table_bytes,
   cast(extract_arg(arg_set_id, 'debug.stream_data_gpu_command_table_record_size') AS INT) AS stream_data_gpu_command_table_record_size,
   cast(extract_arg(arg_set_id, 'debug.stream_data_gpu_command_table_record_count') AS INT) AS stream_data_gpu_command_table_record_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_gpu_command_table_remainder_bytes') AS INT) AS stream_data_gpu_command_table_remainder_bytes,
   extract_arg(arg_set_id, 'debug.stream_data_gpu_command_table_availability') AS stream_data_gpu_command_table_availability,
   extract_arg(arg_set_id, 'debug.stream_data_gpu_command_table_integrity') AS stream_data_gpu_command_table_integrity,
+  extract_arg(arg_set_id, 'debug.stream_data_gpu_command_table_sha256') AS stream_data_gpu_command_table_sha256,
+  extract_arg(arg_set_id, 'debug.stream_data_gpu_command_table_raw_bytes_availability') AS stream_data_gpu_command_table_raw_bytes_availability,
   cast(extract_arg(arg_set_id, 'debug.stream_data_pipeline_table_bytes') AS INT) AS stream_data_pipeline_table_bytes,
   cast(extract_arg(arg_set_id, 'debug.stream_data_pipeline_table_record_size') AS INT) AS stream_data_pipeline_table_record_size,
   cast(extract_arg(arg_set_id, 'debug.stream_data_pipeline_table_record_count') AS INT) AS stream_data_pipeline_table_record_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_pipeline_table_remainder_bytes') AS INT) AS stream_data_pipeline_table_remainder_bytes,
   extract_arg(arg_set_id, 'debug.stream_data_pipeline_table_availability') AS stream_data_pipeline_table_availability,
   extract_arg(arg_set_id, 'debug.stream_data_pipeline_table_integrity') AS stream_data_pipeline_table_integrity,
+  extract_arg(arg_set_id, 'debug.stream_data_pipeline_table_sha256') AS stream_data_pipeline_table_sha256,
+  extract_arg(arg_set_id, 'debug.stream_data_pipeline_table_raw_bytes_availability') AS stream_data_pipeline_table_raw_bytes_availability,
   cast(extract_arg(arg_set_id, 'debug.stream_data_function_table_bytes') AS INT) AS stream_data_function_table_bytes,
   cast(extract_arg(arg_set_id, 'debug.stream_data_function_table_record_size') AS INT) AS stream_data_function_table_record_size,
   cast(extract_arg(arg_set_id, 'debug.stream_data_function_table_record_count') AS INT) AS stream_data_function_table_record_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_function_table_remainder_bytes') AS INT) AS stream_data_function_table_remainder_bytes,
   extract_arg(arg_set_id, 'debug.stream_data_function_table_availability') AS stream_data_function_table_availability,
   extract_arg(arg_set_id, 'debug.stream_data_function_table_integrity') AS stream_data_function_table_integrity,
+  extract_arg(arg_set_id, 'debug.stream_data_function_table_sha256') AS stream_data_function_table_sha256,
+  extract_arg(arg_set_id, 'debug.stream_data_function_table_raw_bytes_availability') AS stream_data_function_table_raw_bytes_availability,
   extract_arg(arg_set_id, 'debug.stream_data_family_count_semantics') AS stream_data_family_count_semantics,
   cast(extract_arg(arg_set_id, 'debug.stream_data_aps_data_entry_count') AS INT) AS stream_data_aps_data_entry_count,
   extract_arg(arg_set_id, 'debug.stream_data_aps_data_availability') AS stream_data_aps_data_availability,
@@ -585,6 +595,28 @@ FROM slice AS s
 JOIN args AS tid
   ON tid.arg_set_id = s.arg_set_id AND tid.key = 'debug.trace_id'
 WHERE s.category = 'counter_trace_id';
+
+-- gputrace_stream_data_table retains the exact bytes of the five fixed-record
+-- tables in streamData. Record boundaries follow record_size; unknown words
+-- and relationships between tables are not decoded by this view.
+CREATE PERFETTO VIEW gputrace_stream_data_table AS
+SELECT
+  id,
+  extract_arg(arg_set_id, 'debug.table_name') AS table_name,
+  extract_arg(arg_set_id, 'debug.source_key') AS source_key,
+  cast(extract_arg(arg_set_id, 'debug.byte_count') AS INT) AS byte_count,
+  extract_arg(arg_set_id, 'debug.raw_bytes_hex') AS raw_bytes_hex,
+  extract_arg(arg_set_id, 'debug.table_sha256') AS table_sha256,
+  cast(extract_arg(arg_set_id, 'debug.record_size') AS INT) AS record_size,
+  cast(extract_arg(arg_set_id, 'debug.record_count') AS INT) AS record_count,
+  cast(extract_arg(arg_set_id, 'debug.remainder_bytes') AS INT) AS remainder_bytes,
+  extract_arg(arg_set_id, 'debug.source') AS source,
+  extract_arg(arg_set_id, 'debug.semantics') AS semantics,
+  extract_arg(arg_set_id, 'debug.clock_domain') AS clock_domain,
+  extract_arg(arg_set_id, 'debug.timing_quality') AS timing_quality,
+  arg_set_id
+FROM slice
+WHERE category = 'stream_data_table';
 
 -- gputrace_raw_profiler_sample_arg retains the unnamed hardware-counter
 -- payload after the seven fixed GRC columns. counter_ordinal is only its

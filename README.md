@@ -108,7 +108,8 @@ for the native Perfetto roadmap and proposed MLX semantic view.
 Trace JSON compatibility.
 The optional SQL file defines `gputrace_capture`, `gputrace_command_buffer`, `gputrace_dispatch`,
 `gputrace_dispatch_arg`, `gputrace_encoder`, `gputrace_encoder_arg`, `gputrace_function`, `gputrace_pipeline`, `gputrace_semantic_node`, `gputrace_semantic_link`,
-`gputrace_counter_series`, `gputrace_unattributed_counter`, `gputrace_evidence_gap`, and
+`gputrace_counter_series`, `gputrace_unattributed_counter`,
+`gputrace_evidence_gap`, `gputrace_stream_data_table`, and
 `gputrace_unmatched` views over the native trace.
 `gputrace_capture` provides typed trace identity, environment, clock, coverage,
 timing-summary, and loss-receipt columns. Timing columns keep encoder span,
@@ -124,7 +125,11 @@ and blit-call count. Private enum and range meanings remain explicitly
 uninterpreted; recorded zero and false values remain distinct from absence.
 For each fixed-record streamData table, the manifest and SQL expose byte
 length, declared record size, computed record count, trailing remainder, and an
-integrity status. This makes truncation and record-layout mismatches visible.
+integrity status. The untimed `gputrace_stream_data_table` view also retains
+each complete table as exact hexadecimal bytes with its whole-table SHA-256
+digest. Recorded size and count delimit rows; any trailing bytes remain in the
+same payload. This makes truncation and record-layout mismatches visible while
+leaving unknown words and cross-table relationships uninterpreted.
 Archive-family inventory separately reports top-level APS, timeline, counter,
 shader-profiler, GPU-timeline, and batch-filtered array entry counts. These are
 presence counts, not decoded samples; an explicit zero differs from absence.

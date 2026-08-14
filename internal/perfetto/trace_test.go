@@ -150,6 +150,37 @@ func TestWriteWithBudgetRejectsMissingSkeletonSpace(t *testing.T) {
 	}
 }
 
+func TestWriteWithBudgetAccountsForManifestSize(t *testing.T) {
+	track := TrackUUID("test", "manifest-budget")
+	trace := &Trace{
+		Identity: "capture", ClockDomain: "busy",
+		Tracks:   []Track{{UUID: track, Name: "events"}},
+		Metadata: map[string]any{"large_source_receipt": strings.Repeat("x", 16<<10)},
+	}
+	for i := 0; i < 100; i++ {
+		trace.Events = append(trace.Events, Event{
+			ID: uint64(i + 1), TrackUUID: track, Name: "event", Kind: EventInstant,
+			StartNS: uint64(i), Args: map[string]any{"index": i, "value": strings.Repeat("y", 64)},
+		})
+	}
+	var full bytes.Buffer
+	if err := Write(&full, trace); err != nil {
+		t.Fatal(err)
+	}
+	limit := int64(full.Len() - 100)
+	var constrained bytes.Buffer
+	receipt, err := WriteWithOptions(&constrained, trace, WriteOptions{MaxBytes: limit})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if int64(constrained.Len()) > limit {
+		t.Fatalf("output bytes = %d, limit %d", constrained.Len(), limit)
+	}
+	if receipt.EventsDropped == 0 {
+		t.Fatalf("receipt = %+v, want a dropped event", receipt)
+	}
+}
+
 type boundedWriteRecorder struct {
 	max    int
 	writes int

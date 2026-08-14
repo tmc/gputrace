@@ -3,6 +3,7 @@
 package counter
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/tmc/apple/x/plist"
@@ -75,10 +76,10 @@ func TestParseStreamDataMetadataPreservesZeroAndFalse(t *testing.T) {
 	if metadata.ProfiledProfilerMode != nil {
 		t.Fatalf("absent profiled profiler mode = %#v, want nil", metadata.ProfiledProfilerMode)
 	}
-	if table := metadata.Tables.Encoders; table == nil || table.Bytes != 10 || table.RecordSize == nil || *table.RecordSize != 4 || table.RecordCount == nil || *table.RecordCount != 2 || table.RemainderBytes == nil || *table.RemainderBytes != 2 {
+	if table := metadata.Tables.Encoders; table == nil || table.Bytes != 10 || table.RecordSize == nil || *table.RecordSize != 4 || table.RecordCount == nil || *table.RecordCount != 2 || table.RemainderBytes == nil || *table.RemainderBytes != 2 || table.RawBytesHex != strings.Repeat("00", 10) || table.SHA256 != "sha256:01d448afd928065458cf670b60f5a594d735af0172c8d67f22a81680132681ca" {
 		t.Fatalf("encoder table = %#v", table)
 	}
-	if table := metadata.Tables.Functions; table == nil || table.Bytes != 10 || table.RecordSize != nil || table.RecordCount != nil || table.RemainderBytes != nil {
+	if table := metadata.Tables.Functions; table == nil || table.Bytes != 10 || table.RecordSize != nil || table.RecordCount != nil || table.RemainderBytes != nil || table.RawBytesHex != strings.Repeat("00", 10) || table.SHA256 != "sha256:01d448afd928065458cf670b60f5a594d735af0172c8d67f22a81680132681ca" {
 		t.Fatalf("function table without size = %#v", table)
 	}
 	if metadata.Tables.CommandBuffers != nil {

@@ -543,6 +543,11 @@ Command-buffer, encoder, GPU-command, pipeline, and function tables additionally
 report their exact byte length, declared record size, computed record count,
 trailing remainder bytes, availability, and integrity. A nonzero remainder is
 reported as incomplete evidence rather than silently truncating the table.
+Each complete table is retained losslessly as one untimed hexadecimal payload,
+together with a whole-table SHA-256 digest. The recorded size and count delimit
+rows; any trailing fragment remains in the payload and is counted separately.
+`gputrace_stream_data_table` exposes these bytes without decoding unknown words
+or asserting relationships between table ordinals.
 The manifest also inventories top-level `APSData`, `APSTimelineData`,
 `APSCounterData`, `shaderProfilerData`, `gpuTimelineData`, and batch-filtered
 counter arrays. Counts describe archive entries only, not decoded samples. A

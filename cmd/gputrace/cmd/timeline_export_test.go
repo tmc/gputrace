@@ -457,6 +457,7 @@ func TestApplyStreamIdentity(t *testing.T) {
 			TraceName:             "trace.gputrace",
 			Tables: counter.StreamDataTables{CommandBuffers: &counter.StreamDataTable{
 				Bytes: 1184, RecordSize: &recordSize, RecordCount: &recordCount, RemainderBytes: &remainder,
+				SHA256: "sha256:abc", RawBytesHex: "0102",
 			}},
 			Families:         counter.StreamDataFamilies{APSData: &twoEntries, ShaderProfilerData: &zeroEntries},
 			DecodedFamilies:  counter.StreamDataDecodedFamilies{APSData: &twoEntries, ShaderProfilerData: &zeroEntries},
@@ -478,6 +479,9 @@ func TestApplyStreamIdentity(t *testing.T) {
 	}
 	if table := timeline.StreamMetadata.Tables.CommandBuffers; table == nil || table.RecordSize == &recordSize || table.RecordCount == &recordCount || table.RemainderBytes == &remainder {
 		t.Fatalf("stream table was not independently cloned: %#v", table)
+	}
+	if timeline.StreamMetadata.Tables.CommandBuffers.RawBytesHex != "0102" {
+		t.Fatalf("stream table bytes = %#v", timeline.StreamMetadata.Tables.CommandBuffers.RawBytesHex)
 	}
 	if timeline.StreamMetadata.Families.APSData == &twoEntries || timeline.StreamMetadata.Families.ShaderProfilerData == &zeroEntries {
 		t.Fatal("stream family counts retained source pointers")
@@ -507,6 +511,7 @@ func TestPerfettoStreamMetadataArgsPreservesZeroAndFalse(t *testing.T) {
 		NumBlitCalls:                 &zero,
 		Tables: counter.StreamDataTables{Encoders: &counter.StreamDataTable{
 			Bytes: 10, RecordSize: &recordSize, RecordCount: &recordCount, RemainderBytes: &remainder,
+			SHA256: "sha256:abc", RawBytesHex: "00000000010101010202",
 		}},
 		Families:        counter.StreamDataFamilies{APSData: &twoEntries, ShaderProfilerData: &zeroEntries},
 		DecodedFamilies: counter.StreamDataDecodedFamilies{APSData: &zeroEntries, ShaderProfilerData: &zeroEntries},
@@ -531,6 +536,12 @@ func TestPerfettoStreamMetadataArgsPreservesZeroAndFalse(t *testing.T) {
 	}
 	if got, want := args["stream_data_encoder_table_integrity"], "incomplete: trailing bytes do not form a complete record"; got != want {
 		t.Fatalf("encoder table integrity = %#v, want %#v", got, want)
+	}
+	if got := args["stream_data_encoder_table_sha256"]; got != "sha256:abc" {
+		t.Fatalf("encoder table sha256 = %#v", got)
+	}
+	if got := args["stream_data_encoder_table_raw_bytes_availability"]; got != "available: exact source bytes retained as one untimed table payload" {
+		t.Fatalf("encoder table raw bytes availability = %#v", got)
 	}
 	if got := args["stream_data_function_table_availability"]; got != "unavailable: archive data key is absent" {
 		t.Fatalf("function table availability = %#v", got)

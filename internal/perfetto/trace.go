@@ -186,7 +186,7 @@ func WriteWithOptions(w io.Writer, trace *Trace, options WriteOptions) (Receipt,
 	if options.MaxBytes == 0 {
 		selected = groups
 	} else {
-		const receiptReserve = int64(4096)
+		receiptReserve := lossReceiptReserve(trace, root, groups, options.MaxBytes, receipt.DependencySkeletonsRetained)
 		used := framedSize(required)
 		for _, group := range groups {
 			if group.required {
@@ -288,6 +288,59 @@ func WriteWithOptions(w io.Writer, trace *Trace, options WriteOptions) (Receipt,
 		}
 	}
 	return receipt, nil
+}
+
+// lossReceiptReserve returns an upper bound for the framed manifest packet.
+// Every retained and dropped value is bounded by its considered total, so the
+// encoded packet cannot exceed this size after selection.
+func lossReceiptReserve(trace *Trace, root uint64, groups []packetGroup, maxBytes int64, skeletons int) int64 {
+	metadata := cloneMap(trace.Metadata)
+	metadata["resource_policy"] = "stable-identity-hash/v1"
+	metadata["logical_byte_boundary"] = maxBytes
+	metadata["events_considered"] = len(trace.Events)
+	metadata["events_retained"] = len(trace.Events)
+	metadata["events_dropped"] = len(trace.Events)
+	samples := 0
+	for _, counter := range trace.Counters {
+		samples += len(counter.Samples)
+	}
+	metadata["counter_samples_considered"] = samples
+	metadata["counter_samples_retained"] = samples
+	metadata["counter_samples_dropped"] = samples
+	metadata["output_complete"] = false
+	metadata["dependency_skeletons_retained"] = skeletons
+
+	counts := make(map[string]int)
+	bytes := make(map[string]int64)
+	longestIdentity := ""
+	for _, group := range groups {
+		counts[group.evidenceClass]++
+		bytes[group.evidenceClass] += framedTimedSize(group.packets)
+		if len(group.identity) > len(longestIdentity) {
+			longestIdentity = group.identity
+		}
+	}
+	if longestIdentity != "" {
+		metadata["first_dropped_identity"] = longestIdentity
+		metadata["last_dropped_identity"] = longestIdentity
+	}
+	for class, count := range counts {
+		key := metadataToken(class)
+		metadata["loss_"+key+"_items_considered"] = count
+		metadata["loss_"+key+"_items_retained"] = count
+		metadata["loss_"+key+"_items_dropped"] = count
+		metadata["loss_"+key+"_bytes_considered"] = bytes[class]
+		metadata["loss_"+key+"_bytes_retained"] = bytes[class]
+		metadata["loss_"+key+"_bytes_dropped"] = bytes[class]
+	}
+	manifest := trackEventPacket(Event{
+		TrackUUID: root,
+		Name:      "gputrace evidence manifest",
+		Category:  "gputrace",
+		Kind:      EventInstant,
+		Args:      metadata,
+	}, false)
+	return framedSize([][]byte{manifest})
 }
 
 func validate(trace *Trace) error {

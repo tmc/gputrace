@@ -200,3 +200,46 @@ FROM gputrace_capture;
 		t.Fatalf("PerfettoSQL trace id manifest = %q, want header and %q", rows, wantManifest)
 	}
 }
+
+func TestExportStreamDataTableReachesPerfettoSQL(t *testing.T) {
+	processor := os.Getenv("TRACE_PROCESSOR_SHELL")
+	if processor == "" {
+		t.Skip("set TRACE_PROCESSOR_SHELL to run native PerfettoSQL integration")
+	}
+	recordSize := int64(2)
+	recordCount := int64(2)
+	remainder := int64(1)
+	timeline := &Timeline{StreamMetadata: &counter.StreamDataMetadata{
+		Tables: counter.StreamDataTables{GPUCommands: &counter.StreamDataTable{
+			Bytes: 5, RecordSize: &recordSize, RecordCount: &recordCount, RemainderBytes: &remainder,
+			SHA256: "sha256:table", RawBytesHex: "0102030405",
+		}},
+	}}
+	trace := filepath.Join(t.TempDir(), "stream-data-table.pftrace")
+	if err := exportPerfettoForClock(timeline, trace, timelineClockBusy); err != nil {
+		t.Fatal(err)
+	}
+	query := perfettosql.Module + `
+SELECT table_name, source_key, byte_count, raw_bytes_hex, table_sha256,
+       record_size, record_count, remainder_bytes,
+       clock_domain, timing_quality
+FROM gputrace_stream_data_table;
+`
+	command := exec.Command(processor, "query", trace)
+	command.Stdin = strings.NewReader(query)
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("trace processor streamData table: %v\n%s", err, output)
+	}
+	rows, err := csv.NewReader(strings.NewReader(string(output))).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"gpu_command", "gpuCommandInfoData", "5", "0102030405", "sha256:table",
+		"2", "2", "1", "none", "unavailable",
+	}
+	if len(rows) != 2 || !slices.Equal(rows[1], want) {
+		t.Fatalf("PerfettoSQL streamData rows = %q, want header and %q", rows, want)
+	}
+}

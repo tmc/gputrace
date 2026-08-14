@@ -4,7 +4,9 @@
 package counter
 
 import (
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -270,6 +272,8 @@ type StreamDataTable struct {
 	RecordSize     *int64 `json:"record_size,omitempty"`
 	RecordCount    *int64 `json:"record_count,omitempty"`
 	RemainderBytes *int64 `json:"remainder_bytes,omitempty"`
+	SHA256         string `json:"sha256"`
+	RawBytesHex    string `json:"raw_bytes_hex"`
 }
 
 // ParseStreamData parses the streamData plist from a .gpuprofiler_raw directory.
@@ -526,7 +530,12 @@ func parseStreamDataTable(objects []any, root map[string]any, dataKey, sizeKey s
 	if !ok {
 		return nil
 	}
-	table := &StreamDataTable{Bytes: int64(len(data))}
+	sum := sha256.Sum256(data)
+	table := &StreamDataTable{
+		Bytes:       int64(len(data)),
+		SHA256:      "sha256:" + hex.EncodeToString(sum[:]),
+		RawBytesHex: hex.EncodeToString(data),
+	}
 	size := archivedInt64(objects, root, sizeKey)
 	if size == nil || *size <= 0 {
 		return table

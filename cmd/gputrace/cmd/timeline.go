@@ -3208,6 +3208,8 @@ func appendStreamDataTableArgs(args map[string]any, name string, table *counter.
 	}
 	args[prefix+"availability"] = "available"
 	args[prefix+"bytes"] = table.Bytes
+	args[prefix+"sha256"] = table.SHA256
+	args[prefix+"raw_bytes_availability"] = "available: exact source bytes retained as one untimed table payload"
 	if table.RecordSize == nil || table.RecordCount == nil || table.RemainderBytes == nil {
 		args[prefix+"integrity"] = "unknown: record size is absent or invalid"
 		return
@@ -3220,6 +3222,35 @@ func appendStreamDataTableArgs(args map[string]any, name string, table *counter.
 	} else {
 		args[prefix+"integrity"] = "incomplete: trailing bytes do not form a complete record"
 	}
+}
+
+type namedStreamDataTable struct {
+	name      string
+	sourceKey string
+	table     *counter.StreamDataTable
+}
+
+func streamDataTables(metadata *counter.StreamDataMetadata) []namedStreamDataTable {
+	if metadata == nil {
+		return nil
+	}
+	return []namedStreamDataTable{
+		{name: "command_buffer", sourceKey: "commandBufferInfoData", table: metadata.Tables.CommandBuffers},
+		{name: "encoder", sourceKey: "encoderInfoData", table: metadata.Tables.Encoders},
+		{name: "gpu_command", sourceKey: "gpuCommandInfoData", table: metadata.Tables.GPUCommands},
+		{name: "pipeline", sourceKey: "pipelineStateInfoData", table: metadata.Tables.Pipelines},
+		{name: "function", sourceKey: "functionInfoData", table: metadata.Tables.Functions},
+	}
+}
+
+func streamDataTableEvidenceCount(metadata *counter.StreamDataMetadata) int {
+	n := 0
+	for _, named := range streamDataTables(metadata) {
+		if named.table != nil {
+			n++
+		}
+	}
+	return n
 }
 
 func perfettoClockConversionArgs(timeline *Timeline) map[string]any {
@@ -3490,7 +3521,7 @@ func appendMLXSemanticEvents(trace *perfetto.Trace, timeline *Timeline) {
 
 func appendEvidenceDetailEvents(trace *perfetto.Trace, timeline *Timeline) {
 	if len(timeline.UnattributedCounters) == 0 && len(timeline.CounterCatalog) == 0 && len(timeline.CounterTraceIDs) == 0 && len(timeline.UnavailableEvidence) == 0 &&
-		(timeline.RawProfilerArtifacts == nil || len(timeline.RawProfilerArtifacts.Artifacts) == 0) {
+		(timeline.RawProfilerArtifacts == nil || len(timeline.RawProfilerArtifacts.Artifacts) == 0) && streamDataTableEvidenceCount(timeline.StreamMetadata) == 0 {
 		return
 	}
 	trackID := perfetto.TrackUUID("gputrace.evidence", "details")
@@ -3534,6 +3565,13 @@ func appendEvidenceDetailEvents(trace *perfetto.Trace, timeline *Timeline) {
 				"timing_quality": "unavailable",
 			},
 		})
+		nextID++
+	}
+	for _, named := range streamDataTables(timeline.StreamMetadata) {
+		if named.table == nil {
+			continue
+		}
+		trace.Events = append(trace.Events, streamDataTableEvent(nextID, trackID, named))
 		nextID++
 	}
 	for _, metric := range timeline.UnattributedCounters {
@@ -3615,6 +3653,35 @@ func appendEvidenceDetailEvents(trace *perfetto.Trace, timeline *Timeline) {
 			Args:      args,
 		})
 		nextID++
+	}
+}
+
+func streamDataTableEvent(id, trackID uint64, named namedStreamDataTable) perfetto.Event {
+	args := map[string]any{
+		"table_name":     named.name,
+		"source_key":     named.sourceKey,
+		"byte_count":     named.table.Bytes,
+		"raw_bytes_hex":  named.table.RawBytesHex,
+		"table_sha256":   named.table.SHA256,
+		"source":         "streamData keyed archive fixed-record table",
+		"semantics":      "exact source bytes; record order is byte order; unknown words and cross-table relationships remain uninterpreted",
+		"clock_domain":   "none",
+		"timing_quality": "unavailable",
+	}
+	if named.table.RecordSize != nil {
+		args["record_size"] = *named.table.RecordSize
+	}
+	if named.table.RecordCount != nil {
+		args["record_count"] = *named.table.RecordCount
+	}
+	if named.table.RemainderBytes != nil {
+		args["remainder_bytes"] = *named.table.RemainderBytes
+	}
+	return perfetto.Event{
+		ID: id, TrackUUID: trackID,
+		Name:     "streamData table: " + named.name,
+		Category: "stream_data_table", Kind: perfetto.EventInstant,
+		Args: args,
 	}
 }
 
