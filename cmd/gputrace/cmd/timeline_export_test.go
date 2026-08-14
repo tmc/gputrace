@@ -945,7 +945,7 @@ func TestTimelineSQLOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, view := range []string{"gputrace_capture", "gputrace_dispatch", "gputrace_dispatch_arg", "gputrace_encoder_arg", "gputrace_raw_profiler_sample", "gputrace_raw_profiler_sample_arg", "gputrace_counter_catalog", "gputrace_track_event_arg", "gputrace_pipeline", "gputrace_counter_series", "gputrace_unmatched"} {
+	for _, view := range []string{"gputrace_capture", "gputrace_dispatch", "gputrace_dispatch_arg", "gputrace_encoder_arg", "gputrace_raw_profiler_sample", "gputrace_raw_profiler_sample_arg", "gputrace_counter_catalog", "gputrace_counter_trace_id", "gputrace_track_event_arg", "gputrace_pipeline", "gputrace_counter_series", "gputrace_unmatched"} {
 		if !bytes.Contains(data, []byte("CREATE PERFETTO VIEW "+view)) {
 			t.Errorf("SQL output missing %s", view)
 		}
@@ -2048,6 +2048,27 @@ func TestRecordCounterCatalogPreservesOrderAndClassification(t *testing.T) {
 	}
 	if got := timeline.CounterCatalog[8]; got.GroupOrdinal != 1 || got.ColumnOrdinal != 0 || got.RecordedName != "GRC_TIMESTAMP" || got.Classification != "fixed GRC" {
 		t.Fatalf("catalog entry 8 = %#v", got)
+	}
+}
+
+func TestRecordCounterTraceIDsPreservesSourceRows(t *testing.T) {
+	timeline := &Timeline{}
+	archive := &counter.CounterArchive{TraceIDs: &counter.TraceIDTable{Rows: []counter.TraceIDInfo{
+		{TraceID: 123, BatchID: 7, SampleIndex: 44},
+		{TraceID: 456, BatchID: 8, SampleIndex: 55},
+	}}}
+	recordCounterTraceIDs(timeline, archive)
+	if got, want := len(timeline.CounterTraceIDs), 2; got != want {
+		t.Fatalf("trace id rows = %d, want %d", got, want)
+	}
+	if got := timeline.CounterTraceIDs[1]; got.RowOrdinal != 1 || got.TraceID != 456 || got.BatchID != 8 || got.SampleIndex != 55 {
+		t.Fatalf("trace id row 1 = %#v", got)
+	}
+
+	empty := &Timeline{}
+	recordCounterTraceIDs(empty, &counter.CounterArchive{})
+	if len(empty.CounterTraceIDs) != 0 {
+		t.Fatalf("absent trace id table produced rows: %#v", empty.CounterTraceIDs)
 	}
 }
 

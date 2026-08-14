@@ -133,3 +133,46 @@ FROM gputrace_capture;
 		t.Fatalf("PerfettoSQL manifest rows = %q, want header and %q", rows, wantManifest)
 	}
 }
+
+func TestExportCounterTraceIDsReachPerfettoSQL(t *testing.T) {
+	processor := os.Getenv("TRACE_PROCESSOR_SHELL")
+	if processor == "" {
+		t.Skip("set TRACE_PROCESSOR_SHELL to run native PerfettoSQL integration")
+	}
+	timeline := &Timeline{CounterTraceIDs: []CounterTraceIDEntry{
+		{RowOrdinal: 0, TraceID: 123, BatchID: 7, SampleIndex: 44},
+		{RowOrdinal: 1, TraceID: 456, BatchID: 8, SampleIndex: 55},
+	}}
+	trace := filepath.Join(t.TempDir(), "counter-trace-ids.pftrace")
+	if err := exportPerfettoForClock(timeline, trace, timelineClockBusy); err != nil {
+		t.Fatal(err)
+	}
+	query := perfettosql.Module + `
+SELECT row_ordinal, trace_id, batch_id, sample_index, source, semantics,
+       clock_domain, timing_quality
+FROM gputrace_counter_trace_id
+ORDER BY row_ordinal;
+`
+	command := exec.Command(processor, "query", trace)
+	command.Stdin = strings.NewReader(query)
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("trace processor trace ids: %v\n%s", err, output)
+	}
+	rows, err := csv.NewReader(strings.NewReader(string(output))).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSuffix := []string{
+		"APSCounterData TraceId to BatchId and TraceId to SampleIndex tables",
+		"source row identity; only row ordinal has a positional relation to encoder execution order; no GRC equality or clock mapping",
+		"none", "unavailable",
+	}
+	want := [][]string{
+		append([]string{"0", "123", "7", "44"}, wantSuffix...),
+		append([]string{"1", "456", "8", "55"}, wantSuffix...),
+	}
+	if len(rows) != 3 || !slices.Equal(rows[1], want[0]) || !slices.Equal(rows[2], want[1]) {
+		t.Fatalf("PerfettoSQL trace id rows = %q, want header and %q", rows, want)
+	}
+}

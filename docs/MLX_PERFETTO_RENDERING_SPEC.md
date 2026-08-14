@@ -509,6 +509,7 @@ gputrace_profiler_stream
 gputrace_raw_profiler_sample
 gputrace_raw_profiler_sample_arg
 gputrace_counter_catalog
+gputrace_counter_trace_id
 gputrace_track_event_arg
 gputrace_live_command_buffer
 gputrace_host_signpost
@@ -632,6 +633,12 @@ ordinal, exact recorded name, and fixed-GRC or pass-specific classification.
 Pass-specific names remain opaque identifiers: the catalog does not establish
 units, decoded value series, encoder attribution, or a clock mapping. Catalog
 availability and decoded-series availability are reported separately.
+
+`gputrace_counter_trace_id` retains the exact recorded rows of the
+APSCounterData TraceId-to-batch and TraceId-to-sample-index tables as untimed
+evidence. The row ordinal is the documented positional relationship to encoder
+execution order. The TraceId value itself is not equated with a GRC encoder or
+kick ID, and the table establishes no timing or command-buffer relationship.
 
 When an APSCounterData TraceId table covers an encoder execution ordinal,
 `gputrace_encoder` also exposes its recorded batch ID and sample index. This is

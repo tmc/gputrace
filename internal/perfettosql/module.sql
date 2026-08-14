@@ -190,6 +190,10 @@ SELECT
   cast(extract_arg(arg_set_id, 'debug.counter_catalog_entries') AS INT) AS counter_catalog_entries,
   extract_arg(arg_set_id, 'debug.counter_catalog_source') AS counter_catalog_source,
   extract_arg(arg_set_id, 'debug.counter_catalog_semantics') AS counter_catalog_semantics,
+  extract_arg(arg_set_id, 'debug.counter_trace_id_availability') AS counter_trace_id_availability,
+  cast(extract_arg(arg_set_id, 'debug.counter_trace_id_rows') AS INT) AS counter_trace_id_rows,
+  extract_arg(arg_set_id, 'debug.counter_trace_id_source') AS counter_trace_id_source,
+  extract_arg(arg_set_id, 'debug.counter_trace_id_semantics') AS counter_trace_id_semantics,
   extract_arg(arg_set_id, 'debug.counter_decoder_availability') AS counter_decoder_availability,
   extract_arg(arg_set_id, 'debug.raw_counter_artifact_availability') AS raw_counter_artifact_availability,
   cast(extract_arg(arg_set_id, 'debug.raw_profiler_artifact_count') AS INT) AS raw_profiler_artifact_count,
@@ -563,6 +567,21 @@ SELECT
   arg_set_id
 FROM slice
 WHERE category = 'counter_catalog';
+
+CREATE PERFETTO VIEW gputrace_counter_trace_id AS
+SELECT
+  id,
+  cast(extract_arg(arg_set_id, 'debug.row_ordinal') AS INT) AS row_ordinal,
+  cast(extract_arg(arg_set_id, 'debug.trace_id') AS INT) AS trace_id,
+  cast(extract_arg(arg_set_id, 'debug.batch_id') AS INT) AS batch_id,
+  cast(extract_arg(arg_set_id, 'debug.sample_index') AS INT) AS sample_index,
+  extract_arg(arg_set_id, 'debug.source') AS source,
+  extract_arg(arg_set_id, 'debug.semantics') AS semantics,
+  extract_arg(arg_set_id, 'debug.clock_domain') AS clock_domain,
+  extract_arg(arg_set_id, 'debug.timing_quality') AS timing_quality,
+  arg_set_id
+FROM slice
+WHERE category = 'counter_trace_id';
 
 -- gputrace_raw_profiler_sample_arg retains the unnamed hardware-counter
 -- payload after the seven fixed GRC columns. counter_ordinal is only its

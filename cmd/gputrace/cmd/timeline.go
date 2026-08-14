@@ -950,6 +950,7 @@ type Timeline struct {
 	CounterTracks            []CounterTrack                 `json:"counter_tracks,omitempty"`
 	UnattributedCounters     []UnattributedCounterMetric    `json:"unattributed_counters,omitempty"`
 	CounterCatalog           []CounterCatalogEntry          `json:"counter_catalog,omitempty"`
+	CounterTraceIDs          []CounterTraceIDEntry          `json:"counter_trace_ids,omitempty"`
 	UnavailableEvidence      []UnavailableEvidence          `json:"unavailable_evidence,omitempty"`
 	Timing                   *TimelineTiming                `json:"timing,omitempty"`
 	XcodeMetrics             map[string]any                 `json:"xcode_metrics,omitempty"`
@@ -1113,6 +1114,15 @@ type CounterCatalogEntry struct {
 	ColumnOrdinal  int    `json:"column_ordinal"`
 	RecordedName   string `json:"recorded_name"`
 	Classification string `json:"classification"`
+}
+
+// CounterTraceIDEntry is one recorded APSCounterData TraceId-table row. Its
+// ordinal relates positionally to encoder execution order; TraceID does not.
+type CounterTraceIDEntry struct {
+	RowOrdinal  int    `json:"row_ordinal"`
+	TraceID     uint64 `json:"trace_id"`
+	BatchID     int    `json:"batch_id"`
+	SampleIndex int    `json:"sample_index"`
 }
 
 // CounterSample represents a single counter measurement at a point in time.
@@ -1721,12 +1731,25 @@ func generateCounterTracks(trace *gputrace.Trace, timeline *Timeline) []CounterT
 		return nil
 	}
 	recordCounterCatalog(timeline, streamStats.CounterArchive)
+	recordCounterTraceIDs(timeline, streamStats.CounterArchive)
 	annotateEncoderCounterArchive(timeline, streamStats.CounterArchive)
 	timeline.UnavailableEvidence = append(timeline.UnavailableEvidence, UnavailableEvidence{
 		Family: "APSCounterData time series",
 		Reason: "counter clock has no verified mapping to cumulative GPU-busy time",
 	})
 	return nil
+}
+
+func recordCounterTraceIDs(timeline *Timeline, archive *counter.CounterArchive) {
+	if timeline == nil || archive == nil || archive.TraceIDs == nil {
+		return
+	}
+	for rowOrdinal, row := range archive.TraceIDs.Rows {
+		timeline.CounterTraceIDs = append(timeline.CounterTraceIDs, CounterTraceIDEntry{
+			RowOrdinal: rowOrdinal, TraceID: row.TraceID,
+			BatchID: row.BatchID, SampleIndex: row.SampleIndex,
+		})
+	}
 }
 
 func recordCounterCatalog(timeline *Timeline, archive *counter.CounterArchive) {
@@ -2750,6 +2773,14 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 		trace.Metadata["counter_catalog_source"] = "APSCounterData Subdivided Dictionary passList"
 		trace.Metadata["counter_catalog_semantics"] = "recorded column identity only; no values, units, derived meaning, encoder attribution, or clock mapping"
 	}
+	if len(timeline.CounterTraceIDs) > 0 {
+		trace.Metadata["counter_trace_id_availability"] = "available: recorded APSCounterData TraceId table"
+		trace.Metadata["counter_trace_id_rows"] = len(timeline.CounterTraceIDs)
+		trace.Metadata["counter_trace_id_source"] = "APSCounterData TraceId to BatchId and TraceId to SampleIndex tables"
+		trace.Metadata["counter_trace_id_semantics"] = "source row identity; only row ordinal has a positional relation to encoder execution order; no GRC equality or clock mapping"
+	} else {
+		trace.Metadata["counter_trace_id_availability"] = "unavailable: APSCounterData TraceId table is absent"
+	}
 	if inventory := timeline.RawProfilerArtifacts; inventory != nil {
 		trace.Metadata["raw_counter_artifact_availability"] = "available: content-identified profiler archive"
 		trace.Metadata["raw_profiler_artifact_count"] = len(inventory.Artifacts)
@@ -3458,7 +3489,7 @@ func appendMLXSemanticEvents(trace *perfetto.Trace, timeline *Timeline) {
 }
 
 func appendEvidenceDetailEvents(trace *perfetto.Trace, timeline *Timeline) {
-	if len(timeline.UnattributedCounters) == 0 && len(timeline.CounterCatalog) == 0 && len(timeline.UnavailableEvidence) == 0 &&
+	if len(timeline.UnattributedCounters) == 0 && len(timeline.CounterCatalog) == 0 && len(timeline.CounterTraceIDs) == 0 && len(timeline.UnavailableEvidence) == 0 &&
 		(timeline.RawProfilerArtifacts == nil || len(timeline.RawProfilerArtifacts.Artifacts) == 0) {
 		return
 	}
@@ -3481,6 +3512,24 @@ func appendEvidenceDetailEvents(trace *perfetto.Trace, timeline *Timeline) {
 				"classification": column.Classification,
 				"source":         "APSCounterData Subdivided Dictionary passList",
 				"semantics":      "recorded column identity only; no values, units, derived meaning, encoder attribution, or clock mapping",
+				"clock_domain":   "none",
+				"timing_quality": "unavailable",
+			},
+		})
+		nextID++
+	}
+	for _, row := range timeline.CounterTraceIDs {
+		trace.Events = append(trace.Events, perfetto.Event{
+			ID: nextID, TrackUUID: trackID,
+			Name:     fmt.Sprintf("Counter TraceId row %d", row.RowOrdinal),
+			Category: "counter_trace_id", Kind: perfetto.EventInstant, Required: true,
+			Args: map[string]any{
+				"row_ordinal":    row.RowOrdinal,
+				"trace_id":       row.TraceID,
+				"batch_id":       row.BatchID,
+				"sample_index":   row.SampleIndex,
+				"source":         "APSCounterData TraceId to BatchId and TraceId to SampleIndex tables",
+				"semantics":      "source row identity; only row ordinal has a positional relation to encoder execution order; no GRC equality or clock mapping",
 				"clock_domain":   "none",
 				"timing_quality": "unavailable",
 			},
