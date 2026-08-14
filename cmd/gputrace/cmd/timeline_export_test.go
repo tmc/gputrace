@@ -963,23 +963,56 @@ func TestAppendMetalDispatchDetailProjection(t *testing.T) {
 		Timing:   &TimelineTiming{TimingSource: "profiled"},
 		Encoders: []EncoderInfo{{Index: 0, Label: "eval/A"}, {Index: 1, Label: "eval/B"}},
 		Events: []TimelineEvent{
-			{Name: "a", Category: "kernel", Phase: "X", Timestamp: 1, Duration: 2, Args: map[string]interface{}{"encoder_index": 0}},
-			{Name: "b", Category: "kernel", Phase: "X", Timestamp: 3, Duration: 4, Args: map[string]interface{}{"encoder_index": 1}},
+			{Name: "a", Category: "kernel", Phase: "X", Timestamp: 1, Duration: 2, Args: map[string]interface{}{"encoder_index": 0, "encoder_containment": "strict"}},
+			{Name: "b", Category: "kernel", Phase: "X", Timestamp: 3, Duration: 4, Args: map[string]interface{}{"encoder_index": 1, "encoder_containment": "strict"}},
 			{Name: "unknown", Category: "kernel", Phase: "X", Args: map[string]interface{}{}},
 		},
 	}
-	tracks, events := appendMetalDispatchDetailProjection(trace, timeline, parent)
-	if tracks != 2 || events != 2 || len(trace.Tracks) != 3 || len(trace.Events) != 2 {
-		t.Fatalf("projection = tracks %d events %d; trace has %d tracks %d events", tracks, events, len(trace.Tracks), len(trace.Events))
+	tracks, events, uncertainTracks, uncertainEvents := appendMetalDispatchDetailProjection(trace, timeline, parent)
+	if tracks != 2 || events != 2 || uncertainTracks != 1 || uncertainEvents != 1 || len(trace.Tracks) != 6 || len(trace.Events) != 3 {
+		t.Fatalf("projection = tracks %d events %d uncertain tracks %d events %d; trace has %d tracks %d events", tracks, events, uncertainTracks, uncertainEvents, len(trace.Tracks), len(trace.Events))
 	}
-	if trace.Tracks[1].ParentUUID != parent || trace.Tracks[1].Name != "Encoder 0 · 1 dispatches · 0.002 ms · 1 functions — eval/A" {
-		t.Fatalf("first detail track = %+v", trace.Tracks[1])
+	group := trace.Tracks[1]
+	if group.ParentUUID != parent || group.Name != "Dispatch sequence by encoder (strict containment)" {
+		t.Fatalf("encoder detail group = %+v", group)
+	}
+	if trace.Tracks[2].ParentUUID != group.UUID || trace.Tracks[2].Name != "Encoder 0 · 1 dispatches · 0.002 ms · 1 functions — eval/A" {
+		t.Fatalf("first detail track = %+v", trace.Tracks[2])
 	}
 	if got := trace.Events[0].Args["presentation_projection"]; got != "encoder_dispatch_detail" {
 		t.Fatalf("projection marker = %v", got)
 	}
 	if trace.Events[0].StartNS != 1_000 || trace.Events[0].DurationNS != 2_000 {
 		t.Fatalf("detail timing = %d+%d", trace.Events[0].StartNS, trace.Events[0].DurationNS)
+	}
+	if got := trace.Events[2].Args["presentation_projection"]; got != "uncertain_encoder_detail" {
+		t.Fatalf("uncertain projection marker = %v", got)
+	}
+}
+
+func TestAppendMetalPipelineProjectionPacksOverlaps(t *testing.T) {
+	parent := perfetto.TrackUUID("test", "parent")
+	trace := &perfetto.Trace{Tracks: []perfetto.Track{{UUID: parent, Name: "parent"}}}
+	timeline := &Timeline{Events: []TimelineEvent{
+		{Name: "kernelA", Category: "kernel", Timestamp: 10, Duration: 10, Args: map[string]interface{}{"pipeline_id": 7, "pipeline_state": "state7"}},
+		{Name: "kernelA", Category: "kernel", Timestamp: 15, Duration: 2, Args: map[string]interface{}{"pipeline_id": 7, "pipeline_state": "state7"}},
+		{Name: "kernelB", Category: "kernel", Timestamp: 20, Duration: 3, Args: map[string]interface{}{"pipeline_id": 8}},
+	}}
+	tracks, events := appendMetalPipelineProjection(trace, timeline, parent)
+	if tracks != 3 || events != 3 || len(trace.Tracks) != 5 {
+		t.Fatalf("projection = %d tracks, %d events; trace tracks = %d", tracks, events, len(trace.Tracks))
+	}
+	group := trace.Tracks[1]
+	if group.Name != "Shaders / pipelines (measured busy time)" || group.ParentUUID != parent {
+		t.Fatalf("pipeline group = %+v", group)
+	}
+	if trace.Tracks[2].ParentUUID != group.UUID || trace.Tracks[3].ParentUUID != group.UUID || trace.Tracks[2].UUID == trace.Tracks[3].UUID {
+		t.Fatalf("overlap lanes = %+v, %+v", trace.Tracks[2], trace.Tracks[3])
+	}
+	for _, event := range trace.Events {
+		if event.Args["presentation_projection"] != "pipeline_dispatch_detail" || event.Args["accounting_source"] != "native gpu_slice" {
+			t.Fatalf("pipeline event args = %+v", event.Args)
+		}
 	}
 }
 

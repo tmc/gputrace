@@ -93,6 +93,11 @@ resource policy, and loss receipt. These are part of the timeline export, not
 separate commands. Use --max-output-bytes for an explicit constrained export
 and --sql-out to write the matching PerfettoSQL views.
 
+Lossless busy-time exports show an Xcode-like Shaders / pipelines group first,
+compact encoder spans, a secondary strict encoder sequence, and a separate
+group for dispatches whose encoder containment is not proven. These detail
+tracks duplicate native GPU slices for presentation only.
+
 Capture-only launches with no profiler timing are instant track events, not GPU
 duration slices. CS/debug labels remain separate observed annotations.
 
@@ -3182,9 +3187,16 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 		trace.Events = append(trace.Events, converted)
 	}
 	if includeMetalDispatchDetailProjection(timeline, clock, maxBytes) {
-		tracks, events := appendMetalDispatchDetailProjection(trace, timeline, trackIDs[[2]int{1, 1}])
-		trace.Metadata["presentation_dispatch_tracks"] = tracks
-		trace.Metadata["presentation_dispatch_events"] = events
+		pipelineTracks, pipelineEvents := appendMetalPipelineProjection(trace, timeline, trackIDs[[2]int{1, 1}])
+		encoderTracks, encoderEvents, uncertainTracks, uncertainEvents := appendMetalDispatchDetailProjection(trace, timeline, trackIDs[[2]int{1, 1}])
+		trace.Metadata["presentation_pipeline_tracks"] = pipelineTracks
+		trace.Metadata["presentation_pipeline_events"] = pipelineEvents
+		trace.Metadata["presentation_encoder_tracks"] = encoderTracks
+		trace.Metadata["presentation_encoder_events"] = encoderEvents
+		trace.Metadata["presentation_uncertain_tracks"] = uncertainTracks
+		trace.Metadata["presentation_uncertain_events"] = uncertainEvents
+		trace.Metadata["presentation_dispatch_tracks"] = pipelineTracks + encoderTracks + uncertainTracks
+		trace.Metadata["presentation_dispatch_events"] = pipelineEvents + encoderEvents + uncertainEvents
 		trace.Metadata["presentation_dispatch_accounting"] = "duplicate detail projection; aggregate GPU totals use native gpu_slice only"
 	} else if clock == timelineClockBusy {
 		reason := "omitted from constrained export"
@@ -3884,21 +3896,145 @@ func includeMetalDispatchDetailProjection(timeline *Timeline, clock timelineCloc
 	return false
 }
 
-// appendMetalDispatchDetailProjection adds one generic child track per encoder
-// so stock Perfetto exposes kernel names without requiring a deep zoom into the
-// packed native GPU queue. The native GPU events remain the accounting source;
-// these slices are an explicitly marked presentation duplicate.
-func appendMetalDispatchDetailProjection(trace *perfetto.Trace, timeline *Timeline, parent uint64) (trackCount, eventCount int) {
+type metalPipelineLane struct {
+	identity string
+	name     string
+	first    uint64
+	events   [][]TimelineEvent
+}
+
+// appendMetalPipelineProjection adds an Xcode-like function and pipeline view.
+// Each dispatch keeps its measured busy-time coordinates. Overlapping uses of
+// one pipeline get separate lanes rather than being drawn as nested slices.
+func appendMetalPipelineProjection(trace *perfetto.Trace, timeline *Timeline, parent uint64) (trackCount, eventCount int) {
 	if trace == nil || timeline == nil || parent == 0 {
 		return 0, 0
 	}
+	groupID := perfetto.TrackUUID("gputrace.pipeline-dispatch-detail", "group")
+	trace.Tracks = append(trace.Tracks, perfetto.Track{
+		UUID:        groupID,
+		ParentUUID:  parent,
+		Name:        "Shaders / pipelines (measured busy time)",
+		Description: "Xcode-like presentation duplicate grouped by recorded pipeline identity; native gpu_slice is the accounting source",
+		ChildOrder:  perfetto.ChildTrackOrderChronological,
+	})
+
+	byIdentity := make(map[string][]TimelineEvent)
+	names := make(map[string]string)
+	for _, event := range timeline.Events {
+		if event.Category != "kernel" || event.Duration == 0 {
+			continue
+		}
+		identity, display := metalPipelineIdentity(event)
+		byIdentity[identity] = append(byIdentity[identity], event)
+		names[identity] = display
+	}
+	lanes := make([]metalPipelineLane, 0, len(byIdentity))
+	for identity, events := range byIdentity {
+		sort.SliceStable(events, func(i, j int) bool {
+			if events[i].Timestamp != events[j].Timestamp {
+				return events[i].Timestamp < events[j].Timestamp
+			}
+			return events[i].Duration < events[j].Duration
+		})
+		packed := packTimelineEventLanes(events)
+		lanes = append(lanes, metalPipelineLane{identity: identity, name: names[identity], first: events[0].Timestamp, events: packed})
+	}
+	sort.Slice(lanes, func(i, j int) bool {
+		if lanes[i].first != lanes[j].first {
+			return lanes[i].first < lanes[j].first
+		}
+		return lanes[i].identity < lanes[j].identity
+	})
+
+	nextID := nextPerfettoEventID(trace)
+	for _, pipeline := range lanes {
+		for lane, events := range pipeline.events {
+			name := pipeline.name
+			if len(pipeline.events) > 1 {
+				name += fmt.Sprintf(" · lane %d", lane+1)
+			}
+			trackID := perfetto.TrackUUID("gputrace.pipeline-dispatch-detail", pipeline.identity+"/"+strconv.Itoa(lane))
+			trace.Tracks = append(trace.Tracks, perfetto.Track{
+				UUID:        trackID,
+				ParentUUID:  groupID,
+				Name:        name,
+				Description: "Presentation duplicate of measured native GPU dispatch slices grouped by pipeline; do not add to gpu_slice totals",
+			})
+			trackCount++
+			for _, event := range events {
+				args := perfettoEventArgs(timeline, event, timelineClockBusy)
+				args["presentation_projection"] = "pipeline_dispatch_detail"
+				args["accounting_source"] = "native gpu_slice"
+				trace.Events = append(trace.Events, perfetto.Event{
+					ID: nextID, TrackUUID: trackID, Name: event.Name, Category: "kernel_detail",
+					StartNS: event.Timestamp * 1000, DurationNS: event.Duration * 1000,
+					Kind: perfetto.EventSlice, Args: args,
+				})
+				nextID++
+				eventCount++
+			}
+		}
+	}
+	return trackCount, eventCount
+}
+
+func metalPipelineIdentity(event TimelineEvent) (identity, display string) {
+	display = event.Name
+	for _, key := range []string{"pipeline_id", "pipeline_idx", "pipeline_state", "pipeline_address"} {
+		if value, ok := event.Args[key]; ok && fmt.Sprint(value) != "" {
+			identity = key + "=" + fmt.Sprint(value) + "/function=" + event.Name
+			return identity, display
+		}
+	}
+	return "function=" + event.Name, display
+}
+
+func packTimelineEventLanes(events []TimelineEvent) [][]TimelineEvent {
+	var lanes [][]TimelineEvent
+	var ends []uint64
+	for _, event := range events {
+		lane := -1
+		for i, end := range ends {
+			if end <= event.Timestamp {
+				lane = i
+				break
+			}
+		}
+		if lane < 0 {
+			lane = len(lanes)
+			lanes = append(lanes, nil)
+			ends = append(ends, 0)
+		}
+		lanes[lane] = append(lanes[lane], event)
+		ends[lane] = event.Timestamp + event.Duration
+	}
+	return lanes
+}
+
+// appendMetalDispatchDetailProjection adds a secondary sequence view for
+// strictly contained dispatches. Non-strict encoder associations are placed in
+// a separate group so track nesting does not assert parentage the trace lacks.
+func appendMetalDispatchDetailProjection(trace *perfetto.Trace, timeline *Timeline, parent uint64) (trackCount, eventCount, uncertainTrackCount, uncertainEventCount int) {
+	if trace == nil || timeline == nil || parent == 0 {
+		return 0, 0, 0, 0
+	}
+	groupID := perfetto.TrackUUID("gputrace.encoder-dispatch-detail", "group")
+	trace.Tracks = append(trace.Tracks, perfetto.Track{
+		UUID: groupID, ParentUUID: parent,
+		Name:        "Dispatch sequence by encoder (strict containment)",
+		Description: "Secondary presentation duplicate containing only dispatches strictly bounded by the recorded encoder interval",
+		ChildOrder:  perfetto.ChildTrackOrderChronological,
+	})
 	byEncoder := make(map[int][]TimelineEvent)
+	var uncertain []TimelineEvent
 	for _, event := range timeline.Events {
 		if event.Category != "kernel" {
 			continue
 		}
 		index, ok := timelineEventArgInt(event.Args, "encoder_index")
-		if !ok || index < 0 {
+		if !ok || index < 0 || fmt.Sprint(event.Args["encoder_containment"]) != "strict" {
+			uncertain = append(uncertain, event)
 			continue
 		}
 		byEncoder[index] = append(byEncoder[index], event)
@@ -3927,7 +4063,7 @@ func appendMetalDispatchDetailProjection(trace *perfetto.Trace, timeline *Timeli
 		trackID := perfetto.TrackUUID("gputrace.encoder-dispatch-detail", strconv.Itoa(index))
 		trace.Tracks = append(trace.Tracks, perfetto.Track{
 			UUID:        trackID,
-			ParentUUID:  parent,
+			ParentUUID:  groupID,
 			Name:        name,
 			Description: "Presentation duplicate of native GPU dispatch slices; do not add to gpu_slice totals",
 		})
@@ -3954,7 +4090,38 @@ func appendMetalDispatchDetailProjection(trace *perfetto.Trace, timeline *Timeli
 			eventCount++
 		}
 	}
-	return trackCount, eventCount
+	if len(uncertain) > 0 {
+		uncertainGroup := perfetto.TrackUUID("gputrace.uncertain-encoder-detail", "group")
+		trace.Tracks = append(trace.Tracks, perfetto.Track{
+			UUID: uncertainGroup, ParentUUID: parent,
+			Name:        "Dispatches without strict encoder containment",
+			Description: "Reported encoder indices are retained as event arguments but are not represented as track parentage",
+			ChildOrder:  perfetto.ChildTrackOrderChronological,
+		})
+		sort.SliceStable(uncertain, func(i, j int) bool { return uncertain[i].Timestamp < uncertain[j].Timestamp })
+		for lane, events := range packTimelineEventLanes(uncertain) {
+			trackID := perfetto.TrackUUID("gputrace.uncertain-encoder-detail", strconv.Itoa(lane))
+			name := "Uncertain encoder association"
+			if lane > 0 {
+				name += fmt.Sprintf(" · lane %d", lane+1)
+			}
+			trace.Tracks = append(trace.Tracks, perfetto.Track{UUID: trackID, ParentUUID: uncertainGroup, Name: name})
+			uncertainTrackCount++
+			for _, event := range events {
+				args := perfettoEventArgs(timeline, event, timelineClockBusy)
+				args["presentation_projection"] = "uncertain_encoder_detail"
+				args["accounting_source"] = "native gpu_slice"
+				trace.Events = append(trace.Events, perfetto.Event{
+					ID: nextID, TrackUUID: trackID, Name: event.Name, Category: "kernel_detail",
+					StartNS: event.Timestamp * 1000, DurationNS: event.Duration * 1000,
+					Kind: perfetto.EventSlice, Args: args,
+				})
+				nextID++
+				uncertainEventCount++
+			}
+		}
+	}
+	return trackCount, eventCount, uncertainTrackCount, uncertainEventCount
 }
 
 func nextPerfettoEventID(trace *perfetto.Trace) uint64 {
