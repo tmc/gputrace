@@ -1651,14 +1651,35 @@ func cloneStreamDataMetadata(metadata counter.StreamDataMetadata) counter.Stream
 		inventory.BlobRecords = append([]counter.APSDataBlobInventory(nil), metadata.APSDataInventory.BlobRecords...)
 		for i := range inventory.BlobRecords {
 			inventory.BlobRecords[i].Keys = cloneStreamDataKeys(metadata.APSDataInventory.BlobRecords[i].Keys)
+			inventory.BlobRecords[i].Nodes = cloneStreamDataNodes(metadata.APSDataInventory.BlobRecords[i].Nodes)
 		}
 		result.APSDataInventory = &inventory
 	}
 	result.ArchiveBlobs = append([]counter.StreamDataBlobInventory(nil), metadata.ArchiveBlobs...)
 	for i := range result.ArchiveBlobs {
 		result.ArchiveBlobs[i].Keys = cloneStreamDataKeys(metadata.ArchiveBlobs[i].Keys)
+		result.ArchiveBlobs[i].Nodes = cloneStreamDataNodes(metadata.ArchiveBlobs[i].Nodes)
 	}
 	return result
+}
+
+func cloneStreamDataNodes(nodes []counter.StreamDataNodeInventory) []counter.StreamDataNodeInventory {
+	cloned := append([]counter.StreamDataNodeInventory(nil), nodes...)
+	for i := range cloned {
+		if nodes[i].ObjectIndex != nil {
+			value := *nodes[i].ObjectIndex
+			cloned[i].ObjectIndex = &value
+		}
+		if nodes[i].DataBytes != nil {
+			value := *nodes[i].DataBytes
+			cloned[i].DataBytes = &value
+		}
+		if nodes[i].ContainerCount != nil {
+			value := *nodes[i].ContainerCount
+			cloned[i].ContainerCount = &value
+		}
+	}
+	return cloned
 }
 
 func cloneStreamDataKeys(keys []counter.StreamDataKeyInventory) []counter.StreamDataKeyInventory {
@@ -3227,15 +3248,30 @@ func appendStreamDataArchiveArgs(args map[string]any, blobs []counter.StreamData
 	}
 	args[prefix+"availability"] = "available: content-identified nested streamData archive blobs"
 	args[prefix+"blob_count"] = len(blobs)
-	args[prefix+"semantics"] = "source family, ordinal, content identity, and sorted root dictionary shape; private values remain uninterpreted"
-	var keys, bytes, malformed, scalars, dataValues, containers, descriptorErrors int
+	args[prefix+"semantics"] = "source family, ordinal, content identity, and deterministic nested dictionary and array projection; private values remain uninterpreted"
+	var keys, nodes, bytes, malformed, scalars, dataValues, containers, descriptorErrors int
+	var expanded, references, depthLimited, nodeTruncated int
 	byFamily := make(map[string]int)
 	for _, blob := range blobs {
 		keys += len(blob.Keys)
+		nodes += len(blob.Nodes)
 		bytes += blob.Bytes
 		byFamily[blob.Family]++
 		if blob.DecodeError != "" {
 			malformed++
+		}
+		if blob.NodesTruncated {
+			nodeTruncated++
+		}
+		for _, node := range blob.Nodes {
+			switch node.ExpansionStatus {
+			case "expanded":
+				expanded++
+			case "reference":
+				references++
+			case "depth_limit":
+				depthLimited++
+			}
 		}
 		for _, key := range blob.Keys {
 			if key.ScalarType != "" {
@@ -3253,6 +3289,11 @@ func appendStreamDataArchiveArgs(args map[string]any, blobs []counter.StreamData
 		}
 	}
 	args[prefix+"key_count"] = keys
+	args[prefix+"node_count"] = nodes
+	args[prefix+"expanded_node_count"] = expanded
+	args[prefix+"reference_node_count"] = references
+	args[prefix+"depth_limited_node_count"] = depthLimited
+	args[prefix+"node_truncated_blob_count"] = nodeTruncated
 	args[prefix+"byte_count"] = bytes
 	args[prefix+"malformed_blob_count"] = malformed
 	args[prefix+"scalar_value_count"] = scalars
@@ -3757,19 +3798,29 @@ func appendEvidenceDetailEvents(trace *perfetto.Trace, timeline *Timeline) {
 	if metadata := timeline.StreamMetadata; metadata != nil {
 		for _, blob := range metadata.ArchiveBlobs {
 			args := map[string]any{
-				"family":         blob.Family,
-				"blob_ordinal":   blob.Ordinal,
-				"byte_count":     blob.Bytes,
-				"blob_sha256":    blob.SHA256,
-				"dictionary":     blob.Dictionary,
-				"key_count":      len(blob.Keys),
-				"source":         "streamData nested NSData archive entry",
-				"semantics":      "content identity and root dictionary shape only; private values remain uninterpreted",
-				"clock_domain":   "none",
-				"timing_quality": "unavailable",
+				"family":          blob.Family,
+				"blob_ordinal":    blob.Ordinal,
+				"byte_count":      blob.Bytes,
+				"blob_sha256":     blob.SHA256,
+				"dictionary":      blob.Dictionary,
+				"key_count":       len(blob.Keys),
+				"node_count":      len(blob.Nodes),
+				"nodes_truncated": blob.NodesTruncated,
+				"source":          "streamData nested NSData archive entry",
+				"semantics":       "content identity and deterministic nested dictionary and array projection; private values remain uninterpreted",
+				"clock_domain":    "none",
+				"timing_quality":  "unavailable",
 			}
 			if blob.DecodeError != "" {
 				args["decode_error"] = blob.DecodeError
+			}
+			for ordinal, node := range blob.Nodes {
+				data, err := json.Marshal(node)
+				if err != nil {
+					args[fmt.Sprintf("archive_node_%06d_error", ordinal)] = err.Error()
+					continue
+				}
+				args[fmt.Sprintf("archive_node_%06d_json", ordinal)] = string(data)
 			}
 			trace.Events = append(trace.Events, perfetto.Event{
 				ID: nextID, TrackUUID: trackID,

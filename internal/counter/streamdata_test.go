@@ -273,6 +273,74 @@ func TestDescribeArchivedValue(t *testing.T) {
 	}
 }
 
+func TestArchiveNodesPreservesPathsAndStopsCycles(t *testing.T) {
+	objects := []any{
+		"$null",
+		"a/b",
+		"til~de",
+		map[string]any{"NS.keys": []any{plist.UID(1)}, "NS.objects": []any{plist.UID(4)}},
+		map[string]any{"NS.objects": []any{plist.UID(5), plist.UID(3)}},
+		map[string]any{"NS.keys": []any{plist.UID(2)}, "NS.objects": []any{true}},
+	}
+	rootIndex := uint64(3)
+	nodes, truncated := archiveNodes(plist.UID(3), objects, &rootIndex, maximumArchiveNodes)
+	if truncated {
+		t.Fatal("archiveNodes reported truncation for a bounded cycle")
+	}
+	want := []struct {
+		path, status string
+	}{
+		{"/a~1b", "expanded"},
+		{"/a~1b/0", "expanded"},
+		{"/a~1b/0/til~0de", "leaf"},
+		{"/a~1b/1", "reference"},
+	}
+	if len(nodes) != len(want) {
+		t.Fatalf("archiveNodes returned %d nodes, want %d: %#v", len(nodes), len(want), nodes)
+	}
+	for i, node := range nodes {
+		if node.Path != want[i].path || node.ExpansionStatus != want[i].status {
+			t.Fatalf("node %d = %#v, want path %q status %q", i, node, want[i].path, want[i].status)
+		}
+	}
+	if nodes[0].Relation != "dictionary" || nodes[1].Relation != "array" || nodes[1].Ordinal != 0 || nodes[0].ObjectIndex == nil || *nodes[0].ObjectIndex != 4 {
+		t.Fatalf("node relationships = %#v", nodes[:2])
+	}
+}
+
+func TestArchiveNodesDepthLimitIsExplicit(t *testing.T) {
+	objects := []any{"$null", "next"}
+	for depth := 0; depth < maximumArchiveNodeDepth+2; depth++ {
+		next := plist.UID(len(objects) + 1)
+		objects = append(objects, map[string]any{
+			"NS.keys": []any{plist.UID(1)}, "NS.objects": []any{next},
+		})
+	}
+	objects = append(objects, "end")
+	rootIndex := uint64(2)
+	nodes, truncated := archiveNodes(plist.UID(2), objects, &rootIndex, maximumArchiveNodes)
+	if !truncated || len(nodes) != maximumArchiveNodeDepth {
+		t.Fatalf("archiveNodes = %d nodes, truncated %v, want %d and true", len(nodes), truncated, maximumArchiveNodeDepth)
+	}
+	last := nodes[len(nodes)-1]
+	if last.Depth != maximumArchiveNodeDepth || last.ExpansionStatus != "depth_limit" {
+		t.Fatalf("last node = %#v", last)
+	}
+}
+
+func TestArchiveNodesCountLimitIsExplicit(t *testing.T) {
+	objects := []any{
+		"$null", "values",
+		map[string]any{"NS.keys": []any{plist.UID(1)}, "NS.objects": []any{plist.UID(3)}},
+		map[string]any{"NS.objects": []any{1, 2, 3}},
+	}
+	rootIndex := uint64(2)
+	nodes, truncated := archiveNodes(plist.UID(2), objects, &rootIndex, 2)
+	if !truncated || len(nodes) != 2 {
+		t.Fatalf("archiveNodes = %d nodes, truncated %v, want 2 and true", len(nodes), truncated)
+	}
+}
+
 func TestParseStreamDataIntegration(t *testing.T) {
 	gpuprofDir := integrationPathFromEnv(t, streamDataIntegrationDirEnv)
 	stats, err := ParseStreamData(gpuprofDir, nil)

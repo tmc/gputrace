@@ -226,6 +226,11 @@ SELECT
   extract_arg(arg_set_id, 'debug.stream_data_archive_availability') AS stream_data_archive_availability,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_blob_count') AS INT) AS stream_data_archive_blob_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_key_count') AS INT) AS stream_data_archive_key_count,
+  cast(extract_arg(arg_set_id, 'debug.stream_data_archive_node_count') AS INT) AS stream_data_archive_node_count,
+  cast(extract_arg(arg_set_id, 'debug.stream_data_archive_expanded_node_count') AS INT) AS stream_data_archive_expanded_node_count,
+  cast(extract_arg(arg_set_id, 'debug.stream_data_archive_reference_node_count') AS INT) AS stream_data_archive_reference_node_count,
+  cast(extract_arg(arg_set_id, 'debug.stream_data_archive_depth_limited_node_count') AS INT) AS stream_data_archive_depth_limited_node_count,
+  cast(extract_arg(arg_set_id, 'debug.stream_data_archive_node_truncated_blob_count') AS INT) AS stream_data_archive_node_truncated_blob_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_byte_count') AS INT) AS stream_data_archive_byte_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_malformed_blob_count') AS INT) AS stream_data_archive_malformed_blob_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_scalar_value_count') AS INT) AS stream_data_archive_scalar_value_count,
@@ -741,6 +746,8 @@ SELECT
   extract_arg(arg_set_id, 'debug.blob_sha256') AS blob_sha256,
   cast(extract_arg(arg_set_id, 'debug.dictionary') AS INT) AS dictionary,
   cast(extract_arg(arg_set_id, 'debug.key_count') AS INT) AS key_count,
+  cast(extract_arg(arg_set_id, 'debug.node_count') AS INT) AS node_count,
+  cast(extract_arg(arg_set_id, 'debug.nodes_truncated') AS INT) AS nodes_truncated,
   extract_arg(arg_set_id, 'debug.decode_error') AS decode_error,
   extract_arg(arg_set_id, 'debug.source') AS source,
   extract_arg(arg_set_id, 'debug.semantics') AS semantics,
@@ -771,9 +778,41 @@ SELECT
 FROM slice
 WHERE category = 'stream_data_archive_key';
 
+-- gputrace_stream_data_archive_node expands the deterministic recursive
+-- dictionary and array projection stored on each blob event. Paths are RFC
+-- 6901 JSON pointers. Rows have no timeline coordinate.
+CREATE PERFETTO VIEW gputrace_stream_data_archive_node AS
+SELECT
+  s.id AS blob_event_id,
+  extract_arg(s.arg_set_id, 'debug.family') AS family,
+  cast(extract_arg(s.arg_set_id, 'debug.blob_ordinal') AS INT) AS blob_ordinal,
+  cast(replace(replace(a.key, 'debug.archive_node_', ''), '_json', '') AS INT) AS node_ordinal,
+  json_extract(a.string_value, '$.path') AS path,
+  json_extract(a.string_value, '$.parent_path') AS parent_path,
+  cast(json_extract(a.string_value, '$.depth') AS INT) AS depth,
+  json_extract(a.string_value, '$.relation') AS relation,
+  cast(json_extract(a.string_value, '$.ordinal') AS INT) AS child_ordinal,
+  json_extract(a.string_value, '$.name') AS recorded_name,
+  cast(json_extract(a.string_value, '$.object_index') AS INT) AS object_index,
+  json_extract(a.string_value, '$.expansion_status') AS expansion_status,
+  json_extract(a.string_value, '$.value_kind') AS value_kind,
+  json_extract(a.string_value, '$.scalar_type') AS scalar_type,
+  json_extract(a.string_value, '$.scalar_json') AS scalar_json,
+  cast(json_extract(a.string_value, '$.data_bytes') AS INT) AS data_bytes,
+  json_extract(a.string_value, '$.data_sha256') AS data_sha256,
+  cast(json_extract(a.string_value, '$.container_count') AS INT) AS container_count,
+  json_extract(a.string_value, '$.descriptor_error') AS descriptor_error,
+  extract_arg(s.arg_set_id, 'debug.blob_sha256') AS blob_sha256,
+  s.arg_set_id
+FROM slice AS s
+JOIN args AS a USING (arg_set_id)
+WHERE s.category = 'stream_data_archive_blob'
+  AND a.key GLOB 'debug.archive_node_[0-9]*_json';
+
 -- APSData-specific aliases keep common queries concise.
 CREATE PERFETTO VIEW gputrace_aps_data_blob AS
 SELECT id, blob_ordinal, byte_count, blob_sha256, dictionary, key_count,
+       node_count, nodes_truncated,
        decode_error, source, semantics, arg_set_id
 FROM gputrace_stream_data_archive_blob
 WHERE family = 'aps_data';

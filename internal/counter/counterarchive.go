@@ -271,23 +271,28 @@ func gprwcntrBlobs(v any, objects []any) [][]byte {
 
 // archiveRoot unmarshals an NSKeyedArchiver blob and returns its root object.
 func archiveRoot(data []byte) (root any, objects []any, ok bool) {
+	root, objects, _, ok = archiveRootIndexed(data)
+	return root, objects, ok
+}
+
+func archiveRootIndexed(data []byte) (root any, objects []any, rootIndex uint64, ok bool) {
 	var archive map[string]any
 	if _, err := plist.Unmarshal(data, &archive); err != nil {
-		return nil, nil, false
+		return nil, nil, 0, false
 	}
 	objects, ok = archive["$objects"].([]any)
 	if !ok {
-		return nil, nil, false
+		return nil, nil, 0, false
 	}
 	top, ok := archive["$top"].(map[string]any)
 	if !ok {
-		return nil, nil, false
+		return nil, nil, 0, false
 	}
 	uid, ok := top["root"].(plist.UID)
 	if !ok || int(uid) >= len(objects) {
-		return nil, nil, false
+		return nil, nil, 0, false
 	}
-	return objects[int(uid)], objects, true
+	return objects[int(uid)], objects, uint64(uid), true
 }
 
 // keyedDict resolves an NSDictionary (NS.keys + NS.objects) to a Go map keyed

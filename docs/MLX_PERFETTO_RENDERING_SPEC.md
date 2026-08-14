@@ -683,10 +683,10 @@ when a constrained export retains only a representative subset.
 ordinal, byte count, and SHA-256 digest, then records whether its nested archive
 decoded to a root dictionary. `gputrace_aps_data_key` retains that dictionary's
 root keys in stable lexical order with structural value kinds such as data,
-array, dictionary, string, number, and bool. The full digest covers private
-values, but the projection does not interpret or copy them. This exposes exact
-debug/release archive-shape differences while keeping the native trace bounded;
-source blob and key counts remain in `gputrace_capture` under sampling.
+array, dictionary, string, number, and bool. The full digest covers every
+private value; the structural projection copies recoverable values without
+interpreting their meaning. Source blob, key, and recursive node counts remain
+in `gputrace_capture` under sampling.
 
 `gputrace_stream_data_archive_blob` and
 `gputrace_stream_data_archive_key` generalize that evidence contract across
@@ -700,6 +700,20 @@ also retain the recorded scalar type and canonical JSON, NSData byte count and
 digest, or container cardinality. Opaque representations carry an explicit
 descriptor error. No field name is promoted into private semantic meaning.
 The manifest reports pre-sampling counts for each descriptor class.
+
+`gputrace_stream_data_archive_node` recursively projects the nested dictionary
+and array graph. Each row carries an RFC 6901 path, parent path, depth, child
+relation and ordinal, optional keyed-archive object index, structural value
+descriptor, and one of `leaf`, `expanded`, `reference`, or `depth_limit`.
+Dictionary children are lexical and array children retain source order. Object
+references are expanded once, so cycles remain explicit without recursion; the
+depth bound and per-family node budget fail visibly through status and manifest
+counts.
+Nodes are JSON debug annotations on their owning blob event, not separate
+untimed tracks. This keeps the ordinary Perfetto UI compact while PerfettoSQL
+can expand every retained node. Under an explicit byte budget the whole blob
+packet is the atomic optional unit, and the normal loss receipt reports dropped
+blob rows while the manifest still describes the full source graph.
 
 When an APSCounterData TraceId table covers an encoder execution ordinal,
 `gputrace_encoder` also exposes its recorded batch ID and sample index. This is

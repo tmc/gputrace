@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
+	"strings"
 
 	"github.com/tmc/apple/x/plist"
 	"github.com/tmc/gputrace/internal/trace"
@@ -289,13 +291,15 @@ type APSDataInventory struct {
 // StreamDataBlobInventory identifies one nested keyed-archive blob and its
 // root dictionary shape. Keys and value kinds are structural evidence only.
 type StreamDataBlobInventory struct {
-	Family      string                   `json:"family"`
-	Ordinal     int                      `json:"ordinal"`
-	Bytes       int                      `json:"bytes"`
-	SHA256      string                   `json:"sha256"`
-	Dictionary  bool                     `json:"dictionary"`
-	Keys        []StreamDataKeyInventory `json:"keys,omitempty"`
-	DecodeError string                   `json:"decode_error,omitempty"`
+	Family         string                    `json:"family"`
+	Ordinal        int                       `json:"ordinal"`
+	Bytes          int                       `json:"bytes"`
+	SHA256         string                    `json:"sha256"`
+	Dictionary     bool                      `json:"dictionary"`
+	Keys           []StreamDataKeyInventory  `json:"keys,omitempty"`
+	Nodes          []StreamDataNodeInventory `json:"nodes,omitempty"`
+	NodesTruncated bool                      `json:"nodes_truncated,omitempty"`
+	DecodeError    string                    `json:"decode_error,omitempty"`
 }
 
 // StreamDataKeyInventory is one root dictionary key in stable lexical order.
@@ -309,6 +313,26 @@ type StreamDataKeyInventory struct {
 	DataSHA256      string `json:"data_sha256,omitempty"`
 	ContainerCount  *int   `json:"container_count,omitempty"`
 	DescriptorError string `json:"descriptor_error,omitempty"`
+}
+
+// StreamDataNodeInventory is one nested dictionary or array child. Path is an
+// RFC 6901 JSON pointer rooted at the archive dictionary.
+type StreamDataNodeInventory struct {
+	Path            string  `json:"path"`
+	ParentPath      string  `json:"parent_path"`
+	Depth           int     `json:"depth"`
+	Relation        string  `json:"relation"`
+	Ordinal         int     `json:"ordinal"`
+	Name            string  `json:"name,omitempty"`
+	ObjectIndex     *uint64 `json:"object_index,omitempty"`
+	ExpansionStatus string  `json:"expansion_status"`
+	ValueKind       string  `json:"value_kind"`
+	ScalarType      string  `json:"scalar_type,omitempty"`
+	ScalarJSON      string  `json:"scalar_json,omitempty"`
+	DataBytes       *int    `json:"data_bytes,omitempty"`
+	DataSHA256      string  `json:"data_sha256,omitempty"`
+	ContainerCount  *int    `json:"container_count,omitempty"`
+	DescriptorError string  `json:"descriptor_error,omitempty"`
 }
 
 type APSDataBlobInventory = StreamDataBlobInventory
@@ -481,13 +505,14 @@ func parseAPSDataInventory(blobs [][]byte) *APSDataInventory {
 
 func parseStreamDataBlobInventory(family string, blobs [][]byte) []StreamDataBlobInventory {
 	records := make([]StreamDataBlobInventory, 0, len(blobs))
+	nodeBudget := maximumArchiveNodes
 	for ordinal, blob := range blobs {
 		sum := sha256.Sum256(blob)
 		record := StreamDataBlobInventory{
 			Family: family, Ordinal: ordinal, Bytes: len(blob),
 			SHA256: "sha256:" + hex.EncodeToString(sum[:]),
 		}
-		root, objects, ok := archiveRoot(blob)
+		root, objects, rootIndex, ok := archiveRootIndexed(blob)
 		if !ok {
 			record.DecodeError = "invalid keyed archive"
 			records = append(records, record)
@@ -510,9 +535,114 @@ func parseStreamDataBlobInventory(family string, blobs [][]byte) []StreamDataBlo
 			describeArchivedValue(&key, dict[name], objects)
 			record.Keys = append(record.Keys, key)
 		}
+		record.Nodes, record.NodesTruncated = archiveNodes(root, objects, &rootIndex, nodeBudget)
+		nodeBudget -= len(record.Nodes)
 		records = append(records, record)
 	}
 	return records
+}
+
+const (
+	maximumArchiveNodeDepth = 16
+	maximumArchiveNodes     = 1_000_000
+)
+
+func archiveNodes(root any, objects []any, rootIndex *uint64, maximum int) ([]StreamDataNodeInventory, bool) {
+	var nodes []StreamDataNodeInventory
+	seen := make(map[uint64]bool)
+	if rootIndex != nil {
+		seen[*rootIndex] = true
+	}
+	truncated := false
+	var walk func(any, string, string, int, string, int, string)
+	walk = func(raw any, path, parent string, depth int, relation string, ordinal int, name string) {
+		if len(nodes) >= maximum {
+			truncated = true
+			return
+		}
+		var key StreamDataKeyInventory
+		describeArchivedValue(&key, raw, objects)
+		node := StreamDataNodeInventory{
+			Path: path, ParentPath: parent, Depth: depth,
+			Relation: relation, Ordinal: ordinal, Name: name,
+			ExpansionStatus: "leaf", ValueKind: key.ValueKind,
+			ScalarType: key.ScalarType, ScalarJSON: key.ScalarJSON,
+			DataBytes: key.DataBytes, DataSHA256: key.DataSHA256,
+			ContainerCount: key.ContainerCount, DescriptorError: key.DescriptorError,
+		}
+		var objectIndex uint64
+		if uid, ok := raw.(plist.UID); ok {
+			objectIndex = uint64(uid)
+			node.ObjectIndex = &objectIndex
+		}
+		dict := keyedDict(raw, objects)
+		array := []any(nil)
+		if dict == nil {
+			array = nsArray(raw, objects)
+		}
+		container := dict != nil || array != nil
+		if container && depth >= maximumArchiveNodeDepth {
+			node.ExpansionStatus = "depth_limit"
+			truncated = true
+			nodes = append(nodes, node)
+			return
+		}
+		if container && node.ObjectIndex != nil {
+			if seen[*node.ObjectIndex] {
+				node.ExpansionStatus = "reference"
+				nodes = append(nodes, node)
+				return
+			}
+			seen[*node.ObjectIndex] = true
+		}
+		if container {
+			node.ExpansionStatus = "expanded"
+		}
+		nodes = append(nodes, node)
+		if dict != nil {
+			names := make([]string, 0, len(dict))
+			for name := range dict {
+				names = append(names, name)
+			}
+			slices.Sort(names)
+			for childOrdinal, childName := range names {
+				walk(dict[childName], path+"/"+escapeJSONPointer(childName), path,
+					depth+1, "dictionary", childOrdinal, childName)
+				if truncated && len(nodes) >= maximum {
+					return
+				}
+			}
+			return
+		}
+		for childOrdinal, child := range array {
+			walk(child, path+"/"+strconv.Itoa(childOrdinal), path,
+				depth+1, "array", childOrdinal, "")
+			if truncated && len(nodes) >= maximum {
+				return
+			}
+		}
+	}
+	rootDict := keyedDict(root, objects)
+	if rootDict == nil {
+		return nil, false
+	}
+	names := make([]string, 0, len(rootDict))
+	for name := range rootDict {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for ordinal, name := range names {
+		walk(rootDict[name], "/"+escapeJSONPointer(name), "", 1, "dictionary", ordinal, name)
+		if truncated && len(nodes) >= maximum {
+			break
+		}
+	}
+	return nodes, truncated
+}
+
+func escapeJSONPointer(value string) string {
+	value = strings.ReplaceAll(value, "~", "~0")
+	return strings.ReplaceAll(value, "/", "~1")
 }
 
 func describeArchivedValue(key *StreamDataKeyInventory, value any, objects []any) {

@@ -44,6 +44,34 @@ func TestAppendEvidenceDetailEventsIncludesRawProfilerArtifacts(t *testing.T) {
 	}
 }
 
+func TestAppendEvidenceDetailEventsEmbedsArchiveNodesOnBlob(t *testing.T) {
+	objectIndex := uint64(7)
+	timeline := &Timeline{StreamMetadata: &counter.StreamDataMetadata{
+		ArchiveBlobs: []counter.StreamDataBlobInventory{{
+			Family: "aps_data", Ordinal: 2, SHA256: "sha256:abc", Dictionary: true,
+			Nodes: []counter.StreamDataNodeInventory{{
+				Path: "/root", Depth: 1, Relation: "dictionary", Name: "root",
+				ObjectIndex: &objectIndex, ExpansionStatus: "leaf", ValueKind: "string",
+				ScalarType: "string", ScalarJSON: `"value"`,
+			}},
+		}},
+	}}
+	trace := &perfetto.Trace{}
+	appendEvidenceDetailEvents(trace, timeline)
+	if len(trace.Tracks) != 1 || len(trace.Events) != 1 {
+		t.Fatalf("archive evidence = %d tracks, %d events, want 1 and 1", len(trace.Tracks), len(trace.Events))
+	}
+	event := trace.Events[0]
+	if event.Category != "stream_data_archive_blob" || event.Args["node_count"] != 1 || event.Args["nodes_truncated"] != false {
+		t.Fatalf("archive blob event = %#v", event)
+	}
+	var node counter.StreamDataNodeInventory
+	encoded, ok := event.Args["archive_node_000000_json"].(string)
+	if !ok || json.Unmarshal([]byte(encoded), &node) != nil || node.Path != "/root" || node.ObjectIndex == nil || *node.ObjectIndex != 7 {
+		t.Fatalf("archive node annotation = %#v", event.Args["archive_node_000000_json"])
+	}
+}
+
 func TestApplyStreamIdentityPreservesOrderedStrings(t *testing.T) {
 	timeline := &Timeline{}
 	stats := &counter.StreamDataStats{FunctionNames: []string{"kernel", "", "/source.metal"}}
