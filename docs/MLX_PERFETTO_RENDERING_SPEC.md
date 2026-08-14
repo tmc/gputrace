@@ -767,6 +767,22 @@ these views. Equal values across archive families do not prove that clocks or
 counter streams are aligned. The manifest retains the full pre-sampling row
 count when an output budget drops the optional blob packets.
 
+`gputrace_profiler_carrier` inventories fields recorded together in one nested
+archive blob: `APSTraceDataFile`, `Source`, `SourceIndex`, `RingBufferIndex`,
+and `Serial`, plus the blob byte count and digest. Missing fields remain
+`NULL`. These are opaque capture-local values; same-blob containment does not
+join a carrier to an encoder, dispatch, or clock. The view also reports the
+count and total bytes of embedded NSData payloads in that blob.
+
+`gputrace_embedded_profiler_artifact` content-identifies each such payload by
+exact archive path, structural kind, byte count, SHA-256 digest, and owning
+carrier digest. Payload bytes remain in the source capture. Shader binaries are
+excluded because `gputrace_shader_binary` owns that evidence class. Other
+payloads are not claimed to be decoded merely because a structural name such
+as `ShaderProfilerData` or `Derived Counter Sample Data` was recorded. Source
+carrier, payload, and payload-byte counts remain in the manifest under output
+sampling.
+
 When an APSCounterData TraceId table covers an encoder execution ordinal,
 `gputrace_encoder` also exposes its recorded batch ID and sample index. This is
 the same positional relationship used for capture-backed execution-cost

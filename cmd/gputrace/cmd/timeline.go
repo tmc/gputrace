@@ -3311,6 +3311,8 @@ func appendStreamDataArchiveArgs(args map[string]any, blobs []counter.StreamData
 	args[prefix+"program_address_mapping_binary_unmatched_count"] = programs.mappings - programs.matches
 	args[prefix+"program_address_semantics"] = "recorded Binaries and Program Address Mappings fields joined by exact capture-local binaryUniqueId; no dispatch, function, source, or timing attribution"
 	var configuration, options, counterInfo, limiterGroups, limiterSamples, profiling int
+	var carriers, embeddedArtifacts int
+	var embeddedArtifactBytes int64
 	for _, blob := range blobs {
 		records := streamDataRecordedScalars(blob)
 		configuration += len(records.configuration)
@@ -3319,6 +3321,13 @@ func appendStreamDataArchiveArgs(args map[string]any, blobs []counter.StreamData
 		limiterGroups += len(records.limiterGroups)
 		limiterSamples += len(records.limiterSamples)
 		profiling += len(records.profiling)
+		if _, artifacts, ok := streamDataCarrier(blob); ok {
+			carriers++
+			embeddedArtifacts += len(artifacts)
+			for _, artifact := range artifacts {
+				embeddedArtifactBytes += int64(artifact.Bytes)
+			}
+		}
 	}
 	args[prefix+"configuration_record_count"] = configuration
 	args[prefix+"aps_option_record_count"] = options
@@ -3326,9 +3335,13 @@ func appendStreamDataArchiveArgs(args map[string]any, blobs []counter.StreamData
 	args[prefix+"limiter_group_record_count"] = limiterGroups
 	args[prefix+"limiter_sample_counter_record_count"] = limiterSamples
 	args[prefix+"profiling_configuration_record_count"] = profiling
+	args[prefix+"profiler_carrier_record_count"] = carriers
+	args[prefix+"embedded_profiler_artifact_record_count"] = embeddedArtifacts
+	args[prefix+"embedded_profiler_artifact_byte_count"] = embeddedArtifactBytes
 	args[prefix+"configuration_semantics"] = "recorded streamData configuration and profiling options; names and values are preserved without assigning units, clock mappings, or runtime effects"
 	args[prefix+"limiter_catalog_semantics"] = "recorded Counter Info, Limiter Counter List Map, and limiter sample counters identities; no counter-value, unit, pass, or derived-limiter attribution"
 	args[prefix+"profiling_configuration_semantics"] = "recorded apsProfilingConfig, Timebase, Perf Info, Frame Consistent Perf Info, and Kick State Trigger Options scalar leaves; no inferred units, clock mapping, or runtime effects"
+	args[prefix+"profiler_carrier_semantics"] = "same-blob recorded carrier fields and embedded profiler payload identities; source indexes, ring indexes, serials, and file names remain opaque capture-local values"
 }
 
 type streamDataProgramCounts struct {
@@ -3453,6 +3466,49 @@ type streamDataScalarRecords struct {
 	limiterGroups  []streamDataScalarRecord
 	limiterSamples []streamDataScalarRecord
 	profiling      []streamDataScalarRecord
+}
+
+type streamDataCarrierRecord struct {
+	Fields        map[string]string `json:"fields,omitempty"`
+	ArtifactCount int               `json:"artifact_count"`
+	ArtifactBytes int64             `json:"artifact_bytes"`
+}
+
+type streamDataEmbeddedArtifact struct {
+	Path       string `json:"path"`
+	ParentPath string `json:"parent_path"`
+	Kind       string `json:"kind"`
+	Ordinal    int    `json:"ordinal"`
+	Bytes      int    `json:"bytes"`
+	SHA256     string `json:"sha256"`
+}
+
+func streamDataCarrier(blob counter.StreamDataBlobInventory) (streamDataCarrierRecord, []streamDataEmbeddedArtifact, bool) {
+	record := streamDataCarrierRecord{Fields: make(map[string]string)}
+	var artifacts []streamDataEmbeddedArtifact
+	for _, node := range blob.Nodes {
+		if node.ParentPath == "" && node.ScalarJSON != "" {
+			switch node.Path {
+			case "/APSTraceDataFile", "/Source", "/SourceIndex", "/RingBufferIndex", "/Serial":
+				record.Fields[strings.TrimPrefix(node.Path, "/")] = node.ScalarJSON
+			}
+		}
+		if node.ValueKind != "data" || node.DataBytes == nil || node.DataSHA256 == "" || strings.HasPrefix(node.Path, "/Binaries/") {
+			continue
+		}
+		kind := strings.TrimPrefix(node.Path, "/")
+		if slash := strings.IndexByte(kind, '/'); slash >= 0 {
+			kind = kind[:slash]
+		}
+		artifact := streamDataEmbeddedArtifact{
+			Path: node.Path, ParentPath: node.ParentPath, Kind: kind,
+			Ordinal: node.Ordinal, Bytes: *node.DataBytes, SHA256: node.DataSHA256,
+		}
+		record.ArtifactCount++
+		record.ArtifactBytes += int64(artifact.Bytes)
+		artifacts = append(artifacts, artifact)
+	}
+	return record, artifacts, len(record.Fields) != 0 || len(artifacts) != 0
 }
 
 func streamDataRecordedScalars(blob counter.StreamDataBlobInventory) streamDataScalarRecords {
@@ -4040,6 +4096,22 @@ func appendEvidenceDetailEvents(trace *perfetto.Trace, timeline *Timeline) {
 			appendStreamDataScalarArgs(args, "limiter_group_counter", records.limiterGroups)
 			appendStreamDataScalarArgs(args, "limiter_sample_counter", records.limiterSamples)
 			appendStreamDataScalarArgs(args, "profiling_configuration", records.profiling)
+			if carrier, artifacts, ok := streamDataCarrier(blob); ok {
+				data, err := json.Marshal(carrier)
+				if err != nil {
+					args["profiler_carrier_error"] = err.Error()
+				} else {
+					args["profiler_carrier_json"] = string(data)
+				}
+				for ordinal, artifact := range artifacts {
+					data, err := json.Marshal(artifact)
+					if err != nil {
+						args[fmt.Sprintf("embedded_profiler_artifact_%06d_error", ordinal)] = err.Error()
+						continue
+					}
+					args[fmt.Sprintf("embedded_profiler_artifact_%06d_json", ordinal)] = string(data)
+				}
+			}
 			trace.Events = append(trace.Events, perfetto.Event{
 				ID: nextID, TrackUUID: trackID,
 				Name:     fmt.Sprintf("%s blob %d", blob.Family, blob.Ordinal),

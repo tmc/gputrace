@@ -524,6 +524,7 @@ func TestExportRecordedConfigurationAndLimiterCatalogReachesPerfettoSQL(t *testi
 	if processor == "" {
 		t.Skip("set TRACE_PROCESSOR_SHELL to run native PerfettoSQL integration")
 	}
+	artifactBytes := 12
 	blob := counter.StreamDataBlobInventory{
 		Family: "aps_data", Ordinal: 1, SHA256: "sha256:blob", Dictionary: true,
 		Nodes: []counter.StreamDataNodeInventory{{
@@ -562,6 +563,24 @@ func TestExportRecordedConfigurationAndLimiterCatalogReachesPerfettoSQL(t *testi
 			Path: "/Timebase/1", ParentPath: "/Timebase",
 			Relation: "array", Ordinal: 1, ExpansionStatus: "leaf",
 			ValueKind: "number", ScalarType: "int64", ScalarJSON: "3",
+		}, {
+			Path: "/APSTraceDataFile", Relation: "dictionary", Name: "APSTraceDataFile", ExpansionStatus: "leaf",
+			ValueKind: "string", ScalarType: "string", ScalarJSON: `"Profiling_f_0.raw"`,
+		}, {
+			Path: "/Source", Relation: "dictionary", Name: "Source", ExpansionStatus: "leaf",
+			ValueKind: "string", ScalarType: "string", ScalarJSON: `"APS_USC"`,
+		}, {
+			Path: "/SourceIndex", Relation: "dictionary", Name: "SourceIndex", ExpansionStatus: "leaf",
+			ValueKind: "number", ScalarType: "int64", ScalarJSON: "5",
+		}, {
+			Path: "/RingBufferIndex", Relation: "dictionary", Name: "RingBufferIndex", ExpansionStatus: "leaf",
+			ValueKind: "number", ScalarType: "int64", ScalarJSON: "0",
+		}, {
+			Path: "/Serial", Relation: "dictionary", Name: "Serial", ExpansionStatus: "leaf",
+			ValueKind: "number", ScalarType: "int64", ScalarJSON: "80",
+		}, {
+			Path: "/ShaderProfilerData", Relation: "dictionary", Name: "ShaderProfilerData", ExpansionStatus: "leaf",
+			ValueKind: "data", DataBytes: &artifactBytes, DataSHA256: "sha256:artifact",
 		}},
 	}
 	timeline := &Timeline{
@@ -608,6 +627,17 @@ func TestExportRecordedConfigurationAndLimiterCatalogReachesPerfettoSQL(t *testi
 			"aps_data", "1", "Timebase", "2", "2",
 			"aps_data", "1", "apsProfilingConfig", "1", "1",
 		}},
+		{`SELECT family, blob_ordinal, trace_data_file, recorded_source,
+                    recorded_source_index, recorded_ring_buffer_index,
+                    recorded_serial, embedded_artifact_count, embedded_artifact_bytes
+              FROM gputrace_profiler_carrier;`, []string{
+			"aps_data", "1", "Profiling_f_0.raw", "APS_USC", "5", "0", "80", "1", "12",
+		}},
+		{`SELECT family, blob_ordinal, artifact_kind, path, recorded_ordinal,
+                    byte_count, sha256
+              FROM gputrace_embedded_profiler_artifact;`, []string{
+			"aps_data", "1", "ShaderProfilerData", "/ShaderProfilerData", "0", "12", "sha256:artifact",
+		}},
 		{`SELECT family, sample_counter_count, grouped_counter_count,
                     sample_to_group_equal_count, sample_to_counter_info_equal_count,
                     sample_to_pass_catalog_equal_count
@@ -619,9 +649,12 @@ func TestExportRecordedConfigurationAndLimiterCatalogReachesPerfettoSQL(t *testi
                     stream_data_archive_counter_info_record_count,
                     stream_data_archive_limiter_group_record_count,
 					stream_data_archive_limiter_sample_counter_record_count,
-					stream_data_archive_profiling_configuration_record_count
+					stream_data_archive_profiling_configuration_record_count,
+					stream_data_archive_profiler_carrier_record_count,
+					stream_data_archive_embedded_profiler_artifact_record_count,
+					stream_data_archive_embedded_profiler_artifact_byte_count
               FROM gputrace_capture;`, []string{
-			"2", "1", "1", "1", "1", "3",
+			"2", "1", "1", "1", "1", "3", "1", "1", "12",
 		}},
 	}
 	for _, test := range queries {

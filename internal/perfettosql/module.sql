@@ -242,9 +242,13 @@ SELECT
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_limiter_group_record_count') AS INT) AS stream_data_archive_limiter_group_record_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_limiter_sample_counter_record_count') AS INT) AS stream_data_archive_limiter_sample_counter_record_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_profiling_configuration_record_count') AS INT) AS stream_data_archive_profiling_configuration_record_count,
+  cast(extract_arg(arg_set_id, 'debug.stream_data_archive_profiler_carrier_record_count') AS INT) AS stream_data_archive_profiler_carrier_record_count,
+  cast(extract_arg(arg_set_id, 'debug.stream_data_archive_embedded_profiler_artifact_record_count') AS INT) AS stream_data_archive_embedded_profiler_artifact_record_count,
+  cast(extract_arg(arg_set_id, 'debug.stream_data_archive_embedded_profiler_artifact_byte_count') AS INT) AS stream_data_archive_embedded_profiler_artifact_byte_count,
   extract_arg(arg_set_id, 'debug.stream_data_archive_configuration_semantics') AS stream_data_archive_configuration_semantics,
   extract_arg(arg_set_id, 'debug.stream_data_archive_limiter_catalog_semantics') AS stream_data_archive_limiter_catalog_semantics,
   extract_arg(arg_set_id, 'debug.stream_data_archive_profiling_configuration_semantics') AS stream_data_archive_profiling_configuration_semantics,
+  extract_arg(arg_set_id, 'debug.stream_data_archive_profiler_carrier_semantics') AS stream_data_archive_profiler_carrier_semantics,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_byte_count') AS INT) AS stream_data_archive_byte_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_malformed_blob_count') AS INT) AS stream_data_archive_malformed_blob_count,
   cast(extract_arg(arg_set_id, 'debug.stream_data_archive_scalar_value_count') AS INT) AS stream_data_archive_scalar_value_count,
@@ -1111,6 +1115,51 @@ SELECT
   'source shape only; equality does not establish common units, clocks, or runtime behavior' AS semantics
 FROM gputrace_profiler_configuration
 GROUP BY family, blob_ordinal, section;
+
+-- gputrace_profiler_carrier relates only fields recorded in the same nested
+-- streamData archive blob. File, source, ring, and serial values are opaque.
+CREATE PERFETTO VIEW gputrace_profiler_carrier AS
+SELECT
+  s.id AS blob_event_id,
+  extract_arg(s.arg_set_id, 'debug.family') AS family,
+  cast(extract_arg(s.arg_set_id, 'debug.blob_ordinal') AS INT) AS blob_ordinal,
+  cast(extract_arg(s.arg_set_id, 'debug.byte_count') AS INT) AS archive_byte_count,
+  extract_arg(s.arg_set_id, 'debug.blob_sha256') AS archive_sha256,
+  json_extract(json_extract(a.string_value, '$.fields.APSTraceDataFile'), '$') AS trace_data_file,
+  json_extract(json_extract(a.string_value, '$.fields.Source'), '$') AS recorded_source,
+  json_extract(json_extract(a.string_value, '$.fields.SourceIndex'), '$') AS recorded_source_index,
+  json_extract(json_extract(a.string_value, '$.fields.RingBufferIndex'), '$') AS recorded_ring_buffer_index,
+  json_extract(json_extract(a.string_value, '$.fields.Serial'), '$') AS recorded_serial,
+  cast(json_extract(a.string_value, '$.artifact_count') AS INT) AS embedded_artifact_count,
+  cast(json_extract(a.string_value, '$.artifact_bytes') AS INT) AS embedded_artifact_bytes,
+  'same-blob fields only; recorded names and indexes are opaque capture-local values, not execution or clock joins' AS semantics,
+  s.arg_set_id
+FROM slice AS s
+JOIN args AS a USING (arg_set_id)
+WHERE s.category = 'stream_data_archive_blob'
+  AND a.key = 'debug.profiler_carrier_json';
+
+-- gputrace_embedded_profiler_artifact content-identifies NSData payloads in
+-- profiler archive blobs. Shader binaries have their own typed view and are
+-- excluded here. Payload bytes remain in the source capture.
+CREATE PERFETTO VIEW gputrace_embedded_profiler_artifact AS
+SELECT
+  s.id AS blob_event_id,
+  extract_arg(s.arg_set_id, 'debug.family') AS family,
+  cast(extract_arg(s.arg_set_id, 'debug.blob_ordinal') AS INT) AS blob_ordinal,
+  json_extract(a.string_value, '$.kind') AS artifact_kind,
+  json_extract(a.string_value, '$.path') AS path,
+  json_extract(a.string_value, '$.parent_path') AS parent_path,
+  cast(json_extract(a.string_value, '$.ordinal') AS INT) AS recorded_ordinal,
+  cast(json_extract(a.string_value, '$.bytes') AS INT) AS byte_count,
+  json_extract(a.string_value, '$.sha256') AS sha256,
+  extract_arg(s.arg_set_id, 'debug.blob_sha256') AS carrier_sha256,
+  'embedded NSData content identity only; no decoder, counter, encoder, dispatch, or clock attribution' AS semantics,
+  s.arg_set_id
+FROM slice AS s
+JOIN args AS a USING (arg_set_id)
+WHERE s.category = 'stream_data_archive_blob'
+  AND a.key GLOB 'debug.embedded_profiler_artifact_[0-9]*_json';
 
 -- APSData-specific aliases keep common queries concise.
 CREATE PERFETTO VIEW gputrace_aps_data_blob AS
