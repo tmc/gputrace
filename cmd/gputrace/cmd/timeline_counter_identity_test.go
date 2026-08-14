@@ -202,6 +202,85 @@ FROM gputrace_capture;
 	}
 }
 
+func TestExportCounterEncoderAggregatesReachPerfettoSQL(t *testing.T) {
+	processor := os.Getenv("TRACE_PROCESSOR_SHELL")
+	if processor == "" {
+		t.Skip("set TRACE_PROCESSOR_SHELL to run native PerfettoSQL integration")
+	}
+	timeline := &Timeline{CounterEncoderAggregates: []counter.EncoderSamples{{
+		EncoderID: ^uint64(0), KickTraceID: 123, Group: 2, Ordinal: 3,
+		BatchID: 4, BatchIDRecorded: true, SampleIndex: 5, SampleIndexRecorded: true,
+		SampleCount: 6, EndSamples: 7,
+		GPUCycles: ^uint64(0), StartTicks: ^uint64(0) - 10,
+		EndTicks: ^uint64(0) - 5, DurationNs: 9,
+	}}}
+	trace := filepath.Join(t.TempDir(), "counter-encoder-aggregates.pftrace")
+	if err := exportPerfettoForClock(timeline, trace, timelineClockBusy); err != nil {
+		t.Fatal(err)
+	}
+	query := perfettosql.Module + `
+SELECT encoder_id_int64, encoder_id_uint64, kick_trace_id_int64,
+       kick_trace_id_uint64, pass_group, execution_ordinal, batch_id,
+       sample_index, sample_count, end_sample_count, gpu_cycles_int64,
+       gpu_cycles_uint64, counter_start_ticks_int64,
+       counter_start_ticks_uint64, counter_end_ticks_int64,
+       counter_end_ticks_uint64, counter_duration_ns_int64,
+       counter_duration_ns_uint64, attribution_basis, source, semantics,
+       clock_domain, clock_mapping, timing_quality
+FROM gputrace_counter_encoder_aggregate;
+`
+	command := exec.Command(processor, "query", trace)
+	command.Stdin = strings.NewReader(query)
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("trace processor counter encoder aggregates: %v\n%s", err, output)
+	}
+	rows, err := csv.NewReader(strings.NewReader(string(output))).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"-1", "18446744073709551615", "123", "123", "2", "3", "4", "5", "6", "7",
+		"-1", "18446744073709551615", "-11", "18446744073709551605",
+		"-6", "18446744073709551610", "9", "9",
+		"GRC encoder ID present in APSCounterData Encoder Infos",
+		"APSCounterData Derived Counter Sample Data",
+		"capture-attributed counter aggregate; no Metal encoder foreign key or timeline coordinate",
+		"counter_raw", "none", "measured_unaligned",
+	}
+	if len(rows) != 2 || !slices.Equal(rows[1], want) {
+		t.Fatalf("PerfettoSQL counter encoder aggregate = %q, want header and %q", rows, want)
+	}
+
+	manifestQuery := perfettosql.Module + `
+SELECT counter_encoder_aggregate_availability, counter_encoder_aggregate_count,
+       counter_encoder_aggregate_count_semantics,
+       counter_encoder_aggregate_source, counter_encoder_aggregate_clock,
+       counter_encoder_aggregate_semantics
+FROM gputrace_capture;
+`
+	command = exec.Command(processor, "query", trace)
+	command.Stdin = strings.NewReader(manifestQuery)
+	output, err = command.Output()
+	if err != nil {
+		t.Fatalf("trace processor counter encoder aggregate manifest: %v\n%s", err, output)
+	}
+	rows, err = csv.NewReader(strings.NewReader(string(output))).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantManifest := []string{
+		"available: capture-attributed APSCounterData aggregate rows", "1",
+		"source rows across all pass groups; not a distinct Metal encoder count",
+		"APSCounterData Derived Counter Sample Data joined to Encoder Infos",
+		"raw counter ticks; no verified mapping to busy or wall time",
+		"one aggregate per recorded encoder ID; group and ordinal are pass placement, timestamps remain unaligned",
+	}
+	if len(rows) != 2 || !slices.Equal(rows[1], wantManifest) {
+		t.Fatalf("PerfettoSQL counter encoder aggregate manifest = %q, want header and %q", rows, wantManifest)
+	}
+}
+
 func TestExportStreamDataTableReachesPerfettoSQL(t *testing.T) {
 	processor := os.Getenv("TRACE_PROCESSOR_SHELL")
 	if processor == "" {

@@ -108,7 +108,8 @@ for the native Perfetto roadmap and proposed MLX semantic view.
 Trace JSON compatibility.
 The optional SQL file defines `gputrace_capture`, `gputrace_command_buffer`, `gputrace_dispatch`,
 `gputrace_dispatch_arg`, `gputrace_encoder`, `gputrace_encoder_arg`, `gputrace_function`, `gputrace_pipeline`, `gputrace_semantic_node`, `gputrace_semantic_link`,
-`gputrace_counter_series`, `gputrace_unattributed_counter`,
+`gputrace_counter_series`, `gputrace_counter_encoder_aggregate`,
+`gputrace_unattributed_counter`,
 `gputrace_evidence_gap`, `gputrace_stream_data_table`,
 `gputrace_stream_data_string`, `gputrace_pipeline_compiler`,
 `gputrace_pipeline_compiler_remark`,
@@ -213,6 +214,16 @@ a positional relation to encoder execution order; TraceId itself is not a GRC
 encoder or kick ID and carries no timing relationship. `trace_id_uint64`
 preserves its full unsigned decimal value; `trace_id_int64` is Perfetto's
 signed SQL projection.
+`gputrace_counter_encoder_aggregate` retains every capture-attributed
+APSCounterData aggregate row, rather than collapsing all pass groups onto the
+visible encoder list. Rows include the exact encoder and optional kick IDs,
+pass group, execution ordinal, optional TraceId-derived batch and sample
+index, sample and end-record counts, GPU cycles, and raw counter timestamp
+range. Unsigned identifiers and counters have exact decimal columns alongside
+Perfetto's signed projections. These are untimed evidence rows: their raw
+counter clock has no verified mapping to busy or wall time, and the ordinal is
+not a Metal encoder foreign key. A constrained export may retain fewer rows;
+the manifest source count and loss receipt remain explicit.
 `gputrace_track_event_arg` retains every argument for low-volume generic events
 such as command buffers and profiler streams; its `event_id` is a trace-local
 join key, not a persistent source identity. These are raw profiler input,

@@ -510,6 +510,7 @@ gputrace_raw_profiler_sample
 gputrace_raw_profiler_sample_arg
 gputrace_counter_catalog
 gputrace_counter_trace_id
+gputrace_counter_encoder_aggregate
 gputrace_track_event_arg
 gputrace_live_command_buffer
 gputrace_host_signpost
@@ -650,6 +651,18 @@ execution order. The TraceId value itself is not equated with a GRC encoder or
 kick ID, and the table establishes no timing or command-buffer relationship.
 The exact unsigned decimal value is retained separately from Perfetto's signed
 SQL integer projection.
+
+`gputrace_counter_encoder_aggregate` retains every decoded APSCounterData row
+whose GRC encoder ID occurs in `Encoder Infos`. Rows preserve encoder ID,
+optional consistently observed kick ID, pass group, execution ordinal,
+optional TraceId-derived batch and sample index, sample and encoder-end counts,
+summed GRC GPU cycles, and the measured raw counter timestamp range. Full-range
+unsigned identifiers, cycles, timestamps, and duration have exact decimal
+columns alongside signed SQL projections. The source row count spans all pass
+groups and is not a distinct Metal encoder count. These rows remain untimed:
+the counter clock is unaligned, and neither encoder ID nor ordinal is promoted
+to a Metal encoder foreign key. Under a byte budget they are optional evidence
+with considered, retained, and dropped counts in the normal loss receipt.
 
 When an APSCounterData TraceId table covers an encoder execution ordinal,
 `gputrace_encoder` also exposes its recorded batch ID and sample index. This is

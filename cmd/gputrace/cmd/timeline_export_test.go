@@ -150,6 +150,24 @@ func TestAppendEvidenceDetailEventsShardsUntimedRecords(t *testing.T) {
 	}
 }
 
+func TestAppendEvidenceDetailEventsOmitsUnrecordedCounterTraceFields(t *testing.T) {
+	timeline := &Timeline{CounterEncoderAggregates: []counter.EncoderSamples{{
+		EncoderID: 7, BatchID: 9, SampleIndex: 11, SampleCount: 1,
+	}}}
+	trace := &perfetto.Trace{}
+	appendEvidenceDetailEvents(trace, timeline)
+	if len(trace.Events) != 1 {
+		t.Fatalf("events = %d, want 1", len(trace.Events))
+	}
+	args := trace.Events[0].Args
+	if _, ok := args["batch_id"]; ok {
+		t.Fatalf("unrecorded batch id emitted: %#v", args)
+	}
+	if _, ok := args["sample_index"]; ok {
+		t.Fatalf("unrecorded sample index emitted: %#v", args)
+	}
+}
+
 func TestExportChromeTracingIncludesTimingMetadata(t *testing.T) {
 	effective := uint64(1650625)
 	timeline := &Timeline{

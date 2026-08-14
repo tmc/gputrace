@@ -951,6 +951,7 @@ type Timeline struct {
 	UnattributedCounters     []UnattributedCounterMetric    `json:"unattributed_counters,omitempty"`
 	CounterCatalog           []CounterCatalogEntry          `json:"counter_catalog,omitempty"`
 	CounterTraceIDs          []CounterTraceIDEntry          `json:"counter_trace_ids,omitempty"`
+	CounterEncoderAggregates []counter.EncoderSamples       `json:"counter_encoder_aggregates,omitempty"`
 	UnavailableEvidence      []UnavailableEvidence          `json:"unavailable_evidence,omitempty"`
 	Timing                   *TimelineTiming                `json:"timing,omitempty"`
 	XcodeMetrics             map[string]any                 `json:"xcode_metrics,omitempty"`
@@ -1743,6 +1744,7 @@ func generateCounterTracks(trace *gputrace.Trace, timeline *Timeline) []CounterT
 	}
 	recordCounterCatalog(timeline, streamStats.CounterArchive)
 	recordCounterTraceIDs(timeline, streamStats.CounterArchive)
+	timeline.CounterEncoderAggregates = append([]counter.EncoderSamples(nil), streamStats.CounterArchive.Encoders...)
 	annotateEncoderCounterArchive(timeline, streamStats.CounterArchive)
 	timeline.UnavailableEvidence = append(timeline.UnavailableEvidence, UnavailableEvidence{
 		Family: "APSCounterData time series",
@@ -2776,6 +2778,7 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 			"replay_mode_availability":                       "unavailable: replay provenance is not recorded in this trace schema",
 			"counter_catalog_availability":                   "unavailable: APSCounterData pass catalog is absent",
 			"counter_decoder_availability":                   "unavailable: no clock-aligned decoded hardware counter series is retained",
+			"counter_encoder_aggregate_availability":         "unavailable: no APSCounterData encoder aggregates were decoded",
 			"pipeline_compiler_availability":                 "unavailable: no pipeline compiler diagnostics were decoded",
 			"pipeline_compiler_remark_availability":          "unavailable: no structured compiler remarks were decoded",
 			"pipeline_compiler_remark_argument_availability": "unavailable: no structured compiler remark arguments were decoded",
@@ -2804,6 +2807,14 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 		trace.Metadata["counter_trace_id_semantics"] = "source row identity; only row ordinal has a positional relation to encoder execution order; no GRC equality or clock mapping"
 	} else {
 		trace.Metadata["counter_trace_id_availability"] = "unavailable: APSCounterData TraceId table is absent"
+	}
+	if len(timeline.CounterEncoderAggregates) > 0 {
+		trace.Metadata["counter_encoder_aggregate_availability"] = "available: capture-attributed APSCounterData aggregate rows"
+		trace.Metadata["counter_encoder_aggregate_count"] = len(timeline.CounterEncoderAggregates)
+		trace.Metadata["counter_encoder_aggregate_count_semantics"] = "source rows across all pass groups; not a distinct Metal encoder count"
+		trace.Metadata["counter_encoder_aggregate_source"] = "APSCounterData Derived Counter Sample Data joined to Encoder Infos"
+		trace.Metadata["counter_encoder_aggregate_clock"] = "raw counter ticks; no verified mapping to busy or wall time"
+		trace.Metadata["counter_encoder_aggregate_semantics"] = "one aggregate per recorded encoder ID; group and ordinal are pass placement, timestamps remain unaligned"
 	}
 	if inventory := timeline.RawProfilerArtifacts; inventory != nil {
 		trace.Metadata["raw_counter_artifact_availability"] = "available: content-identified profiler archive"
@@ -3626,7 +3637,7 @@ func appendMLXSemanticEvents(trace *perfetto.Trace, timeline *Timeline) {
 }
 
 func appendEvidenceDetailEvents(trace *perfetto.Trace, timeline *Timeline) {
-	if len(timeline.UnattributedCounters) == 0 && len(timeline.CounterCatalog) == 0 && len(timeline.CounterTraceIDs) == 0 && len(timeline.UnavailableEvidence) == 0 &&
+	if len(timeline.UnattributedCounters) == 0 && len(timeline.CounterCatalog) == 0 && len(timeline.CounterTraceIDs) == 0 && len(timeline.CounterEncoderAggregates) == 0 && len(timeline.UnavailableEvidence) == 0 &&
 		(timeline.RawProfilerArtifacts == nil || len(timeline.RawProfilerArtifacts.Artifacts) == 0) && streamDataTableEvidenceCount(timeline.StreamMetadata) == 0 && len(timeline.StreamDataStrings) == 0 && len(timeline.PipelineCompilerStats) == 0 {
 		return
 	}
@@ -3639,6 +3650,41 @@ func appendEvidenceDetailEvents(trace *perfetto.Trace, timeline *Timeline) {
 	})
 	defer shardUntimedEvidenceTracks(trace, trackID, eventStart)
 	nextID := nextPerfettoEventID(trace)
+	for _, aggregate := range timeline.CounterEncoderAggregates {
+		args := map[string]any{
+			"encoder_id":          aggregate.EncoderID,
+			"pass_group":          aggregate.Group,
+			"execution_ordinal":   aggregate.Ordinal,
+			"sample_count":        aggregate.SampleCount,
+			"end_sample_count":    aggregate.EndSamples,
+			"gpu_cycles":          aggregate.GPUCycles,
+			"counter_start_ticks": aggregate.StartTicks,
+			"counter_end_ticks":   aggregate.EndTicks,
+			"counter_duration_ns": aggregate.DurationNs,
+			"attribution_basis":   "GRC encoder ID present in APSCounterData Encoder Infos",
+			"source":              "APSCounterData Derived Counter Sample Data",
+			"semantics":           "capture-attributed counter aggregate; no Metal encoder foreign key or timeline coordinate",
+			"clock_domain":        "counter_raw",
+			"clock_mapping":       "none",
+			"timing_quality":      "measured_unaligned",
+		}
+		if aggregate.KickTraceID != 0 {
+			args["kick_trace_id"] = aggregate.KickTraceID
+		}
+		if aggregate.BatchIDRecorded {
+			args["batch_id"] = aggregate.BatchID
+		}
+		if aggregate.SampleIndexRecorded {
+			args["sample_index"] = aggregate.SampleIndex
+		}
+		trace.Events = append(trace.Events, perfetto.Event{
+			ID: nextID, TrackUUID: trackID,
+			Name:     fmt.Sprintf("Counter encoder aggregate: 0x%x", aggregate.EncoderID),
+			Category: "counter_encoder_aggregate", Kind: perfetto.EventInstant,
+			Args: args,
+		})
+		nextID++
+	}
 	for _, column := range timeline.CounterCatalog {
 		trace.Events = append(trace.Events, perfetto.Event{
 			ID: nextID, TrackUUID: trackID,

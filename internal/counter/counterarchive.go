@@ -25,18 +25,20 @@ import (
 
 // EncoderSamples aggregates the counter samples attributed to one encoder id.
 type EncoderSamples struct {
-	EncoderID   uint64 `json:"encoder_id"`
-	KickTraceID uint64 `json:"kick_trace_id,omitempty"` // Set when every sample agrees
-	Group       int    `json:"group"`                   // Encoder Infos group (one per pass)
-	Ordinal     int    `json:"ordinal"`                 // Position within the group, i.e. encoder execution order
-	BatchID     int    `json:"batch_id"`                // From the TraceId tables, by ordinal
-	SampleIndex int    `json:"sample_index"`            // From the TraceId tables, by ordinal
-	SampleCount int    `json:"sample_count"`
-	EndSamples  int    `json:"end_samples"` // Records with GRC_SAMPLE_TYPE 5, one per pass
-	GPUCycles   uint64 `json:"gpu_cycles"`  // Sum of GRC_GPU_CYCLES over the end records
-	StartTicks  uint64 `json:"start_ticks"`
-	EndTicks    uint64 `json:"end_ticks"`
-	DurationNs  uint64 `json:"duration_ns,omitempty"`
+	EncoderID           uint64 `json:"encoder_id"`
+	KickTraceID         uint64 `json:"kick_trace_id,omitempty"` // Set when every sample agrees
+	Group               int    `json:"group"`                   // Encoder Infos group (one per pass)
+	Ordinal             int    `json:"ordinal"`                 // Position within the group, i.e. encoder execution order
+	BatchID             int    `json:"batch_id"`                // From the TraceId tables, by ordinal
+	SampleIndex         int    `json:"sample_index"`            // From the TraceId tables, by ordinal
+	BatchIDRecorded     bool   `json:"batch_id_recorded"`
+	SampleIndexRecorded bool   `json:"sample_index_recorded"`
+	SampleCount         int    `json:"sample_count"`
+	EndSamples          int    `json:"end_samples"` // Records with GRC_SAMPLE_TYPE 5, one per pass
+	GPUCycles           uint64 `json:"gpu_cycles"`  // Sum of GRC_GPU_CYCLES over the end records
+	StartTicks          uint64 `json:"start_ticks"`
+	EndTicks            uint64 `json:"end_ticks"`
+	DurationNs          uint64 `json:"duration_ns,omitempty"`
 }
 
 // CounterArchive is the decoded per-encoder counter attribution.
@@ -124,9 +126,11 @@ func parseCounterArchiveBlob(data []byte, timebaseNumer, timebaseDenom uint64, t
 					e.Group, e.Ordinal = pl.group, pl.ordinal
 					if b, ok := traceIDs.BatchForOrdinal(pl.ordinal); ok {
 						e.BatchID = b
+						e.BatchIDRecorded = true
 					}
 					if idx, ok := traceIDs.SampleIndexForOrdinal(pl.ordinal); ok {
 						e.SampleIndex = idx
+						e.SampleIndexRecorded = true
 					}
 				}
 				byEncoder[s.EncoderID] = e
