@@ -274,6 +274,7 @@ type StreamDataTable struct {
 	RemainderBytes *int64 `json:"remainder_bytes,omitempty"`
 	SHA256         string `json:"sha256"`
 	RawBytesHex    string `json:"raw_bytes_hex"`
+	DecodeError    string `json:"decode_error,omitempty"`
 }
 
 // ParseStreamData parses the streamData plist from a .gpuprofiler_raw directory.
@@ -526,9 +527,13 @@ func archivedArrayCount(objects []any, root map[string]any, key string) *int64 {
 }
 
 func parseStreamDataTable(objects []any, root map[string]any, dataKey, sizeKey string) *StreamDataTable {
-	data, ok := archivedData(objects, root[dataKey])
-	if !ok {
+	value, present := root[dataKey]
+	if !present {
 		return nil
+	}
+	data, ok := archivedData(objects, value)
+	if !ok {
+		return &StreamDataTable{DecodeError: "archive data reference is malformed"}
 	}
 	sum := sha256.Sum256(data)
 	table := &StreamDataTable{

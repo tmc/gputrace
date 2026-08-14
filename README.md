@@ -130,6 +130,9 @@ each complete table as exact hexadecimal bytes with its whole-table SHA-256
 digest. Recorded size and count delimit rows; any trailing bytes remain in the
 same payload. This makes truncation and record-layout mismatches visible while
 leaving unknown words and cross-table relationships uninterpreted.
+A missing table key and a malformed recorded reference are distinct: the
+former reports absent, while the latter carries a decode error and emits no raw
+table payload. A valid empty table retains the SHA-256 digest of empty input.
 Archive-family inventory separately reports top-level APS, timeline, counter,
 shader-profiler, GPU-timeline, and batch-filtered array entry counts. These are
 presence counts, not decoded samples; an explicit zero differs from absence.

@@ -3206,6 +3206,13 @@ func appendStreamDataTableArgs(args map[string]any, name string, table *counter.
 		args[prefix+"availability"] = "unavailable: archive data key is absent"
 		return
 	}
+	if table.DecodeError != "" {
+		args[prefix+"availability"] = "unavailable: " + table.DecodeError
+		args[prefix+"decode_error"] = table.DecodeError
+		args[prefix+"raw_bytes_availability"] = "unavailable: source table bytes were not recovered"
+		args[prefix+"integrity"] = "unavailable: source table bytes were not recovered"
+		return
+	}
 	args[prefix+"availability"] = "available"
 	args[prefix+"bytes"] = table.Bytes
 	args[prefix+"sha256"] = table.SHA256
@@ -3246,7 +3253,7 @@ func streamDataTables(metadata *counter.StreamDataMetadata) []namedStreamDataTab
 func streamDataTableEvidenceCount(metadata *counter.StreamDataMetadata) int {
 	n := 0
 	for _, named := range streamDataTables(metadata) {
-		if named.table != nil {
+		if named.table != nil && named.table.DecodeError == "" {
 			n++
 		}
 	}
@@ -3568,7 +3575,7 @@ func appendEvidenceDetailEvents(trace *perfetto.Trace, timeline *Timeline) {
 		nextID++
 	}
 	for _, named := range streamDataTables(timeline.StreamMetadata) {
-		if named.table == nil {
+		if named.table == nil || named.table.DecodeError != "" {
 			continue
 		}
 		trace.Events = append(trace.Events, streamDataTableEvent(nextID, trackID, named))

@@ -548,6 +548,10 @@ together with a whole-table SHA-256 digest. The recorded size and count delimit
 rows; any trailing fragment remains in the payload and is counted separately.
 `gputrace_stream_data_table` exposes these bytes without decoding unknown words
 or asserting relationships between table ordinals.
+Absence and malformed evidence are not conflated. A missing archive key is
+reported as absent; a present reference that does not resolve to `NSData`
+retains a decode error in canonical JSON and the manifest but emits no raw
+table row. A valid empty `NSData` remains available with its empty-input digest.
 The manifest also inventories top-level `APSData`, `APSTimelineData`,
 `APSCounterData`, `shaderProfilerData`, `gpuTimelineData`, and batch-filtered
 counter arrays. Counts describe archive entries only, not decoded samples. A

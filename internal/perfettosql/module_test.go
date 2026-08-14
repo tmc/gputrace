@@ -100,6 +100,7 @@ func TestModuleProjectsRecordedDispatchesAndCompilerFacts(t *testing.T) {
 		"stream_data_function_table_bytes",
 		"stream_data_function_table_sha256",
 		"stream_data_function_table_raw_bytes_availability",
+		"stream_data_function_table_decode_error",
 		"stream_data_family_count_semantics",
 		"stream_data_aps_data_entry_count",
 		"stream_data_aps_timeline_data_availability",

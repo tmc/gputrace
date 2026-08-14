@@ -208,12 +208,17 @@ func TestExportStreamDataTableReachesPerfettoSQL(t *testing.T) {
 	}
 	recordSize := int64(2)
 	recordCount := int64(2)
+	emptyCount := int64(0)
 	remainder := int64(1)
+	emptyRemainder := int64(0)
 	timeline := &Timeline{StreamMetadata: &counter.StreamDataMetadata{
-		Tables: counter.StreamDataTables{GPUCommands: &counter.StreamDataTable{
+		Tables: counter.StreamDataTables{CommandBuffers: &counter.StreamDataTable{
+			Bytes: 0, RecordSize: &recordSize, RecordCount: &emptyCount, RemainderBytes: &emptyRemainder,
+			SHA256: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", RawBytesHex: "",
+		}, GPUCommands: &counter.StreamDataTable{
 			Bytes: 5, RecordSize: &recordSize, RecordCount: &recordCount, RemainderBytes: &remainder,
 			SHA256: "sha256:table", RawBytesHex: "0102030405",
-		}},
+		}, Functions: &counter.StreamDataTable{DecodeError: "archive data reference is malformed"}},
 	}}
 	trace := filepath.Join(t.TempDir(), "stream-data-table.pftrace")
 	if err := exportPerfettoForClock(timeline, trace, timelineClockBusy); err != nil {
@@ -223,7 +228,8 @@ func TestExportStreamDataTableReachesPerfettoSQL(t *testing.T) {
 SELECT table_name, source_key, byte_count, raw_bytes_hex, table_sha256,
        record_size, record_count, remainder_bytes,
        clock_domain, timing_quality
-FROM gputrace_stream_data_table;
+FROM gputrace_stream_data_table
+ORDER BY table_name;
 `
 	command := exec.Command(processor, "query", trace)
 	command.Stdin = strings.NewReader(query)
@@ -235,11 +241,40 @@ FROM gputrace_stream_data_table;
 	if err != nil {
 		t.Fatal(err)
 	}
+	wantEmpty := []string{
+		"command_buffer", "commandBufferInfoData", "0", "", "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+		"2", "0", "0", "none", "unavailable",
+	}
 	want := []string{
 		"gpu_command", "gpuCommandInfoData", "5", "0102030405", "sha256:table",
 		"2", "2", "1", "none", "unavailable",
 	}
-	if len(rows) != 2 || !slices.Equal(rows[1], want) {
-		t.Fatalf("PerfettoSQL streamData rows = %q, want header and %q", rows, want)
+	if len(rows) != 3 || !slices.Equal(rows[1], wantEmpty) || !slices.Equal(rows[2], want) {
+		t.Fatalf("PerfettoSQL streamData rows = %q, want header and %q, %q", rows, wantEmpty, want)
+	}
+
+	manifestQuery := perfettosql.Module + `
+SELECT stream_data_function_table_availability,
+       stream_data_function_table_decode_error,
+       stream_data_function_table_raw_bytes_availability
+FROM gputrace_capture;
+`
+	command = exec.Command(processor, "query", trace)
+	command.Stdin = strings.NewReader(manifestQuery)
+	output, err = command.Output()
+	if err != nil {
+		t.Fatalf("trace processor streamData manifest: %v\n%s", err, output)
+	}
+	rows, err = csv.NewReader(strings.NewReader(string(output))).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantManifest := []string{
+		"unavailable: archive data reference is malformed",
+		"archive data reference is malformed",
+		"unavailable: source table bytes were not recovered",
+	}
+	if len(rows) != 2 || !slices.Equal(rows[1], wantManifest) {
+		t.Fatalf("PerfettoSQL streamData manifest = %q, want header and %q", rows, wantManifest)
 	}
 }

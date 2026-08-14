@@ -512,7 +512,7 @@ func TestPerfettoStreamMetadataArgsPreservesZeroAndFalse(t *testing.T) {
 		Tables: counter.StreamDataTables{Encoders: &counter.StreamDataTable{
 			Bytes: 10, RecordSize: &recordSize, RecordCount: &recordCount, RemainderBytes: &remainder,
 			SHA256: "sha256:abc", RawBytesHex: "00000000010101010202",
-		}},
+		}, Pipelines: &counter.StreamDataTable{DecodeError: "archive data reference is malformed"}},
 		Families:        counter.StreamDataFamilies{APSData: &twoEntries, ShaderProfilerData: &zeroEntries},
 		DecodedFamilies: counter.StreamDataDecodedFamilies{APSData: &zeroEntries, ShaderProfilerData: &zeroEntries},
 		CounterDecode: &counter.StreamDataCounterDecode{
@@ -545,6 +545,12 @@ func TestPerfettoStreamMetadataArgsPreservesZeroAndFalse(t *testing.T) {
 	}
 	if got := args["stream_data_function_table_availability"]; got != "unavailable: archive data key is absent" {
 		t.Fatalf("function table availability = %#v", got)
+	}
+	if got := args["stream_data_pipeline_table_availability"]; got != "unavailable: archive data reference is malformed" {
+		t.Fatalf("pipeline table availability = %#v", got)
+	}
+	if got := args["stream_data_pipeline_table_decode_error"]; got != "archive data reference is malformed" {
+		t.Fatalf("pipeline table decode error = %#v", got)
 	}
 	if got := args["stream_data_aps_data_entry_count"]; got != int64(2) {
 		t.Fatalf("APSData entry count = %#v, want 2", got)

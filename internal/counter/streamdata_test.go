@@ -96,6 +96,46 @@ func TestParseStreamDataMetadataPreservesZeroAndFalse(t *testing.T) {
 	}
 }
 
+func TestParseStreamDataTableDistinguishesAbsentMalformedAndEmpty(t *testing.T) {
+	objects := []any{
+		"$null",
+		map[string]any{"NS.data": []byte{}},
+		"not data",
+	}
+	for _, test := range []struct {
+		name    string
+		root    map[string]any
+		absent  bool
+		invalid bool
+	}{
+		{name: "absent", root: map[string]any{}, absent: true},
+		{name: "malformed", root: map[string]any{"data": plist.UID(2)}, invalid: true},
+		{name: "empty", root: map[string]any{"data": plist.UID(1), "size": int64(4)}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			table := parseStreamDataTable(objects, test.root, "data", "size")
+			if test.absent {
+				if table != nil {
+					t.Fatalf("table = %#v, want nil", table)
+				}
+				return
+			}
+			if table == nil {
+				t.Fatal("table is nil")
+			}
+			if test.invalid {
+				if table.DecodeError != "archive data reference is malformed" || table.SHA256 != "" || table.RawBytesHex != "" {
+					t.Fatalf("malformed table = %#v", table)
+				}
+				return
+			}
+			if table.DecodeError != "" || table.Bytes != 0 || table.RawBytesHex != "" || table.SHA256 != "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" {
+				t.Fatalf("empty table = %#v", table)
+			}
+		})
+	}
+}
+
 func TestDecodedStreamDataFamiliesCountsOnlyNSData(t *testing.T) {
 	objects := []any{
 		"$null",
