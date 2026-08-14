@@ -172,10 +172,26 @@ for trace in "$@"; do
 	want "dispatches without a stated pipeline identity" \
 		"$(query "$lossless" "$sql" "select count(*) from gputrace_dispatch where coalesce(pipeline_identity_source,'') = '';")" \
 		0
+	untimed=$(jq -r '.evidence_inventory.untimed_dispatches // 0' "$canon")
+	if [ "$untimed" -eq 0 ]; then
+		strict=$(query "$lossless" "$sql" "select count(*) from gputrace_dispatch where parent_basis='strict';")
+		uncertain=$(query "$lossless" "$sql" "select count(*) from gputrace_dispatch where parent_basis!='strict' or parent_basis is null;")
+		want "pipeline presentation covers every measured dispatch" \
+			"$(query "$lossless" "$sql" 'select presentation_pipeline_events from gputrace_capture;')" \
+			"$source_dispatches"
+		want "strict encoder presentation contains only proven relationships" \
+			"$(query "$lossless" "$sql" 'select presentation_encoder_events from gputrace_capture;')" \
+			"$strict"
+		want "uncertain encoder presentation exposes every unproven relationship" \
+			"$(query "$lossless" "$sql" 'select presentation_uncertain_events from gputrace_capture;')" \
+			"$uncertain"
+		want "pipeline presentation has no overlapping slices on one lane" \
+			"$(query "$lossless" "$sql" "select count(*) from (select s.ts, s.dur, lag(s.ts+s.dur) over(partition by s.track_id order by s.ts,s.id) as previous_end from slice s where extract_arg(s.arg_set_id,'debug.presentation_projection')='pipeline_dispatch_detail') where previous_end>ts;")" \
+			0
+	fi
 
 	# Untimed capture-only work must arrive as instants, never as heuristic
 	# bars. A trace with measured GPU execution has no untimed dispatches.
-	untimed=$(jq -r '.evidence_inventory.untimed_dispatches // 0' "$canon")
 	if [ "$untimed" -gt 0 ]; then
 		want "capture-only dispatches carry no duration" \
 			"$(query "$lossless" "$sql" 'select count(*) from gputrace_dispatch where dur > 0;')" \

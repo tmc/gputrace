@@ -17,13 +17,14 @@ and a pinned UI build, so it runs during release qualification rather than in
 `go test`. Handler, protocol, routing, and lifecycle behavior are tested
 separately and are not treated as visual proof.
 
-The smoke gate proves the trace becomes visible and names the groups the UI
-renders. It does not assert on individual encoder rows or on the selection
-detail panel: Perfetto virtualizes track rows, so those assertions need
-viewport automation that this repository has not verified against a pinned
-revision. The corresponding data properties — numeric encoder ordering,
-dispatch names and pipeline identity, capture-only instants — are asserted in
-`tools/perfetto-fixture-qualify.sh` against the exported rows instead.
+The smoke gate proves the trace becomes visible and, for profiled input,
+requires the pipeline-first, strict-encoder, and uncertain-association groups
+to appear in the pinned UI. It does not assert on every virtualized child row
+or on the selection detail panel: those assertions need viewport automation
+that this repository has not verified against a pinned revision. The fixture
+qualification gate independently proves complete pipeline coverage,
+overlap-safe lanes, strict versus uncertain encoder partitioning, numeric
+encoder ordering, dispatch identity, and capture-only instants.
 
 The design has two independent deliverables:
 

@@ -68,9 +68,13 @@ dispatches, and only counter series whose timestamps are proven in that
 domain; `--clock wall` contains APSTimelineData command buffers and wall-clock
 profiler events. Per-encoder APS GPU cycles and derived cost remain selectable
 encoder details because their counter clock is not joined to the busy clock.
-Lossless busy exports also provide one presentation-only dispatch row per
-encoder so kernel detail is visible without deep zoom. Native `gpu_slice` rows
-remain the accounting source; constrained exports omit the duplicate rows.
+Lossless busy exports default to an Xcode-like `Shaders / pipelines` group,
+with one measured dispatch lane per recorded pipeline and extra lanes only
+when uses overlap. Compact encoder spans remain above it. A secondary
+`Dispatch sequence by encoder` group contains only strictly contained
+dispatches; unproven associations appear separately rather than as track
+parentage. All are presentation duplicates: native `gpu_slice` rows remain the
+accounting source, and constrained exports omit the duplicate rows.
 When profiler timing is unavailable, capture launch records instead appear as
 generic instant events with pipeline identity and dispatch geometry. They do
 not enter `gpu_slice`, and CS/debug labels are reported separately as observed

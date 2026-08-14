@@ -1336,11 +1336,17 @@ The default output is clean MLX-compatible output without requiring MLX. It
 uses native labels when present, accepts a sidecar only when explicitly named,
 and otherwise renders the Metal hierarchy faithfully.
 
-Lossless busy-clock exports include a presentation-only dispatch track beneath
-each encoder. These slices copy the measured native dispatch coordinates and
-are marked as duplicates; `gpu_slice` remains the accounting source for totals
-and SQL. Explicitly constrained exports omit this redundant presentation layer
-before dropping source evidence.
+Lossless busy-clock exports present measured dispatches first in an Xcode-like
+`Shaders / pipelines` group. Tracks are keyed by recorded pipeline identity,
+ordered by first measured occurrence, and split into deterministic lanes only
+when uses overlap. Compact encoder spans remain above this group. A secondary
+encoder-sequence group includes only dispatches strictly contained by their
+recorded encoder interval. Dispatches whose reported encoder index is not
+strictly contained appear in a separate uncertainty group, where the index is
+an argument rather than track parentage. These slices copy measured native
+coordinates and are marked as presentation duplicates; `gpu_slice` remains the
+accounting source for totals and SQL. Explicitly constrained exports omit the
+whole redundant presentation layer before dropping source evidence.
 
 ## Delivery plan
 

@@ -113,19 +113,40 @@ await until(cdp, sessionId, trackText, "rendered track names");
 // Groups render collapsed, so the encoder and dispatch tracks are not in the
 // DOM until something expands them. Clicking the collapse buttons is the
 // gesture a user makes; repeat until no button reports a further expansion.
-const expand = `(() => {
+const scan = `(() => {
   const doc = document.querySelector("iframe").contentDocument;
-  const before = doc.querySelectorAll(".pf-track__title").length;
-  for (const node of doc.querySelectorAll(".pf-track__collapse-button")) node.click();
-  return before;
+  let clicked = 0;
+  for (const node of doc.querySelectorAll(".pf-track__collapse-button")) {
+    const header = node.closest(".pf-track__header");
+    if (!header?.classList.contains("pf-track__header--expanded")) {
+      node.click();
+      clicked++;
+    }
+  }
+  const names = [];
+  for (const node of doc.querySelectorAll(".pf-track__title")) {
+    const text = (node.textContent || "").trim();
+    if (text) names.push(text);
+  }
+  const scroller = doc.querySelector(".pf-timeline-page__scrolling-track-tree");
+  const before = scroller?.scrollTop ?? 0;
+  if (scroller) scroller.scrollTop = Math.min(scroller.scrollHeight, before + Math.max(1, scroller.clientHeight * 0.8));
+  return JSON.stringify({names, clicked, before, after: scroller?.scrollTop ?? 0});
 })()`;
-for (let round = 0; round < 8; round++) {
-  const before = await evaluate(cdp, sessionId, expand);
-  await new Promise((resolve) => setTimeout(resolve, 1500));
-  const after = JSON.parse(await evaluate(cdp, sessionId, trackText)).length;
-  if (after <= before) break;
+const seenNames = new Set();
+let idleRounds = 0;
+for (let round = 0; round < 40; round++) {
+  const result = JSON.parse(await evaluate(cdp, sessionId, scan));
+  for (const name of result.names) seenNames.add(name);
+  if (result.clicked === 0 && result.after === result.before) {
+    idleRounds++;
+    if (idleRounds >= 2) break;
+  } else {
+    idleRounds = 0;
+  }
+  await new Promise((resolve) => setTimeout(resolve, 750));
 }
-const names = JSON.parse(await evaluate(cdp, sessionId, trackText));
+const names = [...seenNames];
 
 const report = {
   hostURL,
@@ -145,4 +166,16 @@ cdp.socket.close();
 if (report.trackCount === 0) {
   console.error("the pinned Perfetto UI rendered no named tracks");
   process.exit(1);
+}
+if (names.includes("GPU")) {
+  for (const required of [
+    "Shaders / pipelines (measured busy time)",
+    "Dispatch sequence by encoder (strict containment)",
+    "Dispatches without strict encoder containment",
+  ]) {
+    if (!names.includes(required)) {
+      console.error(`the pinned Perfetto UI did not render required group: ${required}`);
+      process.exit(1);
+    }
+  }
 }
