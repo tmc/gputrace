@@ -508,6 +508,7 @@ gputrace_pipeline
 gputrace_profiler_stream
 gputrace_raw_profiler_sample
 gputrace_raw_profiler_sample_arg
+gputrace_counter_catalog
 gputrace_track_event_arg
 gputrace_live_command_buffer
 gputrace_host_signpost
@@ -624,6 +625,13 @@ zero-based ordinal. Counter names, units, derived meanings, and clock joins
 remain unavailable until separately proven. `raw_value_uint64` is the exact
 unsigned decimal representation retained by Perfetto; `raw_value_int64` is
 the corresponding signed SQL integer projection.
+
+`gputrace_counter_catalog` preserves the recorded APSCounterData pass-column
+catalog as untimed evidence. Each row carries its group ordinal, column
+ordinal, exact recorded name, and fixed-GRC or pass-specific classification.
+Pass-specific names remain opaque identifiers: the catalog does not establish
+units, decoded value series, encoder attribution, or a clock mapping. Catalog
+availability and decoded-series availability are reported separately.
 
 When an APSCounterData TraceId table covers an encoder execution ordinal,
 `gputrace_encoder` also exposes its recorded batch ID and sample index. This is

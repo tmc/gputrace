@@ -162,6 +162,10 @@ counter columns remain uninterpreted and are not exported as named metrics.
 zero-based ordinal without assigning a counter name, unit, or meaning. Its
 decimal `raw_value_uint64` text preserves the full unsigned range; the
 companion `raw_value_int64` column is Perfetto's signed integer projection.
+The untimed `gputrace_counter_catalog` view preserves every recorded
+APSCounterData pass-column name with its group and column ordinal. Names beyond
+the seven fixed GRC fields remain opaque; the catalog supplies no unit, decoded
+value series, encoder attribution, or clock mapping.
 `gputrace_track_event_arg` retains every argument for low-volume generic events
 such as command buffers and profiler streams; its `event_id` is a trace-local
 join key, not a persistent source identity. These are raw profiler input,

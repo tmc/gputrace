@@ -948,6 +948,7 @@ type Timeline struct {
 	APICallseq               []APICall                      `json:"api_callseq"`
 	CounterTracks            []CounterTrack                 `json:"counter_tracks,omitempty"`
 	UnattributedCounters     []UnattributedCounterMetric    `json:"unattributed_counters,omitempty"`
+	CounterCatalog           []CounterCatalogEntry          `json:"counter_catalog,omitempty"`
 	UnavailableEvidence      []UnavailableEvidence          `json:"unavailable_evidence,omitempty"`
 	Timing                   *TimelineTiming                `json:"timing,omitempty"`
 	XcodeMetrics             map[string]any                 `json:"xcode_metrics,omitempty"`
@@ -1101,6 +1102,15 @@ type UnattributedCounterMetric struct {
 	Attribution string                 `json:"attribution"`
 	Source      string                 `json:"source"`
 	Values      map[string]interface{} `json:"values,omitempty"`
+}
+
+// CounterCatalogEntry is one recorded APSCounterData pass column. Pass-specific
+// names are opaque identifiers until a separate catalog proves their meaning.
+type CounterCatalogEntry struct {
+	GroupOrdinal   int    `json:"group_ordinal"`
+	ColumnOrdinal  int    `json:"column_ordinal"`
+	RecordedName   string `json:"recorded_name"`
+	Classification string `json:"classification"`
 }
 
 // CounterSample represents a single counter measurement at a point in time.
@@ -1705,12 +1715,31 @@ func generateCounterTracks(trace *gputrace.Trace, timeline *Timeline) []CounterT
 	if streamStats == nil || streamStats.CounterArchive == nil {
 		return nil
 	}
+	recordCounterCatalog(timeline, streamStats.CounterArchive)
 	annotateEncoderCounterArchive(timeline, streamStats.CounterArchive)
 	timeline.UnavailableEvidence = append(timeline.UnavailableEvidence, UnavailableEvidence{
 		Family: "APSCounterData time series",
 		Reason: "counter clock has no verified mapping to cumulative GPU-busy time",
 	})
 	return nil
+}
+
+func recordCounterCatalog(timeline *Timeline, archive *counter.CounterArchive) {
+	if timeline == nil || archive == nil {
+		return
+	}
+	for groupOrdinal, columns := range archive.PassColumns {
+		for columnOrdinal, name := range columns {
+			classification := "pass-specific"
+			if columnOrdinal < len(counter.GRCColumnNames) {
+				classification = "fixed GRC"
+			}
+			timeline.CounterCatalog = append(timeline.CounterCatalog, CounterCatalogEntry{
+				GroupOrdinal: groupOrdinal, ColumnOrdinal: columnOrdinal,
+				RecordedName: name, Classification: classification,
+			})
+		}
+	}
 }
 
 func recordUnattributedCounterMetrics(timeline *Timeline, metrics []counter.EncoderCounterMetrics) {
@@ -2696,7 +2725,7 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 			"environment_capability_catalog_availability": "unavailable",
 			"capture_mode_availability":                   "unavailable: capture provenance is not recorded in this trace schema",
 			"replay_mode_availability":                    "unavailable: replay provenance is not recorded in this trace schema",
-			"counter_catalog_availability":                "unavailable: no clock-aligned counter catalog identity is retained",
+			"counter_catalog_availability":                "unavailable: APSCounterData pass catalog is absent",
 			"counter_decoder_availability":                "unavailable: no clock-aligned decoded hardware counter series is retained",
 			"raw_counter_artifact_availability":           "unavailable: no separate raw artifact identity and digest were verified",
 			"perfetto_schema_revision":                    perfetto.SchemaRevision,
@@ -2709,6 +2738,12 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 			"unavailable_cpu_frequency":                   "Metal trace contains no CPU frequency evidence",
 			"unavailable_system_memory":                   "Metal trace contains no system-memory evidence",
 		},
+	}
+	if len(timeline.CounterCatalog) > 0 {
+		trace.Metadata["counter_catalog_availability"] = "available: recorded APSCounterData pass columns; names remain opaque"
+		trace.Metadata["counter_catalog_entries"] = len(timeline.CounterCatalog)
+		trace.Metadata["counter_catalog_source"] = "APSCounterData Subdivided Dictionary passList"
+		trace.Metadata["counter_catalog_semantics"] = "recorded column identity only; no values, units, derived meaning, encoder attribution, or clock mapping"
 	}
 	if inventory := timeline.RawProfilerArtifacts; inventory != nil {
 		trace.Metadata["raw_counter_artifact_availability"] = "available: content-identified profiler archive"
@@ -3418,7 +3453,7 @@ func appendMLXSemanticEvents(trace *perfetto.Trace, timeline *Timeline) {
 }
 
 func appendEvidenceDetailEvents(trace *perfetto.Trace, timeline *Timeline) {
-	if len(timeline.UnattributedCounters) == 0 && len(timeline.UnavailableEvidence) == 0 &&
+	if len(timeline.UnattributedCounters) == 0 && len(timeline.CounterCatalog) == 0 && len(timeline.UnavailableEvidence) == 0 &&
 		(timeline.RawProfilerArtifacts == nil || len(timeline.RawProfilerArtifacts.Artifacts) == 0) {
 		return
 	}
@@ -3429,6 +3464,24 @@ func appendEvidenceDetailEvents(trace *perfetto.Trace, timeline *Timeline) {
 		Description: "Source-backed evidence without a verified timeline coordinate",
 	})
 	nextID := nextPerfettoEventID(trace)
+	for _, column := range timeline.CounterCatalog {
+		trace.Events = append(trace.Events, perfetto.Event{
+			ID: nextID, TrackUUID: trackID,
+			Name:     fmt.Sprintf("Counter catalog %d/%d", column.GroupOrdinal, column.ColumnOrdinal),
+			Category: "counter_catalog", Kind: perfetto.EventInstant, Required: true,
+			Args: map[string]any{
+				"group_ordinal":  column.GroupOrdinal,
+				"column_ordinal": column.ColumnOrdinal,
+				"recorded_name":  column.RecordedName,
+				"classification": column.Classification,
+				"source":         "APSCounterData Subdivided Dictionary passList",
+				"semantics":      "recorded column identity only; no values, units, derived meaning, encoder attribution, or clock mapping",
+				"clock_domain":   "none",
+				"timing_quality": "unavailable",
+			},
+		})
+		nextID++
+	}
 	for _, metric := range timeline.UnattributedCounters {
 		label := metric.Label
 		if label == "" {

@@ -945,7 +945,7 @@ func TestTimelineSQLOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, view := range []string{"gputrace_capture", "gputrace_dispatch", "gputrace_dispatch_arg", "gputrace_encoder_arg", "gputrace_raw_profiler_sample", "gputrace_raw_profiler_sample_arg", "gputrace_track_event_arg", "gputrace_pipeline", "gputrace_counter_series", "gputrace_unmatched"} {
+	for _, view := range []string{"gputrace_capture", "gputrace_dispatch", "gputrace_dispatch_arg", "gputrace_encoder_arg", "gputrace_raw_profiler_sample", "gputrace_raw_profiler_sample_arg", "gputrace_counter_catalog", "gputrace_track_event_arg", "gputrace_pipeline", "gputrace_counter_series", "gputrace_unmatched"} {
 		if !bytes.Contains(data, []byte("CREATE PERFETTO VIEW "+view)) {
 			t.Errorf("SQL output missing %s", view)
 		}
@@ -2028,6 +2028,26 @@ func TestAnnotateEncoderCounterArchive(t *testing.T) {
 		if got := timeline.Events[0].Args[key]; got != want {
 			t.Errorf("%s = %v, want %v", key, got, want)
 		}
+	}
+}
+
+func TestRecordCounterCatalogPreservesOrderAndClassification(t *testing.T) {
+	timeline := &Timeline{}
+	archive := &counter.CounterArchive{PassColumns: [][]string{
+		{"GRC_TIMESTAMP", "GRC_GPU_CYCLES", "GRC_SAMPLE_TYPE", "GRC_ENCODER_ID", "GRC_KICK_TRACE_ID", "GRC_KICK_SLOT_IDX", "GRC_SOURCE_ID", "opaque-a"},
+		{"GRC_TIMESTAMP", "GRC_GPU_CYCLES"},
+	}}
+
+	recordCounterCatalog(timeline, archive)
+
+	if got, want := len(timeline.CounterCatalog), 10; got != want {
+		t.Fatalf("catalog entries = %d, want %d", got, want)
+	}
+	if got := timeline.CounterCatalog[7]; got.GroupOrdinal != 0 || got.ColumnOrdinal != 7 || got.RecordedName != "opaque-a" || got.Classification != "pass-specific" {
+		t.Fatalf("catalog entry 7 = %#v", got)
+	}
+	if got := timeline.CounterCatalog[8]; got.GroupOrdinal != 1 || got.ColumnOrdinal != 0 || got.RecordedName != "GRC_TIMESTAMP" || got.Classification != "fixed GRC" {
+		t.Fatalf("catalog entry 8 = %#v", got)
 	}
 }
 
