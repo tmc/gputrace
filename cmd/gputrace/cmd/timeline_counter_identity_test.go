@@ -281,6 +281,72 @@ FROM gputrace_capture;
 	}
 }
 
+func TestExportCounterEncoderSamplesReachPerfettoSQL(t *testing.T) {
+	processor := os.Getenv("TRACE_PROCESSOR_SHELL")
+	if processor == "" {
+		t.Skip("set TRACE_PROCESSOR_SHELL to run native PerfettoSQL integration")
+	}
+	timeline := &Timeline{CounterEncoderSamples: []counter.AttributedCounterSample{{
+		BlobOrdinal: 2, RecordOrdinal: 3, EncoderGroup: 4, ExecutionOrdinal: 5,
+		Timestamp: ^uint64(0), GPUCycles: ^uint64(0) - 1,
+		SampleType: 5, EncoderID: ^uint64(0) - 2, KickTraceID: 9,
+		KickSlotIdx: 10, SourceID: 11, Counters: []uint64{12, ^uint64(0)},
+	}}}
+	trace := filepath.Join(t.TempDir(), "counter-encoder-samples.pftrace")
+	if err := exportPerfettoForClock(timeline, trace, timelineClockBusy); err != nil {
+		t.Fatal(err)
+	}
+	query := perfettosql.Module + `
+SELECT blob_ordinal, record_ordinal, encoder_group, execution_ordinal,
+       counter_timestamp_int64, counter_timestamp_uint64,
+       gpu_cycles_int64, gpu_cycles_uint64, sample_type,
+       encoder_id_int64, encoder_id_uint64,
+       kick_trace_id_int64, kick_trace_id_uint64,
+       kick_slot_index, source_id, counter_value_count, counter_values_json,
+       clock_domain, clock_mapping, timing_quality
+FROM gputrace_counter_encoder_sample;
+`
+	command := exec.Command(processor, "query", trace)
+	command.Stdin = strings.NewReader(query)
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("trace processor counter encoder samples: %v\n%s", err, output)
+	}
+	rows, err := csv.NewReader(strings.NewReader(string(output))).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"2", "3", "4", "5", "-1", "18446744073709551615",
+		"-2", "18446744073709551614", "5",
+		"-3", "18446744073709551613", "9", "9", "10", "11", "2",
+		"[12,18446744073709551615]", "counter_raw", "none", "measured_unaligned",
+	}
+	if len(rows) != 2 || !slices.Equal(rows[1], want) {
+		t.Fatalf("PerfettoSQL counter encoder sample = %q, want header and %q", rows, want)
+	}
+
+	manifestQuery := perfettosql.Module + `
+SELECT counter_encoder_sample_availability, counter_encoder_sample_count,
+       counter_encoder_sample_source, counter_encoder_sample_clock,
+       counter_encoder_sample_semantics
+FROM gputrace_capture;
+`
+	command = exec.Command(processor, "query", trace)
+	command.Stdin = strings.NewReader(manifestQuery)
+	output, err = command.Output()
+	if err != nil {
+		t.Fatalf("trace processor counter encoder sample manifest: %v\n%s", err, output)
+	}
+	rows, err = csv.NewReader(strings.NewReader(string(output))).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[1][0] != "available: capture-attributed APSCounterData source records" || rows[1][1] != "1" {
+		t.Fatalf("PerfettoSQL counter encoder sample manifest = %q", rows)
+	}
+}
+
 func TestExportStreamDataTableReachesPerfettoSQL(t *testing.T) {
 	processor := os.Getenv("TRACE_PROCESSOR_SHELL")
 	if processor == "" {

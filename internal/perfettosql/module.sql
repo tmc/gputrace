@@ -240,6 +240,11 @@ SELECT
   extract_arg(arg_set_id, 'debug.counter_encoder_aggregate_source') AS counter_encoder_aggregate_source,
   extract_arg(arg_set_id, 'debug.counter_encoder_aggregate_clock') AS counter_encoder_aggregate_clock,
   extract_arg(arg_set_id, 'debug.counter_encoder_aggregate_semantics') AS counter_encoder_aggregate_semantics,
+  extract_arg(arg_set_id, 'debug.counter_encoder_sample_availability') AS counter_encoder_sample_availability,
+  cast(extract_arg(arg_set_id, 'debug.counter_encoder_sample_count') AS INT) AS counter_encoder_sample_count,
+  extract_arg(arg_set_id, 'debug.counter_encoder_sample_source') AS counter_encoder_sample_source,
+  extract_arg(arg_set_id, 'debug.counter_encoder_sample_clock') AS counter_encoder_sample_clock,
+  extract_arg(arg_set_id, 'debug.counter_encoder_sample_semantics') AS counter_encoder_sample_semantics,
   extract_arg(arg_set_id, 'debug.counter_decoder_availability') AS counter_decoder_availability,
   extract_arg(arg_set_id, 'debug.raw_counter_artifact_availability') AS raw_counter_artifact_availability,
   cast(extract_arg(arg_set_id, 'debug.raw_profiler_artifact_count') AS INT) AS raw_profiler_artifact_count,
@@ -631,6 +636,43 @@ FROM slice AS s
 JOIN args AS tid
   ON tid.arg_set_id = s.arg_set_id AND tid.key = 'debug.trace_id'
 WHERE s.category = 'counter_trace_id';
+
+-- gputrace_counter_encoder_sample retains every capture-attributed GPRWCNTR
+-- source record. Hardware-counter values remain an ordered JSON array because
+-- no verified sample-blob to passList join establishes their names or units.
+CREATE PERFETTO VIEW gputrace_counter_encoder_sample AS
+SELECT
+  s.id,
+  cast(extract_arg(s.arg_set_id, 'debug.blob_ordinal') AS INT) AS blob_ordinal,
+  cast(extract_arg(s.arg_set_id, 'debug.record_ordinal') AS INT) AS record_ordinal,
+  cast(extract_arg(s.arg_set_id, 'debug.encoder_group') AS INT) AS encoder_group,
+  cast(extract_arg(s.arg_set_id, 'debug.execution_ordinal') AS INT) AS execution_ordinal,
+  ts.int_value AS counter_timestamp_int64,
+  ts.display_value AS counter_timestamp_uint64,
+  cycles.int_value AS gpu_cycles_int64,
+  cycles.display_value AS gpu_cycles_uint64,
+  cast(extract_arg(s.arg_set_id, 'debug.sample_type') AS INT) AS sample_type,
+  eid.int_value AS encoder_id_int64,
+  eid.display_value AS encoder_id_uint64,
+  kid.int_value AS kick_trace_id_int64,
+  kid.display_value AS kick_trace_id_uint64,
+  cast(extract_arg(s.arg_set_id, 'debug.kick_slot_index') AS INT) AS kick_slot_index,
+  cast(extract_arg(s.arg_set_id, 'debug.source_id') AS INT) AS source_id,
+  cast(extract_arg(s.arg_set_id, 'debug.counter_value_count') AS INT) AS counter_value_count,
+  extract_arg(s.arg_set_id, 'debug.counter_values_json') AS counter_values_json,
+  extract_arg(s.arg_set_id, 'debug.attribution_basis') AS attribution_basis,
+  extract_arg(s.arg_set_id, 'debug.source') AS source,
+  extract_arg(s.arg_set_id, 'debug.semantics') AS semantics,
+  extract_arg(s.arg_set_id, 'debug.clock_domain') AS clock_domain,
+  extract_arg(s.arg_set_id, 'debug.clock_mapping') AS clock_mapping,
+  extract_arg(s.arg_set_id, 'debug.timing_quality') AS timing_quality,
+  s.arg_set_id
+FROM slice AS s
+JOIN args AS ts ON ts.arg_set_id = s.arg_set_id AND ts.key = 'debug.counter_timestamp'
+JOIN args AS cycles ON cycles.arg_set_id = s.arg_set_id AND cycles.key = 'debug.gpu_cycles'
+JOIN args AS eid ON eid.arg_set_id = s.arg_set_id AND eid.key = 'debug.encoder_id'
+JOIN args AS kid ON kid.arg_set_id = s.arg_set_id AND kid.key = 'debug.kick_trace_id'
+WHERE s.category = 'counter_encoder_sample';
 
 -- gputrace_counter_encoder_aggregate retains capture-attributed APSCounterData
 -- rows. Raw counter timestamps are measured but have no verified mapping to a

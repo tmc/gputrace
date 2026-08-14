@@ -108,7 +108,8 @@ for the native Perfetto roadmap and proposed MLX semantic view.
 Trace JSON compatibility.
 The optional SQL file defines `gputrace_capture`, `gputrace_command_buffer`, `gputrace_dispatch`,
 `gputrace_dispatch_arg`, `gputrace_encoder`, `gputrace_encoder_arg`, `gputrace_function`, `gputrace_pipeline`, `gputrace_semantic_node`, `gputrace_semantic_link`,
-`gputrace_counter_series`, `gputrace_counter_encoder_aggregate`,
+`gputrace_counter_series`, `gputrace_counter_encoder_sample`,
+`gputrace_counter_encoder_aggregate`,
 `gputrace_unattributed_counter`,
 `gputrace_evidence_gap`, `gputrace_stream_data_table`,
 `gputrace_stream_data_string`, `gputrace_pipeline_compiler`,
@@ -224,6 +225,14 @@ Perfetto's signed projections. These are untimed evidence rows: their raw
 counter clock has no verified mapping to busy or wall time, and the ordinal is
 not a Metal encoder foreign key. A constrained export may retain fewer rows;
 the manifest source count and loss receipt remain explicit.
+`gputrace_counter_encoder_sample` retains every capture-attributed GPRWCNTR
+source record before aggregation. Rows include the source blob and record
+ordinals, fixed GRC fields, encoder-placement evidence, and the exact opaque
+hardware-counter vector as JSON in recorded order. The archive does not prove
+which `passList` names belong to each sample blob, so the view does not assign
+counter names, units, derived meaning, a Metal encoder foreign key, or a
+timeline coordinate. Full-range unsigned timestamps, cycles, and identifiers
+have exact decimal columns alongside Perfetto's signed projections.
 `gputrace_track_event_arg` retains every argument for low-volume generic events
 such as command buffers and profiler streams; its `event_id` is a trace-local
 join key, not a persistent source identity. These are raw profiler input,

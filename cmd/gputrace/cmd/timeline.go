@@ -937,48 +937,49 @@ func timelineEventArgInt(args map[string]interface{}, key string) (int, bool) {
 
 // Timeline represents the complete timeline data.
 type Timeline struct {
-	TracePath                string                         `json:"trace_path,omitempty"`
-	ClockDomain              string                         `json:"clock_domain,omitempty"`
-	RawProfilerSamples       bool                           `json:"raw_profiler_samples,omitempty"`
-	StartTime                uint64                         `json:"start_time"`
-	EndTime                  uint64                         `json:"end_time"`
-	Duration                 uint64                         `json:"duration"`
-	Events                   []TimelineEvent                `json:"events"`
-	Encoders                 []EncoderInfo                  `json:"encoders"`
-	Kernels                  []KernelInfo                   `json:"kernels"`
-	APICallseq               []APICall                      `json:"api_callseq"`
-	CounterTracks            []CounterTrack                 `json:"counter_tracks,omitempty"`
-	UnattributedCounters     []UnattributedCounterMetric    `json:"unattributed_counters,omitempty"`
-	CounterCatalog           []CounterCatalogEntry          `json:"counter_catalog,omitempty"`
-	CounterTraceIDs          []CounterTraceIDEntry          `json:"counter_trace_ids,omitempty"`
-	CounterEncoderAggregates []counter.EncoderSamples       `json:"counter_encoder_aggregates,omitempty"`
-	UnavailableEvidence      []UnavailableEvidence          `json:"unavailable_evidence,omitempty"`
-	Timing                   *TimelineTiming                `json:"timing,omitempty"`
-	XcodeMetrics             map[string]any                 `json:"xcode_metrics,omitempty"`
-	AbsoluteTime             uint64                         `json:"absolute_time"`
-	ContinuousTime           uint64                         `json:"continuous_time,omitempty"`
-	PState                   *int                           `json:"pstate,omitempty"`
-	TimebaseNumer            uint64                         `json:"timebase_numer"`
-	TimebaseDenom            uint64                         `json:"timebase_denom"`
-	MLXSemantics             *mlxsemantic.Sidecar           `json:"mlx_semantics,omitempty"`
-	MLXSemanticReport        *mlxsemantic.Report            `json:"mlx_semantic_report,omitempty"`
-	MLXSidecarDigest         string                         `json:"mlx_sidecar_digest,omitempty"`
-	HostCorrelation          *hostCorrelationProjection     `json:"host_correlation,omitempty"`
-	LiveTiming               *liveTimingProjection          `json:"live_timing,omitempty"`
-	TraceUUID                string                         `json:"trace_uuid,omitempty"`
-	DeviceID                 int                            `json:"device_id,omitempty"`
-	GPUGeneration            *uint32                        `json:"gpu_generation,omitempty"`
-	MetalDeviceName          string                         `json:"metal_device_name,omitempty"`
-	MetalPluginName          string                         `json:"metal_plugin_name,omitempty"`
-	PipelineCompilerStats    []counter.PipelineStats        `json:"pipeline_compiler_stats,omitempty"`
-	PipelineCompilerSource   string                         `json:"pipeline_compiler_source,omitempty"`
-	StreamDataStrings        []string                       `json:"stream_data_strings,omitempty"`
-	StreamMetadata           *counter.StreamDataMetadata    `json:"stream_metadata,omitempty"`
-	ObservedCSLabels         int                            `json:"observed_cs_labels,omitempty"`
-	UniqueCSLabels           int                            `json:"unique_cs_labels,omitempty"`
-	EvidenceInventory        *TimelineEvidenceInventory     `json:"evidence_inventory,omitempty"`
-	RawProfilerArtifacts     *profilerraw.ArtifactInventory `json:"raw_profiler_artifacts,omitempty"`
-	RawProfilerArtifactError string                         `json:"raw_profiler_artifact_error,omitempty"`
+	TracePath                string                            `json:"trace_path,omitempty"`
+	ClockDomain              string                            `json:"clock_domain,omitempty"`
+	RawProfilerSamples       bool                              `json:"raw_profiler_samples,omitempty"`
+	StartTime                uint64                            `json:"start_time"`
+	EndTime                  uint64                            `json:"end_time"`
+	Duration                 uint64                            `json:"duration"`
+	Events                   []TimelineEvent                   `json:"events"`
+	Encoders                 []EncoderInfo                     `json:"encoders"`
+	Kernels                  []KernelInfo                      `json:"kernels"`
+	APICallseq               []APICall                         `json:"api_callseq"`
+	CounterTracks            []CounterTrack                    `json:"counter_tracks,omitempty"`
+	UnattributedCounters     []UnattributedCounterMetric       `json:"unattributed_counters,omitempty"`
+	CounterCatalog           []CounterCatalogEntry             `json:"counter_catalog,omitempty"`
+	CounterTraceIDs          []CounterTraceIDEntry             `json:"counter_trace_ids,omitempty"`
+	CounterEncoderAggregates []counter.EncoderSamples          `json:"counter_encoder_aggregates,omitempty"`
+	CounterEncoderSamples    []counter.AttributedCounterSample `json:"counter_encoder_samples,omitempty"`
+	UnavailableEvidence      []UnavailableEvidence             `json:"unavailable_evidence,omitempty"`
+	Timing                   *TimelineTiming                   `json:"timing,omitempty"`
+	XcodeMetrics             map[string]any                    `json:"xcode_metrics,omitempty"`
+	AbsoluteTime             uint64                            `json:"absolute_time"`
+	ContinuousTime           uint64                            `json:"continuous_time,omitempty"`
+	PState                   *int                              `json:"pstate,omitempty"`
+	TimebaseNumer            uint64                            `json:"timebase_numer"`
+	TimebaseDenom            uint64                            `json:"timebase_denom"`
+	MLXSemantics             *mlxsemantic.Sidecar              `json:"mlx_semantics,omitempty"`
+	MLXSemanticReport        *mlxsemantic.Report               `json:"mlx_semantic_report,omitempty"`
+	MLXSidecarDigest         string                            `json:"mlx_sidecar_digest,omitempty"`
+	HostCorrelation          *hostCorrelationProjection        `json:"host_correlation,omitempty"`
+	LiveTiming               *liveTimingProjection             `json:"live_timing,omitempty"`
+	TraceUUID                string                            `json:"trace_uuid,omitempty"`
+	DeviceID                 int                               `json:"device_id,omitempty"`
+	GPUGeneration            *uint32                           `json:"gpu_generation,omitempty"`
+	MetalDeviceName          string                            `json:"metal_device_name,omitempty"`
+	MetalPluginName          string                            `json:"metal_plugin_name,omitempty"`
+	PipelineCompilerStats    []counter.PipelineStats           `json:"pipeline_compiler_stats,omitempty"`
+	PipelineCompilerSource   string                            `json:"pipeline_compiler_source,omitempty"`
+	StreamDataStrings        []string                          `json:"stream_data_strings,omitempty"`
+	StreamMetadata           *counter.StreamDataMetadata       `json:"stream_metadata,omitempty"`
+	ObservedCSLabels         int                               `json:"observed_cs_labels,omitempty"`
+	UniqueCSLabels           int                               `json:"unique_cs_labels,omitempty"`
+	EvidenceInventory        *TimelineEvidenceInventory        `json:"evidence_inventory,omitempty"`
+	RawProfilerArtifacts     *profilerraw.ArtifactInventory    `json:"raw_profiler_artifacts,omitempty"`
+	RawProfilerArtifactError string                            `json:"raw_profiler_artifact_error,omitempty"`
 	rawProfilerProfiles      []counter.EncoderProfile
 }
 
@@ -1745,12 +1746,24 @@ func generateCounterTracks(trace *gputrace.Trace, timeline *Timeline) []CounterT
 	recordCounterCatalog(timeline, streamStats.CounterArchive)
 	recordCounterTraceIDs(timeline, streamStats.CounterArchive)
 	timeline.CounterEncoderAggregates = append([]counter.EncoderSamples(nil), streamStats.CounterArchive.Encoders...)
+	timeline.CounterEncoderSamples = cloneAttributedCounterSamples(streamStats.CounterArchive.AttributedRecords)
 	annotateEncoderCounterArchive(timeline, streamStats.CounterArchive)
 	timeline.UnavailableEvidence = append(timeline.UnavailableEvidence, UnavailableEvidence{
 		Family: "APSCounterData time series",
 		Reason: "counter clock has no verified mapping to cumulative GPU-busy time",
 	})
 	return nil
+}
+
+func cloneAttributedCounterSamples(samples []counter.AttributedCounterSample) []counter.AttributedCounterSample {
+	if samples == nil {
+		return nil
+	}
+	out := append([]counter.AttributedCounterSample(nil), samples...)
+	for i := range out {
+		out[i].Counters = append([]uint64(nil), samples[i].Counters...)
+	}
+	return out
 }
 
 func recordCounterTraceIDs(timeline *Timeline, archive *counter.CounterArchive) {
@@ -2779,6 +2792,7 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 			"counter_catalog_availability":                   "unavailable: APSCounterData pass catalog is absent",
 			"counter_decoder_availability":                   "unavailable: no clock-aligned decoded hardware counter series is retained",
 			"counter_encoder_aggregate_availability":         "unavailable: no APSCounterData encoder aggregates were decoded",
+			"counter_encoder_sample_availability":            "unavailable: no capture-attributed APSCounterData records were decoded",
 			"pipeline_compiler_availability":                 "unavailable: no pipeline compiler diagnostics were decoded",
 			"pipeline_compiler_remark_availability":          "unavailable: no structured compiler remarks were decoded",
 			"pipeline_compiler_remark_argument_availability": "unavailable: no structured compiler remark arguments were decoded",
@@ -2815,6 +2829,13 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 		trace.Metadata["counter_encoder_aggregate_source"] = "APSCounterData Derived Counter Sample Data joined to Encoder Infos"
 		trace.Metadata["counter_encoder_aggregate_clock"] = "raw counter ticks; no verified mapping to busy or wall time"
 		trace.Metadata["counter_encoder_aggregate_semantics"] = "one aggregate per recorded encoder ID; group and ordinal are pass placement, timestamps remain unaligned"
+	}
+	if len(timeline.CounterEncoderSamples) > 0 {
+		trace.Metadata["counter_encoder_sample_availability"] = "available: capture-attributed APSCounterData source records"
+		trace.Metadata["counter_encoder_sample_count"] = len(timeline.CounterEncoderSamples)
+		trace.Metadata["counter_encoder_sample_source"] = "APSCounterData Derived Counter Sample Data joined to Encoder Infos"
+		trace.Metadata["counter_encoder_sample_clock"] = "raw counter ticks; no verified mapping to busy or wall time"
+		trace.Metadata["counter_encoder_sample_semantics"] = "fixed GRC fields and opaque hardware-counter vectors in recorded order; no passList join, units, derived meaning, Metal encoder foreign key, or clock mapping"
 	}
 	if inventory := timeline.RawProfilerArtifacts; inventory != nil {
 		trace.Metadata["raw_counter_artifact_availability"] = "available: content-identified profiler archive"
@@ -3637,7 +3658,7 @@ func appendMLXSemanticEvents(trace *perfetto.Trace, timeline *Timeline) {
 }
 
 func appendEvidenceDetailEvents(trace *perfetto.Trace, timeline *Timeline) {
-	if len(timeline.UnattributedCounters) == 0 && len(timeline.CounterCatalog) == 0 && len(timeline.CounterTraceIDs) == 0 && len(timeline.CounterEncoderAggregates) == 0 && len(timeline.UnavailableEvidence) == 0 &&
+	if len(timeline.UnattributedCounters) == 0 && len(timeline.CounterCatalog) == 0 && len(timeline.CounterTraceIDs) == 0 && len(timeline.CounterEncoderAggregates) == 0 && len(timeline.CounterEncoderSamples) == 0 && len(timeline.UnavailableEvidence) == 0 &&
 		(timeline.RawProfilerArtifacts == nil || len(timeline.RawProfilerArtifacts.Artifacts) == 0) && streamDataTableEvidenceCount(timeline.StreamMetadata) == 0 && len(timeline.StreamDataStrings) == 0 && len(timeline.PipelineCompilerStats) == 0 {
 		return
 	}
@@ -3650,6 +3671,36 @@ func appendEvidenceDetailEvents(trace *perfetto.Trace, timeline *Timeline) {
 	})
 	defer shardUntimedEvidenceTracks(trace, trackID, eventStart)
 	nextID := nextPerfettoEventID(trace)
+	for _, sample := range timeline.CounterEncoderSamples {
+		values, _ := json.Marshal(sample.Counters)
+		trace.Events = append(trace.Events, perfetto.Event{
+			ID: nextID, TrackUUID: trackID,
+			Name:     fmt.Sprintf("Counter encoder sample: 0x%x", sample.EncoderID),
+			Category: "counter_encoder_sample", Kind: perfetto.EventInstant,
+			Args: map[string]any{
+				"blob_ordinal":        sample.BlobOrdinal,
+				"record_ordinal":      sample.RecordOrdinal,
+				"encoder_group":       sample.EncoderGroup,
+				"execution_ordinal":   sample.ExecutionOrdinal,
+				"counter_timestamp":   sample.Timestamp,
+				"gpu_cycles":          sample.GPUCycles,
+				"sample_type":         sample.SampleType,
+				"encoder_id":          sample.EncoderID,
+				"kick_trace_id":       sample.KickTraceID,
+				"kick_slot_index":     sample.KickSlotIdx,
+				"source_id":           sample.SourceID,
+				"counter_value_count": len(sample.Counters),
+				"counter_values_json": string(values),
+				"attribution_basis":   "GRC encoder ID present in APSCounterData Encoder Infos",
+				"source":              "APSCounterData Derived Counter Sample Data",
+				"semantics":           "source record fixed fields and opaque counter vector in recorded order; no passList join, units, Metal encoder foreign key, or timeline coordinate",
+				"clock_domain":        "counter_raw",
+				"clock_mapping":       "none",
+				"timing_quality":      "measured_unaligned",
+			},
+		})
+		nextID++
+	}
 	for _, aggregate := range timeline.CounterEncoderAggregates {
 		args := map[string]any{
 			"encoder_id":          aggregate.EncoderID,

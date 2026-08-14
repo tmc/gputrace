@@ -41,17 +41,36 @@ type EncoderSamples struct {
 	DurationNs          uint64 `json:"duration_ns,omitempty"`
 }
 
+// AttributedCounterSample is one GPRWCNTR record whose encoder ID appears in
+// APSCounterData Encoder Infos. Counter values remain in recorded column order;
+// the archive does not establish a safe join from a sample blob to passList.
+type AttributedCounterSample struct {
+	BlobOrdinal      int      `json:"blob_ordinal"`
+	RecordOrdinal    int      `json:"record_ordinal"`
+	EncoderGroup     int      `json:"encoder_group"`
+	ExecutionOrdinal int      `json:"execution_ordinal"`
+	Timestamp        uint64   `json:"timestamp"`
+	GPUCycles        uint64   `json:"gpu_cycles"`
+	SampleType       uint64   `json:"sample_type"`
+	EncoderID        uint64   `json:"encoder_id"`
+	KickTraceID      uint64   `json:"kick_trace_id"`
+	KickSlotIdx      uint64   `json:"kick_slot_idx"`
+	SourceID         uint64   `json:"source_id"`
+	Counters         []uint64 `json:"counters,omitempty"`
+}
+
 // CounterArchive is the decoded per-encoder counter attribution.
 type CounterArchive struct {
-	Encoders           []EncoderSamples `json:"encoders"`             // Sorted by encoder id
-	TotalSamples       int              `json:"total_samples"`        // Every record decoded
-	AttributedSamples  int              `json:"attributed_samples"`   // Records naming an encoder of this capture
-	MachineWideSamples int              `json:"machine_wide_samples"` // Records with GRC_ENCODER_ID 0xFFFFFFFF
-	KnownEncoderIDs    int              `json:"known_encoder_ids"`    // Distinct ids in Encoder Infos
-	PassColumns        [][]string       `json:"pass_columns,omitempty"`
-	TraceIDs           *TraceIDTable    `json:"trace_ids,omitempty"`
-	Blobs              int              `json:"blobs"`
-	StrideMismatches   int              `json:"stride_mismatches"` // Blobs rejected because the stride did not divide
+	Encoders           []EncoderSamples          `json:"encoders"` // Sorted by encoder id
+	AttributedRecords  []AttributedCounterSample `json:"attributed_records,omitempty"`
+	TotalSamples       int                       `json:"total_samples"`        // Every record decoded
+	AttributedSamples  int                       `json:"attributed_samples"`   // Records naming an encoder of this capture
+	MachineWideSamples int                       `json:"machine_wide_samples"` // Records with GRC_ENCODER_ID 0xFFFFFFFF
+	KnownEncoderIDs    int                       `json:"known_encoder_ids"`    // Distinct ids in Encoder Infos
+	PassColumns        [][]string                `json:"pass_columns,omitempty"`
+	TraceIDs           *TraceIDTable             `json:"trace_ids,omitempty"`
+	Blobs              int                       `json:"blobs"`
+	StrideMismatches   int                       `json:"stride_mismatches"` // Blobs rejected because the stride did not divide
 }
 
 // AttributedFraction returns the share of decoded samples that name an encoder
@@ -97,14 +116,14 @@ func parseCounterArchiveBlob(data []byte, timebaseNumer, timebaseDenom uint64, t
 	}
 
 	byEncoder := make(map[uint64]*EncoderSamples)
-	for _, blob := range gprwcntrBlobs(sampleData, objects) {
+	for blobOrdinal, blob := range gprwcntrBlobs(sampleData, objects) {
 		archive.Blobs++
 		samples, _, err := ParseGPRWCNTR(blob)
 		if err != nil {
 			archive.StrideMismatches++
 			continue
 		}
-		for _, s := range samples {
+		for recordOrdinal, s := range samples {
 			archive.TotalSamples++
 			if s.MachineWide() {
 				archive.MachineWideSamples++
@@ -114,6 +133,15 @@ func parseCounterArchiveBlob(data []byte, timebaseNumer, timebaseDenom uint64, t
 				continue
 			}
 			archive.AttributedSamples++
+			placement := place[s.EncoderID]
+			archive.AttributedRecords = append(archive.AttributedRecords, AttributedCounterSample{
+				BlobOrdinal: blobOrdinal, RecordOrdinal: recordOrdinal,
+				EncoderGroup: placement.group, ExecutionOrdinal: placement.ordinal,
+				Timestamp: s.Timestamp, GPUCycles: s.GPUCycles,
+				SampleType: s.SampleType, EncoderID: s.EncoderID,
+				KickTraceID: s.KickTraceID, KickSlotIdx: s.KickSlotIdx,
+				SourceID: s.SourceID, Counters: append([]uint64(nil), s.Counters...),
+			})
 			e := byEncoder[s.EncoderID]
 			if e == nil {
 				e = &EncoderSamples{

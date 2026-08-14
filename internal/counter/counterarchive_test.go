@@ -46,6 +46,9 @@ func TestCounterArchiveFromTrace(t *testing.T) {
 	if a.AttributedSamples == 0 {
 		t.Error("no sample attributed to an encoder of this capture")
 	}
+	if len(a.AttributedRecords) != a.AttributedSamples {
+		t.Errorf("retained %d attributed source records, want %d", len(a.AttributedRecords), a.AttributedSamples)
+	}
 	if a.AttributedSamples+a.MachineWideSamples > a.TotalSamples {
 		t.Errorf("attributed(%d) + machine-wide(%d) exceeds total(%d)",
 			a.AttributedSamples, a.MachineWideSamples, a.TotalSamples)
@@ -66,6 +69,14 @@ func TestCounterArchiveFromTrace(t *testing.T) {
 	}
 	if counted != a.AttributedSamples {
 		t.Errorf("per-encoder counts sum to %d, want %d", counted, a.AttributedSamples)
+	}
+	for _, sample := range a.AttributedRecords {
+		if sample.EncoderID == GRCMachineWideID {
+			t.Errorf("machine-wide sample retained as capture-attributed: %#v", sample)
+		}
+		if sample.BlobOrdinal < 0 || sample.BlobOrdinal >= a.Blobs || sample.RecordOrdinal < 0 {
+			t.Errorf("invalid source position: %#v", sample)
+		}
 	}
 
 	// Every pass column list must begin with the seven GRC columns; that is

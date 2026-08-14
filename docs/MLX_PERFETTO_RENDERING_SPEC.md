@@ -510,6 +510,7 @@ gputrace_raw_profiler_sample
 gputrace_raw_profiler_sample_arg
 gputrace_counter_catalog
 gputrace_counter_trace_id
+gputrace_counter_encoder_sample
 gputrace_counter_encoder_aggregate
 gputrace_track_event_arg
 gputrace_live_command_buffer
@@ -663,6 +664,16 @@ groups and is not a distinct Metal encoder count. These rows remain untimed:
 the counter clock is unaligned, and neither encoder ID nor ordinal is promoted
 to a Metal encoder foreign key. Under a byte budget they are optional evidence
 with considered, retained, and dropped counts in the normal loss receipt.
+
+`gputrace_counter_encoder_sample` retains the source records behind those
+aggregates. It preserves source blob and record ordinals, encoder group and
+execution ordinal, every fixed GRC field, and the hardware-counter vector as
+an ordered JSON array. The source archive currently exposes 25 pass-column
+groups but 16 encoder groups in the reference traces, with no verified
+sample-blob foreign key between them. Therefore values remain anonymous: the
+view does not manufacture counter names, units, Metal encoder identity, or a
+busy/wall clock coordinate. The source count remains in `gputrace_capture`
+when a constrained export retains only a representative subset.
 
 When an APSCounterData TraceId table covers an encoder execution ordinal,
 `gputrace_encoder` also exposes its recorded batch ID and sample index. This is
