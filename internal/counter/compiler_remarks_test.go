@@ -9,6 +9,10 @@ Name:            FullyUnrolled
 DebugLoc:        { File: '/tmp/a:b/it''s.h',
                    Line: 325, Column: 0 }
 Function:        agc.main
+Args:
+  - String:          'completely unrolled loop with '
+  - UnrollCount:     '2'
+  - String:          ' iterations'
 ...
 --- !Missed
 Pass:            regalloc
@@ -39,6 +43,12 @@ Function:        agc.main
 		first.SourceColumn == nil || *first.SourceColumn != 0 || first.ParseStatus != "complete" {
 		t.Fatalf("first remark = %#v", first)
 	}
+	if len(first.Arguments) != 3 || first.Arguments[1].Index != 1 ||
+		first.Arguments[1].Name != "UnrollCount" || first.Arguments[1].RawValue != "'2'" ||
+		first.Arguments[1].Value == nil || *first.Arguments[1].Value != "2" ||
+		first.Arguments[1].ParseStatus != "complete" {
+		t.Fatalf("first arguments = %#v", first.Arguments)
+	}
 	malformed := remarks[1]
 	if malformed.Index != 1 || malformed.ParseStatus != "malformed" ||
 		malformed.SourceFile != "" || malformed.SourceLine != nil || malformed.SourceColumn != nil {
@@ -55,6 +65,34 @@ Function:        agc.main
 		unresolved.SourceLine == nil || *unresolved.SourceLine != 0 ||
 		unresolved.SourceColumn == nil || *unresolved.SourceColumn != 0 {
 		t.Fatalf("unresolved remark = %#v", unresolved)
+	}
+}
+
+func TestParseCompilerRemarksPreservesEmptyAndMalformedArguments(t *testing.T) {
+	raw := `--- !Analysis
+Pass: asm-printer
+Name: InstructionMix
+Function: agc.main
+Args:
+  - BasicBlock:      ''
+  - String:          "\n"
+  - String:          >
+    continued
+...
+`
+	remarks := ParseCompilerRemarks(raw)
+	if len(remarks) != 1 || len(remarks[0].Arguments) != 4 {
+		t.Fatalf("remarks = %#v", remarks)
+	}
+	arguments := remarks[0].Arguments
+	if arguments[0].Value == nil || *arguments[0].Value != "" ||
+		arguments[1].Value == nil || *arguments[1].Value != "\n" {
+		t.Fatalf("decoded arguments = %#v", arguments[:2])
+	}
+	for _, index := range []int{2, 3} {
+		if arguments[index].ParseStatus != "malformed" || arguments[index].Value != nil {
+			t.Fatalf("argument %d = %#v", index, arguments[index])
+		}
 	}
 }
 

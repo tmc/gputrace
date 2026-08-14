@@ -8,15 +8,28 @@ import (
 // PipelineCompilerRemark is one searchable projection of a compiler Remarks
 // YAML document. The original Remarks string remains the authoritative source.
 type PipelineCompilerRemark struct {
-	Index        int    `json:"index"`
-	Kind         string `json:"kind,omitempty"`
-	Pass         string `json:"pass,omitempty"`
-	Name         string `json:"name,omitempty"`
-	Function     string `json:"function,omitempty"`
-	SourceFile   string `json:"source_file,omitempty"`
-	SourceLine   *int   `json:"source_line,omitempty"`
-	SourceColumn *int   `json:"source_column,omitempty"`
-	ParseStatus  string `json:"parse_status"`
+	Index        int                              `json:"index"`
+	Kind         string                           `json:"kind,omitempty"`
+	Pass         string                           `json:"pass,omitempty"`
+	Name         string                           `json:"name,omitempty"`
+	Function     string                           `json:"function,omitempty"`
+	SourceFile   string                           `json:"source_file,omitempty"`
+	SourceLine   *int                             `json:"source_line,omitempty"`
+	SourceColumn *int                             `json:"source_column,omitempty"`
+	ParseStatus  string                           `json:"parse_status"`
+	Arguments    []PipelineCompilerRemarkArgument `json:"arguments,omitempty"`
+}
+
+// PipelineCompilerRemarkArgument is one ordered scalar entry beneath a
+// compiler remark's Args key. Raw retains the source line; Value is decoded
+// only as a YAML scalar string and carries no pass-specific interpretation.
+type PipelineCompilerRemarkArgument struct {
+	Index       int     `json:"index"`
+	Name        string  `json:"name,omitempty"`
+	Raw         string  `json:"raw"`
+	RawValue    string  `json:"raw_value,omitempty"`
+	Value       *string `json:"value,omitempty"`
+	ParseStatus string  `json:"parse_status"`
 }
 
 // ParseCompilerRemarks projects stable header fields from compiler Remarks
@@ -31,6 +44,7 @@ func ParseCompilerRemarks(raw string) []PipelineCompilerRemark {
 			Name:        remarkField(document, "Name"),
 			Function:    remarkField(document, "Function"),
 			ParseStatus: "no_source_location",
+			Arguments:   remarkArguments(document),
 		}
 		if remark.Kind == "" || remark.Pass == "" || remark.Name == "" || remark.Function == "" {
 			remark.ParseStatus = "malformed"
@@ -54,6 +68,41 @@ func ParseCompilerRemarks(raw string) []PipelineCompilerRemark {
 		remarks = append(remarks, remark)
 	}
 	return remarks
+}
+
+func remarkArguments(document string) []PipelineCompilerRemarkArgument {
+	var arguments []PipelineCompilerRemarkArgument
+	inArguments := false
+	for _, line := range strings.Split(document, "\n") {
+		if !inArguments {
+			if line == "Args:" {
+				inArguments = true
+			}
+			continue
+		}
+		if line == "" {
+			continue
+		}
+		if line[0] != ' ' && line[0] != '\t' {
+			break
+		}
+		argument := PipelineCompilerRemarkArgument{
+			Index: len(arguments), Raw: line, ParseStatus: "malformed",
+		}
+		if strings.HasPrefix(line, "  - ") {
+			pair, ok := splitFlow(strings.TrimPrefix(line, "  - "), ':')
+			if ok && len(pair) == 2 {
+				argument.Name = strings.TrimSpace(pair[0])
+				argument.RawValue = strings.TrimSpace(pair[1])
+				if value, ok := flowString(argument.RawValue); ok && argument.Name != "" {
+					argument.Value = &value
+					argument.ParseStatus = "complete"
+				}
+			}
+		}
+		arguments = append(arguments, argument)
+	}
+	return arguments
 }
 
 func remarkDocuments(raw string) []string {

@@ -341,6 +341,7 @@ func TestExportPipelineCompilerDiagnosticsReachPerfettoSQL(t *testing.T) {
 	remarks := "--- !Passed\nDebugLoc: { File: kernel.h, Line: 7 }\n"
 	cached := false
 	line, column := 7, 3
+	argumentValue, emptyArgumentValue := "2", ""
 	minusOne := int64(-1)
 	zero := int64(0)
 	timeline := &Timeline{
@@ -349,8 +350,12 @@ func TestExportPipelineCompilerDiagnosticsReachPerfettoSQL(t *testing.T) {
 			PipelineID: 989, PipelineAddress: 0xfedc, FunctionName: "kernel", Remarks: &remarks,
 			RecordedStatistics: []string{"Constant calculation phase present", "Spilled bytes"},
 			CompilerRemarks: []counter.PipelineCompilerRemark{
-				{Index: 0, Kind: "Passed", Pass: "loop-unroll", Name: "FullyUnrolled", Function: "agc.main", SourceFile: "kernel.h", SourceLine: &line, SourceColumn: &column, ParseStatus: "complete"},
-				{Index: 1, Kind: "Analysis", Pass: "asm-printer", Name: "InstructionCount", Function: "agc.main", ParseStatus: "no_source_location"},
+				{Index: 0, Kind: "Passed", Pass: "loop-unroll", Name: "FullyUnrolled", Function: "agc.main", SourceFile: "kernel.h", SourceLine: &line, SourceColumn: &column, ParseStatus: "complete", Arguments: []counter.PipelineCompilerRemarkArgument{
+					{Index: 0, Name: "UnrollCount", Raw: "  - UnrollCount: '2'", RawValue: "'2'", Value: &argumentValue, ParseStatus: "complete"},
+				}},
+				{Index: 1, Kind: "Analysis", Pass: "asm-printer", Name: "InstructionCount", Function: "agc.main", ParseStatus: "no_source_location", Arguments: []counter.PipelineCompilerRemarkArgument{
+					{Index: 0, Name: "BasicBlock", Raw: "  - BasicBlock: ''", RawValue: "''", Value: &emptyArgumentValue, ParseStatus: "complete"},
+				}},
 			},
 			CompilePerformance: &counter.PipelineCompilePerformance{
 				FunctionWasCached: &cached, CompilerBackendNanoseconds: &minusOne,
@@ -416,6 +421,30 @@ ORDER BY remark_index;
 		t.Fatalf("PerfettoSQL pipeline compiler remarks = %q, want header and %q", rows, wantRemarks)
 	}
 
+	argumentQuery := perfettosql.Module + `
+SELECT pipeline_id, remark_index, argument_index, argument_name, argument_raw,
+       argument_raw_value, argument_value, parse_status, clock_domain, timing_quality
+FROM gputrace_pipeline_compiler_remark_arg
+ORDER BY remark_index, argument_index;
+`
+	command = exec.Command(processor, "query", trace)
+	command.Stdin = strings.NewReader(argumentQuery)
+	output, err = command.Output()
+	if err != nil {
+		t.Fatalf("trace processor pipeline compiler remark arguments: %v\n%s", err, output)
+	}
+	rows, err = csv.NewReader(strings.NewReader(string(output))).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantArguments := [][]string{
+		{"989", "0", "0", "UnrollCount", "  - UnrollCount: '2'", "'2'", "2", "complete", "none", "unavailable"},
+		{"989", "1", "0", "BasicBlock", "  - BasicBlock: ''", "''", "", "complete", "none", "unavailable"},
+	}
+	if len(rows) != 3 || !slices.Equal(rows[1], wantArguments[0]) || !slices.Equal(rows[2], wantArguments[1]) {
+		t.Fatalf("PerfettoSQL pipeline compiler remark arguments = %q, want header and %q", rows, wantArguments)
+	}
+
 	manifestQuery := perfettosql.Module + `
 SELECT pipeline_compiler_availability, pipeline_compiler_count,
        pipeline_compiler_count_semantics,
@@ -429,7 +458,12 @@ SELECT pipeline_compiler_availability, pipeline_compiler_count,
        pipeline_compiler_remark_missed_count,
        pipeline_compiler_remark_analysis_count,
        pipeline_compiler_remark_count_semantics,
-       pipeline_compiler_remark_semantics
+       pipeline_compiler_remark_semantics,
+       pipeline_compiler_remark_argument_availability,
+       pipeline_compiler_remark_argument_count,
+       pipeline_compiler_remark_argument_malformed_count,
+       pipeline_compiler_remark_argument_count_semantics,
+       pipeline_compiler_remark_argument_semantics
 FROM gputrace_capture;
 `
 	command = exec.Command(processor, "query", trace)
@@ -450,6 +484,9 @@ FROM gputrace_capture;
 		"available: searchable projection of exact compiler Remarks YAML", "2", "1", "1", "0", "0", "1", "0", "1",
 		"decoded source documents; projected SQL rows may be lower under an explicit output budget",
 		"static compiler pass diagnostics; no duration, sample weight, runtime causality, or source-line GPU cost",
+		"available: ordered scalar projection of compiler Remarks Args", "2", "0",
+		"decoded source scalar entries; projected SQL rows may be lower when their parent remark is omitted under an explicit output budget",
+		"recorded scalar names, order, raw text, and decoded string values only; pass-specific meaning remains uninterpreted",
 	}
 	if len(rows) != 2 || !slices.Equal(rows[1], wantManifest) {
 		t.Fatalf("PerfettoSQL pipeline compiler manifest = %q, want header and %q", rows, wantManifest)

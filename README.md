@@ -111,7 +111,8 @@ The optional SQL file defines `gputrace_capture`, `gputrace_command_buffer`, `gp
 `gputrace_counter_series`, `gputrace_unattributed_counter`,
 `gputrace_evidence_gap`, `gputrace_stream_data_table`,
 `gputrace_stream_data_string`, `gputrace_pipeline_compiler`,
-`gputrace_pipeline_compiler_remark`, and
+`gputrace_pipeline_compiler_remark`,
+`gputrace_pipeline_compiler_remark_arg`, and
 `gputrace_unmatched` views over the native trace.
 `gputrace_capture` provides typed trace identity, environment, clock, coverage,
 timing-summary, and loss-receipt columns. Timing columns keep encoder span,
@@ -150,6 +151,13 @@ source coordinate when recorded. A `Line: 0` sentinel is retained as
 `unresolved_source_location`, not presented as a usable source line. The
 manifest distinguishes recorded, resolved, unresolved, and malformed location
 counts.
+`gputrace_pipeline_compiler_remark_arg` expands the ordered scalar entries
+beneath each remark's `Args` key. It preserves duplicate names, empty values,
+the raw source line and scalar spelling, and a decoded string value. Values
+remain strings: the view does not infer that a quoted number is a metric or
+assign pass-specific meaning. Under a constrained export, argument rows are
+retained with their parent remark; compare the source argument count in
+`gputrace_capture` with the projected view count.
 The manifest count is the decoded source count; under an explicit output budget
 the SQL row count may be lower, with the difference covered by the export loss
 receipt.

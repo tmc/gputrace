@@ -161,6 +161,11 @@ SELECT
   cast(extract_arg(arg_set_id, 'debug.pipeline_compiler_remark_analysis_count') AS INT) AS pipeline_compiler_remark_analysis_count,
   extract_arg(arg_set_id, 'debug.pipeline_compiler_remark_count_semantics') AS pipeline_compiler_remark_count_semantics,
   extract_arg(arg_set_id, 'debug.pipeline_compiler_remark_semantics') AS pipeline_compiler_remark_semantics,
+  extract_arg(arg_set_id, 'debug.pipeline_compiler_remark_argument_availability') AS pipeline_compiler_remark_argument_availability,
+  cast(extract_arg(arg_set_id, 'debug.pipeline_compiler_remark_argument_count') AS INT) AS pipeline_compiler_remark_argument_count,
+  cast(extract_arg(arg_set_id, 'debug.pipeline_compiler_remark_argument_malformed_count') AS INT) AS pipeline_compiler_remark_argument_malformed_count,
+  extract_arg(arg_set_id, 'debug.pipeline_compiler_remark_argument_count_semantics') AS pipeline_compiler_remark_argument_count_semantics,
+  extract_arg(arg_set_id, 'debug.pipeline_compiler_remark_argument_semantics') AS pipeline_compiler_remark_argument_semantics,
   extract_arg(arg_set_id, 'debug.stream_data_family_count_semantics') AS stream_data_family_count_semantics,
   cast(extract_arg(arg_set_id, 'debug.stream_data_aps_data_entry_count') AS INT) AS stream_data_aps_data_entry_count,
   extract_arg(arg_set_id, 'debug.stream_data_aps_data_availability') AS stream_data_aps_data_availability,
@@ -732,6 +737,9 @@ SELECT
   cast(extract_arg(arg_set_id, 'debug.source_line') AS INT) AS source_line,
   cast(extract_arg(arg_set_id, 'debug.source_column') AS INT) AS source_column,
   extract_arg(arg_set_id, 'debug.parse_status') AS parse_status,
+  cast(extract_arg(arg_set_id, 'debug.argument_count') AS INT) AS argument_count,
+  extract_arg(arg_set_id, 'debug.arguments_json') AS arguments_json,
+  extract_arg(arg_set_id, 'debug.argument_semantics') AS argument_semantics,
   extract_arg(arg_set_id, 'debug.source') AS source,
   extract_arg(arg_set_id, 'debug.semantics') AS semantics,
   extract_arg(arg_set_id, 'debug.clock_domain') AS clock_domain,
@@ -739,6 +747,26 @@ SELECT
   arg_set_id
 FROM slice
 WHERE category = 'pipeline_compiler_remark';
+
+-- gputrace_pipeline_compiler_remark_arg preserves the ordered scalar Args
+-- entries carried by one compiler remark. Values remain strings; this view
+-- does not assign pass-specific meaning or runtime weight.
+CREATE PERFETTO VIEW gputrace_pipeline_compiler_remark_arg AS
+SELECT
+  r.id AS remark_event_id,
+  r.pipeline_id,
+  r.function_name,
+  r.remark_index,
+  cast(json_extract(a.value, '$.index') AS INT) AS argument_index,
+  json_extract(a.value, '$.name') AS argument_name,
+  json_extract(a.value, '$.raw') AS argument_raw,
+  json_extract(a.value, '$.raw_value') AS argument_raw_value,
+  json_extract(a.value, '$.value') AS argument_value,
+  json_extract(a.value, '$.parse_status') AS parse_status,
+  r.source,
+  r.clock_domain,
+  r.timing_quality
+FROM gputrace_pipeline_compiler_remark AS r, json_each(r.arguments_json) AS a;
 
 -- gputrace_raw_profiler_sample_arg retains the unnamed hardware-counter
 -- payload after the seven fixed GRC columns. counter_ordinal is only its

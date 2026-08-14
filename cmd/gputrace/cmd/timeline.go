@@ -2755,39 +2755,40 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 		GPUName:     gpuName,
 		GPUModel:    timeline.MetalPluginName,
 		Metadata: map[string]any{
-			"schema":                                      "gputrace.perfetto/v1",
-			"exporter_version":                            buildinfo.EffectiveVersion(),
-			"exporter_commit":                             buildinfo.Commit,
-			"exporter_build_date":                         buildinfo.Date,
-			"clock_domain":                                string(clock),
-			"clock_mapping":                               "none",
-			"timing_quality":                              "measured",
-			"environment_schema":                          "gputrace.environment/v1",
-			"environment_os":                              runtime.GOOS,
-			"environment_arch":                            runtime.GOARCH,
-			"environment_exporter_runtime":                runtime.Version(),
-			"environment_source":                          "Go runtime and gputrace metadata",
-			"environment_parser":                          "gputrace.perfetto/v1",
-			"environment_driver_availability":             "unavailable",
-			"environment_mlx_runtime_availability":        "unavailable",
-			"environment_workload_availability":           "unavailable",
-			"environment_capability_catalog_availability": "unavailable",
-			"capture_mode_availability":                   "unavailable: capture provenance is not recorded in this trace schema",
-			"replay_mode_availability":                    "unavailable: replay provenance is not recorded in this trace schema",
-			"counter_catalog_availability":                "unavailable: APSCounterData pass catalog is absent",
-			"counter_decoder_availability":                "unavailable: no clock-aligned decoded hardware counter series is retained",
-			"pipeline_compiler_availability":              "unavailable: no pipeline compiler diagnostics were decoded",
-			"pipeline_compiler_remark_availability":       "unavailable: no structured compiler remarks were decoded",
-			"raw_counter_artifact_availability":           "unavailable: no separate raw artifact identity and digest were verified",
-			"perfetto_schema_revision":                    perfetto.SchemaRevision,
-			"packet_family_gpu_info":                      true,
-			"packet_family_gpu_render_stage_event":        true,
-			"packet_family_track_event":                   true,
-			"packet_family_gpu_counter_event":             len(timeline.CounterTracks) > 0,
-			"unavailable_cpu_scheduling":                  "Metal trace contains no CPU scheduling evidence",
-			"unavailable_syscalls":                        "Metal trace contains no syscall evidence",
-			"unavailable_cpu_frequency":                   "Metal trace contains no CPU frequency evidence",
-			"unavailable_system_memory":                   "Metal trace contains no system-memory evidence",
+			"schema":                                         "gputrace.perfetto/v1",
+			"exporter_version":                               buildinfo.EffectiveVersion(),
+			"exporter_commit":                                buildinfo.Commit,
+			"exporter_build_date":                            buildinfo.Date,
+			"clock_domain":                                   string(clock),
+			"clock_mapping":                                  "none",
+			"timing_quality":                                 "measured",
+			"environment_schema":                             "gputrace.environment/v1",
+			"environment_os":                                 runtime.GOOS,
+			"environment_arch":                               runtime.GOARCH,
+			"environment_exporter_runtime":                   runtime.Version(),
+			"environment_source":                             "Go runtime and gputrace metadata",
+			"environment_parser":                             "gputrace.perfetto/v1",
+			"environment_driver_availability":                "unavailable",
+			"environment_mlx_runtime_availability":           "unavailable",
+			"environment_workload_availability":              "unavailable",
+			"environment_capability_catalog_availability":    "unavailable",
+			"capture_mode_availability":                      "unavailable: capture provenance is not recorded in this trace schema",
+			"replay_mode_availability":                       "unavailable: replay provenance is not recorded in this trace schema",
+			"counter_catalog_availability":                   "unavailable: APSCounterData pass catalog is absent",
+			"counter_decoder_availability":                   "unavailable: no clock-aligned decoded hardware counter series is retained",
+			"pipeline_compiler_availability":                 "unavailable: no pipeline compiler diagnostics were decoded",
+			"pipeline_compiler_remark_availability":          "unavailable: no structured compiler remarks were decoded",
+			"pipeline_compiler_remark_argument_availability": "unavailable: no structured compiler remark arguments were decoded",
+			"raw_counter_artifact_availability":              "unavailable: no separate raw artifact identity and digest were verified",
+			"perfetto_schema_revision":                       perfetto.SchemaRevision,
+			"packet_family_gpu_info":                         true,
+			"packet_family_gpu_render_stage_event":           true,
+			"packet_family_track_event":                      true,
+			"packet_family_gpu_counter_event":                len(timeline.CounterTracks) > 0,
+			"unavailable_cpu_scheduling":                     "Metal trace contains no CPU scheduling evidence",
+			"unavailable_syscalls":                           "Metal trace contains no syscall evidence",
+			"unavailable_cpu_frequency":                      "Metal trace contains no CPU frequency evidence",
+			"unavailable_system_memory":                      "Metal trace contains no system-memory evidence",
 		},
 	}
 	if len(timeline.CounterCatalog) > 0 {
@@ -3183,6 +3184,7 @@ func appendPipelineCompilerArgs(args map[string]any, timeline *Timeline) {
 	args["pipeline_compiler_source"] = timeline.PipelineCompilerSource
 	args["pipeline_compiler_semantics"] = "static compilation evidence; remarks are not measured source-line GPU cost; no clock or dispatch join"
 	var remarks, locations, resolvedLocations, unresolvedLocations, malformed, passed, missed, analysis int
+	var arguments, malformedArguments int
 	for _, pipeline := range timeline.PipelineCompilerStats {
 		for _, remark := range pipeline.CompilerRemarks {
 			remarks++
@@ -3204,6 +3206,12 @@ func appendPipelineCompilerArgs(args map[string]any, timeline *Timeline) {
 			case "Analysis":
 				analysis++
 			}
+			for _, argument := range remark.Arguments {
+				arguments++
+				if argument.ParseStatus == "malformed" {
+					malformedArguments++
+				}
+			}
 		}
 	}
 	if remarks > 0 {
@@ -3218,6 +3226,13 @@ func appendPipelineCompilerArgs(args map[string]any, timeline *Timeline) {
 		args["pipeline_compiler_remark_analysis_count"] = analysis
 		args["pipeline_compiler_remark_count_semantics"] = "decoded source documents; projected SQL rows may be lower under an explicit output budget"
 		args["pipeline_compiler_remark_semantics"] = "static compiler pass diagnostics; no duration, sample weight, runtime causality, or source-line GPU cost"
+	}
+	if arguments > 0 {
+		args["pipeline_compiler_remark_argument_availability"] = "available: ordered scalar projection of compiler Remarks Args"
+		args["pipeline_compiler_remark_argument_count"] = arguments
+		args["pipeline_compiler_remark_argument_malformed_count"] = malformedArguments
+		args["pipeline_compiler_remark_argument_count_semantics"] = "decoded source scalar entries; projected SQL rows may be lower when their parent remark is omitted under an explicit output budget"
+		args["pipeline_compiler_remark_argument_semantics"] = "recorded scalar names, order, raw text, and decoded string values only; pass-specific meaning remains uninterpreted"
 	}
 }
 
@@ -3743,6 +3758,12 @@ func appendEvidenceDetailEvents(trace *perfetto.Trace, timeline *Timeline) {
 				remarkArgs["source_file"] = remark.SourceFile
 				remarkArgs["source_line"] = *remark.SourceLine
 				remarkArgs["source_column"] = *remark.SourceColumn
+			}
+			if len(remark.Arguments) > 0 {
+				encoded, _ := json.Marshal(remark.Arguments)
+				remarkArgs["argument_count"] = len(remark.Arguments)
+				remarkArgs["arguments_json"] = string(encoded)
+				remarkArgs["argument_semantics"] = "ordered recorded scalar entries; values are strings and pass-specific meaning remains uninterpreted"
 			}
 			trace.Events = append(trace.Events, perfetto.Event{
 				ID: nextID, TrackUUID: trackID,

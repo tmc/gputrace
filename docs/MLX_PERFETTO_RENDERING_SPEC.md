@@ -999,6 +999,17 @@ count, malformed count, and Passed/Missed/Analysis counts. Source counts
 describe the input even when a constrained export retains fewer SQL rows; the
 loss receipt reports the projected-row difference exactly.
 
+The ordered one-line scalar entries beneath a remark's `Args` key are retained
+in canonical JSON and expanded by
+`gputrace_pipeline_compiler_remark_arg`. Each row preserves its source order,
+name, complete raw line, raw scalar spelling, decoded string value, and parse
+status. Duplicate names and empty strings are evidence and remain distinct;
+quoted numbers are not promoted to numeric metrics. Unsupported multiline or
+non-scalar entries are retained as malformed raw rows rather than silently
+discarded. Under an explicit byte budget arguments are retained or omitted
+with their parent remark. The manifest's source argument count therefore may
+exceed the typed argument view count in an incomplete export.
+
 Untimed detail instants are deterministically sharded across bounded evidence
 tracks. This avoids Trace Processor's same-timestamp argument-depth limit
 without assigning synthetic timestamps. Shards are a storage and presentation
