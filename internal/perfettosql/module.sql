@@ -408,6 +408,11 @@ SELECT
   extract_arg(arg_set_id, 'debug.counter_coverage') AS counter_coverage,
   cast(extract_arg(arg_set_id, 'debug.counter_end_records') AS INT) AS counter_end_records,
   cast(extract_arg(arg_set_id, 'debug.counter_sample_count') AS INT) AS counter_sample_count,
+  cast(extract_arg(arg_set_id, 'debug.counter_batch_id') AS INT) AS counter_batch_id,
+  extract_arg(arg_set_id, 'debug.counter_batch_id_source') AS counter_batch_id_source,
+  cast(extract_arg(arg_set_id, 'debug.counter_sample_index') AS INT) AS counter_sample_index,
+  extract_arg(arg_set_id, 'debug.counter_sample_index_source') AS counter_sample_index_source,
+  extract_arg(arg_set_id, 'debug.counter_trace_id_relation') AS counter_trace_id_relation,
   'aggregate details only; counter sample timestamps are not joined to the busy clock' AS counter_clock_relation,
   arg_set_id
 FROM slice

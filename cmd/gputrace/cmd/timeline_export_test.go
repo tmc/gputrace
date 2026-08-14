@@ -1999,7 +1999,10 @@ func TestAnnotateEncoderCounterArchive(t *testing.T) {
 	archive := &counter.CounterArchive{Encoders: []counter.EncoderSamples{
 		{Ordinal: 0, GPUCycles: 100, EndSamples: 16, SampleCount: 32},
 		{Ordinal: 1, GPUCycles: 300, EndSamples: 16, SampleCount: 32},
-	}}
+	}, TraceIDs: &counter.TraceIDTable{Rows: []counter.TraceIDInfo{
+		{TraceID: 10, BatchID: 7, SampleIndex: 44},
+		{TraceID: 20, BatchID: 8, SampleIndex: 55},
+	}}}
 
 	annotateEncoderCounterArchive(timeline, archive)
 
@@ -2014,6 +2017,34 @@ func TestAnnotateEncoderCounterArchive(t *testing.T) {
 	}
 	if got, want := timeline.Events[0].Args["counter_coverage"], "at least one end-counter read per replay group"; got != want {
 		t.Fatalf("counter_coverage = %v, want %q", got, want)
+	}
+	for key, want := range map[string]interface{}{
+		"counter_batch_id":            7,
+		"counter_sample_index":        44,
+		"counter_batch_id_source":     "APSCounterData TraceId to BatchId by encoder execution ordinal",
+		"counter_sample_index_source": "APSCounterData TraceId to SampleIndex by encoder execution ordinal",
+		"counter_trace_id_relation":   "positional only; TraceId does not equal GRC encoder or kick trace id",
+	} {
+		if got := timeline.Events[0].Args[key]; got != want {
+			t.Errorf("%s = %v, want %v", key, got, want)
+		}
+	}
+}
+
+func TestAnnotateEncoderCounterArchiveOmitsUncoveredTraceIDs(t *testing.T) {
+	timeline := &Timeline{Events: []TimelineEvent{{
+		Category: "encoder", Args: map[string]interface{}{"index": 0},
+	}}}
+	archive := &counter.CounterArchive{Encoders: []counter.EncoderSamples{{
+		Ordinal: 0, GPUCycles: 100, EndSamples: 16,
+	}}}
+
+	annotateEncoderCounterArchive(timeline, archive)
+
+	for _, key := range []string{"counter_batch_id", "counter_sample_index", "counter_trace_id_relation"} {
+		if value, ok := timeline.Events[0].Args[key]; ok {
+			t.Errorf("%s = %v, want absent", key, value)
+		}
 	}
 }
 

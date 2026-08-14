@@ -1790,6 +1790,19 @@ func annotateEncoderCounterArchive(timeline *Timeline, archive *counter.CounterA
 		event.Args["counter_attribution_basis"] = "Encoder Infos execution ordinal"
 		event.Args["counter_end_records"] = c.EndRecords
 		event.Args["counter_sample_count"] = c.SampleCount
+		batchID, hasBatchID := archive.TraceIDs.BatchForOrdinal(index)
+		if hasBatchID {
+			event.Args["counter_batch_id"] = batchID
+			event.Args["counter_batch_id_source"] = "APSCounterData TraceId to BatchId by encoder execution ordinal"
+		}
+		sampleIndex, hasSampleIndex := archive.TraceIDs.SampleIndexForOrdinal(index)
+		if hasSampleIndex {
+			event.Args["counter_sample_index"] = sampleIndex
+			event.Args["counter_sample_index_source"] = "APSCounterData TraceId to SampleIndex by encoder execution ordinal"
+		}
+		if hasBatchID || hasSampleIndex {
+			event.Args["counter_trace_id_relation"] = "positional only; TraceId does not equal GRC encoder or kick trace id"
+		}
 		if c.Sparse() {
 			event.Args["counter_coverage"] = "sparse: fewer than 16 end-counter reads"
 		} else {

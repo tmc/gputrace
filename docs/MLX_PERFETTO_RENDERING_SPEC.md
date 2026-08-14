@@ -625,6 +625,13 @@ remain unavailable until separately proven. `raw_value_uint64` is the exact
 unsigned decimal representation retained by Perfetto; `raw_value_int64` is
 the corresponding signed SQL integer projection.
 
+When an APSCounterData TraceId table covers an encoder execution ordinal,
+`gputrace_encoder` also exposes its recorded batch ID and sample index. This is
+the same positional relationship used for capture-backed execution-cost
+annotation. It is not equality between TraceId and GRC encoder or kick IDs and
+does not map the counter clock to the busy clock. Uncovered ordinals remain
+`NULL`.
+
 Pipeline identity is explicitly capture-local. Profiled dispatches use the
 pipeline ID and address from `streamData` `pipelineStateInfoData`; capture-only
 dispatches retain the address from their capture record and leave the absent

@@ -146,6 +146,10 @@ Wall-clock exports retain each APSTimelineData `Restore Timestamps` range on a
 separate replay-restore track. These intervals describe replay restore
 activity, not GPU execution, and are queryable through the
 `gputrace_restore_interval` PerfettoSQL view.
+Busy-clock encoder rows retain APSCounterData batch and sample-index identities
+when the TraceId tables cover that execution ordinal. The relationship is
+positional only: TraceId values are not equated with GRC encoder or kick IDs,
+and these identities do not join the counter and busy clocks.
 `gputrace_manifest_arg` exposes every manifest field
 as a key/value row, including per-class loss fields added by constrained
 exports and fields introduced by newer exporters.
