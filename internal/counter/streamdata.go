@@ -162,7 +162,7 @@ type StreamDataStats struct {
 	Metadata              StreamDataMetadata  `json:"metadata"`
 	Pipelines             []PipelineStats     `json:"pipelines"`
 	Dispatches            []DispatchInfo      `json:"dispatches"`     // Per-dispatch timing and metadata
-	FunctionNames         []string            `json:"function_names"` // Unique function names from strings array
+	FunctionNames         []string            `json:"function_names"` // Ordered strings array; name retained for JSON compatibility
 	EncoderTimings        []EncoderTimingInfo `json:"encoder_timings"`
 	Timeline              *TimelineInfo       `json:"timeline,omitempty"`        // CB timestamps from APSTimelineData
 	CounterArchive        *CounterArchive     `json:"counter_archive,omitempty"` // Per-encoder counter attribution from APSCounterData
@@ -677,7 +677,7 @@ func extractFunctionNames(objects []any, obj1 map[string]any) []string {
 		return nil
 	}
 
-	var names []string
+	names := make([]string, 0, len(nsObjects))
 	for _, elem := range nsObjects {
 		if elemUID, ok := elem.(plist.UID); ok {
 			if str, ok := objects[int(elemUID)].(string); ok {

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -40,6 +41,40 @@ func TestAppendEvidenceDetailEventsIncludesRawProfilerArtifacts(t *testing.T) {
 	}
 	if event.Args["timeline_header_magic"] != "0x0000000000000007" || event.Args["timeline_counter_count"] != uint32(8) || event.Args["timeline_entry_count"] != uint64(10) || event.Args["timeline_timestamp_raw"] != uint64(11) {
 		t.Fatalf("timeline header args = %#v", event.Args)
+	}
+}
+
+func TestApplyStreamIdentityPreservesOrderedStrings(t *testing.T) {
+	timeline := &Timeline{}
+	stats := &counter.StreamDataStats{FunctionNames: []string{"kernel", "", "/source.metal"}}
+	applyStreamIdentity(timeline, stats)
+	if got, want := timeline.StreamDataStrings, stats.FunctionNames; !slices.Equal(got, want) {
+		t.Fatalf("streamData strings = %q, want %q", got, want)
+	}
+	stats.FunctionNames[0] = "changed"
+	if timeline.StreamDataStrings[0] != "kernel" {
+		t.Fatalf("streamData strings alias parser storage: %q", timeline.StreamDataStrings)
+	}
+}
+
+func TestApplyStreamIdentityPreservesPresentEmptyStrings(t *testing.T) {
+	timeline := &Timeline{}
+	applyStreamIdentity(timeline, &counter.StreamDataStats{FunctionNames: []string{}})
+	if timeline.StreamDataStrings == nil || len(timeline.StreamDataStrings) != 0 {
+		t.Fatalf("streamData strings = %#v, want present empty slice", timeline.StreamDataStrings)
+	}
+	args := make(map[string]any)
+	appendStreamDataStringArgs(args, timeline.StreamDataStrings)
+	if args["stream_data_string_table_availability"] != "available: exact ordered streamData strings array" || args["stream_data_string_count"] != 0 {
+		t.Fatalf("streamData string manifest = %#v", args)
+	}
+}
+
+func TestAppendEvidenceDetailEventsOmitsPresentEmptyStrings(t *testing.T) {
+	trace := &perfetto.Trace{}
+	appendEvidenceDetailEvents(trace, &Timeline{StreamDataStrings: []string{}})
+	if len(trace.Tracks) != 0 || len(trace.Events) != 0 {
+		t.Fatalf("present-empty strings emitted %d tracks and %d events", len(trace.Tracks), len(trace.Events))
 	}
 }
 

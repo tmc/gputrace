@@ -1,10 +1,32 @@
 package counter
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/tmc/apple/x/plist"
 )
+
+func TestExtractFunctionNamesPreservesArrayShape(t *testing.T) {
+	tests := []struct {
+		name    string
+		objects []any
+		root    map[string]any
+		want    []string
+	}{
+		{name: "absent", objects: []any{"$null"}, root: map[string]any{}, want: nil},
+		{name: "empty", objects: []any{"$null", map[string]any{"NS.objects": []any{}}}, root: map[string]any{"strings": plist.UID(1)}, want: []string{}},
+		{name: "ordered", objects: []any{"$null", map[string]any{"NS.objects": []any{plist.UID(2), plist.UID(3), plist.UID(4)}}, "kernel", "", "/source.metal"}, root: map[string]any{"strings": plist.UID(1)}, want: []string{"kernel", "", "/source.metal"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := extractFunctionNames(test.objects, test.root)
+			if !slices.Equal(got, test.want) || (got == nil) != (test.want == nil) {
+				t.Fatalf("strings = %#v, want %#v", got, test.want)
+			}
+		})
+	}
+}
 
 // compilerNamesArchive builds the $objects slice of an archive whose
 // pipelinePerformanceStatistics dictionary carries a "Compile Performance"

@@ -968,7 +968,14 @@ Perfetto schema revision
 environment schema, retrieval provenance, and queried-family catalog
 resource policy and loss receipt
 retained raw-artifact identities and digests
+ordered streamData string count and source-array semantics
 ```
+
+The canonical model and native trace retain the complete ordered streamData
+strings NSArray, including empty values. One untimed evidence row carries each
+source index and value. The index is not classified or joined to a pipeline,
+function, source file, or clock unless an independently decoded source table
+establishes that relationship.
 
 Native Perfetto and timeline JSON exports content-identify every regular file
 directly beneath the resolved `.gpuprofiler_raw` directory. Each untimed

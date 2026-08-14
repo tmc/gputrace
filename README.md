@@ -109,7 +109,8 @@ Trace JSON compatibility.
 The optional SQL file defines `gputrace_capture`, `gputrace_command_buffer`, `gputrace_dispatch`,
 `gputrace_dispatch_arg`, `gputrace_encoder`, `gputrace_encoder_arg`, `gputrace_function`, `gputrace_pipeline`, `gputrace_semantic_node`, `gputrace_semantic_link`,
 `gputrace_counter_series`, `gputrace_unattributed_counter`,
-`gputrace_evidence_gap`, `gputrace_stream_data_table`, and
+`gputrace_evidence_gap`, `gputrace_stream_data_table`,
+`gputrace_stream_data_string`, and
 `gputrace_unmatched` views over the native trace.
 `gputrace_capture` provides typed trace identity, environment, clock, coverage,
 timing-summary, and loss-receipt columns. Timing columns keep encoder span,
@@ -133,6 +134,10 @@ leaving unknown words and cross-table relationships uninterpreted.
 A missing table key and a malformed recorded reference are distinct: the
 former reports absent, while the latter carries a decode error and emits no raw
 table payload. A valid empty table retains the SHA-256 digest of empty input.
+The untimed `gputrace_stream_data_string` view retains the archive's complete
+ordered strings array, including empty entries and source paths. Its index is
+only the source NSArray position; the view does not classify values or infer a
+pipeline, function, source-file, clock, or timing relationship.
 Archive-family inventory separately reports top-level APS, timeline, counter,
 shader-profiler, GPU-timeline, and batch-filtered array entry counts. These are
 presence counts, not decoded samples; an explicit zero differs from absence.

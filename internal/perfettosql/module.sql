@@ -141,6 +141,10 @@ SELECT
   extract_arg(arg_set_id, 'debug.stream_data_function_table_sha256') AS stream_data_function_table_sha256,
   extract_arg(arg_set_id, 'debug.stream_data_function_table_raw_bytes_availability') AS stream_data_function_table_raw_bytes_availability,
   extract_arg(arg_set_id, 'debug.stream_data_function_table_decode_error') AS stream_data_function_table_decode_error,
+  extract_arg(arg_set_id, 'debug.stream_data_string_table_availability') AS stream_data_string_table_availability,
+  cast(extract_arg(arg_set_id, 'debug.stream_data_string_count') AS INT) AS stream_data_string_count,
+  extract_arg(arg_set_id, 'debug.stream_data_string_source') AS stream_data_string_source,
+  extract_arg(arg_set_id, 'debug.stream_data_string_semantics') AS stream_data_string_semantics,
   extract_arg(arg_set_id, 'debug.stream_data_family_count_semantics') AS stream_data_family_count_semantics,
   cast(extract_arg(arg_set_id, 'debug.stream_data_aps_data_entry_count') AS INT) AS stream_data_aps_data_entry_count,
   extract_arg(arg_set_id, 'debug.stream_data_aps_data_availability') AS stream_data_aps_data_availability,
@@ -622,6 +626,22 @@ SELECT
   arg_set_id
 FROM slice
 WHERE category = 'stream_data_table';
+
+-- gputrace_stream_data_string retains the exact ordered strings NSArray from
+-- streamData. The source index is not a pipeline, function, or source-file
+-- join unless another independently decoded table establishes that relation.
+CREATE PERFETTO VIEW gputrace_stream_data_string AS
+SELECT
+  id,
+  cast(extract_arg(arg_set_id, 'debug.source_index') AS INT) AS source_index,
+  extract_arg(arg_set_id, 'debug.recorded_value') AS recorded_value,
+  extract_arg(arg_set_id, 'debug.source') AS source,
+  extract_arg(arg_set_id, 'debug.semantics') AS semantics,
+  extract_arg(arg_set_id, 'debug.clock_domain') AS clock_domain,
+  extract_arg(arg_set_id, 'debug.timing_quality') AS timing_quality,
+  arg_set_id
+FROM slice
+WHERE category = 'stream_data_string';
 
 -- gputrace_raw_profiler_sample_arg retains the unnamed hardware-counter
 -- payload after the seven fixed GRC columns. counter_ordinal is only its

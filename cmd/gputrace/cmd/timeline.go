@@ -969,6 +969,7 @@ type Timeline struct {
 	GPUGeneration            *uint32                        `json:"gpu_generation,omitempty"`
 	MetalDeviceName          string                         `json:"metal_device_name,omitempty"`
 	MetalPluginName          string                         `json:"metal_plugin_name,omitempty"`
+	StreamDataStrings        []string                       `json:"stream_data_strings,omitempty"`
 	StreamMetadata           *counter.StreamDataMetadata    `json:"stream_metadata,omitempty"`
 	ObservedCSLabels         int                            `json:"observed_cs_labels,omitempty"`
 	UniqueCSLabels           int                            `json:"unique_cs_labels,omitempty"`
@@ -1566,6 +1567,10 @@ func applyStreamIdentity(timeline *Timeline, stats *counter.StreamDataStats) {
 	}
 	timeline.MetalDeviceName = stats.MetalDeviceName
 	timeline.MetalPluginName = stats.MetalPluginName
+	if stats.FunctionNames != nil {
+		timeline.StreamDataStrings = make([]string, len(stats.FunctionNames))
+		copy(timeline.StreamDataStrings, stats.FunctionNames)
+	}
 	if streamDataMetadataPresent(stats.Metadata) {
 		metadata := cloneStreamDataMetadata(stats.Metadata)
 		timeline.StreamMetadata = &metadata
@@ -2843,6 +2848,7 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 	for key, value := range perfettoStreamMetadataArgs(timeline.StreamMetadata) {
 		trace.Metadata[key] = value
 	}
+	appendStreamDataStringArgs(trace.Metadata, timeline.StreamDataStrings)
 	if timeline != nil {
 		for key, value := range perfettoClockConversionArgs(timeline) {
 			trace.Metadata[key] = value
@@ -3135,6 +3141,17 @@ func perfettoStreamMetadataArgs(metadata *counter.StreamDataMetadata) map[string
 	appendStreamDataCounterDecodeArgs(args, metadata.CounterDecode)
 	appendAPSDataInventoryArgs(args, metadata.APSDataInventory)
 	return args
+}
+
+func appendStreamDataStringArgs(args map[string]any, strings []string) {
+	args["stream_data_string_table_availability"] = "unavailable: streamData strings array is absent"
+	if strings == nil {
+		return
+	}
+	args["stream_data_string_table_availability"] = "available: exact ordered streamData strings array"
+	args["stream_data_string_count"] = len(strings)
+	args["stream_data_string_source"] = "streamData keyed archive strings NSArray"
+	args["stream_data_string_semantics"] = "source array index and value only; classification and cross-table relationships remain uninterpreted"
 }
 
 func appendAPSDataInventoryArgs(args map[string]any, inventory *counter.APSDataInventory) {
@@ -3528,7 +3545,7 @@ func appendMLXSemanticEvents(trace *perfetto.Trace, timeline *Timeline) {
 
 func appendEvidenceDetailEvents(trace *perfetto.Trace, timeline *Timeline) {
 	if len(timeline.UnattributedCounters) == 0 && len(timeline.CounterCatalog) == 0 && len(timeline.CounterTraceIDs) == 0 && len(timeline.UnavailableEvidence) == 0 &&
-		(timeline.RawProfilerArtifacts == nil || len(timeline.RawProfilerArtifacts.Artifacts) == 0) && streamDataTableEvidenceCount(timeline.StreamMetadata) == 0 {
+		(timeline.RawProfilerArtifacts == nil || len(timeline.RawProfilerArtifacts.Artifacts) == 0) && streamDataTableEvidenceCount(timeline.StreamMetadata) == 0 && len(timeline.StreamDataStrings) == 0 {
 		return
 	}
 	trackID := perfetto.TrackUUID("gputrace.evidence", "details")
@@ -3579,6 +3596,22 @@ func appendEvidenceDetailEvents(trace *perfetto.Trace, timeline *Timeline) {
 			continue
 		}
 		trace.Events = append(trace.Events, streamDataTableEvent(nextID, trackID, named))
+		nextID++
+	}
+	for index, value := range timeline.StreamDataStrings {
+		trace.Events = append(trace.Events, perfetto.Event{
+			ID: nextID, TrackUUID: trackID,
+			Name:     fmt.Sprintf("streamData string %d", index),
+			Category: "stream_data_string", Kind: perfetto.EventInstant, Required: true,
+			Args: map[string]any{
+				"source_index":   index,
+				"recorded_value": value,
+				"source":         "streamData keyed archive strings NSArray",
+				"semantics":      "source array index and value only; classification and cross-table relationships remain uninterpreted",
+				"clock_domain":   "none",
+				"timing_quality": "unavailable",
+			},
+		})
 		nextID++
 	}
 	for _, metric := range timeline.UnattributedCounters {

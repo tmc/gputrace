@@ -211,7 +211,7 @@ func TestExportStreamDataTableReachesPerfettoSQL(t *testing.T) {
 	emptyCount := int64(0)
 	remainder := int64(1)
 	emptyRemainder := int64(0)
-	timeline := &Timeline{StreamMetadata: &counter.StreamDataMetadata{
+	timeline := &Timeline{StreamDataStrings: []string{"kernel", "", "/source.metal"}, StreamMetadata: &counter.StreamDataMetadata{
 		Tables: counter.StreamDataTables{CommandBuffers: &counter.StreamDataTable{
 			Bytes: 0, RecordSize: &recordSize, RecordCount: &emptyCount, RemainderBytes: &emptyRemainder,
 			SHA256: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", RawBytesHex: "",
@@ -276,5 +276,58 @@ FROM gputrace_capture;
 	}
 	if len(rows) != 2 || !slices.Equal(rows[1], wantManifest) {
 		t.Fatalf("PerfettoSQL streamData manifest = %q, want header and %q", rows, wantManifest)
+	}
+
+	stringQuery := perfettosql.Module + `
+SELECT source_index, recorded_value, source, semantics, clock_domain, timing_quality
+FROM gputrace_stream_data_string
+ORDER BY source_index;
+`
+	command = exec.Command(processor, "query", trace)
+	command.Stdin = strings.NewReader(stringQuery)
+	output, err = command.Output()
+	if err != nil {
+		t.Fatalf("trace processor streamData strings: %v\n%s", err, output)
+	}
+	rows, err = csv.NewReader(strings.NewReader(string(output))).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantStringSuffix := []string{
+		"streamData keyed archive strings NSArray",
+		"source array index and value only; classification and cross-table relationships remain uninterpreted",
+		"none", "unavailable",
+	}
+	wantStrings := [][]string{
+		append([]string{"0", "kernel"}, wantStringSuffix...),
+		append([]string{"1", ""}, wantStringSuffix...),
+		append([]string{"2", "/source.metal"}, wantStringSuffix...),
+	}
+	if len(rows) != 4 || !slices.Equal(rows[1], wantStrings[0]) || !slices.Equal(rows[2], wantStrings[1]) || !slices.Equal(rows[3], wantStrings[2]) {
+		t.Fatalf("PerfettoSQL streamData strings = %q, want header and %q", rows, wantStrings)
+	}
+
+	stringManifestQuery := perfettosql.Module + `
+SELECT stream_data_string_table_availability, stream_data_string_count,
+       stream_data_string_source, stream_data_string_semantics
+FROM gputrace_capture;
+`
+	command = exec.Command(processor, "query", trace)
+	command.Stdin = strings.NewReader(stringManifestQuery)
+	output, err = command.Output()
+	if err != nil {
+		t.Fatalf("trace processor streamData string manifest: %v\n%s", err, output)
+	}
+	rows, err = csv.NewReader(strings.NewReader(string(output))).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantStringManifest := []string{
+		"available: exact ordered streamData strings array", "3",
+		"streamData keyed archive strings NSArray",
+		"source array index and value only; classification and cross-table relationships remain uninterpreted",
+	}
+	if len(rows) != 2 || !slices.Equal(rows[1], wantStringManifest) {
+		t.Fatalf("PerfettoSQL streamData string manifest = %q, want header and %q", rows, wantStringManifest)
 	}
 }
