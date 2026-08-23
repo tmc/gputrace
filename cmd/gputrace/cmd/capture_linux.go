@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
 	"github.com/tmc/gputrace/internal/buildinfo"
@@ -56,6 +57,24 @@ func runCaptureLinux(cmd *cobra.Command, opts *captureOptions, args []string) er
 		return err
 	}
 
+	// Optional NVML sampler runs alongside the target and writes into the
+	// same bundle; it is stopped when the target exits.
+	var sampler *exec.Cmd
+	if captureLinuxOpts.samples {
+		samplerPath, samplerErr := exec.LookPath("nvml_sampler")
+		if samplerErr != nil {
+			fmt.Fprintln(os.Stderr, "capture: --samples requested but nvml_sampler not on PATH; continuing without device samples")
+		} else {
+			sampler = exec.Command(samplerPath, filepath.Join(out, cupticapture.SamplesFileName), captureLinuxOpts.sampleInterval)
+			sampler.Stdout = nil
+			sampler.Stderr = os.Stderr
+			if err := sampler.Start(); err != nil {
+				fmt.Fprintf(os.Stderr, "capture: start sampler: %v; continuing without samples\n", err)
+				sampler = nil
+			}
+		}
+	}
+
 	target := exec.Command(args[0], args[1:]...)
 	if opts.dir != "" {
 		target.Dir = opts.dir
@@ -67,6 +86,13 @@ func runCaptureLinux(cmd *cobra.Command, opts *captureOptions, args []string) er
 	target.Stderr = &stderr
 
 	err = target.Run()
+	// Stop the sampler before reporting so its file is complete.
+	if sampler != nil {
+		if sampler.Process != nil {
+			_ = sampler.Process.Signal(syscall.SIGTERM)
+		}
+		_ = sampler.Wait()
+	}
 	// A failing workload still produced a valid (possibly empty) bundle;
 	// report both facts rather than discarding evidence.
 	fmt.Fprintf(cmd.OutOrStdout(), "wrote %s\n", out)
