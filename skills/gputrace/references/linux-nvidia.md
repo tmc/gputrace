@@ -1,61 +1,65 @@
 # Linux / NVIDIA workflows
 
 The repo's agent skill (`skills/gputrace/SKILL.md`) covers Metal traces.
-This reference extends it for NVIDIA hosts where capture is CUPTI-based.
+This reference covers NVIDIA hosts, where capture is CUPTI-based and the
+analysis/export loop runs natively.
 
 ## Inventory the host
 
 ```bash
-gputrace devices            # backend capabilities
+gputrace devices            # backend capabilities (cuda / metal)
 gputrace nvidia             # per-GPU status; --json for machines
 ```
 
-## Capture kernel activity
-
-Capture happens in-process: a CUPTI probe shared library is loaded by the
-workload (ctypes from Python, or a Go c-shared import). It writes
-newline-delimited JSON activity records:
-
-```json
-{"kind":"kernel","raw_symbol":"_ZN3mlx...","start_ns":...,"end_ns":...,"grid":"112x1x1","block":"32x8x1","registers":40}
-{"kind":"memcpy","start_ns":...,"end_ns":...,"bytes":9216}
-{"kind":"memset","start_ns":...,"end_ns":...,"bytes":4096}
-```
-
-Concurrently sample device counters (25 ms cadence works well):
+## Capture a workload natively
 
 ```bash
-nvml_sampler nvml_samples.jsonl 25ms &
+gputrace capture -o run.gpucapture --samples -- <workload command...>
 ```
 
-Sample records carry `timestamp_ns`, `power_mw`, `gpu_util_pct`,
-`mem_util_pct`, `temp_c`, `mem_used_bytes`.
+This compiles (once, then caches) a small CUPTI shim and preloads it into
+the target. The bundle contains:
+
+- `events.jsonl` — kernel/memcpy/memset activity with per-launch timing,
+  grid/block geometry, registers, device/stream/correlation IDs
+- `nvml_samples.jsonl` — concurrent power/util/temp/memory series
+  (`--samples`; interval via `--sample-interval`)
+- `meta.json` — provenance: exact command, timestamps, versions
+
+Constraints: targets must link CUDA dynamically (`-cudart=shared` for nvcc;
+Python/MLX/JAX are dynamic by default). Statically-linked CUDA runtimes
+bypass interposition and yield an empty events file.
 
 ## Analyze
 
 ```bash
-gputrace analyze events.jsonl                       # findings + per-kernel table
-gputrace analyze events.jsonl --suggest             # playbook actions with verify clauses
-gputrace analyze events.jsonl --samples nvml_samples.jsonl   # join device state
-gputrace analyze events.jsonl --json                # machine-readable report
+gputrace analyze run.gpucapture                       # findings + kernel table
+gputrace analyze run.gpucapture --suggest             # playbook actions
+gputrace analyze run.gpucapture --json                # machine-readable report
 ```
 
-Findings are ranked high/medium/low and pair evidence with hypotheses.
-Bound classification (compute/memory/latency) derives from launch geometry;
-report it as heuristic, not measured.
+Findings rank high/medium/low and pair evidence lines with hypotheses.
+Bound classification derives from launch geometry — report it as heuristic,
+not counter-measured.
 
 ## Render for humans
 
 ```bash
-gputrace cupti events.jsonl --samples nvml_samples.jsonl \
-  --per-kernel-tracks -o trace.pftrace
+gputrace cupti run.gpucapture --per-kernel-tracks -o trace.pftrace
 ```
 
-Open at ui.perfetto.dev: one track per kernel with `--per-kernel-tracks`,
-transfers on their own lane, NVML series as counter tracks.
+Open at ui.perfetto.dev: one track per distinct kernel, transfers on their
+own lane, NVML series as counter tracks.
 
 ## Close the loop
 
-See the gputrace-optimize skill: `optimize run` -> apply one action ->
-`optimize run` again -> `optimize compare`. Only separated-IQR verdicts
-count as proven.
+```bash
+gputrace optimize run --iterations 7 -o base.json -- <workload>
+# apply ONE playbook action
+gputrace optimize run --iterations 7 -o variant.json -- <workload>
+gputrace optimize compare base.json variant.json
+```
+
+Verdict rules: `improved`/`regressed` require separated IQRs;
+`noisy-change` means unproven — rerun with more iterations, never claim it.
+See docs/OPTIMIZATION_PLAYBOOK.md for the action catalog and guardrails.

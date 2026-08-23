@@ -41,8 +41,9 @@ from approximate fallback timing.
 
 Read [references/commands.md](references/commands.md) for command selection,
 examples, and output guidance. On NVIDIA hosts (Linux), read
-[references/linux-nvidia.md](references/linux-nvidia.md) for CUPTI capture,
-`analyze`, `optimize run/compare`, and the closed optimization loop.
+[references/linux-nvidia.md](references/linux-nvidia.md) for native capture
+(`gputrace capture -o run.gpucapture -- <workload>`), `analyze`,
+`optimize run/compare`, and the closed optimization loop.
 
 For native Perfetto, keep the viewer and exporter on `timeline`:
 

@@ -379,15 +379,16 @@ form:
 {"kind":"memcpy","start_ns":...,"end_ns":...,"bytes":9216}
 ```
 
-can feed it. The repo's companion capture probe (a purego/c-shared library
-built from `github.com/tmc/lib/nvidia/cupti`) loads into the target process
-and writes that format; a small `nvml_sampler` binary records power,
-utilization, and memory series concurrently.
+can feed it. `gputrace capture` produces exactly this format natively: it
+compiles a small CUPTI shim on demand, preloads it into the target, and
+writes a `.gpucapture` bundle (events plus concurrent NVML samples and
+provenance metadata).
 
 ```console
-$ # run the workload with the probe loaded in-process and the sampler beside it
-$ python run_traced.py mlx-community/Qwen2.5-0.5B-Instruct-4bit
-$ gputrace cupti cupti_events.jsonl --stats
+$ gputrace capture -o run.gpucapture --samples -- ./workload
+wrote run.gpucapture
+$ gputrace analyze run.gpucapture            # findings with evidence
+$ gputrace cupti run.gpucapture --stats
 CUPTI capture: 27550 kernels, 630 memory transfers
 Total kernel time: 150.85 ms across 21 distinct kernels
 
