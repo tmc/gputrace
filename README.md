@@ -337,9 +337,70 @@ into a controlled regression.
 | | `xcode-parity` | Audit Xcode metric parity for a trace |
 | **Utilities** | `mtlb` | Metal Library Binary inspection |
 | | `clear-buffers` | Zero out buffers to reduce trace size |
+| | `nvidia` | Report NVIDIA GPU status via NVML (Linux) |
+| | `cupti` | Convert CUPTI activity captures to Perfetto traces (Linux) |
 | | `version` | Print build version |
 
 Run `gputrace [command] --help` for details on any command.
+
+## Linux / NVIDIA
+
+gputrace is developed against Apple Metal; on Linux the trace-analysis
+commands work unchanged, while capture, replay, and Xcode automation report
+that they are darwin-only. The `nvidia` command reports local NVIDIA GPU
+status through NVML:
+
+```
+$ gputrace nvidia
+NVIDIA driver: 580.95.05 (1 device)
+
+GPU 0: NVIDIA GB10
+  UUID:     GPU-...
+  Memory:   2.3 GiB used / 121.5 GiB total
+  Util:     gpu 7%, memory 0%
+  Power:    7103 mW
+```
+
+It uses `github.com/tmc/lib/nvidia/nvml` (purego, no cgo) and loads
+`libnvidia-ml.so.1` from the standard driver search paths at runtime.
+
+### CUPTI kernel tracing
+
+`gputrace cupti` converts CUPTI activity captures into native Perfetto
+traces. Any tracer that enables `CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL` (and
+optionally memcpy/memset) and emits newline-delimited JSON records of the
+form:
+
+```json
+{"kind":"kernel","name":"_ZN3mlx...","start_ns":...,"end_ns":...,"grid":"112x1x1","block":"32x8x1","registers":40}
+{"kind":"memcpy","start_ns":...,"end_ns":...,"bytes":9216}
+```
+
+can feed it. The repo's companion capture probe (a purego/c-shared library
+built from `github.com/tmc/lib/nvidia/cupti`) loads into the target process
+and writes that format; a small `nvml_sampler` binary records power,
+utilization, and memory series concurrently.
+
+```console
+$ # run the workload with the probe loaded in-process and the sampler beside it
+$ python run_traced.py mlx-community/Qwen2.5-0.5B-Instruct-4bit
+$ gputrace cupti cupti_events.jsonl --stats
+CUPTI capture: 27550 kernels, 630 memory transfers
+Total kernel time: 150.85 ms across 21 distinct kernels
+
+Top kernels by total GPU time:
+    111.70 ms   9506x  void mlx::core::cu::qmv_kernel<8, 16, 64, ...>
+     11.68 ms   6680x  void mlx::core::cu::binary_vv<mlx::core::cu::Add, ...>
+$ gputrace cupti cupti_events.jsonl --samples nvml_samples.jsonl \
+    --per-kernel-tracks -o trace.pftrace
+Wrote 28180 events -> trace.pftrace
+```
+
+Open `trace.pftrace` at [ui.perfetto.dev](https://ui.perfetto.dev): kernel
+launches appear as GPU compute slices (one track per distinct kernel with
+`--per-kernel-tracks`), memory transfers on their own track, and the NVML
+power/utilization/temperature series as counter tracks aligned to the same
+normalized clock.
 
 ## Headless timing
 

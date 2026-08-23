@@ -64,6 +64,8 @@ Capture & Automation:
 Utilities:
   mtlb             - Metal Library Binary inspection
   clear-buffers    - Destructively zero captured buffers
+  nvidia           - Report NVIDIA GPU status via NVML (Linux)
+  cupti            - Convert CUPTI activity captures to Perfetto traces (Linux)
   version          - Print gputrace build version
 
 Hidden commands are runnable but omitted from Available Commands because their
