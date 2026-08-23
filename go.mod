@@ -15,5 +15,8 @@ require (
 require (
 	github.com/aclements/go-moremath v0.0.0-20210112150236-f10218a38794 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	golang.org/x/sys v0.42.0 // indirect
+	github.com/tmc/lib/nvidia v0.0.0
+	golang.org/x/sys v0.47.0 // indirect
 )
+
+replace github.com/tmc/lib/nvidia => /home/tmc/go/src/github.com/tmc/lib/nvidia
