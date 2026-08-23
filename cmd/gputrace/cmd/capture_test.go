@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"runtime"
 	"bytes"
 	"os"
 	"os/exec"
@@ -14,6 +15,9 @@ import (
 // codesign silently checks a same-named file in the working directory instead,
 // so the verdict tracked the caller's cwd rather than PATH.
 func TestCaptureCheckResolvesThroughPath(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("codesign-based capture check is darwin-only")
+	}
 	want, err := exec.LookPath("python3")
 	if err != nil {
 		t.Skip("no python3 on PATH")

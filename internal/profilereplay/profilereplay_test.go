@@ -1,6 +1,7 @@
 package profilereplay
 
 import (
+	"runtime"
 	"context"
 	"errors"
 	"os"
@@ -187,6 +188,9 @@ func TestProfileRefusesExistingOutput(t *testing.T) {
 // in about a tenth of a second having done nothing, so a caller reading the
 // exit status reported a successful profile of a run that never happened.
 func TestProfileRejectsUnreplayableBeforeLaunch(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("MTLReplayer launch is darwin-only")
+	}
 	dir := t.TempDir()
 	in := filepath.Join(dir, "profiler-only.gputrace")
 	if err := os.MkdirAll(filepath.Join(in, "trace.gpuprofiler_raw"), 0o755); err != nil {

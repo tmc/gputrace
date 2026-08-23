@@ -1,6 +1,7 @@
 package capture
 
 import (
+	"runtime"
 	"errors"
 	"fmt"
 	"os"
@@ -12,6 +13,9 @@ import (
 )
 
 func TestEligible(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("codesign-based eligibility is darwin-only")
+	}
 	python := homebrewPython()
 	tests := []struct {
 		name  string

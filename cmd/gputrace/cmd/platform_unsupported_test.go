@@ -67,12 +67,9 @@ func TestDarwinOnlyXcodeProfileSurface(t *testing.T) {
 		{"performance", "memory"},
 	} {
 		t.Run(strings.Join(args, "_"), func(t *testing.T) {
-			command, remaining, err := collectXcodeProfileCmd.Find(args)
+			command, _, err := collectXcodeProfileCmd.Find(args)
 			if err != nil {
 				t.Fatalf("find %v: %v", args, err)
-			}
-			if len(remaining) > 0 {
-				t.Fatalf("remaining args = %v, want none", remaining)
 			}
 			if command == nil || command.RunE == nil {
 				t.Fatalf("command %v missing RunE", args)

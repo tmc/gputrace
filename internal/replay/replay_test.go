@@ -1,6 +1,7 @@
 package replay
 
 import (
+	"runtime"
 	"encoding/binary"
 	"errors"
 	"path/filepath"
@@ -89,6 +90,9 @@ func TestAnalyzeReplayResolvesDispatchFromPipeline(t *testing.T) {
 }
 
 func TestAnalyzeReplayFlattensNestedCttRecords(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Metal replay analysis is darwin-only")
+	}
 	path := filepath.Join("..", "..", "testdata", "traces", "06-six-encoders", "06-six-encoders-run1.gputrace")
 	trace, err := trace.Open(path)
 	if err != nil {
