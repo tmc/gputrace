@@ -339,6 +339,9 @@ into a controlled regression.
 | | `clear-buffers` | Zero out buffers to reduce trace size |
 | | `nvidia` | Report NVIDIA GPU status via NVML (Linux) |
 | | `cupti` | Convert CUPTI activity captures to Perfetto traces (Linux) |
+| | `devices` | List GPUs and capture backend capabilities |
+| | `analyze` | Report kernel metrics and optimization findings (Linux) |
+| | `optimize` | Run, compare, and iterate on workload performance |
 | | `version` | Print build version |
 
 Run `gputrace [command] --help` for details on any command.
@@ -401,6 +404,35 @@ launches appear as GPU compute slices (one track per distinct kernel with
 `--per-kernel-tracks`), memory transfers on their own track, and the NVML
 power/utilization/temperature series as counter tracks aligned to the same
 normalized clock.
+
+### Agentic optimization loop
+
+`analyze`, `optimize run`, and `optimize compare` close the loop from
+capture to verified improvement:
+
+```console
+$ gputrace analyze events.jsonl            # findings with evidence + hypotheses
+$ gputrace analyze events.jsonl --suggest  # playbook actions, one per finding
+Suggested actions (apply ONE, then re-measure):
+1. tile for cache/tensor-core reuse before micro-optimizing inner loops
+   verify: dominant kernel share drops
+...
+$ gputrace optimize run --iterations 7 -o base.json -- <workload>
+median 10.92ms  q1 10.88ms  q3 10.99ms
+# ... apply the one action ...
+$ gputrace optimize run --iterations 7 -o variant.json -- <workload>
+$ gputrace optimize compare base.json variant.json
+verdict: improved
+base:    median 10.92ms
+variant: median 5.81ms (-46.8%)
+variant IQR [5794749..5819517] sits entirely below baseline IQR [10883246..10987607]
+```
+
+Compare verdicts are noise-aware: when interquartile ranges overlap, the
+verdict is `noisy-change` and the delta is unproven regardless of how good
+the medians look — the only sound response is more iterations. The loop,
+its guardrails, and the findings-to-actions catalog are documented in
+[docs/OPTIMIZATION_PLAYBOOK.md](docs/OPTIMIZATION_PLAYBOOK.md).
 
 ## Headless timing
 
