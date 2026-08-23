@@ -1,3 +1,5 @@
+//go:build darwin
+
 // Package osa provides in-process AppleScript execution via CGO.
 // This avoids TCC issues that occur when spawning osascript as a child process,
 // since the AppleScript runs in the same process and inherits TCC permissions.

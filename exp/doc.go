@@ -1,3 +1,5 @@
+//go:build darwin
+
 // Package exp provides experimental Metal interposing and GPU trace capture facilities.
 //
 // It compiles and manages a lightweight Objective-C interposing dynamic library (libgputrace_capture.dylib)
