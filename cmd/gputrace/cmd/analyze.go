@@ -9,13 +9,15 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/tmc/gputrace/internal/cuptitrace"
 	"github.com/tmc/gputrace/internal/gpuevent"
+	"github.com/tmc/gputrace/internal/optimize"
 )
 
 var analyzeOpts = struct {
-	json    bool
-	samples string
+	json     bool
+	suggest  bool
+	samples  string
 	demangle bool
-	limit   int
+	limit    int
 }{demangle: true, limit: 10}
 
 var analyzeCmd = &cobra.Command{
@@ -58,6 +60,21 @@ state during the capture window.`,
 		rep := gpuevent.Analyze(cap.Events, cap.Samples)
 		if analyzeOpts.json {
 			return json.NewEncoder(cmd.OutOrStdout()).Encode(rep)
+		}
+		if analyzeOpts.suggest {
+			entries := optimize.Suggest(rep.Findings)
+			out := cmd.OutOrStdout()
+			if len(entries) == 0 {
+				fmt.Fprintln(out, "No findings to act on.")
+				return nil
+			}
+			fmt.Fprintln(out, "Suggested actions (apply ONE, then re-measure):")
+			fmt.Fprint(out, optimize.RenderSuggestions(entries))
+			fmt.Fprintln(out, "\nLoop: gputrace optimize run -o base.json -- <workload>")
+			fmt.Fprintln(out, "      ... apply one action ...")
+			fmt.Fprintln(out, "      gputrace optimize run -o variant.json -- <workload>")
+			fmt.Fprintln(out, "      gputrace optimize compare base.json variant.json")
+			return nil
 		}
 		return printAnalysis(cmd, rep)
 	},
@@ -145,6 +162,7 @@ func dur(ns uint64) string {
 
 func init() {
 	analyzeCmd.Flags().BoolVar(&analyzeOpts.json, "json", false, "Output machine-readable JSON report")
+	analyzeCmd.Flags().BoolVar(&analyzeOpts.suggest, "suggest", false, "Print playbook actions for each finding instead of the report")
 	analyzeCmd.Flags().StringVar(&analyzeOpts.samples, "samples", "", "Concurrent NVML sample file to join")
 	analyzeCmd.Flags().BoolVar(&analyzeOpts.demangle, "demangle", true, "Demangle kernel symbols with c++filt when available")
 	analyzeCmd.Flags().IntVar(&analyzeOpts.limit, "limit", 10, "Kernels listed in the text report")
