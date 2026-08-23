@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/tmc/gputrace/internal/cupticapture"
 	"github.com/tmc/gputrace/internal/cuptitrace"
 	"github.com/tmc/gputrace/internal/gpuevent"
 	"github.com/tmc/gputrace/internal/optimize"
@@ -36,12 +37,17 @@ not hardware-counter measurements.
 state during the capture window.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		f, err := os.Open(args[0])
+		eventsPath, err := cupticapture.ResolveEvents(args[0])
+		if err != nil {
+			return err
+		}
+		f, err := os.Open(eventsPath)
 		if err != nil {
 			return err
 		}
 		defer f.Close()
-		cap, err := gpuevent.DecodeJSONL(f)
+		samplesPath := cupticapture.ResolveSamples(args[0], analyzeOpts.samples)
+		cap, err := readCapture(f, samplesPath)
 		if err != nil {
 			return err
 		}

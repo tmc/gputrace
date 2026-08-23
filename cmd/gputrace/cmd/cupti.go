@@ -38,7 +38,7 @@ power_mw, gpu_util_pct, mem_util_pct, temp_c, mem_used_bytes) is overlaid as
 native counter tracks on the same normalized clock.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			events, err := cuptitrace.ReadJSONL(args[0])
+			events, err := cuptitrace.ReadInput(args[0])
 			if err != nil {
 				return err
 			}

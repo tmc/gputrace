@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/tmc/gputrace/internal/cupticapture"
 	"github.com/tmc/gputrace/internal/gpuevent"
 	"github.com/tmc/gputrace/internal/perfetto"
 )
@@ -41,6 +42,16 @@ func ReadJSONL(path string) ([]Event, error) {
 	defer f.Close()
 	cap, err := gpuevent.DecodeJSONL(f)
 	return cap.Events, err
+}
+
+// ReadInput reads events from either a bare JSONL file or a .gpucapture
+// bundle directory.
+func ReadInput(path string) ([]Event, error) {
+	eventsPath, err := cupticapture.ResolveEvents(path)
+	if err != nil {
+		return nil, err
+	}
+	return ReadJSONL(eventsPath)
 }
 
 // ReadSamples reads newline-delimited NVML samples; a missing file yields
