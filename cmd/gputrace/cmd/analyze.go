@@ -97,12 +97,16 @@ func printAnalysis(cmd *cobra.Command, rep *gpuevent.Report) error {
 
 	fmt.Fprintln(out, "\nKernels by GPU time:")
 	limit := analyzeOpts.limit
-	if limit > len(rep.Kernels) {
+	if limit == 0 || limit > len(rep.Kernels) {
 		limit = len(rep.Kernels)
 	}
 	for _, k := range rep.Kernels[:limit] {
-		fmt.Fprintf(out, "  %6.1f%%  %5dx  mean %-9s p95 %-9s [%s] %s\n",
-			k.SharePct, k.Count, dur(k.MeanNS), dur(k.P95NS), k.Bound, shortKernel(k.Name))
+		occ := ""
+		if k.TheoreticalOccupancyPct > 0 {
+			occ = fmt.Sprintf("  occ ~%.0f%% (%s)", k.TheoreticalOccupancyPct, k.OccupancyLimiter)
+		}
+		fmt.Fprintf(out, "  %6.1f%%  %5dx  mean %-9s p95 %-9s [%s] %s%s\n",
+			k.SharePct, k.Count, dur(k.MeanNS), dur(k.P95NS), k.Bound, shortKernel(k.Name), occ)
 	}
 
 	if rep.LaunchOverhead != nil && rep.LaunchOverhead.Joins > 0 {

@@ -26,7 +26,7 @@ const (
 // the vendor symbol and geometry stay available alongside any decoded name
 // so analysis can cite evidence without re-deriving it.
 type Event struct {
-	Kind          Kind           `json:"kind"`
+	Kind          Kind           `json:"kind,omitempty"`
 	Name          string         `json:"name,omitempty"`   // decoded/display name
 	RawSymbol     string         `json:"raw_symbol"`       // vendor-mangled original
 	StartNS       uint64         `json:"start_ns"`
@@ -34,6 +34,13 @@ type Event struct {
 	Grid          string         `json:"grid,omitempty"`
 	Block         string         `json:"block,omitempty"`
 	Registers     int            `json:"registers,omitempty"`
+	SharedMem     int            `json:"shared_mem,omitempty"`          // static+dynamic, bytes
+	LocalMemThread uint32       `json:"local_mem_per_thread,omitempty"` // bytes per thread
+	ContextID     uint32         `json:"context_id,omitempty"`
+	GraphID       uint32         `json:"graph_id,omitempty"`
+	GraphNodeID   uint64         `json:"graph_node_id,omitempty"`
+	SrcKind       string         `json:"src_kind,omitempty"` // memcpy memory kinds
+	DstKind       string         `json:"dst_kind,omitempty"`
 	Bytes         uint64         `json:"bytes,omitempty"` // memcpy/memset size
 	DeviceID      uint32         `json:"device_id,omitempty"`
 	StreamID      uint32         `json:"stream_id,omitempty"`
@@ -115,6 +122,7 @@ type Capture struct {
 	Events    []Event
 	Samples   []Sample
 	APIs      []APIEvent
+	Spans     []Span
 	ClockSync *ClockSync
 	Meta      *CaptureMeta
 }
@@ -123,19 +131,26 @@ type Capture struct {
 // which lets separately captured sources join on one clock. It returns the
 // subtracted origin so callers can report absolute time if needed.
 func (c *Capture) Normalize() (origin uint64) {
-	if len(c.Events) == 0 && len(c.Samples) == 0 {
+	if len(c.Events) == 0 && len(c.Samples) == 0 && len(c.Spans) == 0 && len(c.APIs) == 0 {
 		return 0
 	}
 	origin = ^uint64(0)
-	for _, e := range c.Events {
-		if e.StartNS < origin {
-			origin = e.StartNS
+	scan := func(start uint64) {
+		if start < origin {
+			origin = start
 		}
 	}
+	for _, e := range c.Events {
+		scan(e.StartNS)
+	}
 	for _, s := range c.Samples {
-		if s.TimestampNS < origin {
-			origin = s.TimestampNS
-		}
+		scan(s.TimestampNS)
+	}
+	for _, s := range c.Spans {
+		scan(s.StartNS)
+	}
+	for _, a := range c.APIs {
+		scan(a.StartNS)
 	}
 	if origin == ^uint64(0) {
 		return 0
@@ -146,6 +161,14 @@ func (c *Capture) Normalize() (origin uint64) {
 	}
 	for i := range c.Samples {
 		c.Samples[i].TimestampNS -= origin
+	}
+	for i := range c.Spans {
+		c.Spans[i].StartNS -= origin
+		c.Spans[i].EndNS -= origin
+	}
+	for i := range c.APIs {
+		c.APIs[i].StartNS -= origin
+		c.APIs[i].EndNS -= origin
 	}
 	return origin
 }
@@ -183,6 +206,11 @@ func DecodeJSONL(r io.Reader) (Capture, error) {
 			if json.Unmarshal(data, &cs) == nil && cap.ClockSync == nil {
 				cap.ClockSync = &cs
 			}
+		case probe.Kind == "span":
+			sp, err := decodeSpan(data)
+			if err == nil {
+				cap.Spans = append(cap.Spans, sp)
+			}
 		case probe.Kind == "api":
 			var a APIEvent
 			if json.Unmarshal(data, &a) == nil && (a.StartNS != 0 || a.EndNS != 0) {
@@ -207,21 +235,28 @@ func DecodeJSONL(r io.Reader) (Capture, error) {
 
 func decodeEvent(data []byte) (Event, error) {
 	var wire struct {
-		Kind          string         `json:"kind"`
-		Name          string         `json:"name"`
-		RawSymbol     string         `json:"raw_symbol"`
-		LegacyName    string         `json:"name_raw"` // older probes
-		Symbol        string         `json:"symbol"`
-		StartNS       uint64         `json:"start_ns"`
-		EndNS         uint64         `json:"end_ns"`
-		Grid          string         `json:"grid"`
-		Block         string         `json:"block"`
-		Registers     int            `json:"registers"`
-		Bytes         uint64         `json:"bytes"`
-		DeviceID      uint32         `json:"device_id"`
-		StreamID      uint32         `json:"stream_id"`
-		CorrelationID uint64         `json:"correlation_id"`
-		Attrs         map[string]any `json:"attrs"`
+		Kind           string         `json:"kind"`
+		Name           string         `json:"name"`
+		RawSymbol      string         `json:"raw_symbol"`
+		LegacyName     string         `json:"name_raw"` // older probes
+		Symbol         string         `json:"symbol"`
+		StartNS        uint64         `json:"start_ns"`
+		EndNS          uint64         `json:"end_ns"`
+		Grid           string         `json:"grid"`
+		Block          string         `json:"block"`
+		Registers      int            `json:"registers"`
+		SharedMem      int            `json:"shared_mem"`
+		LocalMemThread uint32         `json:"local_mem_per_thread"`
+		ContextID      uint32         `json:"context_id"`
+		GraphID        uint32         `json:"graph_id"`
+		GraphNodeID    uint64         `json:"graph_node_id"`
+		SrcKind        string         `json:"src_kind"`
+		DstKind        string         `json:"dst_kind"`
+		Bytes          uint64         `json:"bytes"`
+		DeviceID       uint32         `json:"device_id"`
+		StreamID       uint32         `json:"stream_id"`
+		CorrelationID  uint64         `json:"correlation_id"`
+		Attrs          map[string]any `json:"attrs"`
 	}
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return Event{}, err
@@ -235,19 +270,26 @@ func decodeEvent(data []byte) (Event, error) {
 		name = wire.LegacyName
 	}
 	return Event{
-		Kind:          Kind(wire.Kind),
-		Name:          name,
-		RawSymbol:     symbol,
-		StartNS:       wire.StartNS,
-		EndNS:         wire.EndNS,
-		Grid:          wire.Grid,
-		Block:         wire.Block,
-		Registers:     wire.Registers,
-		Bytes:         wire.Bytes,
-		DeviceID:      wire.DeviceID,
-		StreamID:      wire.StreamID,
-		CorrelationID: wire.CorrelationID,
-		Attrs:         wire.Attrs,
+		Kind:           Kind(wire.Kind),
+		Name:           name,
+		RawSymbol:      symbol,
+		StartNS:        wire.StartNS,
+		EndNS:          wire.EndNS,
+		Grid:           wire.Grid,
+		Block:          wire.Block,
+		Registers:      wire.Registers,
+		SharedMem:      wire.SharedMem,
+		LocalMemThread: wire.LocalMemThread,
+		ContextID:      wire.ContextID,
+		GraphID:        wire.GraphID,
+		GraphNodeID:    wire.GraphNodeID,
+		SrcKind:        wire.SrcKind,
+		DstKind:        wire.DstKind,
+		Bytes:          wire.Bytes,
+		DeviceID:       wire.DeviceID,
+		StreamID:       wire.StreamID,
+		CorrelationID:  wire.CorrelationID,
+		Attrs:          wire.Attrs,
 	}, nil
 }
 

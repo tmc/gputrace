@@ -86,15 +86,26 @@ func ReadSamples(path string) ([]Sample, error) {
 	return cap.Samples, err
 }
 
-// Build converts CUPTI events (plus optional NVML samples and host API
-// records) into a Perfetto trace.
+// Build converts CUPTI events (plus optional NVML samples, host API
+// records, and application spans) into a Perfetto trace.
 func Build(events []Event, samples []Sample, apis []APIEvent, sourcePath string, opts Options) (*perfetto.Trace, error) {
-	if len(events) == 0 {
+	return build(gpuevent.Capture{Events: events, Samples: samples, APIs: apis}, sourcePath, opts)
+}
+
+// BuildCapture converts a decoded capture into a Perfetto trace. Spans in
+// the capture render as parent slices on per-label tracks with attributed
+// kernels nested beneath; kernels matching no span keep the flat tracks.
+func BuildCapture(cap gpuevent.Capture, sourcePath string, opts Options) (*perfetto.Trace, error) {
+	if len(cap.Events) == 0 {
 		return nil, fmt.Errorf("no CUPTI events in %s", sourcePath)
 	}
-	cap := gpuevent.Capture{Events: events, Samples: samples, APIs: apis}
+	return build(cap, sourcePath, opts)
+}
+
+func build(cap gpuevent.Capture, sourcePath string, opts Options) (*perfetto.Trace, error) {
 	origin := cap.Normalize()
-	events, samples, apis = cap.Events, cap.Samples, cap.APIs
+	events, samples, apis := cap.Events, cap.Samples, cap.APIs
+	spans := gpuevent.AttributeSpans(cap)
 	sort.SliceStable(events, func(i, j int) bool { return events[i].StartNS < events[j].StartNS })
 
 	trace := &perfetto.Trace{
@@ -117,7 +128,21 @@ func Build(events []Event, samples []Sample, apis []APIEvent, sourcePath string,
 
 	kernelGroupUUID := perfetto.TrackUUID("gputrace.cupti", "kernels")
 	kernelTrackUUID := perfetto.TrackUUID("gputrace.cupti", "kernels/all")
-	memcpyTrackUUID := perfetto.TrackUUID("gputrace.cupti", "memcpy")
+	memcpyGroupUUID := perfetto.TrackUUID("gputrace.cupti", "memcpy")
+	memcpyTrackUUID := perfetto.TrackUUID("gputrace.cupti", "memcpy/all")
+
+	// Streams with observed activity get their own kernel tracks: real
+	// concurrency becomes visible as parallel lanes instead of one
+	// interleaved row.
+	streamTracks := map[uint32]uint64{}
+	for _, e := range events {
+		if e.Kind == gpuevent.KindKernel {
+			streamTracks[e.StreamID] = 0
+		}
+	}
+	for sid := range streamTracks {
+		streamTracks[sid] = perfetto.TrackUUID("gputrace.cupti/stream", fmt.Sprint(sid))
+	}
 
 	trace.Tracks = append(trace.Tracks,
 		perfetto.Track{UUID: kernelGroupUUID, Name: "CUDA kernels (CUPTI)"},
@@ -127,10 +152,27 @@ func Build(events []Event, samples []Sample, apis []APIEvent, sourcePath string,
 			Name:        "all kernels",
 			Description: "Per-launch kernel execution measured by CUPTI concurrent-kernel activity",
 		},
+	)
+	// Deterministic stream track order.
+	streamIDs := make([]uint32, 0, len(streamTracks))
+	for sid := range streamTracks {
+		streamIDs = append(streamIDs, sid)
+	}
+	sort.Slice(streamIDs, func(i, j int) bool { return streamIDs[i] < streamIDs[j] })
+	for _, sid := range streamIDs {
+		trace.Tracks = append(trace.Tracks, perfetto.Track{
+			UUID:       streamTracks[sid],
+			ParentUUID: kernelGroupUUID,
+			Name:       fmt.Sprintf("stream %d", sid),
+		})
+	}
+	trace.Tracks = append(trace.Tracks,
+		perfetto.Track{UUID: memcpyGroupUUID, Name: "Memory transfers (CUPTI)"},
 		perfetto.Track{
 			UUID:        memcpyTrackUUID,
-			Name:        "Memory transfers (CUPTI)",
-			Description: "Host<->device copies measured by CUPTI activity tracing",
+			ParentUUID:  memcpyGroupUUID,
+			Name:        "all transfers",
+			Description: "Host<->device copies measured by CUPTI activity tracing; src/dst memory kinds in slice args",
 		},
 	)
 
@@ -159,8 +201,75 @@ func Build(events []Event, samples []Sample, apis []APIEvent, sourcePath string,
 		}
 	}
 
+	// Spans render luminal-style: each span is a parent slice on its own
+	// track (grouped under an "Application" group), with attributed kernels
+	// emitted as child slices on the same track — SLICE_BEGIN/Slice_END
+	// nesting puts them inside the span on the timeline. Span labels become
+	// debug annotations. Kernels attributed to a span are not duplicated on
+	// the flat tracks; unattributed kernels stay there.
+	attributedKernelIDs := make(map[kernelKeyT]bool)
+	nextEventID := uint64(len(events) + 1) // flat loop reuses i+1; spans take IDs beyond it
+	if len(spans) > 0 {
+		appGroupUUID := perfetto.TrackUUID("gputrace.cupti", "app")
+		trace.Tracks = append(trace.Tracks, perfetto.Track{
+			UUID:        appGroupUUID,
+			Name:        "Application spans",
+			Description: "Host-declared eval/phase spans from the app-events sidecar; attributed kernels nested beneath",
+		})
+		for _, s := range spans {
+			trackUUID := perfetto.TrackUUID("gputrace.cupti/span", s.Name)
+			trace.Tracks = append(trace.Tracks, perfetto.Track{
+				UUID:       trackUUID,
+				ParentUUID: appGroupUUID,
+				Name:       ShortName(s.Name),
+			})
+			args := map[string]any{"eval_seq": s.EvalSeq}
+			for k, v := range s.Labels {
+				args["label."+k] = v
+			}
+			trace.Events = append(trace.Events, perfetto.Event{
+				ID:         nextEventID,
+				TrackUUID:  trackUUID,
+				Name:       ShortName(s.Name),
+				Category:   "app_span",
+				StartNS:    s.StartNS,
+				DurationNS: s.EndNS - s.StartNS,
+				Kind:       perfetto.EventSlice,
+				Required:   true,
+				Args:       args,
+			})
+			nextEventID++
+			for _, k := range s.Kernels {
+				attributedKernelIDs[kernelKey(k.Event)] = true
+				trace.Events = append(trace.Events, perfetto.Event{
+					ID:         nextEventID,
+					TrackUUID:  trackUUID,
+					Name:       ShortName(Demangle(kernelDisplayName(k.Event))),
+					Category:   "cuda_kernel",
+					StartNS:    k.StartNS,
+					DurationNS: k.DurationNS(),
+					Kind:       perfetto.EventGPUCompute,
+					Args: map[string]any{
+						"raw_symbol":     k.RawSymbol,
+						"grid":           k.Grid,
+						"block":          k.Block,
+						"registers":      k.Registers,
+						"stream_id":      k.StreamID,
+						"correlation_id": k.CorrelationID,
+						"attribution":    k.Attribution,
+						"timebase":       "cupti_activity_ns",
+					},
+				})
+				nextEventID++
+			}
+		}
+	}
+
 	for i := range events {
 		e := &events[i]
+		if e.Kind == gpuevent.KindKernel && attributedKernelIDs[kernelKey(*e)] {
+			continue // rendered nested under its span
+		}
 		ev := perfetto.Event{
 			ID:         uint64(i + 1),
 			StartNS:    e.StartNS,
@@ -185,11 +294,17 @@ func Build(events []Event, samples []Sample, apis []APIEvent, sourcePath string,
 			ev.Kind = perfetto.EventGPUCompute
 			if t, ok := nameTracks[e.Name]; ok {
 				ev.TrackUUID = t
+			} else if tu, ok := streamTracks[e.StreamID]; ok && !opts.PerKernelTracks {
+				ev.TrackUUID = tu
 			} else {
 				ev.TrackUUID = kernelTrackUUID
 			}
 		case gpuevent.KindMemcpy, gpuevent.KindMemset:
 			ev.Category = "cuda_" + string(e.Kind)
+			if e.Kind == gpuevent.KindMemcpy {
+				ev.Args["src_kind"] = e.SrcKind
+				ev.Args["dst_kind"] = e.DstKind
+			}
 			ev.Name = string(e.Kind)
 			if e.Bytes > 0 {
 				ev.Args["bytes"] = e.Bytes
@@ -343,4 +458,24 @@ func ShortName(demangled string) string {
 		return demangled
 	}
 	return demangled[:maxLen-3] + "..."
+}
+
+// kernelKey identifies an event for span-attribution bookkeeping. Events
+// carry a map field and are not comparable; correlation ID plus start is
+// unique within one process's capture.
+type kernelKeyT struct {
+	CorrelationID uint64
+	StartNS       uint64
+	Stream        uint32
+}
+
+func kernelKey(e gpuevent.Event) kernelKeyT {
+	return kernelKeyT{e.CorrelationID, e.StartNS, e.StreamID}
+}
+
+func kernelDisplayName(e gpuevent.Event) string {
+	if e.Name != "" {
+		return e.Name
+	}
+	return e.RawSymbol
 }

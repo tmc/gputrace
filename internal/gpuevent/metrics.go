@@ -29,6 +29,8 @@ const (
 	FindingLaunchShape FindingKind = "launch-shape" // geometry too small to use the device
 	FindingLongTail    FindingKind = "long-tail"    // high p95-vs-mean spread
 	FindingTransferHeavy FindingKind = "transfer-heavy" // memcpys rival kernel time
+	FindingLowOccupancy  FindingKind = "low-occupancy"  // register/shared limits cap theoretical occupancy
+	FindingPageableCopy  FindingKind = "pageable-copy"  // most transfer time moves pageable memory
 )
 
 // Severity ranks how much measured time a finding touches.
@@ -56,6 +58,9 @@ type KernelStats struct {
 	ThreadsPerLaunch uint64 `json:"threads_per_launch"` // grid x block of modal launch
 	BytesTotal uint64  `json:"bytes_total,omitempty"`
 	Bound      Bound   `json:"bound"`
+	TheoreticalOccupancyPct float64 `json:"theoretical_occupancy_pct,omitempty"` // [H] computed, not measured
+	OccupancyLimiter         string  `json:"occupancy_limiter,omitempty"`
+	SharedMemBytes           int     `json:"shared_mem_bytes,omitempty"`
 }
 
 // Finding is one evidence-backed observation with a proposed direction.
@@ -78,6 +83,7 @@ type Report struct {
 	MemcpyCount   int           `json:"memcpy_count"`
 	MemsetCount   int           `json:"memset_count"`
 	MemcpyNS      uint64        `json:"memcpy_ns"`
+	PageableNS    uint64        `json:"pageable_ns,omitempty"` // memcpy time touching pageable memory [V]
 	SpanNS        uint64        `json:"span_ns"` // first start to last end
 	LaunchOverhead *LaunchOverhead `json:"launch_overhead,omitempty"`
 }
@@ -107,6 +113,9 @@ func Analyze(events []Event, _ []Sample) *Report {
 		case KindMemcpy:
 			rep.MemcpyCount++
 			rep.MemcpyNS += e.DurationNS()
+			if e.SrcKind == "pageable" || e.DstKind == "pageable" {
+				rep.PageableNS += e.DurationNS()
+			}
 		case KindMemset:
 			rep.MemsetCount++
 		}
@@ -116,6 +125,14 @@ func Analyze(events []Event, _ []Sample) *Report {
 	}
 	for _, agg := range byName {
 		ks := agg.finish(rep.TotalKernelNS)
+		// Theoretical occupancy from the modal launch's attributes [H].
+		if ks.TypicalBlock != "" && ks.Registers > 0 {
+			modalEvent := Event{Kind: KindKernel, Block: ks.TypicalBlock, Registers: ks.Registers}
+			pct, limiter := TheoreticalOccupancy(modalEvent)
+			ks.TheoreticalOccupancyPct = pct
+			ks.OccupancyLimiter = limiter
+			ks.SharedMemBytes = agg.sharedMemBytes
+		}
 		rep.Kernels = append(rep.Kernels, ks)
 	}
 	sort.Slice(rep.Kernels, func(i, j int) bool {
@@ -140,6 +157,7 @@ type kernelAgg struct {
 	totalNS  uint64
 	durations []uint64
 	registers int
+	sharedMemBytes int
 	grids     map[string]int
 	blocks   map[string]int
 	bytes    uint64
@@ -152,6 +170,9 @@ func (a *kernelAgg) add(e Event) {
 	a.durations = append(a.durations, d)
 	if e.Registers > 0 && a.registers == 0 {
 		a.registers = e.Registers
+	}
+	if e.SharedMem > 0 && a.sharedMemBytes == 0 {
+		a.sharedMemBytes = e.SharedMem
 	}
 	if a.grids == nil {
 		a.grids = map[string]int{}
@@ -334,6 +355,41 @@ func buildFindings(rep *Report) []Finding {
 			Evidence: []string{fmt.Sprintf("%d transfers totalling %.2f ms vs %.2f ms of kernel time", rep.MemcpyCount, float64(rep.MemcpyNS)/1e6, float64(rep.TotalKernelNS)/1e6)},
 			Hypothesis: "transfers rival compute; batch small copies, prefer pinned memory, or keep data resident on-device between kernels",
 		})
+	}
+	// Low theoretical occupancy: computed from recorded launch attributes
+	// against architectural constants [H]. Reported only when occupancy is
+	// both low and the kernel matters (>=5% of GPU time).
+	for i, k := range rep.Kernels {
+		if k.TheoreticalOccupancyPct <= 0 || k.TheoreticalOccupancyPct >= 50 {
+			continue
+		}
+		if !(i == 0 || k.SharePct >= 5) {
+			continue
+		}
+		out = append(out, Finding{
+			Kind:     FindingLowOccupancy,
+			Severity: severityFor(k.SharePct),
+			Subject:  k.Name,
+			Evidence: []string{fmt.Sprintf(
+				"theoretical occupancy %.0f%% (%s-limited): %d regs/thread, block %s, %d B shared; share %.1f%% of GPU time",
+				k.TheoreticalOccupancyPct, k.OccupancyLimiter, k.Registers, orDash(k.TypicalBlock), k.SharedMemBytes, k.SharePct)},
+			Hypothesis: "launch geometry cannot fill the SM: fewer registers per thread, smaller shared-memory footprint, larger blocks, or a bigger grid raise the ceiling — verify with measured occupancy before changing code",
+		})
+	}
+	// Pageable transfers: when transfers matter at all and most moved
+	// pageable memory, pinning is a concrete, testable action.
+	if rep.PageableNS > 0 && rep.MemcpyNS > 0 {
+		pageablePct := 100 * float64(rep.PageableNS) / float64(rep.MemcpyNS)
+		if pageablePct >= 50 && rep.PageableNS > rep.TotalKernelNS/10 {
+			out = append(out, Finding{
+				Kind:     FindingPageableCopy,
+				Severity: SeverityMedium,
+				Subject:  "(host transfers)",
+				Evidence: []string{fmt.Sprintf("%.0f%% of %.2f ms transfer time touched pageable memory",
+					pageablePct, float64(rep.MemcpyNS)/1e6)},
+				Hypothesis: "pin staging buffers with cudaMallocHost/cudaHostRegister so copies use DMA instead of staged paging",
+			})
+		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		return severityRank(out[i].Severity) < severityRank(out[j].Severity)

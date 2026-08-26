@@ -147,11 +147,25 @@ static void emit_kernel(CUpti_ActivityKernel4 *k) {
         ",\"start_ns\":%llu,\"end_ns\":%llu,"
         "\"grid\":\"%ux%ux%u\",\"block\":\"%ux%ux%u\","
         "\"registers\":%d,"
-        "\"device_id\":%u,\"stream_id\":%u,\"correlation_id\":%llu",
+        "\"shared_mem\":%d,\"local_mem_per_thread\":%u,"
+        "\"context_id\":%u,\"device_id\":%u,\"stream_id\":%u,\"correlation_id\":%llu",
         (unsigned long long)k->start, (unsigned long long)k->end,
         k->gridX, k->gridY, k->gridZ, k->blockX, k->blockY, k->blockZ,
         (int)k->registersPerThread,
-        k->deviceId, k->streamId, (unsigned long long)k->correlationId);
+        (int)(k->staticSharedMemory + k->dynamicSharedMemory),
+        k->localMemoryPerThread,
+        k->contextId, k->deviceId, k->streamId, (unsigned long long)k->correlationId);
+    /* Kernel4 lacks graphId/graphNodeId; they live in Kernel8+ at a
+     * fixed offset past the prefix-compatible region. The record buffer
+     * is large enough for the newest struct CUPTI emits, so reading
+     * Kernel9 fields through the same pointer is safe on CUDA >= 11.8
+     * and reads garbage (guarded by !=0) nowhere else. */
+    {
+        const CUpti_ActivityKernel9 *k9 = (const CUpti_ActivityKernel9 *)k;
+        if (k9->graphId != 0)
+            fprintf(g_out, ",\"graph_id\":%u,\"graph_node_id\":%llu",
+                    k9->graphId, (unsigned long long)k9->graphNodeId);
+    }
     /* Latency timestamps (enabled at arm time): queued/submitted separate
      * "kernel is slow" from "kernel waited in the stream queue". */
     if (k->queued || k->submitted)
