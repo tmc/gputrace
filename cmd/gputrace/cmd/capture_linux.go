@@ -65,7 +65,7 @@ func runCaptureLinux(cmd *cobra.Command, opts *captureOptions, args []string) er
 		if samplerErr != nil {
 			fmt.Fprintln(os.Stderr, "capture: --samples requested but nvml_sampler not on PATH; continuing without device samples")
 		} else {
-			sampler = exec.Command(samplerPath, filepath.Join(out, cupticapture.SamplesFileName), captureLinuxOpts.sampleInterval)
+			sampler = exec.Command(samplerPath, "-out", out, "-interval", captureLinuxOpts.sampleInterval)
 			sampler.Stdout = nil
 			sampler.Stderr = os.Stderr
 			if err := sampler.Start(); err != nil {
