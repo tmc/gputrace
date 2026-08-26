@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/tmc/gputrace/internal/cupticapture"
 	"github.com/tmc/gputrace/internal/cuptitrace"
 )
 
@@ -38,10 +39,12 @@ power_mw, gpu_util_pct, mem_util_pct, temp_c, mem_used_bytes) is overlaid as
 native counter tracks on the same normalized clock.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			events, err := cuptitrace.ReadInput(args[0])
+			capData, err := cuptitrace.ReadCapture(args[0])
 			if err != nil {
 				return err
 			}
+			events := capData.Events
+			apis := capData.APIs
 			if len(events) == 0 {
 				return fmt.Errorf("no CUPTI events in %s", args[0])
 			}
@@ -52,11 +55,12 @@ native counter tracks on the same normalized clock.`,
 				return printCuptiTop(cmd, events, opts.top)
 			}
 
-			samples, err := cuptitrace.ReadSamples(opts.samples)
+			samplesPath := cupticapture.ResolveSamples(args[0], opts.samples)
+			samples, err := cuptitrace.ReadSamples(samplesPath)
 			if err != nil {
 				return fmt.Errorf("read NVML samples: %w", err)
 			}
-			trace, err := cuptitrace.Build(events, samples, args[0], cuptitrace.Options{
+			trace, err := cuptitrace.Build(events, samples, apis, args[0], cuptitrace.Options{
 				PerKernelTracks: opts.perKernel,
 			})
 			if err != nil {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/tmc/gputrace"
+	"github.com/tmc/gputrace/internal/cupticapture"
 	"github.com/tmc/gputrace/internal/export"
 	"github.com/tmc/gputrace/internal/mlxprof"
 	"github.com/tmc/gputrace/internal/timing"
@@ -84,6 +85,13 @@ func init() {
 
 func runPprof(cmd *cobra.Command, args []string, opts *pprofOptions) error {
 	tracePath := args[0]
+
+	// CUDA captures (.gpucapture bundles or activity JSONL) take the
+	// cuptiprofile path: per-launch kernel samples instead of Metal
+	// shader timing. Everything else keeps the Metal flow.
+	if cupticapture.IsBundle(tracePath) || filepath.Ext(tracePath) == ".jsonl" {
+		return runCuptiPprof(cmd, args, opts)
+	}
 
 	// Verify trace file exists
 	if err := checkTraceFile(tracePath); err != nil {

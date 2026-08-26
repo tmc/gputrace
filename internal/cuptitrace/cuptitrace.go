@@ -24,6 +24,9 @@ type Event = gpuevent.Event
 // Sample is one NVML device observation taken while the workload ran.
 type Sample = gpuevent.Sample
 
+// APIEvent is one host-side CUDA runtime/driver call record.
+type APIEvent = gpuevent.APIEvent
+
 // Options controls trace construction.
 type Options struct {
 	// PerKernelTracks puts each distinct kernel name on its own track,
@@ -47,13 +50,22 @@ func ReadJSONL(path string) ([]Event, error) {
 // ReadInput reads events from either a bare JSONL file or a .gpucapture
 // bundle directory (including per-PID event shards, merged on read).
 func ReadInput(path string) ([]Event, error) {
-	r, closers, err := cupticapture.OpenEvents(path)
+	cap, err := ReadCapture(path)
 	if err != nil {
 		return nil, err
 	}
-	defer closers()
-	cap, err := gpuevent.DecodeJSONL(r)
 	return cap.Events, err
+}
+
+// ReadCapture reads the full capture: events plus any host API records
+// and metadata records found alongside them.
+func ReadCapture(path string) (gpuevent.Capture, error) {
+	r, closers, err := cupticapture.OpenEvents(path)
+	if err != nil {
+		return gpuevent.Capture{}, err
+	}
+	defer closers()
+	return gpuevent.DecodeJSONL(r)
 }
 
 // ReadSamples reads newline-delimited NVML samples; a missing file yields
@@ -74,14 +86,15 @@ func ReadSamples(path string) ([]Sample, error) {
 	return cap.Samples, err
 }
 
-// Build converts CUPTI events (plus optional NVML samples) into a Perfetto trace.
-func Build(events []Event, samples []Sample, sourcePath string, opts Options) (*perfetto.Trace, error) {
+// Build converts CUPTI events (plus optional NVML samples and host API
+// records) into a Perfetto trace.
+func Build(events []Event, samples []Sample, apis []APIEvent, sourcePath string, opts Options) (*perfetto.Trace, error) {
 	if len(events) == 0 {
 		return nil, fmt.Errorf("no CUPTI events in %s", sourcePath)
 	}
-	cap := gpuevent.Capture{Events: events, Samples: samples}
+	cap := gpuevent.Capture{Events: events, Samples: samples, APIs: apis}
 	origin := cap.Normalize()
-	events, samples = cap.Events, cap.Samples
+	events, samples, apis = cap.Events, cap.Samples, cap.APIs
 	sort.SliceStable(events, func(i, j int) bool { return events[i].StartNS < events[j].StartNS })
 
 	trace := &perfetto.Trace{
@@ -153,12 +166,17 @@ func Build(events []Event, samples []Sample, sourcePath string, opts Options) (*
 			StartNS:    e.StartNS,
 			DurationNS: e.DurationNS(),
 			Args: map[string]any{
-				"raw_symbol": e.RawSymbol,
-				"grid":       e.Grid,
-				"block":      e.Block,
-				"registers":  e.Registers,
-				"timebase":   "cupti_activity_ns",
+				"raw_symbol":     e.RawSymbol,
+				"grid":           e.Grid,
+				"block":          e.Block,
+				"registers":      e.Registers,
+				"timebase":       "cupti_activity_ns",
+				"stream_id":      e.StreamID,
+				"correlation_id": e.CorrelationID,
 			},
+		}
+		if q, ok := e.Attrs["queued_ns"]; ok {
+			ev.Args["queued_ns"] = q
 		}
 		switch e.Kind {
 		case gpuevent.KindKernel:
@@ -182,6 +200,57 @@ func Build(events []Event, samples []Sample, sourcePath string, opts Options) (*
 			continue
 		}
 		trace.Events = append(trace.Events, ev)
+	}
+
+	// Host-side API call records become slices on per-thread tracks, so the
+	// launch-submission cost and the gap between host submission and GPU
+	// start are visible directly in the timeline.
+	apiTrackUUID := perfetto.TrackUUID("gputrace.cupti", "api")
+	threadTracks := map[uint32]uint64{}
+	if len(apis) > 0 {
+		trace.Tracks = append(trace.Tracks, perfetto.Track{
+			UUID:        apiTrackUUID,
+			Name:        "Host CUDA API calls (CUPTI)",
+			Description: "Runtime/driver call timing on the submitting thread; join to kernels via correlation_id",
+		})
+		for _, a := range apis {
+			tt, ok := threadTracks[a.ThreadID]
+			if !ok {
+				tt = perfetto.TrackUUID("gputrace.cupti/thread", fmt.Sprint(a.ThreadID))
+				threadTracks[a.ThreadID] = tt
+				trace.Tracks = append(trace.Tracks, perfetto.Track{
+					UUID:       tt,
+					ParentUUID: apiTrackUUID,
+					Name:       fmt.Sprintf("thread %d", a.ThreadID),
+				})
+			}
+			dur := uint64(0)
+			if a.EndNS > a.StartNS {
+				dur = a.EndNS - a.StartNS
+			}
+			name := a.Name
+			if name == "" {
+				name = fmt.Sprintf("cbid %d", a.Cbid)
+			}
+			trace.Events = append(trace.Events, perfetto.Event{
+				ID:         uint64(len(trace.Events) + 1),
+				TrackUUID:  tt,
+				Name:       name,
+				Category:   "cuda_api_" + a.API,
+				StartNS:    a.StartNS,
+				DurationNS: dur,
+				Kind:       perfetto.EventSlice,
+				Args: map[string]any{
+					"cbid":           a.Cbid,
+					"correlation_id": a.CorrelationID,
+					"timebase":       "cupti_activity_ns",
+				},
+			})
+		}
+		sort.SliceStable(trace.Events, func(i, j int) bool {
+			return trace.Events[i].StartNS < trace.Events[j].StartNS
+		})
+		trace.Metadata["api_record_count"] = len(apis)
 	}
 
 	// NVML device counters as native Perfetto counter series on the same
