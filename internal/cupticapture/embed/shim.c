@@ -28,6 +28,7 @@
 #define ALIGN_SIZE 8
 #define MAX_RECORDS 0
 
+
 static FILE *g_out = NULL;
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static int g_enabled = 0;
@@ -37,6 +38,7 @@ static void debug(const char *msg) {
         fprintf(stderr, "gputrace-shim: %s\n", msg);
     }
 }
+
 
 /* --- JSON escaping ------------------------------------------------------ */
 
@@ -58,9 +60,53 @@ static void json_escape(FILE *out, const char *s) {
     fputc('"', out);
 }
 
-static const char *demangle_cached(const char *mangled);
 
-/* --- record emission ---------------------------------------------------- */
+
+/* --- record emitters ------------------------------------------------------ */
+
+/* Cbid names for the runtime/driver calls that matter for launch-overhead
+ * analysis. CUPTI does not expose a numeric->name table in the activity API,
+ * so we carry the small set that dominates inference workloads and fall
+ * back to the number for everything else. */
+static const char *cbid_name(uint32_t cbid) {
+    switch (cbid) {
+    /* runtime (cupti_runtime_cbid.h) */
+    case 211: return "cudaLaunchKernel";
+    case 212: return "cudaLaunchKernelExC";
+    case 223: return "cudaMemcpyAsync";
+    case 218: return "cudaMemcpy";
+    case 222: return "cudaMemsetAsync";
+    case 231: return "cudaStreamSynchronize";
+    case 229: return "cudaDeviceSynchronize";
+    case 217: return "cudaEventSynchronize";
+    case 251: return "cudaEventRecord";
+    case 206: return "cudaMallocManaged";
+    /* driver (cupti_driver_cbid.h) */
+    case 307: return "cuLaunchKernel";
+    case 308: return "cuLaunchKernelEx";
+    case 402: return "cuMemcpyHtoDAsync_v2";
+    case 405: return "cuMemcpyDtoHAsync_v2";
+    default:  return NULL;
+    }
+}
+
+static void emit_api(const CUpti_ActivityAPI *a, const char *api_kind) {
+    const char *name = cbid_name(a->cbid);
+    fprintf(g_out, "{\"kind\":\"api\",\"api\":");
+    json_escape(g_out, api_kind);
+    if (name) {
+        fprintf(g_out, ",\"name\":");
+        json_escape(g_out, name);
+    }
+    fprintf(g_out,
+        ",\"cbid\":%u,\"start_ns\":%llu,\"end_ns\":%llu,"
+        "\"thread_id\":%u,\"correlation_id\":%llu}\n",
+        a->cbid,
+        (unsigned long long)a->start, (unsigned long long)a->end,
+        a->threadId, (unsigned long long)a->correlationId);
+}
+
+
 
 static void emit_kernel(CUpti_ActivityKernel4 *k) {
     /* No demangling here: this runs on a CUPTI callback thread where fork
@@ -74,11 +120,17 @@ static void emit_kernel(CUpti_ActivityKernel4 *k) {
         ",\"start_ns\":%llu,\"end_ns\":%llu,"
         "\"grid\":\"%ux%ux%u\",\"block\":\"%ux%ux%u\","
         "\"registers\":%d,"
-        "\"device_id\":%u,\"stream_id\":%u,\"correlation_id\":%llu}\n",
+        "\"device_id\":%u,\"stream_id\":%u,\"correlation_id\":%llu",
         (unsigned long long)k->start, (unsigned long long)k->end,
         k->gridX, k->gridY, k->gridZ, k->blockX, k->blockY, k->blockZ,
         (int)k->registersPerThread,
         k->deviceId, k->streamId, (unsigned long long)k->correlationId);
+    /* Latency timestamps (enabled at arm time): queued/submitted separate
+     * "kernel is slow" from "kernel waited in the stream queue". */
+    if (k->queued || k->submitted)
+        fprintf(g_out, ",\"queued_ns\":%llu,\"submitted_ns\":%llu",
+                (unsigned long long)k->queued, (unsigned long long)k->submitted);
+    fprintf(g_out, "}\n");
 }
 
 static void emit_memcpy(CUpti_ActivityMemcpy5 *m) {
@@ -106,44 +158,6 @@ static void emit_memset(CUpti_ActivityMemset3 *m) {
         "\"device_id\":%u,\"stream_id\":%u}\n",
         (unsigned long long)m->start, (unsigned long long)m->end,
         (unsigned long long)m->bytes, m->deviceId, m->streamId);
-}
-
-/* --- demangling via c++filt --------------------------------------------- */
-
-#define DMANGLE_SLOTS 512
-static struct { char *raw; char *pretty; } g_dmangle[DMANGLE_SLOTS];
-static int g_dmangle_n = 0;
-
-static const char *demangle_cached(const char *mangled) {
-    int i;
-    for (i = 0; i < g_dmangle_n; i++)
-        if (strcmp(g_dmangle[i].raw, mangled) == 0)
-            return g_dmangle[i].pretty;
-
-    char cmd[1024];
-    snprintf(cmd, sizeof(cmd), "c++filt %s", mangled);
-    FILE *p = popen(cmd, "r");
-    char pretty[512] = "";
-    if (p) {
-        size_t n = fread(pretty, 1, sizeof(pretty) - 2, p);
-        while (n > 0 && (pretty[n-1] == '\n' || pretty[n-1] == ' ')) n--;
-        pretty[n] = '\0';
-        pclose(p);
-    }
-    if (pretty[0] == '\0' || strchr(pretty, ' ') == pretty /* failure modes */)
-        strncpy(pretty, mangled, sizeof(pretty) - 1);
-
-    char *raw_copy = strdup(mangled), *pretty_copy = strdup(pretty);
-    if (!raw_copy || !pretty_copy) return mangled;
-    if (g_dmangle_n >= DMANGLE_SLOTS) { /* recycle oldest slot */
-        free(g_dmangle[0].raw); free(g_dmangle[0].pretty);
-        memmove(&g_dmangle[0], &g_dmangle[1], sizeof(g_dmangle[0]) * (DMANGLE_SLOTS - 1));
-        g_dmangle_n--;
-    }
-    g_dmangle[g_dmangle_n].raw = raw_copy;
-    g_dmangle[g_dmangle_n].pretty = pretty_copy;
-    g_dmangle_n++;
-    return pretty_copy;
 }
 
 /* --- CUPTI callbacks ----------------------------------------------------- */
@@ -181,6 +195,12 @@ static void CUPTIAPI bufferCompleted(CUcontext ctx, uint32_t streamId,
                 break;
             case CUPTI_ACTIVITY_KIND_MEMSET:
                 emit_memset((CUpti_ActivityMemset3 *)record);
+                break;
+            case CUPTI_ACTIVITY_KIND_RUNTIME:
+                emit_api((const CUpti_ActivityAPI *)record, "runtime");
+                break;
+            case CUPTI_ACTIVITY_KIND_DRIVER:
+                emit_api((const CUpti_ActivityAPI *)record, "driver");
                 break;
             default:
                 break;
@@ -221,23 +241,43 @@ static void arm_cupti(void) {
     if (!h) { debug("cannot dlopen libcupti"); return; }
     r = cuptiActivityRegisterCallbacks(bufferRequested, bufferCompleted);
     if (r != CUPTI_SUCCESS) { debug("register failed"); return; }
-    r = cuptiActivityEnable(CUPTI_ACTIVITY_KIND_KERNEL);
-    if (getenv("GPUTRACE_CAPTURE_DEBUG"))
-        fprintf(stderr, "gputrace-shim: enable kernel rc=%d\n", (int)r);
-    if (r != CUPTI_SUCCESS) {
-        if (getenv("GPUTRACE_CAPTURE_DEBUG"))
-            fprintf(stderr, "gputrace-shim: enable kernel rc=%d\n", (int)r);
-        else {
-            /* serialized KERNEL unsupported; try CONCURRENT as fallback */
-            if (cuptiActivityEnable(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL) == CUPTI_SUCCESS)
-                debug("using concurrent-kernel activity");
-        }
+    /* CONCURRENT_KERNEL first: serialized KERNEL serializes all launches
+     * and hides real stream overlap, distorting the profile. Only fall
+     * back to KERNEL when CONCURRENT is refused (rare, old drivers). */
+    int concurrent = 0;
+    r = cuptiActivityEnable(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL);
+    if (r == CUPTI_SUCCESS) {
+        concurrent = 1;
+        debug("using concurrent-kernel activity");
     } else {
-        debug("using serialized kernel activity");
+        if (getenv("GPUTRACE_CAPTURE_DEBUG"))
+            fprintf(stderr, "gputrace-shim: enable concurrent-kernel rc=%d\n", (int)r);
+        r = cuptiActivityEnable(CUPTI_ACTIVITY_KIND_KERNEL);
+        if (r == CUPTI_SUCCESS)
+            debug("concurrent unavailable; using serialized kernel activity");
+        else if (getenv("GPUTRACE_CAPTURE_DEBUG"))
+            fprintf(stderr, "gputrace-shim: enable kernel rc=%d\n", (int)r);
     }
+    /* Latency timestamps: per-launch queued/submitted times, which separate
+     * "kernel is slow" from "kernel waited in the stream queue". */
+    cuptiActivityEnableLatencyTimestamps(1);
     cuptiActivityEnable(CUPTI_ACTIVITY_KIND_MEMCPY);
     cuptiActivityEnable(CUPTI_ACTIVITY_KIND_MEMSET);
+    /* Runtime/driver API records: host-side call timing per launch. These
+     * are what turn "GPU was idle 35ms/token" into "each launch costs X us
+     * of host time". Gated behind env because they multiply record volume. */
+    if (getenv("GPUTRACE_CAPTURE_API")) {
+        CUptiResult ar = cuptiActivityEnable(CUPTI_ACTIVITY_KIND_RUNTIME);
+        debug(ar == CUPTI_SUCCESS ? "runtime api records on" : "runtime api enable failed");
+        ar = cuptiActivityEnable(CUPTI_ACTIVITY_KIND_DRIVER);
+        debug(ar == CUPTI_SUCCESS ? "driver api records on" : "driver api enable failed");
+    }
     g_enabled = 1;
+    if (g_out) {
+        fprintf(g_out, "{\"kind\":\"capture_meta\",\"concurrent_kernel\":%s,\"pid\":%d}\n",
+                concurrent ? "true" : "false", (int)getpid());
+        fflush(g_out);
+    }
     debug("armed");
 }
 
