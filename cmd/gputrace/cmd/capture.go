@@ -77,6 +77,7 @@ Examples:
 	f.StringVar(&opts.runID, "run-id", "", "run identity shared by timing sidecar and host signposts")
 	f.StringVar(&opts.dir, "dir", "", "working directory for the target")
 	f.BoolVar(&opts.check, "check", false, "report whether the target accepts the interposer, then exit")
+	f.BoolVar(&captureLinuxOpts.api, "api", false, "record host-side CUDA runtime/driver API calls (Linux; multiplies record volume)")
 	return cmd
 }
 

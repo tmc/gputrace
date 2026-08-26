@@ -131,6 +131,7 @@ type Options struct {
 	OutputPath string // events.jsonl path inside the capture bundle
 	Dir        string // working directory for the target
 	Debug      bool   // pass through shim diagnostics
+	APIRecords bool   // enable host-side CUDA API call records (higher volume)
 }
 
 // Command wraps argv with the environment needed to trace it. It returns
@@ -146,6 +147,9 @@ func Command(argv []string, opts Options) ([]string, *[]string, error) {
 	)
 	if opts.Debug {
 		env = append(env, "GPUTRACE_CAPTURE_DEBUG=1")
+	}
+	if opts.APIRecords {
+		env = append(env, "GPUTRACE_CAPTURE_API=1")
 	}
 	return argv, &env, nil
 }
@@ -163,6 +167,9 @@ func PreloadEnv(opts Options) ([]string, error) {
 	}
 	if opts.Debug {
 		env = append(env, "GPUTRACE_CAPTURE_DEBUG=1")
+	}
+	if opts.APIRecords {
+		env = append(env, "GPUTRACE_CAPTURE_API=1")
 	}
 	return env, nil
 }

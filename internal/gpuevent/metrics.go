@@ -79,6 +79,7 @@ type Report struct {
 	MemsetCount   int           `json:"memset_count"`
 	MemcpyNS      uint64        `json:"memcpy_ns"`
 	SpanNS        uint64        `json:"span_ns"` // first start to last end
+	LaunchOverhead *LaunchOverhead `json:"launch_overhead,omitempty"`
 }
 
 // Analyze reduces events into per-kernel statistics and ordered findings.

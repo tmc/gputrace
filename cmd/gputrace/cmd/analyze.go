@@ -64,6 +64,11 @@ state during the capture window.`,
 			}
 		}
 		rep := gpuevent.Analyze(cap.Events, cap.Samples)
+		// Launch-overhead analysis needs API records; when present, attach
+		// the host-vs-device split to the report.
+		if len(cap.APIs) > 0 {
+			rep.LaunchOverhead = gpuevent.LaunchOverheadAnalysis(cap)
+		}
 		if analyzeOpts.json {
 			return json.NewEncoder(cmd.OutOrStdout()).Encode(rep)
 		}
@@ -103,6 +108,21 @@ func printAnalysis(cmd *cobra.Command, rep *gpuevent.Report) error {
 	for _, k := range rep.Kernels[:limit] {
 		fmt.Fprintf(out, "  %6.1f%%  %5dx  mean %-9s p95 %-9s [%s] %s\n",
 			k.SharePct, k.Count, dur(k.MeanNS), dur(k.P95NS), k.Bound, shortKernel(k.Name))
+	}
+
+	if rep.LaunchOverhead != nil && rep.LaunchOverhead.Joins > 0 {
+		lo := rep.LaunchOverhead
+		fmt.Fprintf(out, "\nLaunch overhead (host API vs GPU execution, %d joined launches):\n", lo.Joins)
+		fmt.Fprintf(out, "  host cost/launch:  mean %s, p50 %s, p95 %s\n",
+			dur(lo.MeanHostCostNS), dur(lo.P50HostCostNS), dur(lo.P95HostCostNS))
+		if lo.TotalGPUNS > 0 {
+			ratio := float64(lo.TotalHostNS) / float64(lo.TotalGPUNS) * 100
+			fmt.Fprintf(out, "  host/GPU ratio:    %.1f%% (%s host vs %s GPU)\n",
+				ratio, dur(lo.TotalHostNS), dur(lo.TotalGPUNS))
+			if ratio >= 25 {
+				fmt.Fprintf(out, "  => launch-bound: host submission is a material share of GPU time;\n     reduce launch count or batch work before tuning kernels\n")
+			}
+		}
 	}
 
 	if len(rep.Findings) == 0 {

@@ -22,6 +22,7 @@ import (
 // command so the CLI surface stays identical across platforms.
 type captureLinuxOptions struct {
 	samples        bool
+	api            bool
 	sampleInterval string
 }
 
@@ -59,6 +60,7 @@ func runCaptureLinux(cmd *cobra.Command, opts *captureOptions, args []string) er
 
 	preloadEnv, err := cupticapture.PreloadEnv(cupticapture.Options{
 		OutputPath: eventsPath,
+		APIRecords: captureLinuxOpts.api,
 	})
 	if err != nil {
 		return err
