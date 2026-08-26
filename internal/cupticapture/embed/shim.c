@@ -20,6 +20,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <dlfcn.h>
+#include <time.h>
 
 #include <cuda.h>
 #include <cupti.h>
@@ -276,6 +277,16 @@ static void arm_cupti(void) {
     if (g_out) {
         fprintf(g_out, "{\"kind\":\"capture_meta\",\"concurrent_kernel\":%s,\"pid\":%d}\n",
                 concurrent ? "true" : "false", (int)getpid());
+        /* Clock sync: CUPTI's timestamp domain is undocumented relative to
+         * wall clock. Record both at one instant so the reader can align
+         * NVML samples (CLOCK_REALTIME) even if the domains diverge. */
+        uint64_t cupti_now = 0;
+        cuptiGetTimestamp(&cupti_now);
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        fprintf(g_out, "{\"kind\":\"clock_sync\",\"unix_ns\":%llu,\"cupti_ns\":%llu}\n",
+                (unsigned long long)ts.tv_sec * 1000000000ull + (unsigned long long)ts.tv_nsec,
+                (unsigned long long)cupti_now);
         fflush(g_out);
     }
     debug("armed");
@@ -286,8 +297,24 @@ static void shim_init(void) {
     const char *path = getenv("GPUTRACE_CAPTURE_OUT");
     if (!path || !*path) return; // not ours; stay inert
 
-    /* Skip our own compiler children (c++filt spawns are short-lived). */
-    g_out = fopen(path, "a");
+    /* Per-PID output: LD_PRELOAD and GPUTRACE_CAPTURE_OUT are inherited by
+     * children (torchrun ranks, dataloader workers, python -m), and a
+     * shared stdio FILE* interleaves mid-line. Each process writes its own
+     * events.<pid>.jsonl; readers merge on timestamp. The parent (the
+     * process matching the bundle's meta pid) also keeps the plain path so
+     * single-process captures look unchanged. */
+    char final_path[1024];
+    snprintf(final_path, sizeof(final_path), "%s", path);
+
+    /* Detect fork: the child inherits the already-open g_out. Close it and
+     * reopen per-PID so two processes never share one stdio buffer. */
+    if (g_out) { fclose(g_out); g_out = NULL; }
+
+    char with_pid[1024];
+    snprintf(with_pid, sizeof(with_pid), "%s.%d.jsonl", path, (int)getpid());
+    g_out = fopen(with_pid, "a");
+    if (!g_out && getenv("GPUTRACE_CAPTURE_DEBUG"))
+        fprintf(stderr, "gputrace-shim: cannot open %s\n", with_pid);
     if (!g_out) { debug("cannot open output"); return; }
 
     arm_cupti();

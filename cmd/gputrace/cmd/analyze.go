@@ -3,7 +3,6 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -37,15 +36,11 @@ not hardware-counter measurements.
 state during the capture window.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		eventsPath, err := cupticapture.ResolveEvents(args[0])
+		f, closers, err := cupticapture.OpenEvents(args[0])
 		if err != nil {
 			return err
 		}
-		f, err := os.Open(eventsPath)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
+		defer closers()
 		samplesPath := cupticapture.ResolveSamples(args[0], analyzeOpts.samples)
 		cap, err := readCapture(f, samplesPath)
 		if err != nil {

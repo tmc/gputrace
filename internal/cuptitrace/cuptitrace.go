@@ -45,13 +45,15 @@ func ReadJSONL(path string) ([]Event, error) {
 }
 
 // ReadInput reads events from either a bare JSONL file or a .gpucapture
-// bundle directory.
+// bundle directory (including per-PID event shards, merged on read).
 func ReadInput(path string) ([]Event, error) {
-	eventsPath, err := cupticapture.ResolveEvents(path)
+	r, closers, err := cupticapture.OpenEvents(path)
 	if err != nil {
 		return nil, err
 	}
-	return ReadJSONL(eventsPath)
+	defer closers()
+	cap, err := gpuevent.DecodeJSONL(r)
+	return cap.Events, err
 }
 
 // ReadSamples reads newline-delimited NVML samples; a missing file yields

@@ -60,16 +60,12 @@ var compareCapturesOpts struct{ json bool }
 
 // loadCaptureReport reads a bundle or JSONL and analyzes it.
 func loadCaptureReport(path string) (*gpuevent.Report, error) {
-	eventsPath, err := cupticapture.ResolveEvents(path)
+	r, closers, err := cupticapture.OpenEvents(path)
 	if err != nil {
 		return nil, err
 	}
-	f, err := os.Open(eventsPath)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	cap, err := gpuevent.DecodeJSONL(f)
+	defer closers()
+	cap, err := gpuevent.DecodeJSONL(r)
 	if err != nil {
 		return nil, err
 	}

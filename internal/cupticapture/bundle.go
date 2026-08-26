@@ -6,8 +6,10 @@ package cupticapture
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 )
 
@@ -63,32 +65,69 @@ func CreateBundle(dir string, meta Meta) error {
 }
 
 // IsBundle reports whether path looks like a capture bundle directory.
+// A directory containing any events shard (events.jsonl or
+// events.<pid>.jsonl) or a meta.json qualifies.
 func IsBundle(path string) bool {
 	info, err := os.Stat(path)
 	if err != nil || !info.IsDir() {
 		return false
 	}
-	_, err = os.Stat(filepath.Join(path, EventsFileName))
-	return err == nil
+	if _, err := os.Stat(filepath.Join(path, MetaFileName)); err == nil {
+		return true
+	}
+	matches, _ := filepath.Glob(filepath.Join(path, "events*"))
+	return len(matches) > 0
 }
 
-// ReadEventsJSONL returns the events file path for a bundle or bare JSONL.
-func ResolveEvents(path string) (string, error) {
+// ResolveEvents returns the event file paths for a bundle or bare JSONL.
+// A bundle may hold multiple per-PID shards (events.jsonl,
+// events.<pid>.jsonl) from multi-process targets; callers read all of them
+// and merge on timestamp.
+func ResolveEvents(path string) ([]string, error) {
 	if IsBundle(path) {
-		p := filepath.Join(path, EventsFileName)
-		if _, err := os.Stat(p); err != nil {
-			return "", fmt.Errorf("bundle %s has no %s", path, EventsFileName)
+		matches, err := filepath.Glob(filepath.Join(path, "events*.jsonl"))
+		if err != nil || len(matches) == 0 {
+			return nil, fmt.Errorf("bundle %s has no events files", path)
 		}
-		return p, nil
+		sort.Strings(matches)
+		return matches, nil
 	}
 	info, err := os.Stat(path)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if info.IsDir() {
-		return "", fmt.Errorf("%s is a directory but not a .gpucapture bundle", path)
+		return nil, fmt.Errorf("%s is a directory but not a .gpucapture bundle", path)
 	}
-	return path, nil
+	return []string{path}, nil
+}
+
+// OpenEvents opens every event file for a capture input and returns a
+// reader over their concatenated contents. Per-PID shards are read in
+// filename order; records carry absolute timestamps so consumers merge by
+// sorting rather than relying on file order.
+func OpenEvents(path string) (io.Reader, func(), error) {
+	paths, err := ResolveEvents(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	files := make([]*os.File, 0, len(paths))
+	closers := func() {
+		for _, f := range files {
+			f.Close()
+		}
+	}
+	var readers []io.Reader
+	for _, p := range paths {
+		f, err := os.Open(p)
+		if err != nil {
+			closers()
+			return nil, nil, err
+		}
+		files = append(files, f)
+		readers = append(readers, f)
+	}
+	return io.MultiReader(readers...), closers, nil
 }
 
 // ResolveSamples returns the samples file path if the input is a bundle,
