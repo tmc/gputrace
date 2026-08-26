@@ -87,3 +87,34 @@ func TestEventString(t *testing.T) {
 		t.Errorf("missing geometry dash in %q", s)
 	}
 }
+
+func TestDecodeAPIAndMeta(t *testing.T) {
+	r := strings.NewReader(`{"kind":"capture_meta","concurrent_kernel":true,"pid":123}
+{"kind":"clock_sync","unix_ns":100,"cupti_ns":90}
+{"kind":"api","api":"runtime","name":"cudaLaunchKernel","cbid":211,"start_ns":200,"end_ns":300,"thread_id":7,"correlation_id":5}
+{"kind":"kernel","name":"k","start_ns":350,"end_ns":1350,"grid":"1x1x1","block":"32x1x1","correlation_id":5}
+`)
+	cap, err := DecodeJSONL(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cap.Meta == nil || !cap.Meta.ConcurrentKernel || cap.Meta.PID != 123 {
+		t.Errorf("meta = %+v", cap.Meta)
+	}
+	if cap.ClockSync == nil || cap.ClockSync.CuptiNS != 90 {
+		t.Errorf("clock sync = %+v", cap.ClockSync)
+	}
+	if len(cap.APIs) != 1 || cap.APIs[0].Name != "cudaLaunchKernel" {
+		t.Fatalf("apis = %+v", cap.APIs)
+	}
+	oh := LaunchOverheadAnalysis(cap)
+	if oh.Joins != 1 {
+		t.Fatalf("joins = %d, want 1", oh.Joins)
+	}
+	if oh.MeanHostCostNS != 100 {
+		t.Errorf("host cost = %d, want 100", oh.MeanHostCostNS)
+	}
+	if oh.TotalGPUNS != 1000 {
+		t.Errorf("gpu total = %d, want 1000", oh.TotalGPUNS)
+	}
+}

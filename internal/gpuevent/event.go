@@ -60,11 +60,63 @@ type Sample struct {
 	MemUsedB    uint64 `json:"mem_used_bytes"`
 }
 
+// APIEvent is one host-side CUDA runtime/driver call, recorded when the
+// capture enables API tracing. CorrelationID joins it to the kernel or
+// transfer it launched: host-side cost per launch is EndNS-StartNS, and
+// KernelStartNS-EndNS is the submission latency into the GPU queue.
+type APIEvent struct {
+	API           string `json:"api"` // "runtime" | "driver"
+	Name          string `json:"name,omitempty"`
+	Cbid          uint32 `json:"cbid"`
+	StartNS       uint64 `json:"start_ns"`
+	EndNS         uint64 `json:"end_ns"`
+	ThreadID      uint32 `json:"thread_id"`
+	CorrelationID uint64 `json:"correlation_id"`
+}
+
+// LaunchJoin pairs one cudaLaunchKernel-style host call with the kernel it
+// produced. It is the unit of launch-overhead analysis.
+type LaunchJoin struct {
+	CorrelationID   uint64 `json:"correlation_id"`
+	Name            string `json:"name"`
+	HostCostNS      uint64 `json:"host_cost_ns"`
+	GPUDurationNS   uint64 `json:"gpu_duration_ns"`
+	SubmitGapNS     int64  `json:"submit_gap_ns"` // kernel start - api end; negative = pre-queued
+}
+
+// LaunchOverhead summarizes the host-vs-device split across joined launches.
+type LaunchOverhead struct {
+	Joins            int     `json:"joins"`
+	TotalHostNS      uint64  `json:"total_host_ns"`
+	TotalGPUNS       uint64  `json:"total_gpu_ns"`
+	MeanHostCostNS   uint64  `json:"mean_host_cost_ns"`
+	P50HostCostNS    uint64  `json:"p50_host_cost_ns"`
+	P95HostCostNS    uint64  `json:"p95_host_cost_ns"`
+	MeanSubmitGapNS  float64 `json:"mean_submit_gap_ns"`
+}
+
+// ClockSync records the CUPTI timestamp domain against wall clock at one
+// instant, letting readers align NVML samples even when the domains
+// diverge across drivers or platforms.
+type ClockSync struct {
+	UnixNS uint64 `json:"unix_ns"`
+	CuptiNS uint64 `json:"cupti_ns"`
+}
+
+// CaptureMeta carries capture-mode provenance from the shim.
+type CaptureMeta struct {
+	ConcurrentKernel bool `json:"concurrent_kernel"`
+	PID              int  `json:"pid"`
+}
+
 // Capture is one decoded capture: activity events plus optional concurrent
 // device samples sharing one clock domain.
 type Capture struct {
-	Events  []Event
-	Samples []Sample
+	Events    []Event
+	Samples   []Sample
+	APIs      []APIEvent
+	ClockSync *ClockSync
+	Meta      *CaptureMeta
 }
 
 // Normalize shifts every timestamp so the earliest event starts at zero,
@@ -121,6 +173,21 @@ func DecodeJSONL(r io.Reader) (Capture, error) {
 			continue // tolerate trailing partial records
 		}
 		switch {
+		case probe.Kind == "capture_meta":
+			var m CaptureMeta
+			if json.Unmarshal(data, &m) == nil {
+				cap.Meta = &m
+			}
+		case probe.Kind == "clock_sync":
+			var cs ClockSync
+			if json.Unmarshal(data, &cs) == nil && cap.ClockSync == nil {
+				cap.ClockSync = &cs
+			}
+		case probe.Kind == "api":
+			var a APIEvent
+			if json.Unmarshal(data, &a) == nil && (a.StartNS != 0 || a.EndNS != 0) {
+				cap.APIs = append(cap.APIs, a)
+			}
 		case probe.Kind != "":
 			e, err := decodeEvent(data)
 			if err != nil || (e.StartNS == 0 && e.EndNS == 0) {
@@ -208,3 +275,64 @@ func blockOrDash(e Event) string {
 }
 
 func bufioReader(r io.Reader) io.Reader { return r }
+
+// LaunchOverhead analyzes the host-vs-device split by joining API records
+// (cudaLaunchKernel and friends) to the kernels they produced via
+// correlation ID. It quantifies launch-bound behavior directly: host cost
+// per submission, and how long kernels waited between submission and start.
+func LaunchOverheadAnalysis(cap Capture) *LaunchOverhead {
+	apisByCorrelation := make(map[uint64]APIEvent)
+	for _, a := range cap.APIs {
+		switch a.Name {
+		case "cudaLaunchKernel", "cudaLaunchKernelExC", "cuLaunchKernel",
+			"cuLaunchKernelEx", "cudaLaunch":
+			apisByCorrelation[a.CorrelationID] = a
+		}
+	}
+	if len(apisByCorrelation) == 0 {
+		return &LaunchOverhead{}
+	}
+	kernelsByCorrelation := make(map[uint64]Event)
+	for _, e := range cap.Events {
+		if e.Kind == KindKernel && e.CorrelationID != 0 {
+			kernelsByCorrelation[e.CorrelationID] = e
+		}
+	}
+	var hostCosts []uint64
+	out := &LaunchOverhead{}
+	for cid, k := range kernelsByCorrelation {
+		a, ok := apisByCorrelation[cid]
+		if !ok {
+			continue
+		}
+		host := a.EndNS - a.StartNS
+		gpu := k.DurationNS()
+		var gap int64
+		if k.StartNS >= a.EndNS {
+			gap = int64(k.StartNS - a.EndNS)
+		} else {
+			gap = -int64(a.EndNS - k.StartNS) // pre-queued before API returned
+		}
+		out.Joins++
+		out.TotalHostNS += host
+		out.TotalGPUNS += gpu
+		out.MeanSubmitGapNS = float64(gap)
+		hostCosts = append(hostCosts, host)
+		_ = gap
+	}
+	sortU64(hostCosts)
+	if out.Joins > 0 {
+		out.MeanHostCostNS = out.TotalHostNS / uint64(out.Joins)
+		out.P50HostCostNS = percentile(hostCosts, 0.50)
+		out.P95HostCostNS = percentile(hostCosts, 0.95)
+	}
+	return out
+}
+
+func sortU64(v []uint64) {
+	for i := 1; i < len(v); i++ {
+		for j := i; j > 0 && v[j] < v[j-1]; j-- {
+			v[j], v[j-1] = v[j-1], v[j]
+		}
+	}
+}
