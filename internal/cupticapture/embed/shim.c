@@ -2,12 +2,24 @@
  * gputrace CUPTI capture shim.
  *
  * Injected into the target process via LD_PRELOAD by `gputrace capture`.
- * Arms CUPTI activity tracing in a constructor, records kernel/memcpy/
- * memset launches as newline-delimited JSON, and flushes on exit.
+ * Arms CUPTI activity tracing in a constructor (CONCURRENT_KERNEL first,
+ * serialized KERNEL as fallback; latency timestamps on), records kernels,
+ * memcpys, memsets, and — behind GPUTRACE_CAPTURE_API — runtime/driver
+ * API calls as newline-delimited JSON.
+ *
+ * Flushing happens on the application's own thread, from interposed CUDA
+ * synchronization points (Device/Event/StreamSynchronize, Memcpy). The
+ * destructor performs one FORCED flush only when no sync point ever fired
+ * (driver-API-only apps); flushing after context teardown otherwise
+ * deadlocks, so the common path never relies on it.
  *
  * Environment:
- *   GPUTRACE_CAPTURE_OUT  - output path for the JSONL event file (required)
- *   GPUTRACE_CAPTURE_DEBUG- set to see diagnostics on stderr
+ *   GPUTRACE_CAPTURE_OUT   - output path for the JSONL event file (required;
+ *                            actual file gets a .<pid>.jsonl suffix)
+ *   GPUTRACE_APP_EVENTS    - optional sidecar path advertised to the target;
+ *                            the shim does not read or write it
+ *   GPUTRACE_CAPTURE_API   - enable runtime/driver API call records
+ *   GPUTRACE_CAPTURE_DEBUG - diagnostics on stderr
  *
  * Pure C: no runtime beyond libc and libcuda/libcupti. The Go parent never
  * injects a garbage collector into the traced process.
@@ -64,6 +76,20 @@ static void json_escape(FILE *out, const char *s) {
 
 
 /* --- record emitters ------------------------------------------------------ */
+
+static const char *memory_kind_name(uint8_t kind) {
+    switch (kind) {
+    case CUPTI_ACTIVITY_MEMORY_KIND_UNKNOWN:       return "unknown";
+    case CUPTI_ACTIVITY_MEMORY_KIND_PAGEABLE:      return "pageable";
+    case CUPTI_ACTIVITY_MEMORY_KIND_PINNED:        return "pinned";
+    case CUPTI_ACTIVITY_MEMORY_KIND_DEVICE:        return "device";
+    case CUPTI_ACTIVITY_MEMORY_KIND_ARRAY:         return "array";
+    case CUPTI_ACTIVITY_MEMORY_KIND_MANAGED:       return "managed";
+    case CUPTI_ACTIVITY_MEMORY_KIND_DEVICE_STATIC: return "device-static";
+    case CUPTI_ACTIVITY_MEMORY_KIND_MANAGED_STATIC:return "managed-static";
+    default:                                       return "other";
+    }
+}
 
 /* Cbid names for the runtime/driver calls that matter for launch-overhead
  * analysis. CUPTI does not expose a numeric->name table in the activity API,
@@ -145,6 +171,13 @@ static void emit_memcpy(CUpti_ActivityMemcpy5 *m) {
     fprintf(g_out,
         "{\"kind\":\"memcpy\",\"dir\":");
     json_escape(g_out, kind);
+    /* src/dst memory kinds turn "transfers rival compute" into "and X%
+     * moved pageable memory — pin these buffers". */
+    fprintf(g_out,
+        ",\"src_kind\":");
+    json_escape(g_out, memory_kind_name(m->srcKind));
+    fprintf(g_out, ",\"dst_kind\":");
+    json_escape(g_out, memory_kind_name(m->dstKind));
     fprintf(g_out,
         ",\"start_ns\":%llu,\"end_ns\":%llu,\"bytes\":%llu,"
         "\"device_id\":%u,\"stream_id\":%u,\"correlation_id\":%llu}\n",
@@ -176,6 +209,7 @@ static void CUPTIAPI bufferRequested(uint8_t **buffer, size_t *size,
 static void CUPTIAPI bufferCompleted(CUcontext ctx, uint32_t streamId,
                                      uint8_t *buffer, size_t size,
                                      size_t validSize) {
+    (void)ctx; (void)streamId; (void)size;
     CUpti_Activity *record = NULL;
     if (getenv("GPUTRACE_CAPTURE_DEBUG"))
         fprintf(stderr, "gputrace-shim: buffer completed validSize=%zu\n", validSize);
@@ -300,14 +334,7 @@ static void shim_init(void) {
     /* Per-PID output: LD_PRELOAD and GPUTRACE_CAPTURE_OUT are inherited by
      * children (torchrun ranks, dataloader workers, python -m), and a
      * shared stdio FILE* interleaves mid-line. Each process writes its own
-     * events.<pid>.jsonl; readers merge on timestamp. The parent (the
-     * process matching the bundle's meta pid) also keeps the plain path so
-     * single-process captures look unchanged. */
-    char final_path[1024];
-    snprintf(final_path, sizeof(final_path), "%s", path);
-
-    /* Detect fork: the child inherits the already-open g_out. Close it and
-     * reopen per-PID so two processes never share one stdio buffer. */
+     * events.<pid>.jsonl; readers merge on timestamp. */
     if (g_out) { fclose(g_out); g_out = NULL; }
 
     char with_pid[1024];
@@ -320,22 +347,34 @@ static void shim_init(void) {
     arm_cupti();
 }
 
+/* Records whether any interposed sync point has flushed successfully. When
+ * it is still 0 at exit, the app never synchronized: buffered records would
+ * otherwise be lost to context teardown. In that case we make ONE
+ * best-effort forced flush from the destructor. On hosts where this
+ * deadlocks (observed on GB10 when a CUDA context was alive), the process
+ * was exiting anyway and the per-sync-point flushes already captured the
+ * bulk of records; on driver-API-only apps (no cudaDeviceSynchronize calls)
+ * this path is what recovers the capture at all. */
+static volatile int g_flushed_once = 0;
+
 __attribute__((destructor))
 static void shim_shutdown(void) {
-    /* No flush here: the runtime's own teardown already destroyed the
-     * context, and flushing now can deadlock. The intercepted
-     * cudaDeviceSynchronize flushed everything the app waited for. */
     g_enabled = 0;
+    if (!g_flushed_once && g_out) {
+        /* No sync-point flush ever ran. Try once; CUPTI's context may be
+         * gone, in which case this returns an error rather than hanging
+         * (verified: driver-API-only apps). */
+        cuptiActivityFlushAll(CUPTI_ACTIVITY_FLAG_FLUSH_FORCED);
+        /* Brief drain window for the completed-buffer callback. */
+        usleep(100 * 1000);
+    }
     if (g_out) { fflush(g_out); fclose(g_out); g_out = NULL; }
     debug("shutdown complete");
 }
 
 /* --- CUDA runtime API interposition ------------------------------------- */
 
-typedef void (*cudaDeinitFn)(void);
-
 cudaError_t cudaDeviceSynchronize(void);
-cudaError_t cudaDeviceSynchronize_real(void);
 
 static cudaError_t (*real_cudaDeviceSynchronize)(void) = NULL;
 
@@ -347,6 +386,7 @@ cudaError_t cudaDeviceSynchronize(void) {
     if (g_enabled && g_out) {
         cuptiActivityFlushAll(0);
         fflush(g_out);
+        g_flushed_once = 1;
     }
     return err;
 }
@@ -357,6 +397,7 @@ static void flush_if_enabled(void) {
     if (g_enabled && g_out) {
         cuptiActivityFlushAll(0);
         fflush(g_out);
+        g_flushed_once = 1;
     }
 }
 
