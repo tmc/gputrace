@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/tmc/gputrace/internal/buildinfo"
 	"github.com/tmc/gputrace/internal/cupticapture"
+	"github.com/tmc/gputrace/internal/nvidia"
 )
 
 // captureLinuxOptions mirrors the darwin captureOptions subset meaningful on
@@ -45,6 +46,12 @@ func runCaptureLinux(cmd *cobra.Command, opts *captureOptions, args []string) er
 		Command:         args,
 		Dir:             opts.dir,
 		GPUTRACEVersion: buildinfo.EffectiveVersion(),
+	}
+	if devices, err := nvidia.Devices(); err == nil && len(devices) > 0 {
+		d := devices[0]
+		meta.GPUName = d.Name
+		meta.GPUUUID = d.UUID
+		meta.DriverVersion = d.DriverVer
 	}
 	if err := cupticapture.CreateBundle(out, meta); err != nil {
 		return fmt.Errorf("capture: create bundle: %w", err)

@@ -28,6 +28,13 @@ type Meta struct {
 	GPUTRACEVersion string  `json:"gputrace_version,omitempty"`
 	ShimPath      string   `json:"shim_path,omitempty"`
 	Hostname      string   `json:"hostname,omitempty"`
+
+	// Hardware provenance: lets optimize compare refuse to diff runs from
+	// different machines, drivers, or GPUs — a comparison across those is
+	// noise, not evidence.
+	GPUName       string `json:"gpu_name,omitempty"`
+	GPUUUID       string `json:"gpu_uuid,omitempty"`
+	DriverVersion string `json:"driver_version,omitempty"`
 }
 
 // CreateBundle makes an empty bundle directory with meta.json written.
