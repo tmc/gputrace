@@ -10,6 +10,48 @@ messaged as objects.
 The measured baseline fixture is a streamData archive with 574 draws, 12
 encoders, 18 pipelines, 980 binaries, and 45,977 instructions.
 
+## The APS-cost route: bus error is capture-specific, and the passes succeed
+
+`TestAPSCostProcessing` (`internal/xcodebindings/aps_cost_darwin_test.go:34`)
+was reported to bus-error -- `EXC_CRASH / SIGBUS` -- reproducibly, on three
+captures and both Xcode installs. `[V]` It **does not** on a fourth: three
+consecutive `-count=1` runs against a headless-replay-produced bundle passed in
+2.1 s, 6.8 s, and 2.7 s with no fault. So the crash is a property of those
+captures, not of the route, the bindings, or the machine, and it is not a
+blanket blocker. What it does block is those three captures specifically; the
+distinguishing feature between them and this one is not established.
+
+Note the test skips unless `GPUTRACE_TEST_TRACE` or `GPUTRACE_PROCESS_STREAMDATA`
+names a bundle, so nothing routine surfaces either outcome.
+
+`[V]` On the run that completed, both passes **accepted the data**:
+
+    processAPSTimelineData -> true
+    processAPSCostData     -> true
+    draws=413 encoders=10 costs=414
+    non-zero kick durations: 0 of 10
+    non-zero scope costs:    0 of 32
+    derivedCountersData count=0
+
+That kills the "the ingesting pass was never run" hypothesis this test was
+written to check -- see its own header comment, which proposes exactly that.
+Both passes report success, 414 cost objects are constructed, and every scalar
+signal out of them is still zero. Combined with the `allValues()` NULL ->
+`movi d0, #0` substitution documented below, the cost model is being populated
+with Apple's placeholder zeros rather than left unpopulated.
+
+The bundle: `qwen25-05b-python-metaldebug_tokens_2_to_3.gputrace`, a 1.3 GB
+Metal-debugger capture carrying no profiler data at all, run through the
+headless MTLReplayer recipe in `HEADLESS_PROFILING_AND_G16_COUNTERS.md` to
+produce 40 each of `Counters_f_*.raw` / `Profiling_f_*.raw` /
+`Timeline_f_*.raw` plus a 166 MB `streamData`. Replay took 23 s; the input
+bundle's 240-file SHA-256 manifest was unchanged afterwards. GPU reported as
+`Gen: 16 Type: G16C Rev: B1, 40 cores, 20 override cores, 16 GPs`.
+
+`[D]` The recipe is not byte-deterministic: two replays of the same input
+produced `streamData` files with different SHA-256s. Not investigated, but it
+means a hash is not a valid way to check two profiling runs agree.
+
 ## Demonstrated capabilities
 
 ### Additional archived constant-calculation fields
@@ -410,6 +452,44 @@ wrapped in an opt-in path.
   `GTMioCounterDataPerDM`, with sample counts 12/574 but zero-valued `^d`
   arrays and DBL_MAX/0 min/max. These values reproduced across two runs and
   are classified as allocated-but-zero, not usable parity data.
+
+  The DBL_MAX/0 min/max half of that reading is **withdrawn**, and the zeros
+  now have a mechanism. `-[GTMioCounterDataPerDM minValue]` at 0xc6594 is a
+  bare `ldr d0,[x0,#0x58]` with no call; +0x58/+0x50 are written only as a side
+  effect of the `_cacheValues` loop (`fcmp`/`fcsel`, `stp d0,d1,[x19,#0x50]`),
+  which `values` at 0xc653c invokes before returning. Reading min/max before
+  `values` therefore returns constructor seeds. The probe did, so DBL_MAX/0 was
+  a probe-ordering artifact and never evidence of anything.
+
+  The zeros themselves are Apple's, not ours. Inside `_cacheValues`, 0xc64a0
+  calls `GTMioNonOverlappingCounterContainerInternal::allValues(u64)` and
+  0xc64a4 `cbz x0` sends a NULL result to 0xc64c4, `movi d0, #0`, which is then
+  pushed. A substituted 0.0 for a missing lookup is indistinguishable
+  downstream from a measured zero.
+
+  That gives a discriminator, and this capture already answers it.
+  `SampleCount() == 0` would mean the container vector at `self+0x8` was never
+  populated -- a processing problem. `SampleCount() > 0` with all-zero values
+  means the loop ran and every `allValues()` lookup missed -- a key or
+  absent-data problem. The counts above are 12 and 574, so on this capture it
+  is the **lookup** branch: the processing step ran. That agrees independently
+  with the section at the top of this file, where both APS passes return true
+  and build 414 cost objects that are nonetheless all zero. One caveat on the
+  mechanics: `sampleCount`
+  is `(end-begin)>>3` over the vector at `+0x8`, so the earlier reading of a
+  0x78-byte record vector at `this+0x48` was wrong on both offset and stride --
+  `+0x48` is `scope`, a `uint16`.
+
+  Hazard when looping over counters: `_cacheValues` takes a lock at 0xc6468 and
+  its memoized early-out at 0xc6478 branches to the epilogue without reaching
+  the `unlock` at 0xc650c. Only the do-the-work path unlocks. Whether a repeat
+  `values` call deadlocks depends on whether the ivar at `+0x38` is recursive;
+  that was not chased. `CacheValues()` / `CanCacheValues()` are bound, so the
+  population step can be forced explicitly rather than triggered through
+  `values`.
+
+  All of the above is disassembly on this host, contributed by session
+  8597FC82; none of it required a capture.
 - `GTMioShaderExecutionHistory` initialization returns a real object via
   `initWithTraceData:style:options:delegate:` (`@40@0:8@16I24I28@32`). Twice
   over all 18 pipeline IDs, `generatePipelineStateId:programType:`

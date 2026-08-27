@@ -6,6 +6,8 @@ These files are useful when extending parsers or validating Xcode parity, but th
 
 Start with:
 
+- [HEADLESS_PROFILING_AND_G16_COUNTERS.md](./HEADLESS_PROFILING_AND_G16_COUNTERS.md) - the verified MTLReplayer headless replay/profile recipe, its option surface and dispatch precedence, and why G16 ships no derived-counter plist (read this before hunting for one)
+- [AGXPS_COUNTER_ORACLE.md](./AGXPS_COUNTER_ORACLE.md) - exact-name counter oracle, provenance, coverage, and the raw-counter-name-only join rule
 - [XDIC_INDEX_FORMAT.md](./XDIC_INDEX_FORMAT.md) - `index` (xdic) format, API-call markers, timing investigation
 - [RECORD_FORMATS.md](./RECORD_FORMATS.md) - MTSP record notes
 - [BINARY_FORMAT_REFERENCE.md](./BINARY_FORMAT_REFERENCE.md) - counter binary format notes
@@ -18,6 +20,10 @@ Start with:
 - [COUNTER_FILE_MAPPING.md](./COUNTER_FILE_MAPPING.md) - counter file mapping
 - [BUFFER_FEATURES_STATUS.md](./BUFFER_FEATURES_STATUS.md) - buffer features status
 - [BUFFER_FILE_ANALYSIS.md](./BUFFER_FILE_ANALYSIS.md) - buffer file analysis
+
+Linux/NVIDIA notes:
+
+- [LUMINAL_TRACING_COMPARISON.md](./LUMINAL_TRACING_COMPARISON.md) - luminal's first-party CUDA graph tracing (event-record nodes, tracing-crate spans, Perfetto merge) vs. our CUPTI observer approach, and what to adopt from it
 
 Private-framework binding notes:
 
