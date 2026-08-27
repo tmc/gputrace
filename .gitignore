@@ -53,3 +53,9 @@ gputrace_bin
 watch_*
 beads.svg
 brain/
+
+# Capture artifacts
+*.pprof
+*.pftrace
+*.gpucapture/
+.hermes/
