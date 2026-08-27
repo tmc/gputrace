@@ -162,6 +162,7 @@ Examples:
   gputrace capture -o run.gpucapture -- python3 bench.py
   gputrace capture -o run.gpucapture --samples -- ./matmul`
 	captureCmd.Short = "Run a workload under the GPU capture tracer"
+	captureCmd.Flags().BoolVar(&captureLinuxOpts.api, "api", captureLinuxOpts.api, "record host-side CUDA runtime/driver API calls (multiplies record volume)")
 	captureCmd.Flags().BoolVar(&captureLinuxOpts.samples, "samples", captureLinuxOpts.samples, "Sample NVML device counters during the run")
 	captureCmd.Flags().StringVar(&captureLinuxOpts.sampleInterval, "sample-interval", captureLinuxOpts.sampleInterval, "NVML sampling interval")
 
