@@ -15,31 +15,31 @@ import (
 
 // Config describes one reproducible workload execution series.
 type Config struct {
-	Command    []string `json:"command"`              // argv to execute
-	Dir        string   `json:"dir,omitempty"`        // working directory
-	Warmups    int      `json:"warmups"`              // discarded runs before measurement
-	Iterations int      `json:"iterations"`           // measured runs
+	Command    []string `json:"command"`               // argv to execute
+	Dir        string   `json:"dir,omitempty"`         // working directory
+	Warmups    int      `json:"warmups"`               // discarded runs before measurement
+	Iterations int      `json:"iterations"`            // measured runs
 	OutputPath string   `json:"output_path,omitempty"` // where to persist the Result
 }
 
 // Iteration is one measured run.
 type Iteration struct {
-	Index     int    `json:"index"`
-	WallNS    uint64 `json:"wall_ns"`
-	ExitCode  int    `json:"exit_code"`
+	Index      int    `json:"index"`
+	WallNS     uint64 `json:"wall_ns"`
+	ExitCode   int    `json:"exit_code"`
 	StdoutTail string `json:"stdout_tail,omitempty"`
 }
 
 // Result summarizes one Config executed Iterations times.
 type Result struct {
-	Config    Config      `json:"config"`
-	Iterations []Iteration `json:"iterations"`
-	MedianNS  uint64      `json:"median_ns"`
-	Q1NS      uint64      `json:"q1_ns"`
-	Q3NS      uint64      `json:"q3_ns"`
-	FailedCount int       `json:"failed_count"`
-	StartedAt time.Time   `json:"started_at"`
-	DurationS float64     `json:"duration_s"`
+	Config      Config      `json:"config"`
+	Iterations  []Iteration `json:"iterations"`
+	MedianNS    uint64      `json:"median_ns"`
+	Q1NS        uint64      `json:"q1_ns"`
+	Q3NS        uint64      `json:"q3_ns"`
+	FailedCount int         `json:"failed_count"`
+	StartedAt   time.Time   `json:"started_at"`
+	DurationS   float64     `json:"duration_s"`
 }
 
 const maxStdoutTail = 2048

@@ -10,13 +10,13 @@ import (
 // library; a backend that cannot load is reported unavailable with the
 // reason, not hidden.
 type Backend struct {
-	Name       string `json:"name"`
-	Vendor     string `json:"vendor"`
-	Available  bool   `json:"available"`
-	Devices    int    `json:"devices,omitempty"`
-	Tracing    bool   `json:"tracing,omitempty"`    // can capture per-launch activity
-	Counters   bool   `json:"counters,omitempty"`   // can sample device metrics
-	Detail     string `json:"detail,omitempty"`     // driver/library version or failure reason
+	Name      string `json:"name"`
+	Vendor    string `json:"vendor"`
+	Available bool   `json:"available"`
+	Devices   int    `json:"devices,omitempty"`
+	Tracing   bool   `json:"tracing,omitempty"`  // can capture per-launch activity
+	Counters  bool   `json:"counters,omitempty"` // can sample device metrics
+	Detail    string `json:"detail,omitempty"`   // driver/library version or failure reason
 }
 
 // Registry probes every known backend in vendor order. Probing is cheap:

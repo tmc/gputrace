@@ -12,12 +12,12 @@ import (
 // not measured. Provenance: [H] heuristic — device constants, real limits
 // vary by part.
 const (
-	maxThreadsPerSM   = 1536 // Blackwell GB10: 1536 threads/SM (12 warps... conservative 48*32)
-	maxBlocksPerSM    = 24
-	maxRegsPerThread  = 255
-	sharedMemPerSM    = 228 * 1024 // max shared memory per SM, bytes
-	warpSize          = 32
-	regFilePerSM      = 64 * 1024 // 64K 32-bit registers per SM
+	maxThreadsPerSM  = 1536 // Blackwell GB10: 1536 threads/SM (12 warps... conservative 48*32)
+	maxBlocksPerSM   = 24
+	maxRegsPerThread = 255
+	sharedMemPerSM   = 228 * 1024 // max shared memory per SM, bytes
+	warpSize         = 32
+	regFilePerSM     = 64 * 1024 // 64K 32-bit registers per SM
 )
 
 // TheoreticalOccupancy estimates the fraction of an SM's maximum warp
@@ -97,17 +97,17 @@ func min3(a, b, c int) int {
 
 // OccupancySummary summarizes occupancy across one kernel's launches.
 type OccupancySummary struct {
-	MeanPct  float64 `json:"mean_pct"`
-	Limiter  string  `json:"limiter"`
-	Samples  int     `json:"samples"`
+	MeanPct float64 `json:"mean_pct"`
+	Limiter string  `json:"limiter"`
+	Samples int     `json:"samples"`
 }
 
 // SummarizeOccupancy computes mean theoretical occupancy for each kernel
 // that carries the needed attributes.
 func SummarizeOccupancy(events []Event) map[string]OccupancySummary {
 	sums := map[string]*struct {
-		total float64
-		n     int
+		total   float64
+		n       int
 		limiter string
 	}{}
 	for _, e := range events {
@@ -145,11 +145,11 @@ func SummarizeOccupancy(events []Event) map[string]OccupancySummary {
 // PageableTransferStats quantifies memcpy time spent moving pageable host
 // memory, the cheapest large win in most pipelines (pin the buffers).
 type PageableTransferStats struct {
-	CopyCount    int    `json:"copy_count"`
-	PageableNS   uint64 `json:"pageable_ns"`
-	TotalCopyNS  uint64 `json:"total_copy_ns"`
+	CopyCount    int     `json:"copy_count"`
+	PageableNS   uint64  `json:"pageable_ns"`
+	TotalCopyNS  uint64  `json:"total_copy_ns"`
 	PageablePct  float64 `json:"pageable_pct"`
-	ExampleBytes uint64 `json:"example_bytes"`
+	ExampleBytes uint64  `json:"example_bytes"`
 }
 
 // AnalyzePageableTransfers sums memcpy durations touching pageable memory.

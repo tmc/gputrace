@@ -1,12 +1,12 @@
 package capture
 
 import (
-	"runtime"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"

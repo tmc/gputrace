@@ -15,21 +15,21 @@ import (
 
 // BundleFileNames are the well-known members of a capture bundle.
 const (
-	EventsFileName     = "events.jsonl"
-	SamplesFileName    = "nvml_samples.jsonl"
-	MetaFileName       = "meta.json"
-	bundleSuffix       = ".gpucapture"
+	EventsFileName  = "events.jsonl"
+	SamplesFileName = "nvml_samples.jsonl"
+	MetaFileName    = "meta.json"
+	bundleSuffix    = ".gpucapture"
 )
 
 // Meta records how and when a bundle was produced.
 type Meta struct {
-	Schema        string   `json:"schema"`
-	CreatedAt     time.Time `json:"created_at"`
-	Command       []string `json:"command"`
-	Dir           string   `json:"dir,omitempty"`
-	GPUTRACEVersion string  `json:"gputrace_version,omitempty"`
-	ShimPath      string   `json:"shim_path,omitempty"`
-	Hostname      string   `json:"hostname,omitempty"`
+	Schema          string    `json:"schema"`
+	CreatedAt       time.Time `json:"created_at"`
+	Command         []string  `json:"command"`
+	Dir             string    `json:"dir,omitempty"`
+	GPUTRACEVersion string    `json:"gputrace_version,omitempty"`
+	ShimPath        string    `json:"shim_path,omitempty"`
+	Hostname        string    `json:"hostname,omitempty"`
 
 	// Hardware provenance: lets optimize compare refuse to diff runs from
 	// different machines, drivers, or GPUs — a comparison across those is

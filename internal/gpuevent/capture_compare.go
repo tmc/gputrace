@@ -10,10 +10,10 @@ import (
 type CaptureVerdict string
 
 const (
-	CaptureImproved    CaptureVerdict = "improved"
-	CaptureRegressed   CaptureVerdict = "regressed"
-	CaptureUnchanged   CaptureVerdict = "unchanged"
-	CaptureMixed       CaptureVerdict = "mixed"
+	CaptureImproved     CaptureVerdict = "improved"
+	CaptureRegressed    CaptureVerdict = "regressed"
+	CaptureUnchanged    CaptureVerdict = "unchanged"
+	CaptureMixed        CaptureVerdict = "mixed"
 	CaptureInconclusive CaptureVerdict = "inconclusive"
 )
 
@@ -32,12 +32,12 @@ type KernelDelta struct {
 
 // CaptureComparison is the kernel-level result of diffing two captures.
 type CaptureComparison struct {
-	Verdict       CaptureVerdict `json:"verdict"`
-	Summary       string         `json:"summary"`
-	KernelDeltas  []KernelDelta  `json:"kernel_deltas"`
-	BaseTotalNS   uint64         `json:"base_total_ns"`
-	VariantTotalNS uint64        `json:"variant_total_ns"`
-	TotalDeltaPct float64        `json:"total_delta_pct"`
+	Verdict        CaptureVerdict `json:"verdict"`
+	Summary        string         `json:"summary"`
+	KernelDeltas   []KernelDelta  `json:"kernel_deltas"`
+	BaseTotalNS    uint64         `json:"base_total_ns"`
+	VariantTotalNS uint64         `json:"variant_total_ns"`
+	TotalDeltaPct  float64        `json:"total_delta_pct"`
 }
 
 // CompareCaptures diffs two capture reports kernel by kernel, ordered by
@@ -83,12 +83,12 @@ func CompareCaptures(base, variant *Report) *CaptureComparison {
 	for _, n := range names {
 		b, v := baseBy[n], variantBy[n]
 		d := KernelDelta{
-			Name:         n,
-			BaseCount:    b.Count,
-			VariantCount: v.Count,
-			BaseMeanNS:   b.MeanNS,
-			VariantMeanNS: v.MeanNS,
-			BaseTotalNS:  b.TotalNS,
+			Name:           n,
+			BaseCount:      b.Count,
+			VariantCount:   v.Count,
+			BaseMeanNS:     b.MeanNS,
+			VariantMeanNS:  v.MeanNS,
+			BaseTotalNS:    b.TotalNS,
 			VariantTotalNS: v.TotalNS,
 		}
 		if b.MeanNS > 0 && v.MeanNS > 0 {

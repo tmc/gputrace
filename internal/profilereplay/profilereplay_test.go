@@ -1,11 +1,11 @@
 package profilereplay
 
 import (
-	"runtime"
 	"context"
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )

@@ -1,11 +1,11 @@
 package cmd
 
 import (
-	"runtime"
 	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )

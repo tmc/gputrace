@@ -15,19 +15,19 @@ import (
 type Bound string
 
 const (
-	BoundCompute    Bound = "compute"    // plenty of parallel work, likely ALU/tensor limited
-	BoundMemory     Bound = "memory"     // byte volume dominates; likely bandwidth limited
-	BoundLatency    Bound = "latency"    // too little parallel work to hide latency
-	BoundUndetermined Bound = "unknown"  // insufficient shape information
+	BoundCompute      Bound = "compute" // plenty of parallel work, likely ALU/tensor limited
+	BoundMemory       Bound = "memory"  // byte volume dominates; likely bandwidth limited
+	BoundLatency      Bound = "latency" // too little parallel work to hide latency
+	BoundUndetermined Bound = "unknown" // insufficient shape information
 )
 
 // FindingKind names the pattern a Finding describes.
 type FindingKind string
 
 const (
-	FindingDominance   FindingKind = "dominance"   // one kernel owns the GPU time
-	FindingLaunchShape FindingKind = "launch-shape" // geometry too small to use the device
-	FindingLongTail    FindingKind = "long-tail"    // high p95-vs-mean spread
+	FindingDominance     FindingKind = "dominance"      // one kernel owns the GPU time
+	FindingLaunchShape   FindingKind = "launch-shape"   // geometry too small to use the device
+	FindingLongTail      FindingKind = "long-tail"      // high p95-vs-mean spread
 	FindingTransferHeavy FindingKind = "transfer-heavy" // memcpys rival kernel time
 	FindingLowOccupancy  FindingKind = "low-occupancy"  // register/shared limits cap theoretical occupancy
 	FindingPageableCopy  FindingKind = "pageable-copy"  // most transfer time moves pageable memory
@@ -44,23 +44,23 @@ const (
 
 // KernelStats aggregates every launch of one kernel name.
 type KernelStats struct {
-	Name       string `json:"name"`
-	Count      int    `json:"count"`
-	TotalNS    uint64 `json:"total_ns"`
-	MeanNS     uint64 `json:"mean_ns"`
-	P50NS      uint64 `json:"p50_ns"`
-	P95NS      uint64 `json:"p95_ns"`
-	MaxNS      uint64 `json:"max_ns"`
-	SharePct   float64 `json:"share_pct"`
-	Registers  int    `json:"registers,omitempty"`
-	TypicalGrid  string `json:"typical_grid,omitempty"`
-	TypicalBlock string `json:"typical_block,omitempty"`
-	ThreadsPerLaunch uint64 `json:"threads_per_launch"` // grid x block of modal launch
-	BytesTotal uint64  `json:"bytes_total,omitempty"`
-	Bound      Bound   `json:"bound"`
+	Name                    string  `json:"name"`
+	Count                   int     `json:"count"`
+	TotalNS                 uint64  `json:"total_ns"`
+	MeanNS                  uint64  `json:"mean_ns"`
+	P50NS                   uint64  `json:"p50_ns"`
+	P95NS                   uint64  `json:"p95_ns"`
+	MaxNS                   uint64  `json:"max_ns"`
+	SharePct                float64 `json:"share_pct"`
+	Registers               int     `json:"registers,omitempty"`
+	TypicalGrid             string  `json:"typical_grid,omitempty"`
+	TypicalBlock            string  `json:"typical_block,omitempty"`
+	ThreadsPerLaunch        uint64  `json:"threads_per_launch"` // grid x block of modal launch
+	BytesTotal              uint64  `json:"bytes_total,omitempty"`
+	Bound                   Bound   `json:"bound"`
 	TheoreticalOccupancyPct float64 `json:"theoretical_occupancy_pct,omitempty"` // [H] computed, not measured
-	OccupancyLimiter         string  `json:"occupancy_limiter,omitempty"`
-	SharedMemBytes           int     `json:"shared_mem_bytes,omitempty"`
+	OccupancyLimiter        string  `json:"occupancy_limiter,omitempty"`
+	SharedMemBytes          int     `json:"shared_mem_bytes,omitempty"`
 }
 
 // Finding is one evidence-backed observation with a proposed direction.
@@ -76,15 +76,15 @@ type Finding struct {
 
 // Report is the analysis of one capture.
 type Report struct {
-	Kernels       []KernelStats `json:"kernels"`
-	Findings      []Finding     `json:"findings"`
-	TotalKernelNS uint64        `json:"total_kernel_ns"`
-	KernelLaunches int          `json:"kernel_launches"`
-	MemcpyCount   int           `json:"memcpy_count"`
-	MemsetCount   int           `json:"memset_count"`
-	MemcpyNS      uint64        `json:"memcpy_ns"`
-	PageableNS    uint64        `json:"pageable_ns,omitempty"` // memcpy time touching pageable memory [V]
-	SpanNS        uint64        `json:"span_ns"` // first start to last end
+	Kernels        []KernelStats   `json:"kernels"`
+	Findings       []Finding       `json:"findings"`
+	TotalKernelNS  uint64          `json:"total_kernel_ns"`
+	KernelLaunches int             `json:"kernel_launches"`
+	MemcpyCount    int             `json:"memcpy_count"`
+	MemsetCount    int             `json:"memset_count"`
+	MemcpyNS       uint64          `json:"memcpy_ns"`
+	PageableNS     uint64          `json:"pageable_ns,omitempty"` // memcpy time touching pageable memory [V]
+	SpanNS         uint64          `json:"span_ns"`               // first start to last end
 	LaunchOverhead *LaunchOverhead `json:"launch_overhead,omitempty"`
 }
 
@@ -152,15 +152,15 @@ func (e Event) displayName() string {
 }
 
 type kernelAgg struct {
-	name     string
-	count    int
-	totalNS  uint64
-	durations []uint64
-	registers int
+	name           string
+	count          int
+	totalNS        uint64
+	durations      []uint64
+	registers      int
 	sharedMemBytes int
-	grids     map[string]int
-	blocks   map[string]int
-	bytes    uint64
+	grids          map[string]int
+	blocks         map[string]int
+	bytes          uint64
 }
 
 func (a *kernelAgg) add(e Event) {
@@ -201,14 +201,14 @@ func modal(m map[string]int) string {
 func (a *kernelAgg) finish(totalAll uint64) KernelStats {
 	sort.Slice(a.durations, func(i, j int) bool { return a.durations[i] < a.durations[j] })
 	ks := KernelStats{
-		Name:       a.name,
-		Count:      a.count,
-		TotalNS:    a.totalNS,
-		MaxNS:      a.durations[len(a.durations)-1],
-		Registers:  a.registers,
+		Name:         a.name,
+		Count:        a.count,
+		TotalNS:      a.totalNS,
+		MaxNS:        a.durations[len(a.durations)-1],
+		Registers:    a.registers,
 		TypicalGrid:  modal(a.grids),
 		TypicalBlock: modal(a.blocks),
-		BytesTotal: a.bytes,
+		BytesTotal:   a.bytes,
 	}
 	var sum uint64
 	for _, d := range a.durations {
@@ -230,7 +230,7 @@ func percentile(sorted []uint64, q float64) uint64 {
 		return 0
 	}
 	// Nearest-rank: the smallest value covering at least q of the samples.
-	idx := int(math.Ceil(q * float64(len(sorted)))) - 1
+	idx := int(math.Ceil(q*float64(len(sorted)))) - 1
 	if idx < 0 {
 		idx = 0
 	}
@@ -339,20 +339,20 @@ func buildFindings(rep *Report) []Finding {
 		}
 		if k.Count >= 4 && k.MeanNS > 0 && float64(k.P95NS)/float64(k.MeanNS) >= longTailRatio {
 			out = append(out, Finding{
-				Kind:     FindingLongTail,
-				Severity: SeverityLow,
-				Subject:  k.Name,
-				Evidence: []string{fmt.Sprintf("p95 %s vs mean %s over %d launches", dur(k.P95NS), dur(k.MeanNS), k.Count)},
+				Kind:       FindingLongTail,
+				Severity:   SeverityLow,
+				Subject:    k.Name,
+				Evidence:   []string{fmt.Sprintf("p95 %s vs mean %s over %d launches", dur(k.P95NS), dur(k.MeanNS), k.Count)},
 				Hypothesis: "a minority of launches run far slower than typical; look for input-dependent work, clock throttling during the capture, or contention with concurrent streams",
 			})
 		}
 	}
 	if rep.MemcpyNS > rep.TotalKernelNS/2 && rep.MemcpyCount > 0 {
 		out = append(out, Finding{
-			Kind:     FindingTransferHeavy,
-			Severity: SeverityMedium,
-			Subject:  "(all transfers)",
-			Evidence: []string{fmt.Sprintf("%d transfers totalling %.2f ms vs %.2f ms of kernel time", rep.MemcpyCount, float64(rep.MemcpyNS)/1e6, float64(rep.TotalKernelNS)/1e6)},
+			Kind:       FindingTransferHeavy,
+			Severity:   SeverityMedium,
+			Subject:    "(all transfers)",
+			Evidence:   []string{fmt.Sprintf("%d transfers totalling %.2f ms vs %.2f ms of kernel time", rep.MemcpyCount, float64(rep.MemcpyNS)/1e6, float64(rep.TotalKernelNS)/1e6)},
 			Hypothesis: "transfers rival compute; batch small copies, prefer pinned memory, or keep data resident on-device between kernels",
 		})
 	}

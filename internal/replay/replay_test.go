@@ -1,10 +1,10 @@
 package replay
 
 import (
-	"runtime"
 	"encoding/binary"
 	"errors"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 

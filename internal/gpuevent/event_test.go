@@ -10,6 +10,7 @@ const sampleJSONL = `{"kind":"kernel","name":"void mlx::qmv_kernel<8>","raw_symb
 {"kind":"memset","start_ns":31000,"end_ns":32000,"bytes":4096}
 {"timestamp_ns":500,"power_mw":7103,"gpu_util_pct":96,"mem_util_pct":12,"temp_c":44,"mem_used_bytes":2147483648}
 {"kind":"kernel","raw_symbol":"_Ztruncated`
+
 // last line is a partial record from a tracer killed mid-write.
 
 func TestDecodeJSONL(t *testing.T) {

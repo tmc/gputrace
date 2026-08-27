@@ -26,26 +26,26 @@ const (
 // the vendor symbol and geometry stay available alongside any decoded name
 // so analysis can cite evidence without re-deriving it.
 type Event struct {
-	Kind          Kind           `json:"kind,omitempty"`
-	Name          string         `json:"name,omitempty"`   // decoded/display name
-	RawSymbol     string         `json:"raw_symbol"`       // vendor-mangled original
-	StartNS       uint64         `json:"start_ns"`
-	EndNS         uint64         `json:"end_ns"`
-	Grid          string         `json:"grid,omitempty"`
-	Block         string         `json:"block,omitempty"`
-	Registers     int            `json:"registers,omitempty"`
-	SharedMem     int            `json:"shared_mem,omitempty"`          // static+dynamic, bytes
-	LocalMemThread uint32       `json:"local_mem_per_thread,omitempty"` // bytes per thread
-	ContextID     uint32         `json:"context_id,omitempty"`
-	GraphID       uint32         `json:"graph_id,omitempty"`
-	GraphNodeID   uint64         `json:"graph_node_id,omitempty"`
-	SrcKind       string         `json:"src_kind,omitempty"` // memcpy memory kinds
-	DstKind       string         `json:"dst_kind,omitempty"`
-	Bytes         uint64         `json:"bytes,omitempty"` // memcpy/memset size
-	DeviceID      uint32         `json:"device_id,omitempty"`
-	StreamID      uint32         `json:"stream_id,omitempty"`
-	CorrelationID uint64         `json:"correlation_id,omitempty"`
-	Attrs         map[string]any `json:"attrs,omitempty"` // vendor extras
+	Kind           Kind           `json:"kind,omitempty"`
+	Name           string         `json:"name,omitempty"` // decoded/display name
+	RawSymbol      string         `json:"raw_symbol"`     // vendor-mangled original
+	StartNS        uint64         `json:"start_ns"`
+	EndNS          uint64         `json:"end_ns"`
+	Grid           string         `json:"grid,omitempty"`
+	Block          string         `json:"block,omitempty"`
+	Registers      int            `json:"registers,omitempty"`
+	SharedMem      int            `json:"shared_mem,omitempty"`           // static+dynamic, bytes
+	LocalMemThread uint32         `json:"local_mem_per_thread,omitempty"` // bytes per thread
+	ContextID      uint32         `json:"context_id,omitempty"`
+	GraphID        uint32         `json:"graph_id,omitempty"`
+	GraphNodeID    uint64         `json:"graph_node_id,omitempty"`
+	SrcKind        string         `json:"src_kind,omitempty"` // memcpy memory kinds
+	DstKind        string         `json:"dst_kind,omitempty"`
+	Bytes          uint64         `json:"bytes,omitempty"` // memcpy/memset size
+	DeviceID       uint32         `json:"device_id,omitempty"`
+	StreamID       uint32         `json:"stream_id,omitempty"`
+	CorrelationID  uint64         `json:"correlation_id,omitempty"`
+	Attrs          map[string]any `json:"attrs,omitempty"` // vendor extras
 }
 
 // DurationNS reports the measured execution duration.
@@ -84,29 +84,29 @@ type APIEvent struct {
 // LaunchJoin pairs one cudaLaunchKernel-style host call with the kernel it
 // produced. It is the unit of launch-overhead analysis.
 type LaunchJoin struct {
-	CorrelationID   uint64 `json:"correlation_id"`
-	Name            string `json:"name"`
-	HostCostNS      uint64 `json:"host_cost_ns"`
-	GPUDurationNS   uint64 `json:"gpu_duration_ns"`
-	SubmitGapNS     int64  `json:"submit_gap_ns"` // kernel start - api end; negative = pre-queued
+	CorrelationID uint64 `json:"correlation_id"`
+	Name          string `json:"name"`
+	HostCostNS    uint64 `json:"host_cost_ns"`
+	GPUDurationNS uint64 `json:"gpu_duration_ns"`
+	SubmitGapNS   int64  `json:"submit_gap_ns"` // kernel start - api end; negative = pre-queued
 }
 
 // LaunchOverhead summarizes the host-vs-device split across joined launches.
 type LaunchOverhead struct {
-	Joins            int     `json:"joins"`
-	TotalHostNS      uint64  `json:"total_host_ns"`
-	TotalGPUNS       uint64  `json:"total_gpu_ns"`
-	MeanHostCostNS   uint64  `json:"mean_host_cost_ns"`
-	P50HostCostNS    uint64  `json:"p50_host_cost_ns"`
-	P95HostCostNS    uint64  `json:"p95_host_cost_ns"`
-	MeanSubmitGapNS  float64 `json:"mean_submit_gap_ns"`
+	Joins           int     `json:"joins"`
+	TotalHostNS     uint64  `json:"total_host_ns"`
+	TotalGPUNS      uint64  `json:"total_gpu_ns"`
+	MeanHostCostNS  uint64  `json:"mean_host_cost_ns"`
+	P50HostCostNS   uint64  `json:"p50_host_cost_ns"`
+	P95HostCostNS   uint64  `json:"p95_host_cost_ns"`
+	MeanSubmitGapNS float64 `json:"mean_submit_gap_ns"`
 }
 
 // ClockSync records the CUPTI timestamp domain against wall clock at one
 // instant, letting readers align NVML samples even when the domains
 // diverge across drivers or platforms.
 type ClockSync struct {
-	UnixNS uint64 `json:"unix_ns"`
+	UnixNS  uint64 `json:"unix_ns"`
 	CuptiNS uint64 `json:"cupti_ns"`
 }
 

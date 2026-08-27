@@ -24,7 +24,7 @@ which kernels moved beyond a 5% threshold.
 This is the right comparison when process startup or unified-memory
 overhead dominates wall clock — e.g. integrated-GPU hosts where a real
 28% kernel win can read as "equivalent" end to end.`,
-	Args:              cobra.ExactArgs(2),
+	Args:               cobra.ExactArgs(2),
 	DisableFlagParsing: false,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		base, err := loadCaptureReport(args[0])

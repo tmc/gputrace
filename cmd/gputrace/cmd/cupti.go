@@ -12,13 +12,13 @@ import (
 )
 
 type cuptiOptions struct {
-	output     string
-	stats      bool
-	spans      bool
-	spansJSON  bool
-	top        int
-	perKernel  bool
-	samples    string
+	output    string
+	stats     bool
+	spans     bool
+	spansJSON bool
+	top       int
+	perKernel bool
+	samples   string
 }
 
 var cuptiOpts = &cuptiOptions{}

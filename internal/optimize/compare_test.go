@@ -15,8 +15,8 @@ func mkResult(walls ...uint64) *Result {
 }
 
 func TestCompareClearImprovement(t *testing.T) {
-	base := mkResult(1000, 1010, 990, 1005)     // median 1002
-	variant := mkResult(800, 810, 795, 802)     // median ~806: far outside base IQR
+	base := mkResult(1000, 1010, 990, 1005) // median 1002
+	variant := mkResult(800, 810, 795, 802) // median ~806: far outside base IQR
 	v := Compare(base, variant)
 	if v.Verdict != Improved {
 		t.Fatalf("verdict = %v (%s)", v.Verdict, v.Reason)
