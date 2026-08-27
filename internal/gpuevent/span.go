@@ -13,6 +13,11 @@ const (
 	// AttributionTemporal joins a kernel to the tightest containing span
 	// on the same stream (any stream when the span declares none).
 	AttributionTemporal = "temporal"
+
+	// ClockUnix marks a span stamped with CLOCK_REALTIME rather than the
+	// CUPTI timestamp domain. DecodeJSONL translates such spans via the
+	// capture's clock_sync record; see Capture.translateSpanClocks.
+	ClockUnix = "unix"
 )
 
 // Span is an application-declared interval bracketing one eval or phase.
@@ -26,6 +31,9 @@ type Span struct {
 	Labels  map[string]string `json:"labels,omitempty"`
 	EvalSeq uint64            `json:"eval_seq,omitempty"`
 	Streams []int64           `json:"streams,omitempty"`
+	// Clock names the timestamp domain: "" (CUPTI, the capture domain)
+	// or ClockUnix (CLOCK_REALTIME, translated at decode).
+	Clock string `json:"clock,omitempty"`
 }
 
 // AttributedKernel is one kernel joined to a span.

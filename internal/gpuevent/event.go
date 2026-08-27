@@ -230,7 +230,28 @@ func DecodeJSONL(r io.Reader) (Capture, error) {
 			cap.Samples = append(cap.Samples, s)
 		}
 	}
+	cap.translateSpanClocks()
 	return cap, scanner.Err()
+}
+
+// translateSpanClocks maps spans stamped on the unix clock into the CUPTI
+// timestamp domain using the capture's clock_sync record. Producers outside
+// the shim (app-events sidecars) have no CUPTI handle, so they stamp
+// CLOCK_REALTIME and declare clock "unix"; without a clock_sync record such
+// spans stay untranslated and simply attribute no kernels.
+func (c *Capture) translateSpanClocks() {
+	if c.ClockSync == nil {
+		return
+	}
+	delta := int64(c.ClockSync.CuptiNS) - int64(c.ClockSync.UnixNS)
+	for i := range c.Spans {
+		if c.Spans[i].Clock != ClockUnix {
+			continue
+		}
+		c.Spans[i].StartNS = uint64(int64(c.Spans[i].StartNS) + delta)
+		c.Spans[i].EndNS = uint64(int64(c.Spans[i].EndNS) + delta)
+		c.Spans[i].Clock = ""
+	}
 }
 
 func decodeEvent(data []byte) (Event, error) {

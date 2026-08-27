@@ -124,3 +124,40 @@ func TestOverlappingSpansFirstMatchWins(t *testing.T) {
 		t.Errorf("outer kernels = %d, want 0", got)
 	}
 }
+
+func TestUnixClockSpanTranslation(t *testing.T) {
+	// clock_sync: cupti = unix - 100. A unix-stamped span containing the
+	// kernel in wall time must attribute it after translation.
+	const jsonl = `{"kind":"clock_sync","unix_ns":1000,"cupti_ns":900}
+{"kind":"span","name":"decode","start_ns":1500,"end_ns":3500,"clock":"unix","streams":[3]}
+{"kind":"kernel","name":"hot","start_ns":1600,"end_ns":2600,"grid":"1x1x1","block":"32x1x1","correlation_id":5,"stream_id":3}
+`
+	cap, err := DecodeJSONL(strings.NewReader(jsonl))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := cap.Spans[0]
+	if s.StartNS != 1400 || s.EndNS != 3400 {
+		t.Fatalf("translated interval = [%d,%d], want [1400,3400]", s.StartNS, s.EndNS)
+	}
+	if s.Clock != "" {
+		t.Errorf("clock = %q after translation, want empty", s.Clock)
+	}
+	spans := AttributeSpans(cap)
+	if len(spans[0].Kernels) != 1 {
+		t.Fatalf("attributed kernels = %d, want 1", len(spans[0].Kernels))
+	}
+}
+
+func TestUnixClockSpanWithoutSyncStaysUntranslated(t *testing.T) {
+	const jsonl = `{"kind":"span","name":"decode","start_ns":1500,"end_ns":3500,"clock":"unix"}
+`
+	cap, err := DecodeJSONL(strings.NewReader(jsonl))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := cap.Spans[0]
+	if s.StartNS != 1500 || s.EndNS != 3500 || s.Clock != ClockUnix {
+		t.Fatalf("span mutated without clock_sync: [%d,%d] clock=%q", s.StartNS, s.EndNS, s.Clock)
+	}
+}
