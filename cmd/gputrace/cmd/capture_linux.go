@@ -38,6 +38,9 @@ func runCaptureLinux(cmd *cobra.Command, opts *captureOptions, args []string) er
 	if !strings.HasSuffix(out, ".gpucapture") {
 		out += ".gpucapture"
 	}
+	if abs, err := filepath.Abs(out); err == nil {
+		out = abs // the target may run with a different working directory
+	}
 	if fi, err := os.Stat(out); err == nil && fi.IsDir() && len(args) > 0 {
 		return fmt.Errorf("capture: output bundle %s already exists", out)
 	}
@@ -65,6 +68,12 @@ func runCaptureLinux(cmd *cobra.Command, opts *captureOptions, args []string) er
 	if err != nil {
 		return err
 	}
+
+	// App-events sidecar: any process in the target tree may append
+	// span/instant JSONL records here; they are merged into the bundle's
+	// events stream when the target exits. See docs/ENVIRONMENT.md.
+	sidecarPath := filepath.Join(out, "app_events.jsonl")
+	preloadEnv = append(preloadEnv, fmt.Sprintf("GPUTRACE_APP_EVENTS=%s", sidecarPath))
 
 	// Optional NVML sampler runs alongside the target and writes into the
 	// same bundle; it is stopped when the target exits.
@@ -101,6 +110,16 @@ func runCaptureLinux(cmd *cobra.Command, opts *captureOptions, args []string) er
 			_ = sampler.Process.Signal(syscall.SIGTERM)
 		}
 		_ = sampler.Wait()
+	}
+	// Merge the app-events sidecar into the bundle's events stream so span
+	// records ride the same decode path as shim-emitted records. The
+	// sidecar is optional: an absent file means the target declared nothing.
+	if sidecarData, err := os.ReadFile(sidecarPath); err == nil && len(sidecarData) > 0 {
+		// Append into an events-glob-matching shard so OpenEvents picks it up.
+		mergedPath := filepath.Join(out, fmt.Sprintf("events.app.%d.jsonl", os.Getpid()))
+		if err := os.WriteFile(mergedPath, sidecarData, 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "capture: merge app-events: %v\n", err)
+		}
 	}
 	// A failing workload still produced a valid (possibly empty) bundle;
 	// report both facts rather than discarding evidence.

@@ -14,6 +14,8 @@ import (
 type cuptiOptions struct {
 	output     string
 	stats      bool
+	spans      bool
+	spansJSON  bool
 	top        int
 	perKernel  bool
 	samples    string
@@ -47,6 +49,9 @@ native counter tracks on the same normalized clock.`,
 			apis := capData.APIs
 			if len(events) == 0 {
 				return fmt.Errorf("no CUPTI events in %s", args[0])
+			}
+			if opts.spans {
+				return printSpanTable(cmd, capData, opts.spansJSON)
 			}
 			if opts.stats {
 				return printCuptiStats(cmd, events)
@@ -89,6 +94,8 @@ native counter tracks on the same normalized clock.`,
 	}
 	cmd.Flags().StringVarP(&opts.output, "output", "o", opts.output, "Output Perfetto trace path")
 	cmd.Flags().BoolVar(&opts.stats, "stats", opts.stats, "Print summary statistics instead of writing a trace")
+	cmd.Flags().BoolVar(&opts.spans, "spans", opts.spans, "Print per-span setup/launch-latency/GPU/tail decomposition")
+	cmd.Flags().BoolVar(&opts.spansJSON, "json", opts.spansJSON, "Output --spans table as JSON")
 	cmd.Flags().IntVar(&opts.top, "top", opts.top, "Print the N slowest kernel launches instead of writing a trace")
 	cmd.Flags().BoolVar(&opts.perKernel, "per-kernel-tracks", opts.perKernel, "Give each distinct kernel its own track")
 	cmd.Flags().StringVar(&opts.samples, "samples", opts.samples, "Newline-delimited NVML sample file to overlay as counter tracks")
