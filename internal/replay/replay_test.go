@@ -107,8 +107,17 @@ func TestAnalyzeReplayFlattensNestedCttRecords(t *testing.T) {
 	if len(plan.Commands) == 0 {
 		t.Fatal("nested Ctt records produced no replay commands")
 	}
-	if plan.ComputeDispatches != len(plan.Commands) {
-		t.Fatalf("compute dispatches = %d, commands = %d", plan.ComputeDispatches, len(plan.Commands))
+	// Every flattened command must be accounted for as a dispatch or an ICB
+	// execution. The fixture yielded only dispatches when this test was
+	// written; parsing records after the MTSP header (9abafa87) surfaced
+	// three Ci records as well, so the invariant is full accounting rather
+	// than dispatches-only.
+	if plan.ComputeDispatches+plan.ICBExecutions != len(plan.Commands) {
+		t.Fatalf("compute dispatches = %d, icb executions = %d, commands = %d",
+			plan.ComputeDispatches, plan.ICBExecutions, len(plan.Commands))
+	}
+	if plan.ComputeDispatches == 0 {
+		t.Fatal("nested Ctt records produced no compute dispatches")
 	}
 }
 
