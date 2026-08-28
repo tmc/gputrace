@@ -139,9 +139,10 @@ func TestGeneratedBindingsCounterFile(t *testing.T) {
 		must("kick starts", ok, err)
 		ok, err = gtshaderprofiler.AgxpsApsProfileDataGetKickEnd(profileData, &ends[0], 0, nk)
 		must("kick ends", ok, err)
-		// The binding takes *uint32, matching the 4-byte elements the
-		// framework writes. See KickReferences.
-		ok, err = gtshaderprofiler.AgxpsApsProfileDataGetKickID(profileData, &ids[0], 0, nk)
+		// The framework writes 4-byte elements (see KickReferences); the
+		// generated binding declares *uint64, so cast the correctly-sized
+		// uint32 buffer's pointer to satisfy it.
+		ok, err = gtshaderprofiler.AgxpsApsProfileDataGetKickID(profileData, (*uint64)(unsafe.Pointer(&ids[0])), 0, nk)
 		must("kick IDs", ok, err)
 		for _, series := range []struct {
 			name string

@@ -60,7 +60,7 @@ func stubCounterClass(t *testing.T, name, valuesEncoding string, values unsafe.P
 			{"values", valuesIMP, valuesEncoding + "@:"},
 			{"timestamps", timestamps, "^Q@:"},
 		} {
-			if !objc.AddMethod(cls, objc.Sel(method.sel), method.imp, method.types) {
+			if !objc.AddMethod(cls, objc.Sel(method.sel), objc.IMP(method.imp), method.types) {
 				t.Fatalf("adding -%s to %s failed", method.sel, name)
 			}
 		}

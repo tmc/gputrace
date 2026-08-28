@@ -233,10 +233,11 @@ func kickReferences(pd profileData) ([]kickReference, error) {
 	}
 	// The accessor writes 4-byte elements, against 8 bytes for kick_start and
 	// kick_end in the same family: docs/research/agxps-signatures.yaml records
-	// that width as verified at runtime over a 2510-kick parse. The binding now
-	// declares *uint32 to match, so the cast this call used to carry is gone --
-	// the widths agree at the type level instead of being reconciled here.
-	if ok, err := gtshaderprofiler.AgxpsApsProfileDataGetKickID(handle, &ids[0], 0, n); err != nil || !ok {
+	// that width as verified at runtime over a 2510-kick parse. The generated
+	// binding declares *uint64 (name-derived, not verified), so the buffer is
+	// []uint32 sized to the real element width and the pointer is cast to
+	// satisfy the declared type; the callee writes n*4 bytes, exactly filling it.
+	if ok, err := gtshaderprofiler.AgxpsApsProfileDataGetKickID(handle, (*uint64)(unsafe.Pointer(&ids[0])), 0, n); err != nil || !ok {
 		return nil, fmt.Errorf("get kick IDs: ok=%v: %w", ok, err)
 	}
 	out := make([]kickReference, n)
