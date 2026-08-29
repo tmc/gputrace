@@ -11,6 +11,8 @@ source lookup behavior:
 | `GPUTRACE_APS_PRELOAD_BUNDLE` | Preloads `AGXGPURawCounterBundle` before APS source-group discovery, so a discovery failure reports the real reason. |
 | `GPUTRACE_APP_EVENTS` | Set by `gputrace capture` on the target process: path of a JSONL sidecar where the target may append span/instant records (`{"kind":"span","name",...,"start_ns","end_ns","labels":{...}}`). Records are merged into the bundle at capture close; stamp timestamps with the CUPTI clock, or stamp `CLOCK_REALTIME` and declare `"clock":"unix"` — the decoder translates via the capture's `clock_sync` record. Absent file is fine — declaring nothing is normal. |
 | `GPUTRACE_CAPTURE_API` | Set by `gputrace capture --api` on the target process: enables host-side runtime/driver API call records in the shim. |
+| `GPUTRACE_CAPTURE_NVTX` | Set by `gputrace capture --nvtx` on the target process: arms `CUPTI_ACTIVITY_KIND_MARKER`, so NVTX ranges from the target or the libraries it links become marker records that pair into spans at decode. |
+| `NVTX_INJECTION64_PATH` | Set by `gputrace capture --nvtx` to the resolved `libcupti.so`: a target that loads NVTX dynamically only emits into the profiler named here. Absent libcupti is not fatal — statically linked NVTX still routes through the armed activity API. |
 | `GPUTRACE_CAPTURE_OUT` | Set by `gputrace capture` on the target process: output path for the shim's activity JSONL. |
 | `GPUTRACE_CAPTURE_DEBUG` | Enables extra debug logging from the capture shim. |
 | `GPUTRACE_MIO_MCA` | Enables MCA register readback for pipelines in `streamData` model integration. |

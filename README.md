@@ -338,7 +338,10 @@ into a controlled regression.
 | **Utilities** | `mtlb` | Metal Library Binary inspection |
 | | `clear-buffers` | Zero out buffers to reduce trace size |
 | | `nvidia` | Report NVIDIA GPU status via NVML (Linux) |
+| | `doctor` | Diagnose the GPU profiling environment and print fixes |
 | | `cupti` | Convert CUPTI activity captures to Perfetto traces (Linux) |
+| | `ncu` | Escalate a capture's hottest kernels to Nsight Compute counters (Linux) |
+| | `overhead` | Measure how much the capture shim perturbs a workload (Linux) |
 | | `devices` | List GPUs and capture backend capabilities |
 | | `analyze` | Report kernel metrics and optimization findings (Linux) |
 | | `optimize` | Run, compare, and iterate on workload performance |
@@ -405,6 +408,90 @@ launches appear as GPU compute slices (one track per distinct kernel with
 `--per-kernel-tracks`), memory transfers on their own track, and the NVML
 power/utilization/temperature series as counter tracks aligned to the same
 normalized clock.
+
+### Diagnosing the environment
+
+Two ways a CUDA profiling setup fails silently rather than loudly: an
+`nsys` whose default `-t cuda` routes to hardware event tracing drops
+every kernel record while still writing a healthy-looking report, and a
+CUPTI older than the running driver records nothing at all. Both read as
+"the workload launched no kernels".
+
+```console
+$ gputrace doctor
+ok     nvidia driver    NVIDIA GB10: driver 580.95.05, CUDA 13.0
+warn   libcupti         1 match the CUDA 13 driver, 2 predate it
+warn   nsight systems   4 nsys installs found
+         * 2026.1.1  /opt/nvidia/nsight-systems/2026.1.1/.../nsys
+             -t cuda enables hardware tracing, which drops every kernel record
+             on GB10-class parts while the capture still looks healthy
+           2025.3.2  /opt/nvidia/nsight-systems/2025.3.2/.../nsys
+             -t cuda falls back to software tracing correctly
+  fix: always pass -t cuda-sw with this version
+warn   nsight compute   GPU performance counters refused for this user
+ok     capture shim     built with gcc -> ~/.cache/gputrace/libcupticapture-....so
+```
+
+Pass a workload binary to also check it for capturability: static linkage
+defeats `LD_PRELOAD` entirely, and a Go target needs an in-process
+`cuptiActivityFlushAll` because it crosses no interposed synchronization
+point and exits via `exit_group`.
+
+### Budget, latency, and comparison
+
+`analyze` and `summary` report where a capture's wall time went, not just
+which kernels ran:
+
+```console
+$ gputrace summary run.gpucapture
+GPU budget: 634.6us busy of 36.49ms wall span (1.7% occupancy), 35.85ms idle across 51 gaps
+  idle gaps:         mean 703.0us, p95 1.46ms, max 20.73ms
+    20.73ms   after scale -> saxpy
+
+CUDA graphs: 1 graph, 54.4% of kernel time (32 graph kernels vs 17 direct launches)
+  graph 2: 4 launches x 8 nodes, 225.9us (54.4% of kernel time)
+    node #0    14.5% of graph      4x  mean 8.2us     saxpy
+
+Launch latency (queue -> submit -> start, 17 of 49 launches timed):
+  queued -> submitted: mean 93.8us, p50 93.2us, p95 139.5us
+  coverage:          computed over the 34.7% of kernels with latency
+                     timestamps; the rest (CUDA-graph launches) report none
+```
+
+Launch latency is reported as a coverage-gated metric rather than a bare
+number. CUPTI leaves its queued/submitted timestamps unset for launches it
+cannot time — CUDA-graph nodes among them — and a stale value in a reused
+record buffer once made 45,943 of 46,138 kernels share one queued
+timestamp, implying 1.16 s of launch latency that never happened. When too
+few launches carry a consistent triple, the analysis says so instead of
+averaging the rest.
+
+Two bundles compare kernel by kernel, ordered by GPU time moved:
+
+```console
+$ gputrace diff base.gpucapture variant.gpucapture
+verdict: regressed — slower overall (13.2%)
+kernel time: 415.5us -> 470.5us (+13.2%)
+occupancy:   1.7% -> 2.8% (+1.0 points)
+idle budget: 35.85ms across 51 gaps -> 25.25ms across 51 gaps
+```
+
+### Counters and capture cost
+
+`gputrace ncu` re-runs the workload a bundle recorded, profiling only the
+kernels the capture ranked highest and merging the counters into the
+bundle as `ncu.json`. `gputrace overhead` measures what the capture itself
+costs, against the effect size under study:
+
+```console
+$ gputrace overhead --effect-size 5 -- ./workload
+baseline:     median 372.82ms  IQR [369.68ms..374.88ms]
+instrumented: median 391.84ms  IQR [389.72ms..395.39ms]
+overhead:     +5.1% (+19.02ms)
+
+NOT usable for this effect size: the shim moves wall time by 5.1%, at or
+beyond the 5.0% effect under study
+```
 
 ### Agentic optimization loop
 

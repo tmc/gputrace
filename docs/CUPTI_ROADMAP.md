@@ -128,6 +128,16 @@ capture command unless noted.
    fields plus queued/submitted latency timestamps now emitted when
    nonzero. Newer-struct-only fields remain open.
 
+   **REVISED (2026-08-29):** emitting queued/submitted whenever *either*
+   was nonzero published stale values from reused record buffers. See
+   `docs/research/GB10_PROFILING_TOOLCHAIN.md` §1: 45,943 of 46,138
+   kernels shared one queued timestamp, implying a p50 launch latency of
+   1.16 s. Emission is now gated on a consistent
+   queued <= submitted <= start triple; the offsets themselves are fine
+   ([V] `queued` and `submitted` sit at 120 and 128 in both Kernel4 and
+   Kernel9 under CUPTI_API_VERSION 130001), so the prefix-safe cast was
+   never the problem.
+
 ## 3. Free upgrades: fields CUPTI already hands us
 
 The activity records the shim already receives carry substantially more
@@ -163,7 +173,7 @@ All present in the local CUPTI headers. Each should be a capture flag
 | Kind | What it buys | Flag sketch |
 |---|---|---|
 | `RUNTIME`/`DRIVER` (exists, env-gated) | host-side launch/sync timing; launch-bound detection | promote to `--api` |
-| `MARKER` + `MARKER_DATA` (NVTX) | semantic phases: PyTorch `emit_nvtx`, cuDNN/cuBLAS/TensorRT built-in ranges, user annotations | `--nvtx` (also set `NVTX_INJECTION64_PATH=libcupti.so` in the child env) |
+| `MARKER` + `MARKER_DATA` (NVTX) | semantic phases: PyTorch `emit_nvtx`, cuDNN/cuBLAS/TensorRT built-in ranges, user annotations | **DONE:** `--nvtx`, with `NVTX_INJECTION64_PATH` set in the child env; markers pair into spans at decode |
 | `OVERHEAD` | CUPTI's own overhead, attributed instead of polluting kernels | on with `--api` |
 | `MEMORY2` / `MEMORY_POOL` | cudaMalloc/Free timeline, pool grow/shrink — allocation churn and fragmentation findings | `--memory` |
 | `UNIFIED_MEMORY_COUNTER` | UM page faults, HtoD/DtoH migration bytes, thrashing | `--um` |
@@ -394,6 +404,43 @@ strategy:
    flamegraphs, benchfmt for statistics — open formats other tools
    already speak.
 
+## 9a. Shipped since this doc was written
+
+Established empirically on GB10; see
+`docs/research/GB10_PROFILING_TOOLCHAIN.md` for how each was verified.
+
+- **Launch latency as a computed, coverage-gated metric** (§2.9 revision).
+  CUDA-graph node launches carry no latency timestamps at all [V], so the
+  analysis reports coverage and refuses to characterize a capture from too
+  few timed launches.
+- **Busy/idle budget** (`gpuevent.UtilizationOf`): GPU busy time as an
+  interval *union* — summing kernel durations double-counts overlapped
+  streams — wall span, occupancy, per-gap attribution, and a `gpu-idle`
+  finding. Surfaced by `analyze` and by `summary` on a bundle.
+- **NVTX capture** (§4, §7.1): `--nvtx` arms markers and points
+  `NVTX_INJECTION64_PATH` at libcupti; marker pairs become spans that
+  attract kernels exactly as sidecar spans do.
+- **CUDA graph attribution** (`gpuevent.AnalyzeGraphs`): kernels grouped
+  by graph and node ID, with per-node time share. Node ID to source
+  operation is *not* derivable from activity records — CUPTI reports the
+  node's identity, not its provenance — so this stops at "node 7 of graph
+  3 runs this kernel for 40% of the graph's time".
+- **`gputrace doctor`**: per-install nsys verdicts, CUPTI-versus-driver
+  compatibility, counter permission probed via ncu, shim build, and
+  per-target capturability checks.
+- **`gputrace diff` for two bundles**: per-kernel deltas ordered by GPU
+  time moved, occupancy movement, the idle budget, and the kernels present
+  in only one capture.
+- **`gputrace ncu`**: escalation of the top-N kernels to hardware
+  counters, merged back into the bundle as `ncu.json`.
+- **`gputrace overhead`**: the shim's own cost against a stated effect
+  size — +5.1% wall time for activity records on the local fixture, +5.7%
+  with `--api --nvtx` [V].
+
+Still open from the tiers below: PM sampling, the range profiler, PC
+sampling, `cuptiGetCallbackName`, the in-process demangler, sampler as a
+subcommand, `CUDA_INJECTION64_PATH`, and multi-GPU/multi-node merge.
+
 ## 10. Prioritized plan
 
 Ordered by leverage per unit of work; each tier is shippable alone.
@@ -402,6 +449,11 @@ Ordered by leverage per unit of work; each tier is shippable alone.
 kernel activity, fallback bug, per-PID output files, clock-sync record,
 sampler as subcommand + all devices, hardware provenance in meta.json,
 exit-flush investigation.
+
+**Tier 1 status (2026-08-29):** shared/local memory, queued/submitted
+latency timestamps, graph IDs, memcpy src/dst kinds, `--api`, and
+theoretical occupancy are in. `cuptiGetCallbackName` and the in-process
+demangler remain open.
 
 **Tier 1 — free richness (small):** Kernel9/10 fields (shared/local
 memory, queued/submitted via latency timestamps, graph IDs), memcpy
