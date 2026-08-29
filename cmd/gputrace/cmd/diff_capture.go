@@ -93,7 +93,7 @@ func writeCaptureDiff(out io.Writer, c *gpuevent.CaptureComparison, base, varian
 		rows = rows[:limit]
 	}
 	fmt.Fprintf(out, "\nPer-kernel deltas (by GPU time moved):\n")
-	fmt.Fprintf(out, "  %10s  %11s  %21s  %13s  %s\n", "TOTAL Δ", "COUNT", "MEAN", "OCCUPANCY", "KERNEL")
+	fmt.Fprintf(out, "  %9s  %-12s  %-22s  %-14s  %s\n", "TOTAL Δ", "COUNT", "MEAN", "OCCUPANCY", "KERNEL")
 	for _, d := range rows {
 		mark := "  "
 		switch d.OnlyIn {

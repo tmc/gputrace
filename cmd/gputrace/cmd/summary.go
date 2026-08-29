@@ -21,9 +21,14 @@ type summaryOptions struct {
 
 func newSummaryCommand(opts *summaryOptions) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "summary <trace.gputrace>",
+		Use:   "summary <trace.gputrace|capture.gpucapture>",
 		Short: "Summarize structure, timing, and evidence gaps",
-		Args:  cobra.ExactArgs(1),
+		Long: `Summarize a trace's structure, timing, and evidence gaps.
+
+Given a .gpucapture bundle (Linux/NVIDIA), it summarizes the capture
+instead: kernel time, the GPU busy/idle budget with its largest gaps, and
+launch latency when the capture recorded it.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runSummary(cmd, args, opts)
 		},
@@ -42,6 +47,12 @@ func runSummary(cmd *cobra.Command, args []string, opts *summaryOptions) error {
 		return fmt.Errorf("--limit must be >= 0")
 	}
 	path := args[0]
+	// A CUDA capture has no command buffers or encoders to summarize; its
+	// budget is the busy/idle split, which lives in the same place for a
+	// reader asking the same question.
+	if isCaptureInput(path) {
+		return runCaptureSummary(cmd, path, opts)
+	}
 	if err := checkTraceFile(path); err != nil {
 		return err
 	}
@@ -64,6 +75,42 @@ func runSummary(cmd *cobra.Command, args []string, opts *summaryOptions) error {
 		return encoder.Encode(report)
 	}
 	writeSummary(cmd.OutOrStdout(), report, opts.limit)
+	return nil
+}
+
+// runCaptureSummary reports the budget of a CUDA capture: where its GPU
+// time went, and how much of the span the device spent waiting.
+func runCaptureSummary(cmd *cobra.Command, path string, opts *summaryOptions) error {
+	rep, err := loadCaptureReport(path)
+	if err != nil {
+		return err
+	}
+	if opts.json {
+		encoder := json.NewEncoder(cmd.OutOrStdout())
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(rep)
+	}
+	out := cmd.OutOrStdout()
+	fmt.Fprintf(out, "%d launches · %d distinct kernels · %s total kernel time\n",
+		rep.KernelLaunches, len(rep.Kernels), dur(rep.TotalKernelNS))
+	if rep.MemcpyCount > 0 || rep.MemsetCount > 0 {
+		fmt.Fprintf(out, "Transfers: %d copies (%s), %d fills\n",
+			rep.MemcpyCount, dur(rep.MemcpyNS), rep.MemsetCount)
+	}
+
+	fmt.Fprintln(out, "\nTop work")
+	rows := rep.Kernels
+	if opts.limit > 0 && len(rows) > opts.limit {
+		rows = rows[:opts.limit]
+	}
+	for _, k := range rows {
+		fmt.Fprintf(out, "%-44s %6d launches  %9s  %5.1f%%\n",
+			fmtutil.TruncateString(shortKernel(k.Name), 44), k.Count, dur(k.TotalNS), k.SharePct)
+	}
+
+	printUtilization(out, rep.Utilization)
+	printGraphs(out, rep.Graphs)
+	printLaunchLatency(out, rep.LaunchLatency)
 	return nil
 }
 

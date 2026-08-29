@@ -64,6 +64,21 @@ func CreateBundle(dir string, meta Meta) error {
 	return os.WriteFile(filepath.Join(dir, MetaFileName), append(data, '\n'), 0o644)
 }
 
+// ReadMeta reads a bundle's provenance. It is what lets a later tool
+// re-run the very command a capture recorded rather than an approximation
+// of it.
+func ReadMeta(dir string) (Meta, error) {
+	var meta Meta
+	data, err := os.ReadFile(filepath.Join(dir, MetaFileName))
+	if err != nil {
+		return meta, err
+	}
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return meta, fmt.Errorf("read %s: %w", filepath.Join(dir, MetaFileName), err)
+	}
+	return meta, nil
+}
+
 // IsBundle reports whether path looks like a capture bundle directory.
 // A directory containing any events shard (events.jsonl or
 // events.<pid>.jsonl) or a meta.json qualifies.

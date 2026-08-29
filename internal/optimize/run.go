@@ -20,6 +20,10 @@ type Config struct {
 	Warmups    int      `json:"warmups"`               // discarded runs before measurement
 	Iterations int      `json:"iterations"`            // measured runs
 	OutputPath string   `json:"output_path,omitempty"` // where to persist the Result
+	// Env adds "K=V" entries to the child's inherited environment. It is
+	// how a series runs the same command under an instrumented
+	// configuration, so the two sides differ only in the instrumentation.
+	Env []string `json:"env,omitempty"`
 }
 
 // Iteration is one measured run.
@@ -88,6 +92,9 @@ func Run(cfg Config) (*Result, error) {
 func runOnce(cfg Config) (Iteration, error) {
 	cmd := exec.Command(cfg.Command[0], cfg.Command[1:]...)
 	cmd.Dir = cfg.Dir
+	if len(cfg.Env) > 0 {
+		cmd.Env = append(os.Environ(), cfg.Env...)
+	}
 	var stdout io.ReadCloser
 	start := time.Now()
 	out, err := cmd.Output()
