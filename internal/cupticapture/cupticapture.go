@@ -126,6 +126,11 @@ func ensureShim() (string, error) {
 	return shimPath, buildErr
 }
 
+// EnsureShim builds (or reuses) the compiled capture shim and returns its
+// path. It exists so environment diagnostics can prove the shim builds
+// without starting a capture.
+func EnsureShim() (string, error) { return ensureShim() }
+
 // Options configures one capture run.
 type Options struct {
 	OutputPath string // events.jsonl path inside the capture bundle

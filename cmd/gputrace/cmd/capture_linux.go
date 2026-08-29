@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/tmc/gputrace/internal/buildinfo"
 	"github.com/tmc/gputrace/internal/cupticapture"
+	"github.com/tmc/gputrace/internal/gpudoctor"
 	"github.com/tmc/gputrace/internal/nvidia"
 )
 
@@ -137,6 +138,9 @@ func runCaptureLinux(cmd *cobra.Command, opts *captureOptions, args []string) er
 }
 
 func init() {
+	// Let `gputrace doctor` prove the shim builds without capturing.
+	gpudoctor.SetShimBuilder(cupticapture.EnsureShim)
+
 	// Extend the existing capture command with Linux-specific flags and
 	// rerouting. The darwin implementation compiles an Objective-C interposer;
 	// here we compile a C CUPTI shim and LD_PRELOAD it instead.
