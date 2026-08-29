@@ -19,6 +19,7 @@
  *   GPUTRACE_APP_EVENTS    - optional sidecar path advertised to the target;
  *                            the shim does not read or write it
  *   GPUTRACE_CAPTURE_API   - enable runtime/driver API call records
+ *   GPUTRACE_CAPTURE_NVTX  - enable NVTX marker (range) records
  *   GPUTRACE_CAPTURE_DEBUG - diagnostics on stderr
  *
  * Pure C: no runtime beyond libc and libcuda/libcupti. The Go parent never
@@ -167,8 +168,18 @@ static void emit_kernel(CUpti_ActivityKernel4 *k) {
                     k9->graphId, (unsigned long long)k9->graphNodeId);
     }
     /* Latency timestamps (enabled at arm time): queued/submitted separate
-     * "kernel is slow" from "kernel waited in the stream queue". */
-    if (k->queued || k->submitted)
+     * "kernel is slow" from "kernel waited in the stream queue".
+     *
+     * Emit them only as a consistent triple. CUPTI writes
+     * CUPTI_TIMESTAMP_UNKNOWN (0) for launches it cannot time, notably
+     * CUDA-graph nodes, and a record buffer reused across activities can
+     * carry a stale nonzero queued while submitted stays 0. Emitting on
+     * "either is nonzero" published that stale value: on a GB10 MLX
+     * capture 45,943 of 46,138 kernels shared one identical queued
+     * timestamp, implying a 1.16 s launch latency that never happened. */
+    if (k->queued != CUPTI_TIMESTAMP_UNKNOWN &&
+        k->submitted != CUPTI_TIMESTAMP_UNKNOWN &&
+        k->queued <= k->submitted && k->submitted <= k->start)
         fprintf(g_out, ",\"queued_ns\":%llu,\"submitted_ns\":%llu",
                 (unsigned long long)k->queued, (unsigned long long)k->submitted);
     fprintf(g_out, "}\n");
@@ -208,6 +219,28 @@ static void emit_memset(CUpti_ActivityMemset3 *m) {
         (unsigned long long)m->bytes, m->deviceId, m->streamId);
 }
 
+/* NVTX ranges arrive as MARKER records: a start and an end sharing one id,
+ * with the name carried on the start. They are emitted raw and paired at
+ * read time — pairing in the shim would need per-thread state on a CUPTI
+ * callback thread, and an unpaired start is still evidence. */
+static void emit_marker(const CUpti_ActivityMarker2 *m) {
+    const char *flag = "other";
+    if (m->flags & CUPTI_ACTIVITY_FLAG_MARKER_START) flag = "start";
+    else if (m->flags & CUPTI_ACTIVITY_FLAG_MARKER_END) flag = "end";
+    fprintf(g_out, "{\"kind\":\"marker\",\"phase\":");
+    json_escape(g_out, flag);
+    if (m->name) {
+        fprintf(g_out, ",\"name\":");
+        json_escape(g_out, (const char *)m->name);
+    }
+    if (m->domain) {
+        fprintf(g_out, ",\"domain\":");
+        json_escape(g_out, (const char *)m->domain);
+    }
+    fprintf(g_out, ",\"marker_id\":%u,\"timestamp_ns\":%llu}\n",
+            m->id, (unsigned long long)m->timestamp);
+}
+
 /* --- CUPTI callbacks ----------------------------------------------------- */
 
 static void CUPTIAPI bufferRequested(uint8_t **buffer, size_t *size,
@@ -244,6 +277,9 @@ static void CUPTIAPI bufferCompleted(CUcontext ctx, uint32_t streamId,
                 break;
             case CUPTI_ACTIVITY_KIND_MEMSET:
                 emit_memset((CUpti_ActivityMemset3 *)record);
+                break;
+            case CUPTI_ACTIVITY_KIND_MARKER:
+                emit_marker((const CUpti_ActivityMarker2 *)record);
                 break;
             case CUPTI_ACTIVITY_KIND_RUNTIME:
                 emit_api((const CUpti_ActivityAPI *)record, "runtime");
@@ -315,6 +351,14 @@ static void arm_cupti(void) {
     /* Runtime/driver API records: host-side call timing per launch. These
      * are what turn "GPU was idle 35ms/token" into "each launch costs X us
      * of host time". Gated behind env because they multiply record volume. */
+    /* NVTX ranges: the only source of application semantics ("decode
+     * token 47") that needs no cooperation from us beyond arming it. The
+     * capture command also sets NVTX_INJECTION64_PATH so a target that
+     * loads NVTX dynamically routes into CUPTI. */
+    if (getenv("GPUTRACE_CAPTURE_NVTX")) {
+        CUptiResult nr = cuptiActivityEnable(CUPTI_ACTIVITY_KIND_MARKER);
+        debug(nr == CUPTI_SUCCESS ? "nvtx markers on" : "nvtx marker enable failed");
+    }
     if (getenv("GPUTRACE_CAPTURE_API")) {
         CUptiResult ar = cuptiActivityEnable(CUPTI_ACTIVITY_KIND_RUNTIME);
         debug(ar == CUPTI_SUCCESS ? "runtime api records on" : "runtime api enable failed");

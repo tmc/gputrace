@@ -132,35 +132,40 @@ type Options struct {
 	Dir        string // working directory for the target
 	Debug      bool   // pass through shim diagnostics
 	APIRecords bool   // enable host-side CUDA API call records (higher volume)
+	NVTX       bool   // enable NVTX marker (range) records
 }
 
-// Command wraps argv with the environment needed to trace it. It returns
-// the modified environment and any setup error.
-func Command(argv []string, opts Options) ([]string, *[]string, error) {
-	shim, err := ensureShim()
-	if err != nil {
-		return nil, nil, err
+// LibCUPTIPath locates the CUPTI shared library. NVTX routes its ranges
+// into a profiler through the library named by NVTX_INJECTION64_PATH, so
+// capturing markers needs the path, not just the loaded library.
+func LibCUPTIPath() (string, error) {
+	candidates := []string{
+		"libcupti.so",
+		"libcupti.so.13",
+		"libcupti.so.12",
 	}
-	env := append(os.Environ(),
-		fmt.Sprintf("GPUTRACE_CAPTURE_OUT=%s", opts.OutputPath),
-		fmt.Sprintf("LD_PRELOAD=%s", shim),
+	if e := os.Getenv("CUDA_HOME"); e != "" {
+		candidates = append(candidates, filepath.Join(e, "lib64", "libcupti.so"))
+	}
+	candidates = append(candidates,
+		"/usr/local/cuda/lib64/libcupti.so",
+		"/usr/local/cuda/extras/CUPTI/lib64/libcupti.so",
+		"/usr/local/cuda-13/lib64/libcupti.so",
+		"/usr/local/cuda-12/lib64/libcupti.so",
 	)
-	if opts.Debug {
-		env = append(env, "GPUTRACE_CAPTURE_DEBUG=1")
+	for _, c := range candidates {
+		if !strings.Contains(c, "/") {
+			continue // bare sonames are for the loader, not for a path
+		}
+		if _, err := os.Stat(c); err == nil {
+			return c, nil
+		}
 	}
-	if opts.APIRecords {
-		env = append(env, "GPUTRACE_CAPTURE_API=1")
-	}
-	return argv, &env, nil
+	return "", fmt.Errorf("cupticapture: libcupti.so not found; NVTX ranges need it on disk")
 }
 
-// PreloadEnv returns just the environment additions, for callers managing
-// their own exec environment.
-func PreloadEnv(opts Options) ([]string, error) {
-	shim, err := ensureShim()
-	if err != nil {
-		return nil, err
-	}
+// captureEnv builds the shim environment shared by Command and PreloadEnv.
+func captureEnv(shim string, opts Options) []string {
 	env := []string{
 		fmt.Sprintf("GPUTRACE_CAPTURE_OUT=%s", opts.OutputPath),
 		fmt.Sprintf("LD_PRELOAD=%s", shim),
@@ -171,5 +176,36 @@ func PreloadEnv(opts Options) ([]string, error) {
 	if opts.APIRecords {
 		env = append(env, "GPUTRACE_CAPTURE_API=1")
 	}
-	return env, nil
+	if opts.NVTX {
+		env = append(env, "GPUTRACE_CAPTURE_NVTX=1")
+		// A target that loads NVTX dynamically (the common case) only
+		// emits into a profiler that named itself here. A missing
+		// libcupti is not fatal: statically-linked NVTX still routes
+		// through the armed activity API.
+		if lib, err := LibCUPTIPath(); err == nil {
+			env = append(env, fmt.Sprintf("NVTX_INJECTION64_PATH=%s", lib))
+		}
+	}
+	return env
+}
+
+// Command wraps argv with the environment needed to trace it. It returns
+// the modified environment and any setup error.
+func Command(argv []string, opts Options) ([]string, *[]string, error) {
+	shim, err := ensureShim()
+	if err != nil {
+		return nil, nil, err
+	}
+	env := append(os.Environ(), captureEnv(shim, opts)...)
+	return argv, &env, nil
+}
+
+// PreloadEnv returns just the environment additions, for callers managing
+// their own exec environment.
+func PreloadEnv(opts Options) ([]string, error) {
+	shim, err := ensureShim()
+	if err != nil {
+		return nil, err
+	}
+	return captureEnv(shim, opts), nil
 }

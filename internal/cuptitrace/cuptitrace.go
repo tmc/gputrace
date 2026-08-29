@@ -284,8 +284,12 @@ func build(cap gpuevent.Capture, sourcePath string, opts Options) (*perfetto.Tra
 				"correlation_id": e.CorrelationID,
 			},
 		}
-		if q, ok := e.Attrs["queued_ns"]; ok {
-			ev.Args["queued_ns"] = q
+		// Launch latency renders as durations, never as the raw activity
+		// timestamps: those sit in a different clock domain from the
+		// normalized slice times around them.
+		if e.Latency.Known {
+			ev.Args["queue_to_submit_ns"] = e.Latency.QueueToSubmitNS
+			ev.Args["submit_to_start_ns"] = e.Latency.SubmitToStartNS
 		}
 		switch e.Kind {
 		case gpuevent.KindKernel:

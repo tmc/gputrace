@@ -31,6 +31,7 @@ const (
 	FindingTransferHeavy FindingKind = "transfer-heavy" // memcpys rival kernel time
 	FindingLowOccupancy  FindingKind = "low-occupancy"  // register/shared limits cap theoretical occupancy
 	FindingPageableCopy  FindingKind = "pageable-copy"  // most transfer time moves pageable memory
+	FindingGPUIdle       FindingKind = "gpu-idle"       // device idle between activities dominates the span
 )
 
 // Severity ranks how much measured time a finding touches.
@@ -86,6 +87,9 @@ type Report struct {
 	PageableNS     uint64          `json:"pageable_ns,omitempty"` // memcpy time touching pageable memory [V]
 	SpanNS         uint64          `json:"span_ns"`               // first start to last end
 	LaunchOverhead *LaunchOverhead `json:"launch_overhead,omitempty"`
+	Utilization    Utilization     `json:"utilization"`
+	LaunchLatency  *LaunchLatency  `json:"launch_latency,omitempty"`
+	Graphs         *GraphAnalysis  `json:"graphs,omitempty"`
 }
 
 // Analyze reduces events into per-kernel statistics and ordered findings.
@@ -138,6 +142,11 @@ func Analyze(events []Event, _ []Sample) *Report {
 	sort.Slice(rep.Kernels, func(i, j int) bool {
 		return rep.Kernels[i].TotalNS > rep.Kernels[j].TotalNS
 	})
+	rep.Utilization = UtilizationOf(events)
+	rep.LaunchLatency = LaunchLatencyAnalysis(events)
+	if g := AnalyzeGraphs(events); len(g.Graphs) > 0 {
+		rep.Graphs = g
+	}
 	rep.Findings = buildFindings(rep)
 	return rep
 }
@@ -391,10 +400,53 @@ func buildFindings(rep *Report) []Finding {
 			})
 		}
 	}
+	// Device idle: the GPU spent a material share of the capture waiting
+	// between activities. Reported from measured record timestamps [V];
+	// the cause (host latency, synchronization, dependency stalls) is a
+	// hypothesis, so the evidence stays purely the busy/idle split.
+	if f, ok := idleFinding(rep.Utilization); ok {
+		out = append(out, f)
+	}
 	sort.SliceStable(out, func(i, j int) bool {
 		return severityRank(out[i].Severity) < severityRank(out[j].Severity)
 	})
 	return out
+}
+
+// Idle thresholds: below this occupancy the device spent more time waiting
+// than a well-fed pipeline should, and a span shorter than the floor is
+// too small for the split to mean anything.
+const (
+	idleOccupancyPct  = 70.0
+	idleMinWallSpanNS = 1_000_000 // 1 ms
+)
+
+func idleFinding(u Utilization) (Finding, bool) {
+	if u.WallSpanNS < idleMinWallSpanNS || u.OccupancyPct == 0 || u.OccupancyPct >= idleOccupancyPct {
+		return Finding{}, false
+	}
+	severity := SeverityLow
+	switch {
+	case u.OccupancyPct < 40:
+		severity = SeverityHigh
+	case u.OccupancyPct < 60:
+		severity = SeverityMedium
+	}
+	evidence := []string{
+		fmt.Sprintf("GPU busy %s of %s wall span (%.1f%% occupancy); %s idle across %d gaps",
+			dur(u.BusyNS), dur(u.WallSpanNS), u.OccupancyPct, dur(u.IdleNS), u.GapCount),
+	}
+	if u.GapCount > 0 {
+		evidence = append(evidence, fmt.Sprintf("gap mean %s, p95 %s, max %s",
+			dur(u.MeanGapNS), dur(u.P95GapNS), dur(u.MaxGapNS)))
+	}
+	return Finding{
+		Kind:       FindingGPUIdle,
+		Severity:   severity,
+		Subject:    "(device idle)",
+		Evidence:   evidence,
+		Hypothesis: "the device waits between activities more than it computes; capture with --api to attribute the gaps to host launch cost, synchronization, or dependency stalls before tuning any kernel",
+	}, true
 }
 
 func dominanceHypothesis(k KernelStats) string {

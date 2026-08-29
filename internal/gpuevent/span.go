@@ -34,6 +34,9 @@ type Span struct {
 	// Clock names the timestamp domain: "" (CUPTI, the capture domain)
 	// or ClockUnix (CLOCK_REALTIME, translated at decode).
 	Clock string `json:"clock,omitempty"`
+	// Source names where the span came from: SourceNVTX for a CUPTI
+	// marker pair, empty for the app-events sidecar.
+	Source string `json:"source,omitempty"`
 }
 
 // AttributedKernel is one kernel joined to a span.
@@ -192,4 +195,73 @@ func Decompositions(spans []AttributedSpan, apis []APIEvent) []SpanDecomposition
 		out = append(out, spans[i].Decompose(apiByCorrelation))
 	}
 	return out
+}
+
+// SourceNVTX marks a span reconstructed from CUPTI marker records — an
+// NVTX range emitted by the application or by a library it links (cuDNN,
+// cuBLAS, TensorRT, PyTorch's emit_nvtx). Spans without it came from the
+// GPUTRACE_APP_EVENTS sidecar.
+const SourceNVTX = "nvtx"
+
+// Marker is one CUPTI marker record: the start or the end of an NVTX
+// range. The name rides the start record; both share a marker id.
+type Marker struct {
+	Phase       string `json:"phase"` // "start" | "end"
+	Name        string `json:"name,omitempty"`
+	Domain      string `json:"domain,omitempty"`
+	MarkerID    uint32 `json:"marker_id"`
+	TimestampNS uint64 `json:"timestamp_ns"`
+}
+
+// decodeMarker parses a marker record.
+func decodeMarker(data []byte) (Marker, error) {
+	var m Marker
+	if err := json.Unmarshal(data, &m); err != nil {
+		return Marker{}, err
+	}
+	if m.TimestampNS == 0 {
+		return Marker{}, fmt.Errorf("marker record missing timestamp")
+	}
+	return m, nil
+}
+
+// pairMarkers joins start/end marker records into spans. A range whose
+// end never arrived (the process exited inside it) has no measurable
+// extent, so it is counted rather than invented; the count is what lets a
+// reader tell "no NVTX ranges" from "ranges truncated by exit".
+func pairMarkers(markers []Marker) (spans []Span, unpaired int) {
+	starts := make(map[uint32]Marker, len(markers))
+	for _, m := range markers {
+		switch m.Phase {
+		case "start":
+			starts[m.MarkerID] = m
+		case "end":
+			start, ok := starts[m.MarkerID]
+			if !ok {
+				unpaired++ // end without a recorded start
+				continue
+			}
+			delete(starts, m.MarkerID)
+			if m.TimestampNS < start.TimestampNS {
+				unpaired++
+				continue
+			}
+			span := Span{
+				Name:    start.Name,
+				StartNS: start.TimestampNS,
+				EndNS:   m.TimestampNS,
+				Source:  SourceNVTX,
+			}
+			if span.Name == "" {
+				span.Name = fmt.Sprintf("nvtx range %d", start.MarkerID)
+			}
+			if start.Domain != "" {
+				span.Labels = map[string]string{"domain": start.Domain}
+			}
+			spans = append(spans, span)
+		}
+	}
+	unpaired += len(starts)
+	sort.Slice(spans, func(i, j int) bool { return spans[i].StartNS < spans[j].StartNS })
+	return spans, unpaired
 }

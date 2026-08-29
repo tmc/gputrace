@@ -23,6 +23,7 @@ import (
 type captureLinuxOptions struct {
 	samples        bool
 	api            bool
+	nvtx           bool
 	sampleInterval string
 }
 
@@ -64,6 +65,7 @@ func runCaptureLinux(cmd *cobra.Command, opts *captureOptions, args []string) er
 	preloadEnv, err := cupticapture.PreloadEnv(cupticapture.Options{
 		OutputPath: eventsPath,
 		APIRecords: captureLinuxOpts.api,
+		NVTX:       captureLinuxOpts.nvtx,
 	})
 	if err != nil {
 		return err
@@ -163,6 +165,7 @@ Examples:
   gputrace capture -o run.gpucapture --samples -- ./matmul`
 	captureCmd.Short = "Run a workload under the GPU capture tracer"
 	captureCmd.Flags().BoolVar(&captureLinuxOpts.api, "api", captureLinuxOpts.api, "record host-side CUDA runtime/driver API calls (multiplies record volume)")
+	captureCmd.Flags().BoolVar(&captureLinuxOpts.nvtx, "nvtx", captureLinuxOpts.nvtx, "record NVTX ranges emitted by the target or the libraries it links")
 	captureCmd.Flags().BoolVar(&captureLinuxOpts.samples, "samples", captureLinuxOpts.samples, "Sample NVML device counters during the run")
 	captureCmd.Flags().StringVar(&captureLinuxOpts.sampleInterval, "sample-interval", captureLinuxOpts.sampleInterval, "NVML sampling interval")
 

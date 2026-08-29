@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -109,6 +110,10 @@ func printAnalysis(cmd *cobra.Command, rep *gpuevent.Report) error {
 			k.SharePct, k.Count, dur(k.MeanNS), dur(k.P95NS), k.Bound, shortKernel(k.Name), occ)
 	}
 
+	printUtilization(out, rep.Utilization)
+	printGraphs(out, rep.Graphs)
+	printLaunchLatency(out, rep.LaunchLatency)
+
 	if rep.LaunchOverhead != nil && rep.LaunchOverhead.Joins > 0 {
 		lo := rep.LaunchOverhead
 		fmt.Fprintf(out, "\nLaunch overhead (host API vs GPU execution, %d joined launches):\n", lo.Joins)
@@ -144,6 +149,75 @@ func printAnalysis(cmd *cobra.Command, rep *gpuevent.Report) error {
 		}
 	}
 	return nil
+}
+
+// printUtilization reports the busy/idle budget: how much of the capture's
+// wall span the device spent executing anything.
+func printUtilization(out io.Writer, u gpuevent.Utilization) {
+	if u.WallSpanNS == 0 {
+		return
+	}
+	fmt.Fprintf(out, "\nGPU budget: %s busy of %s wall span (%.1f%% occupancy), %s idle across %d gaps\n",
+		dur(u.BusyNS), dur(u.WallSpanNS), u.OccupancyPct, dur(u.IdleNS), u.GapCount)
+	if u.Concurrency > 1.05 {
+		fmt.Fprintf(out, "  stream overlap:    %.2fx (summed activity time over busy wall time)\n", u.Concurrency)
+	}
+	if u.GapCount > 0 {
+		fmt.Fprintf(out, "  idle gaps:         mean %s, p95 %s, max %s\n",
+			dur(u.MeanGapNS), dur(u.P95GapNS), dur(u.MaxGapNS))
+		for _, g := range u.TopGaps {
+			fmt.Fprintf(out, "    %-9s after %s -> %s\n", dur(g.DurationNS),
+				shortKernel(orUnknown(g.AfterName)), shortKernel(orUnknown(g.BeforeName)))
+		}
+	}
+}
+
+// printGraphs reports how much of the capture ran through CUDA graphs and
+// which node of each graph owns its time.
+func printGraphs(out io.Writer, g *gpuevent.GraphAnalysis) {
+	if g == nil || len(g.Graphs) == 0 {
+		return
+	}
+	fmt.Fprintf(out, "\nCUDA graphs: %d graph%s, %.1f%% of kernel time (%d graph kernels vs %d direct launches)\n",
+		len(g.Graphs), plural(len(g.Graphs)), g.GraphSharePct, g.GraphKernels, g.DirectKernels)
+	for _, gr := range g.Graphs {
+		fmt.Fprintf(out, "  graph %d: %d launches x %d nodes, %s (%.1f%% of kernel time)\n",
+			gr.GraphID, gr.Launches, gr.Nodes, dur(gr.TotalNS), gr.SharePct)
+		for _, n := range gr.TopNodes {
+			fmt.Fprintf(out, "    node #%-3d %5.1f%% of graph  %5dx  mean %-9s %s\n",
+				n.Index, n.SharePct, n.Count, dur(n.MeanNS), shortKernel(n.Name))
+		}
+	}
+}
+
+// printLaunchLatency reports the queue -> submit -> start decomposition, or
+// says why the capture cannot support one. It never prints a figure the
+// analysis declared unusable.
+func printLaunchLatency(out io.Writer, l *gpuevent.LaunchLatency) {
+	if l == nil || l.Kernels == 0 {
+		return
+	}
+	if !l.Usable {
+		fmt.Fprintf(out, "\nLaunch latency: unavailable — %s\n", l.Reason)
+		return
+	}
+	fmt.Fprintf(out, "\nLaunch latency (queue -> submit -> start, %d of %d launches timed):\n", l.Timed, l.Kernels)
+	fmt.Fprintf(out, "  queued -> submitted: mean %s, p50 %s, p95 %s\n",
+		dur(l.QueueToSubmitNS.MeanNS), dur(l.QueueToSubmitNS.P50NS), dur(l.QueueToSubmitNS.P95NS))
+	fmt.Fprintf(out, "  submitted -> start:  mean %s, p50 %s, p95 %s\n",
+		dur(l.SubmitToStartNS.MeanNS), dur(l.SubmitToStartNS.P50NS), dur(l.SubmitToStartNS.P95NS))
+	fmt.Fprintf(out, "  queued -> start:     mean %s, p50 %s, p95 %s\n",
+		dur(l.QueueToStartNS.MeanNS), dur(l.QueueToStartNS.P50NS), dur(l.QueueToStartNS.P95NS))
+	if l.Reason != "" {
+		fmt.Fprintf(out, "  coverage:          %s\n", l.Reason)
+	}
+}
+
+func orUnknown(s string) string {
+	if s == "" {
+		return "(unknown)"
+	}
+	return s
 }
 
 func shortKernel(name string) string {

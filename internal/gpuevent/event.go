@@ -31,6 +31,7 @@ type Event struct {
 	RawSymbol      string         `json:"raw_symbol"`     // vendor-mangled original
 	StartNS        uint64         `json:"start_ns"`
 	EndNS          uint64         `json:"end_ns"`
+	Latency        Latency        `json:"latency,omitempty"`
 	Grid           string         `json:"grid,omitempty"`
 	Block          string         `json:"block,omitempty"`
 	Registers      int            `json:"registers,omitempty"`
@@ -46,6 +47,48 @@ type Event struct {
 	StreamID       uint32         `json:"stream_id,omitempty"`
 	CorrelationID  uint64         `json:"correlation_id,omitempty"`
 	Attrs          map[string]any `json:"attrs,omitempty"` // vendor extras
+}
+
+// Latency is the launch latency decomposition derived from CUPTI's
+// queued/submitted timestamps: how long a launch sat in the command
+// buffer, and how long it then waited to start on the device.
+//
+// It holds durations rather than the raw absolute timestamps on purpose.
+// The raw values live in the activity clock domain, so a consumer that
+// reads them alongside a normalized start time computes nonsense — that
+// mistake is what produced a reported 1.16 s of "launch latency" on a
+// GB10 MLX capture. Durations survive Capture.Normalize unchanged, and
+// Known records whether the capture supplied a consistent triple at all.
+type Latency struct {
+	Known           bool   `json:"known"`
+	QueueToSubmitNS uint64 `json:"queue_to_submit_ns"`
+	SubmitToStartNS uint64 `json:"submit_to_start_ns"`
+}
+
+// QueueToStartNS is the full queue-to-device-start latency.
+func (l Latency) QueueToStartNS() uint64 {
+	return l.QueueToSubmitNS + l.SubmitToStartNS
+}
+
+// decodeLatency derives the latency decomposition from one activity
+// record's raw timestamps, applying the validity gate where the raw
+// values are still in one clock domain.
+//
+// CUPTI writes CUPTI_TIMESTAMP_UNKNOWN (0) for launches it cannot time,
+// notably CUDA-graph node launches. A record buffer reused across
+// activities can carry a stale nonzero queued while submitted stays 0
+// [V]: on a GB10 MLX capture 45,943 of 46,138 kernels shared one
+// identical queued value. Requiring both fields and the ordering
+// queued <= submitted <= start rejects those.
+func decodeLatency(queued, submitted, start uint64) Latency {
+	if queued == 0 || submitted == 0 || queued > submitted || submitted > start {
+		return Latency{}
+	}
+	return Latency{
+		Known:           true,
+		QueueToSubmitNS: submitted - queued,
+		SubmitToStartNS: start - submitted,
+	}
 }
 
 // DurationNS reports the measured execution duration.
@@ -125,6 +168,10 @@ type Capture struct {
 	Spans     []Span
 	ClockSync *ClockSync
 	Meta      *CaptureMeta
+	// UnpairedMarkers counts NVTX marker records that never formed a
+	// range, so "no NVTX spans" stays distinguishable from "ranges the
+	// capture truncated".
+	UnpairedMarkers int
 }
 
 // Normalize shifts every timestamp so the earliest event starts at zero,
@@ -158,6 +205,8 @@ func (c *Capture) Normalize() (origin uint64) {
 	for i := range c.Events {
 		c.Events[i].StartNS -= origin
 		c.Events[i].EndNS -= origin
+		// Event.Latency holds durations, not absolute timestamps, so it
+		// needs no shift: that is why it holds durations.
 	}
 	for i := range c.Samples {
 		c.Samples[i].TimestampNS -= origin
@@ -179,6 +228,7 @@ func (c *Capture) Normalize() (origin uint64) {
 // yields everything before the partial record.
 func DecodeJSONL(r io.Reader) (Capture, error) {
 	var cap Capture
+	var markers []Marker
 	scanner := bufio.NewScanner(bufioReader(r))
 	scanner.Buffer(make([]byte, 1<<20), 1<<20)
 	line := 0
@@ -206,6 +256,11 @@ func DecodeJSONL(r io.Reader) (Capture, error) {
 			if json.Unmarshal(data, &cs) == nil && cap.ClockSync == nil {
 				cap.ClockSync = &cs
 			}
+		case probe.Kind == "marker":
+			m, err := decodeMarker(data)
+			if err == nil {
+				markers = append(markers, m)
+			}
 		case probe.Kind == "span":
 			sp, err := decodeSpan(data)
 			if err == nil {
@@ -230,6 +285,9 @@ func DecodeJSONL(r io.Reader) (Capture, error) {
 			cap.Samples = append(cap.Samples, s)
 		}
 	}
+	nvtxSpans, unpaired := pairMarkers(markers)
+	cap.Spans = append(cap.Spans, nvtxSpans...)
+	cap.UnpairedMarkers = unpaired
 	cap.translateSpanClocks()
 	return cap, scanner.Err()
 }
@@ -263,6 +321,8 @@ func decodeEvent(data []byte) (Event, error) {
 		Symbol         string         `json:"symbol"`
 		StartNS        uint64         `json:"start_ns"`
 		EndNS          uint64         `json:"end_ns"`
+		QueuedNS       uint64         `json:"queued_ns"`
+		SubmittedNS    uint64         `json:"submitted_ns"`
 		Grid           string         `json:"grid"`
 		Block          string         `json:"block"`
 		Registers      int            `json:"registers"`
@@ -296,6 +356,7 @@ func decodeEvent(data []byte) (Event, error) {
 		RawSymbol:      symbol,
 		StartNS:        wire.StartNS,
 		EndNS:          wire.EndNS,
+		Latency:        decodeLatency(wire.QueuedNS, wire.SubmittedNS, wire.StartNS),
 		Grid:           wire.Grid,
 		Block:          wire.Block,
 		Registers:      wire.Registers,
@@ -362,6 +423,7 @@ func LaunchOverheadAnalysis(cap Capture) *LaunchOverhead {
 		}
 	}
 	var hostCosts []uint64
+	var gapSum int64
 	out := &LaunchOverhead{}
 	for cid, k := range kernelsByCorrelation {
 		a, ok := apisByCorrelation[cid]
@@ -379,15 +441,15 @@ func LaunchOverheadAnalysis(cap Capture) *LaunchOverhead {
 		out.Joins++
 		out.TotalHostNS += host
 		out.TotalGPUNS += gpu
-		out.MeanSubmitGapNS = float64(gap)
+		gapSum += gap
 		hostCosts = append(hostCosts, host)
-		_ = gap
 	}
 	sortU64(hostCosts)
 	if out.Joins > 0 {
 		out.MeanHostCostNS = out.TotalHostNS / uint64(out.Joins)
 		out.P50HostCostNS = percentile(hostCosts, 0.50)
 		out.P95HostCostNS = percentile(hostCosts, 0.95)
+		out.MeanSubmitGapNS = float64(gapSum) / float64(out.Joins)
 	}
 	return out
 }
