@@ -56,28 +56,42 @@ func probeNVIDIA() Backend {
 		b.Detail = "driver " + v
 	}
 	// Tracing needs CUPTI; its absence degrades to counters-only.
-	if err := cupti.Load("libcupti.so"); err == nil {
-		b.Tracing = true
-	} else if path := defaultCuptiPath(); path != "" {
-		if err := cupti.Load(path); err == nil {
-			b.Tracing = true
-		}
-	}
+	b.Tracing = cuptiLoadable()
 	if !b.Tracing {
 		b.Detail += "; cupti unavailable (no kernel tracing)"
 	}
 	return b
 }
 
-func defaultCuptiPath() string {
-	for _, p := range []string{
-		"/usr/local/cuda/lib64/libcupti.so",
-		"/usr/local/cuda/lib64/libcupti.so.13",
-		"/usr/local/cuda/lib64/libcupti.so.12",
-	} {
-		return p // first candidate; Load decides availability
+// cuptiCandidates are the names to try, loader search path first. The
+// versioned sonames matter: a runtime-only CUDA install ships
+// libcupti.so.13 without the unversioned symlink that the development
+// package provides, and stopping at "libcupti.so" reports no tracing on a
+// host that traces fine.
+var cuptiCandidates = []string{
+	"libcupti.so",
+	"libcupti.so.13",
+	"libcupti.so.12",
+	"/usr/local/cuda/lib64/libcupti.so",
+	"/usr/local/cuda/lib64/libcupti.so.13",
+	"/usr/local/cuda/lib64/libcupti.so.12",
+	"/usr/local/cuda/extras/CUPTI/lib64/libcupti.so",
+}
+
+// cuptiLoadable reports whether CUPTI can be loaded on this host. A
+// library already loaded under some other name counts: Load reports a
+// conflict for a second name, which says the library is present, not
+// that it is missing.
+func cuptiLoadable() bool {
+	for _, name := range cuptiCandidates {
+		if cupti.Loaded() {
+			return true
+		}
+		if err := cupti.Load(name); err == nil {
+			return true
+		}
 	}
-	return ""
+	return cupti.Loaded()
 }
 
 func probeMetal() Backend {
