@@ -18,7 +18,8 @@ const (
 )
 
 // KernelDelta is the per-kernel difference between two captures. Kernels
-// present on only one side are reported with the other side's count at 0.
+// present on only one side are reported with the other side's count at 0
+// and OnlyIn naming the side that has it.
 type KernelDelta struct {
 	Name           string  `json:"name"`
 	BaseCount      int     `json:"base_count"`
@@ -27,17 +28,44 @@ type KernelDelta struct {
 	VariantMeanNS  uint64  `json:"variant_mean_ns"`
 	BaseTotalNS    uint64  `json:"base_total_ns"`
 	VariantTotalNS uint64  `json:"variant_total_ns"`
-	DeltaPct       float64 `json:"delta_pct"` // mean-to-mean; negative = faster
+	DeltaPct       float64 `json:"delta_pct"`             // mean-to-mean; negative = faster
+	TotalDeltaNS   int64   `json:"total_delta_ns"`        // variant total - base total
+	BaseOccupancy  float64 `json:"base_occupancy_pct"`    // [H] theoretical, from launch geometry
+	VarOccupancy   float64 `json:"variant_occupancy_pct"` // [H]
+	OnlyIn         string  `json:"only_in,omitempty"`     // "base" | "variant"
+}
+
+// UtilizationDelta compares the busy/idle budget of two captures. It is
+// what separates "the kernels got faster" from "the device stopped
+// waiting": a run can win on wall time with identical kernel times purely
+// by closing gaps.
+type UtilizationDelta struct {
+	BaseOccupancyPct    float64 `json:"base_occupancy_pct"`
+	VariantOccupancyPct float64 `json:"variant_occupancy_pct"`
+	BaseIdleNS          uint64  `json:"base_idle_ns"`
+	VariantIdleNS       uint64  `json:"variant_idle_ns"`
+	BaseWallSpanNS      uint64  `json:"base_wall_span_ns"`
+	VariantWallSpanNS   uint64  `json:"variant_wall_span_ns"`
+	BaseGapCount        int     `json:"base_gap_count"`
+	VariantGapCount     int     `json:"variant_gap_count"`
+	BaseMeanGapNS       uint64  `json:"base_mean_gap_ns"`
+	VariantMeanGapNS    uint64  `json:"variant_mean_gap_ns"`
 }
 
 // CaptureComparison is the kernel-level result of diffing two captures.
 type CaptureComparison struct {
-	Verdict        CaptureVerdict `json:"verdict"`
-	Summary        string         `json:"summary"`
-	KernelDeltas   []KernelDelta  `json:"kernel_deltas"`
-	BaseTotalNS    uint64         `json:"base_total_ns"`
-	VariantTotalNS uint64         `json:"variant_total_ns"`
-	TotalDeltaPct  float64        `json:"total_delta_pct"`
+	Verdict        CaptureVerdict   `json:"verdict"`
+	Summary        string           `json:"summary"`
+	KernelDeltas   []KernelDelta    `json:"kernel_deltas"`
+	BaseTotalNS    uint64           `json:"base_total_ns"`
+	VariantTotalNS uint64           `json:"variant_total_ns"`
+	TotalDeltaPct  float64          `json:"total_delta_pct"`
+	Utilization    UtilizationDelta `json:"utilization"`
+	// OnlyInBase and OnlyInVariant name the kernels one capture ran and
+	// the other did not — the difference most easily missed when reading
+	// a table sorted by delta.
+	OnlyInBase    []string `json:"only_in_base,omitempty"`
+	OnlyInVariant []string `json:"only_in_variant,omitempty"`
 }
 
 // CompareCaptures diffs two capture reports kernel by kernel, ordered by
@@ -90,6 +118,17 @@ func CompareCaptures(base, variant *Report) *CaptureComparison {
 			VariantMeanNS:  v.MeanNS,
 			BaseTotalNS:    b.TotalNS,
 			VariantTotalNS: v.TotalNS,
+			TotalDeltaNS:   int64(v.TotalNS) - int64(b.TotalNS),
+			BaseOccupancy:  b.TheoreticalOccupancyPct,
+			VarOccupancy:   v.TheoreticalOccupancyPct,
+		}
+		switch {
+		case b.Count == 0:
+			d.OnlyIn = "variant"
+			c.OnlyInVariant = append(c.OnlyInVariant, n)
+		case v.Count == 0:
+			d.OnlyIn = "base"
+			c.OnlyInBase = append(c.OnlyInBase, n)
 		}
 		if b.MeanNS > 0 && v.MeanNS > 0 {
 			d.DeltaPct = pct(v.MeanNS, b.MeanNS)
@@ -101,22 +140,35 @@ func CompareCaptures(base, variant *Report) *CaptureComparison {
 		c.KernelDeltas = append(c.KernelDeltas, d)
 	}
 	sort.Slice(c.KernelDeltas, func(i, j int) bool {
-		ai, aj := absF(c.KernelDeltas[i].DeltaPct)*impactWeight(c.KernelDeltas[i]), absF(c.KernelDeltas[j].DeltaPct)*impactWeight(c.KernelDeltas[j])
-		return ai > aj
+		ai, aj := impact(c.KernelDeltas[i]), impact(c.KernelDeltas[j])
+		if ai != aj {
+			return ai > aj
+		}
+		return c.KernelDeltas[i].Name < c.KernelDeltas[j].Name
 	})
+	c.Utilization = UtilizationDelta{
+		BaseOccupancyPct:    base.Utilization.OccupancyPct,
+		VariantOccupancyPct: variant.Utilization.OccupancyPct,
+		BaseIdleNS:          base.Utilization.IdleNS,
+		VariantIdleNS:       variant.Utilization.IdleNS,
+		BaseWallSpanNS:      base.Utilization.WallSpanNS,
+		VariantWallSpanNS:   variant.Utilization.WallSpanNS,
+		BaseGapCount:        base.Utilization.GapCount,
+		VariantGapCount:     variant.Utilization.GapCount,
+		BaseMeanGapNS:       base.Utilization.MeanGapNS,
+		VariantMeanGapNS:    variant.Utilization.MeanGapNS,
+	}
 
 	c.Verdict, c.Summary = verdictFor(c)
 	return c
 }
 
-// impactWeight scales a kernel's delta by its share of combined time so a
-// small change to a hot kernel outranks a big change to a cold one.
-func impactWeight(d KernelDelta) float64 {
-	total := float64(d.BaseTotalNS + d.VariantTotalNS)
-	if total == 0 {
-		return 0
-	}
-	return total / total // placeholder scale: weight 1; ordering by |delta%| alone
+// impact ranks a delta by the GPU time it moved, in nanoseconds. Ordering
+// by percentage alone puts a 90% swing on a kernel that runs for a
+// microsecond above a 5% swing on one that owns the capture; ordering by
+// moved time puts the reader in front of what actually changed.
+func impact(d KernelDelta) float64 {
+	return absF(float64(d.TotalDeltaNS))
 }
 
 func pct(variant, base uint64) float64 {

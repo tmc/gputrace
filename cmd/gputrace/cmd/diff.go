@@ -48,7 +48,13 @@ This command supports .gputrace bundles and -perfdata.gputrace bundles.
 It reports total deltas, function-level contributors, encoder/pipeline deltas,
 spike windows, unnamed dispatch impact, and matched/unmatched dispatches.
 
+Given two .gpucapture bundles (Linux/NVIDIA), it compares them kernel by
+kernel instead: GPU time moved per kernel, launch counts, theoretical
+occupancy, the busy/idle budget, and the kernels present in only one of
+the two captures.
+
 Examples:
+  gputrace diff base.gpucapture variant.gpucapture
   gputrace diff go-perfdata.gputrace py-perfdata.gputrace
   gputrace diff --bench-dir ~/bench-traces --quick --explain --by-encoder
   gputrace diff --bench-dir ~/bench-traces --left go.gputrace --right py.gputrace
@@ -91,6 +97,12 @@ func init() {
 }
 
 func runDiff(cmd *cobra.Command, args []string, opts diffOptions) error {
+	// CUDA captures carry no encoder structure to align dispatches
+	// against, so they take the kernel-name comparison instead of the
+	// Metal dispatch-alignment one.
+	if len(args) == 2 && isCaptureInput(args[0]) && isCaptureInput(args[1]) {
+		return runCaptureDiff(cmd, args[0], args[1], opts)
+	}
 	if err := opts.validate(args); err != nil {
 		return err
 	}
