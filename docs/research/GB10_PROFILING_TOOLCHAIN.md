@@ -65,6 +65,65 @@ and two 2024.5.1 (one bundled at `/usr/local/cuda-12.6/bin/nsys`).
 `gputrace doctor` reports all of this per install, marking the one the
 user's PATH resolves to.
 
+## 2a. Node-mode graph tracing fails on MLX, and not because of HES
+
+The natural reading of §2 is that `-t cuda-sw` is the safe path and the
+hardware event system is the whole problem. That reading is wrong, and the
+correction cost a measurement.
+
+[V] MLX (`mlx-lm-generate`, Qwen3-0.6B, 64 tokens) under nsys 2026.1.1
+with **`-t cuda-sw --cuda-graph-trace=node`** — the software path, node
+granularity — produced:
+
+- 36,085 `GetGraphId(data.originalGraph, ...) returned 1:
+  CUPTI_ERROR_INVALID_PARAMETER`
+- 36,085 `GetGraphNodeId(data.originalNode, ...)` with the same error
+- no `CUPTI_ACTIVITY_KIND_KERNEL` table at all, and
+  `Number of CUDA events collected: 1`
+
+So the failure is on the software path, not HES. The `originalGraph` /
+`originalNode` parameter names locate it: this is the clone-to-original
+mapping CUPTI performs when a graph is instantiated or updated. MLX
+re-instantiates graphs continuously, so those handles are stale by the
+time CUPTI resolves them.
+
+[V] A synthetic contrast rules out "node mode is broken on GB10": a
+fixture launching one static 8-node graph 4,000 times, same nsys, same
+flags, produced 32,017 kernels with 32,000 carrying graph IDs across 8
+distinct nodes, and **zero** errors. Our own shim recorded the same
+32,000 / 4,000 launches / 8 nodes for that binary, with matching node IDs
+(8589934592–8589934599 in both nsys's sqlite and our JSONL). Node
+attribution works; what fails is node attribution over *churned* graphs.
+
+## 2b. nsys collects nothing from this Go workload, node mode or not
+
+[V] The control matters more than the experiment: MLX under plain
+`-t cuda-sw`, no node mode, also yields no kernel table and
+`Number of CUDA events collected: 1`. The GetGraphNodeId errors disappear;
+the emptiness does not.
+
+[D] The likely cause is the one §4 of `docs/CUPTI_ROADMAP.md` describes
+for our own shim: `mlx-lm-generate` is a Go binary (go1.26.7), a Go
+process crosses no interposed CUDA synchronization point and exits via
+`exit_group`, and nsys's own diagnostic says "Buffers holding CUDA trace
+data will be flushed on CudaProfilerStop". Nothing triggers that stop.
+This is why mlx-go-lm carries an in-process `cuptiActivityFlushAll`
+(`lmgenerate/appevents_cupti_linux.go`) — and why a gputrace capture of
+the same workload from 2026-08-25 holds 46,138 kernels while nsys holds
+one event.
+
+[?] Not established: a *fresh* side-by-side of the two tools on MLX. The
+installed `mlx-lm-generate` predates the flush commit and captures empty
+(exactly as `gputrace doctor` warns for a Go target); a build from the
+current branch panics before generating, with or without capture, against
+the installed MLX library. The 46,138-kernel capture is historical
+evidence, not a reproduction.
+
+**If you take one operational rule from this section:** on a Go CUDA
+target, a profiler reporting no kernels is reporting its own flush
+problem, not the workload's behavior. Check the kernel count before
+believing any result — `gputrace doctor <binary>` says so up front.
+
 ## 3. GPU performance counters are admin-restricted, and the usual probe fails
 
 [V] `ncu` returns `ERR_NVGPUCTRPERM` for an ordinary user here, while

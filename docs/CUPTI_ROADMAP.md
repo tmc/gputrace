@@ -425,6 +425,11 @@ Established empirically on GB10; see
   operation is *not* derivable from activity records — CUPTI reports the
   node's identity, not its provenance — so this stops at "node 7 of graph
   3 runs this kernel for 40% of the graph's time".
+  [V] Verified against nsys on a static graph: identical node IDs and
+  counts. [V] It does *not* survive MLX-style graph churn — nsys's node
+  mode emits 36k `GetGraphNodeId ... INVALID_PARAMETER` errors there on
+  the *software* path, so this is not an HES limitation; see
+  `docs/research/GB10_PROFILING_TOOLCHAIN.md` §2a.
 - **`gputrace doctor`**: per-install nsys verdicts, CUPTI-versus-driver
   compatibility, counter permission probed via ncu, shim build, and
   per-target capturability checks.
