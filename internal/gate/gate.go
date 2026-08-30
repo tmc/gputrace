@@ -59,7 +59,8 @@ type Options struct {
 	Slack int `json:"slack,omitempty"`
 	// StationarityThreshold is the max allowed relative excursion (default: 0.15 for 15%).
 	StationarityThreshold float64 `json:"stationarity_threshold,omitempty"`
-	// BlockSize is the token block size for trajectory analysis (default: 16).
+	// BlockSize is the gap block size for trajectory analysis.
+	// Zero means auto: at least 16 gaps per block, at most 8 blocks.
 	BlockSize int `json:"block_size,omitempty"`
 	// Ranges is reserved for nested half-open range monotonicity checks.
 	Ranges []string `json:"ranges,omitempty"`
@@ -137,7 +138,6 @@ func DefaultOptions() Options {
 	return Options{
 		Slack:                 2,
 		StationarityThreshold: 0.15,
-		BlockSize:             16,
 	}
 }
 
@@ -149,9 +149,6 @@ func Evaluate(bundlePath string, opts Options) (*Result, error) {
 	}
 	if opts.StationarityThreshold <= 0 {
 		opts.StationarityThreshold = 0.15
-	}
-	if opts.BlockSize <= 0 {
-		opts.BlockSize = 16
 	}
 
 	info, err := os.Stat(bundlePath)
@@ -477,7 +474,6 @@ func EvaluateStationarity(marks []uint64, opts Options) StationarityResult {
 	res := StationarityResult{
 		GapsCount: len(marks) - 1,
 		Threshold: opts.StationarityThreshold,
-		BlockSize: opts.BlockSize,
 	}
 
 	if len(marks) < 2 {
@@ -491,14 +487,17 @@ func EvaluateStationarity(marks []uint64, opts Options) StationarityResult {
 		gaps[i] = float64(marks[i+1]-marks[i]) / 1e6 // in milliseconds
 	}
 
-	minTokens := 2 * opts.BlockSize
-	if minTokens < 16 {
-		minTokens = 16
+	// Two blocks minimum: one block yields one median and a trivially flat
+	// trajectory. Auto keeps the historical 32-gap threshold (two 16-gap
+	// blocks); an explicit block size needs two of its own blocks, but never
+	// less than 16 gaps total.
+	minGaps := 32
+	if opts.BlockSize > 0 {
+		minGaps = max(2*opts.BlockSize, 16)
 	}
-
-	if len(gaps) < minTokens {
+	if len(gaps) < minGaps {
 		res.Status = VerdictNotEvaluable
-		res.Reason = fmt.Sprintf("stationarity UNSCORED (need >=%d tokens, have %d)", minTokens, len(gaps))
+		res.Reason = fmt.Sprintf("stationarity UNSCORED (need >=%d gaps, have %d)", minGaps, len(gaps))
 		return res
 	}
 
@@ -510,6 +509,7 @@ func EvaluateStationarity(marks []uint64, opts Options) StationarityResult {
 	if block <= 0 {
 		block = max(16, len(gaps)/8)
 	}
+	res.BlockSize = block
 
 	var medians []float64
 	for i := 0; i+block <= len(gaps); i += block {
