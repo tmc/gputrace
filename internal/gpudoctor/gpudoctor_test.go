@@ -157,3 +157,27 @@ func TestDoctorDiagnosesPartialCaptures(t *testing.T) {
 		t.Errorf("the empty-capture remedy does not name the missing flush: %s", c.Remedy)
 	}
 }
+
+// A staged-but-inactive profiling setting must not be reported the same
+// as an absent one: the nvidia module reads the parameter at load time,
+// so a drop-in written after boot governs nothing until the next one, and
+// telling someone to write a file they already wrote is the unhelpful
+// answer.
+func TestProfilingConfigStagedReadsDropIns(t *testing.T) {
+	// The real /etc/modprobe.d is whatever this host has; the contract
+	// under test is that a hit names the file it found and a miss is "".
+	got := profilingConfigStaged()
+	if got == "" {
+		return // no drop-in on this host; nothing to assert
+	}
+	if !strings.HasPrefix(got, "/etc/modprobe.d/") || !strings.HasSuffix(got, ".conf") {
+		t.Errorf("profilingConfigStaged() = %q, want a /etc/modprobe.d/*.conf path", got)
+	}
+	data, err := os.ReadFile(got)
+	if err != nil {
+		t.Fatalf("named %s but it does not read: %v", got, err)
+	}
+	if !strings.Contains(string(data), "NVreg_RestrictProfilingToAdminUsers=0") {
+		t.Errorf("%s named but does not set the parameter", got)
+	}
+}

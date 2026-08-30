@@ -453,6 +453,40 @@ func profilingRestricted(ncu string) (restricted bool, known bool) {
 	return false, false
 }
 
+// profilingConfigStaged returns the modprobe drop-in that already sets
+// NVreg_RestrictProfilingToAdminUsers=0, or "" if none does.
+//
+// It exists to tell two states apart that otherwise look identical: the
+// setting was never made, and the setting was made and has not taken
+// effect. The nvidia module reads the parameter when it loads, and it
+// cannot be reloaded while a display server holds it -- on this host the
+// module sat at refcount 306 with Xorg and a browser attached -- so a
+// drop-in written today governs nothing until the next boot. Repeating
+// "write this file" at someone who already wrote it is the unhelpful
+// answer, and it is the one this check used to give.
+func profilingConfigStaged() string {
+	paths, err := filepath.Glob("/etc/modprobe.d/*.conf")
+	if err != nil {
+		return ""
+	}
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "#") {
+				continue
+			}
+			if strings.Contains(line, "NVreg_RestrictProfilingToAdminUsers=0") {
+				return p
+			}
+		}
+	}
+	return ""
+}
+
 func checkNCU(rep *Report) {
 	path, err := exec.LookPath("ncu")
 	if err != nil {
@@ -473,9 +507,16 @@ func checkNCU(rep *Report) {
 	case restricted:
 		c.Status = StatusWarn
 		c.Detail = path + "; GPU performance counters refused for this user (ERR_NVGPUCTRPERM)"
-		c.Remedy = "run ncu under sudo, or make it permanent:\n" +
-			"  echo 'options nvidia NVreg_RestrictProfilingToAdminUsers=0' | sudo tee /etc/modprobe.d/nvidia-profiling.conf\n" +
-			"  sudo update-initramfs -u && sudo reboot"
+		if staged := profilingConfigStaged(); staged != "" {
+			c.Detail += "; " + staged + " already sets NVreg_RestrictProfilingToAdminUsers=0"
+			c.Remedy = "the setting is staged but not in force: the nvidia module reads it at load\n" +
+				"time and cannot be reloaded while a display server holds it, so it applies at\n" +
+				"the next boot. Until then, run ncu under sudo."
+		} else {
+			c.Remedy = "run ncu under sudo, or make it permanent:\n" +
+				"  echo 'options nvidia NVreg_RestrictProfilingToAdminUsers=0' | sudo tee /etc/modprobe.d/nvidia-profiling.conf\n" +
+				"  sudo update-initramfs -u && sudo reboot"
+		}
 	default:
 		c.Detail = path + "; GPU performance counters readable by this user"
 	}
