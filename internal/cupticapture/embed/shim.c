@@ -46,6 +46,9 @@
  *                            disables the flush thread). Records still
  *                            unflushed when the target exits are lost, so
  *                            this bounds the loss.
+ *   GPUTRACE_CAPTURE_BUFSIZE_MB - activity buffer size in MiB (default 4).
+ *                            Rarely needs changing; see the note on
+ *                            g_bufsize for why it exists
  *   GPUTRACE_CAPTURE_DEBUG - diagnostics on stderr
  *
  * Pure C: no runtime beyond libc and libcuda/libcupti. The Go parent never
@@ -67,6 +70,25 @@
 #define BUFSIZE 4 * 1024 * 1024
 #define ALIGN_SIZE 8
 #define MAX_RECORDS 0
+
+/* Activity buffer size, in bytes. Rarely worth touching now; the knob is
+ * kept because it is what made the flush bug visible.
+ *
+ * While flushing went through cuptiActivityFlushPeriod, which does not
+ * complete a PARTIAL buffer, records reached bufferCompleted only when a
+ * buffer filled, so whatever was outstanding at exit was lost and the
+ * loss was roughly outstanding buffers times this size. Smaller was
+ * better, which is the opposite of the intuition, and that inversion is
+ * how the cause was found. Measured on a GB10 MLX decode whose argmax
+ * must run 129 times [V]: 1 MiB recovered 119, 2 MiB 117, this 4 MiB
+ * default 102, and at 16 MiB no buffer filled inside the run at all, so
+ * the capture came back empty while the shim reported itself armed.
+ *
+ * With the flush thread calling cuptiActivityFlushAll on an interval,
+ * partial buffers come back and the size stops mattering: the same ladder
+ * runs 127-128 at every size from 1 to 64 MiB [V]. The lever is
+ * GPUTRACE_CAPTURE_FLUSH_MS. */
+static size_t g_bufsize = BUFSIZE;
 
 
 static FILE *g_out = NULL;
@@ -296,10 +318,10 @@ static void *flush_thread(void *arg) {
 
 static void CUPTIAPI bufferRequested(uint8_t **buffer, size_t *size,
                                      size_t *maxNumRecords) {
-    uint8_t *buf = (uint8_t *)malloc(BUFSIZE + ALIGN_SIZE);
+    uint8_t *buf = (uint8_t *)malloc(g_bufsize + ALIGN_SIZE);
     if (!buf) { *size = 0; *maxNumRecords = 0; return; }
     *buffer = buf;
-    *size = BUFSIZE;
+    *size = g_bufsize;
     *maxNumRecords = MAX_RECORDS;
     debug("buffer requested");
 }
@@ -307,12 +329,28 @@ static void CUPTIAPI bufferRequested(uint8_t **buffer, size_t *size,
 static void CUPTIAPI bufferCompleted(CUcontext ctx, uint32_t streamId,
                                      uint8_t *buffer, size_t size,
                                      size_t validSize) {
-    (void)ctx; (void)streamId; (void)size;
+    (void)size;
     CUpti_Activity *record = NULL;
     if (getenv("GPUTRACE_CAPTURE_DEBUG"))
         fprintf(stderr, "gputrace-shim: buffer completed validSize=%zu\n", validSize);
     if (!g_out) return;
     pthread_mutex_lock(&g_lock);
+    /* Records CUPTI discarded because no buffer was free when they were
+     * produced. Uniform, deterministic loss spread across a whole run is
+     * what this looks like from the outside: on an MLX decode it silently
+     * removed ~48% of every kernel, and every count and total derived from
+     * that capture was confidently wrong. The count is emitted per buffer
+     * rather than summed at exit because the destructor does not run for a
+     * target that exits through exit_group -- the same reason the capture
+     * can be silently empty. */
+    {
+        size_t dropped = 0;
+        if (cuptiActivityGetNumDroppedRecords(ctx, streamId, &dropped) == CUPTI_SUCCESS &&
+            dropped > 0) {
+            fprintf(g_out, "{\"kind\":\"dropped\",\"records\":%llu,\"stream_id\":%u}\n",
+                    (unsigned long long)dropped, streamId);
+        }
+    }
     while (1) {
         CUptiResult status = cuptiActivityGetNextRecord(buffer, validSize, &record);
         if (status == CUPTI_SUCCESS) {
@@ -342,8 +380,15 @@ static void CUPTIAPI bufferCompleted(CUcontext ctx, uint32_t streamId,
                 break;
             }
         } else {
-            /* CUPTI_ERROR_MAX_LIMIT_REACHED here means "no more records
-             * in this buffer"; anything else is also a stop condition. */
+            /* CUPTI_ERROR_MAX_LIMIT_REACHED means "no more records in this
+             * buffer" and is the normal end. Any other status stops the
+             * loop with records still in the buffer, so it is a silent
+             * partial read of a buffer that arrived intact -- loss that
+             * cuptiActivityGetNumDroppedRecords does not report, because
+             * from CUPTI's side nothing was dropped. */
+            if (status != CUPTI_ERROR_MAX_LIMIT_REACHED &&
+                getenv("GPUTRACE_CAPTURE_DEBUG"))
+                fprintf(stderr, "gputrace-shim: record walk stopped early rc=%d\n", (int)status);
             break;
         }
     }
@@ -360,6 +405,15 @@ static void CUPTIAPI bufferCompleted(CUcontext ctx, uint32_t streamId,
 
 static void arm_cupti(void) {
     CUptiResult r;
+    {
+        const char *bs = getenv("GPUTRACE_CAPTURE_BUFSIZE_MB");
+        if (bs && *bs) {
+            char *end = NULL;
+            unsigned long mb = strtoul(bs, &end, 10);
+            if (end && *end == 0 && mb > 0 && mb <= 1024)
+                g_bufsize = (size_t)mb * 1024 * 1024;
+        }
+    }
     /* Resolve CUPTI lazily: the shim is LD_PRELOADed and may load before
      * libcupti is on the process's symbol map. dlopen the known paths. */
     void *h = dlopen("libcupti.so", RTLD_LAZY | RTLD_GLOBAL);
