@@ -3,7 +3,6 @@
 package cmd
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -102,9 +101,15 @@ func runCaptureLinux(cmd *cobra.Command, opts *captureOptions, args []string) er
 	}
 	target.Env = append(os.Environ(), preloadEnv...)
 	target.Stdin = cmd.InOrStdin()
-	var stderr bytes.Buffer
 	target.Stdout = cmd.OutOrStdout()
-	target.Stderr = &stderr
+	// Streamed, not buffered. Buffering hid the target's own diagnostics
+	// until the run ended and discarded them entirely when it succeeded --
+	// the case that matters, because a capture that succeeds while
+	// recording nothing is the failure this tool is worst at showing.
+	// GPUTRACE_CAPTURE_DEBUG writes to the target's stderr, so it was
+	// invisible through `gputrace capture` and diagnosing the shim meant
+	// bypassing the command entirely.
+	target.Stderr = cmd.ErrOrStderr()
 
 	err = target.Run()
 	// Stop the sampler before reporting so its file is complete.
@@ -128,9 +133,6 @@ func runCaptureLinux(cmd *cobra.Command, opts *captureOptions, args []string) er
 	// report both facts rather than discarding evidence.
 	fmt.Fprintf(cmd.OutOrStdout(), "wrote %s\n", out)
 	if err != nil {
-		if stderr.Len() > 0 {
-			fmt.Fprint(os.Stderr, stderr.String())
-		}
 		fmt.Fprintf(os.Stderr, "capture: target exited with error; bundle retained for inspection\n")
 		return reportedCaptureError{err}
 	}
