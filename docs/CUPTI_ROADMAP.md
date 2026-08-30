@@ -91,6 +91,15 @@ capture command unless noted.
    (`atexit` + forced `cuptiActivityFlushAll(CUPTI_ACTIVITY_FLAG_FLUSH_FORCED)`
    before CUDA teardown, or a driver-callback-based flush on context
    destroy) rather than "hope the app called cudaDeviceSynchronize".
+   **DONE (2026-08-29):** `cuptiActivityFlushPeriod(100)` at arm time.
+   This was worse than described: MLX links the CUDA runtime statically
+   and launches through graphs resolved by `cuGetProcAddress`, so *no*
+   interposition point exists at any level — capturing it yielded zero
+   kernels while the workload ran. With the periodic flush the same
+   unmodified binary yields 19,417 launches and full graph attribution.
+   See `docs/research/GB10_PROFILING_TOOLCHAIN.md` §2c, including why
+   driver-level launch interposition was implemented, measured at zero
+   hits, and deleted.
 6. **NVML overlay clock alignment is unproven in general.**
    [verified] On this host `cuptiGetTimestamp` == CLOCK_REALTIME within
    tens of ns, so joining CUPTI activity timestamps with the sampler's

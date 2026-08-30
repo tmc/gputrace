@@ -112,17 +112,61 @@ This is why mlx-go-lm carries an in-process `cuptiActivityFlushAll`
 the same workload from 2026-08-25 holds 46,138 kernels while nsys holds
 one event.
 
-[?] Not established: a *fresh* side-by-side of the two tools on MLX. The
-installed `mlx-lm-generate` predates the flush commit and captures empty
-(exactly as `gputrace doctor` warns for a Go target); a build from the
-current branch panics before generating, with or without capture, against
-the installed MLX library. The 46,138-kernel capture is historical
-evidence, not a reproduction.
-
 **If you take one operational rule from this section:** on a Go CUDA
 target, a profiler reporting no kernels is reporting its own flush
 problem, not the workload's behavior. Check the kernel count before
 believing any result — `gputrace doctor <binary>` says so up front.
+
+## 2c. Why interposition alone cannot capture MLX, and what does
+
+Chasing 2b to its root turned up a target shape no LD_PRELOAD shim can
+reach, and the fix is not target cooperation.
+
+[V] `libmlx.so` links the CUDA runtime **statically**:
+`cudaDeviceSynchronize`, `cudaLaunchKernel`, and `cudaLaunchKernelExC`
+are local (`t`) symbols inside it, and no `libcudart.so` appears in its
+`ldd`. Its runtime calls therefore never leave the library, so the shim's
+interposed synchronization points never fire and nothing flushes.
+
+[V] The driver is dynamic (`libcuda.so.1`) and `cuLaunchKernelEx` is a
+real import, so driver-level interposition looks like the way out. It is
+not: MLX launches through CUDA graphs, and the statically linked runtime
+resolves `cuGraphLaunch` via `cuGetProcAddress` rather than the PLT.
+Interposing `cuLaunchKernel`/`cuLaunchKernelEx` and flushing every N
+launches fired **zero** times — for MLX *and* for an ordinary
+`nvcc -cudart=shared` fixture, which resolves driver entry points the
+same way. That approach was implemented, measured, and deleted.
+
+[V] What works is `cuptiActivityFlushPeriod`, which asks CUPTI's own
+worker to flush on a timer and needs nothing from the target. With it,
+the unmodified stale `mlx-lm-generate` — the binary that predates the
+in-process flush and that nsys collects one event from — captures
+**19,417 kernel launches**, with full CUDA-graph attribution: 49 graphs,
+100% of kernel time, per-node breakdown (node #15 of graph 1013 owns
+89.6% of that graph at 2.13 ms mean). This is the attribution nsys's node
+mode cannot produce here at all (§2a).
+
+[V] The period bounds tail loss, because a target that exits without
+synchronizing still loses whatever it buffered since the last flush:
+
+| Period | MLX decode, two runs | Generation throughput |
+|---|---|---|
+| 500 ms | 15,809 then 10,263 launches | 110.8, 109.0 tok/s |
+| 100 ms | 19,417 both | 109.5, 110.4 tok/s |
+| 25 ms | 19,417 both | 109.7, 111.7 tok/s |
+
+100 ms is the shortest period that buys completeness here; 25 ms bought
+nothing more, and no period moved throughput. Shim overhead on the CUDA
+fixture is unchanged at +5.3% (§4), inside the run-to-run spread of the
++5.1% measured before the periodic flush existed.
+
+[?] Still not established: a fresh *side-by-side* on a target that also
+carries the in-process flush. The installed `mlx-lm-generate` predates
+that commit and the current branch panics before generating (with and
+without capture, so not a capture defect) against the available MLX
+library. It no longer matters much for capture — the periodic flush
+covers the case the in-process flush was written for — but the two
+mechanisms have not been compared head to head.
 
 ## 3. GPU performance counters are admin-restricted, and the usual probe fails
 

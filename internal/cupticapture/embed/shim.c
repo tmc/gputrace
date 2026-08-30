@@ -7,11 +7,21 @@
  * memcpys, memsets, and — behind GPUTRACE_CAPTURE_API — runtime/driver
  * API calls as newline-delimited JSON.
  *
- * Flushing happens on the application's own thread, from interposed CUDA
- * synchronization points (Device/Event/StreamSynchronize, Memcpy). The
- * destructor performs one FORCED flush only when no sync point ever fired
- * (driver-API-only apps); flushing after context teardown otherwise
- * deadlocks, so the common path never relies on it.
+ * Flushing happens two ways. Interposed CUDA synchronization points
+ * (Device/Event/StreamSynchronize, Memcpy) flush on the application's own
+ * thread, and cuptiActivityFlushPeriod asks CUPTI's own worker to flush on
+ * a timer. The destructor performs one FORCED flush only when no flush
+ * ever fired; flushing after context teardown otherwise deadlocks, so the
+ * common path never relies on it.
+ *
+ * The periodic flush is what makes interposition-proof targets capturable
+ * [V]. A target that links the CUDA runtime statically -- MLX's libmlx.so
+ * carries cudaDeviceSynchronize and cudaLaunchKernel as local symbols --
+ * makes those calls internally, where LD_PRELOAD cannot see them, and its
+ * CUDA-graph launches reach the driver through cuGetProcAddress rather
+ * than the PLT, so no driver entry point is interposable either. Before
+ * the periodic flush, capturing MLX yielded zero kernels while the
+ * workload ran perfectly; after it, 19,417.
  *
  * Environment:
  *   GPUTRACE_CAPTURE_OUT   - output path for the JSONL event file (required;
@@ -20,6 +30,8 @@
  *                            the shim does not read or write it
  *   GPUTRACE_CAPTURE_API   - enable runtime/driver API call records
  *   GPUTRACE_CAPTURE_NVTX  - enable NVTX marker (range) records
+ *   GPUTRACE_CAPTURE_FLUSH_MS - CUPTI periodic flush interval in ms
+ *                            (default 100; 0 disables the periodic flush)
  *   GPUTRACE_CAPTURE_DEBUG - diagnostics on stderr
  *
  * Pure C: no runtime beyond libc and libcuda/libcupti. The Go parent never
@@ -44,6 +56,10 @@
 
 
 static FILE *g_out = NULL;
+/* Set once any flush has succeeded. While it is still 0 at exit the app
+ * never synchronized, and the destructor makes one forced attempt. */
+static volatile int g_flushed_once = 0;
+
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static int g_enabled = 0;
 
@@ -365,6 +381,35 @@ static void arm_cupti(void) {
         ar = cuptiActivityEnable(CUPTI_ACTIVITY_KIND_DRIVER);
         debug(ar == CUPTI_SUCCESS ? "driver api records on" : "driver api enable failed");
     }
+    /* Periodic flush, handled by CUPTI's own worker: the one mechanism
+     * that needs nothing from the target. A target that links the CUDA
+     * runtime statically and launches through CUDA graphs -- MLX -- makes
+     * no interposable call at all in steady state: its graph launches
+     * reach the driver through cuGetProcAddress, not the PLT. Without a
+     * period, CUPTI requests buffers and never completes one, and the
+     * capture ends empty while the workload runs perfectly.
+     *
+     * A target that exits without synchronizing still loses whatever it
+     * buffered since the last flush, so the period sets how much. Measured
+     * on MLX decode [V]: 500ms lost between a quarter and a half of the
+     * records and varied run to run (15,809 then 10,263 launches), while
+     * 100ms and 25ms both recorded 19,417 every time. 100ms is the
+     * shortest period that buys completeness here; going shorter bought
+     * nothing, and neither period moved generation throughput. */
+    {
+        unsigned long period_ms = 100;
+        const char *p = getenv("GPUTRACE_CAPTURE_FLUSH_MS");
+        if (p && *p) {
+            char *end = NULL;
+            unsigned long v = strtoul(p, &end, 10);
+            if (end && *end == 0) period_ms = v;
+        }
+        if (period_ms > 0) {
+            CUptiResult fr = cuptiActivityFlushPeriod((uint32_t)period_ms);
+            if (getenv("GPUTRACE_CAPTURE_DEBUG"))
+                fprintf(stderr, "gputrace-shim: flush period %lums rc=%d\n", period_ms, (int)fr);
+        }
+    }
     g_enabled = 1;
     if (g_out) {
         fprintf(g_out, "{\"kind\":\"capture_meta\",\"concurrent_kernel\":%s,\"pid\":%d}\n",
@@ -413,7 +458,6 @@ static void shim_init(void) {
  * was exiting anyway and the per-sync-point flushes already captured the
  * bulk of records; on driver-API-only apps (no cudaDeviceSynchronize calls)
  * this path is what recovers the capture at all. */
-static volatile int g_flushed_once = 0;
 
 __attribute__((destructor))
 static void shim_shutdown(void) {
