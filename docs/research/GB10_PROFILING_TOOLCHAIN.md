@@ -232,9 +232,37 @@ from a bare kernel name matches nothing and ncu reports "No kernels were
 profiled" rather than an error. `--kernel-name-base function` matches the
 bare name.
 
-[V] `dram__throughput` reads `n/a` on this part; unified memory exposes no
-discrete-DRAM counter. gputrace's default metric set omits it and reports
-any `n/a` metric as unsupported rather than dropping it.
+[V] The `dram__` counters do not merely read `n/a` here: the whole domain
+is absent from `ncu --query-metrics`, because the part has no separate
+device DRAM to instrument. Asking for one collects nothing while looking
+like it collected something, so gputrace's default metric set omits them
+and stands in the cache hierarchy plus `gpu__compute_memory_throughput`,
+all of which return real values.
+
+[V] CUPTI's unified-memory counters are unavailable here, and not because
+of the profiling permission. With counters permitted -- `ncu` returning
+values in the same session -- each of the eight kinds handed to
+`cuptiActivityConfigureUnifiedMemoryCounter` (HtoD, DtoH and DtoD transfer
+bytes, CPU and GPU page faults, thrashing, throttling, remote map) returns
+`CUPTI_ERROR_UM_PROFILING_NOT_SUPPORTED`. That is error 28, "not supported
+on the system ... unsupported OS or architecture", not the per-device
+error 29 and not a permission error. Configuration fails before any
+workload runs, so there is nothing left to enable and
+`CUPTI_ACTIVITY_KIND_UNIFIED_MEMORY_COUNTER` can yield no records at all.
+
+The device attributes say why. `ManagedMemory` and
+`ConcurrentManagedAccess` are both 1, but so are `PageableMemoryAccess`
+and `PageableMemoryAccessUsesHostPageTables`: the GPU walks the host page
+tables, so managed memory is never migrated and there is no migration or
+fault event to count. These counters measure a mechanism this part does
+not use, which is a stronger statement than "they report zero".
+
+Established with a standalone probe that calls
+`cuptiActivityConfigureUnifiedMemoryCounter` once per counter kind and
+prints `cuptiGetResultString` for each, before any allocation; the failure
+needs no workload to reproduce. Driver 580.95.05, CUDA/CUPTI 13.0.88.
+[?] The same should hold for any part whose GPU uses the host page tables,
+but only GB10 was measured.
 
 ## 4. The capture shim costs about 5% of wall time
 

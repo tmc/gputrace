@@ -192,7 +192,7 @@ All present in the local CUPTI headers. Each should be a capture flag
 | `MARKER` + `MARKER_DATA` (NVTX) | semantic phases: PyTorch `emit_nvtx`, cuDNN/cuBLAS/TensorRT built-in ranges, user annotations | **DONE:** `--nvtx`, with `NVTX_INJECTION64_PATH` set in the child env; markers pair into spans at decode |
 | `OVERHEAD` | CUPTI's own overhead, attributed instead of polluting kernels | on with `--api` |
 | `MEMORY2` / `MEMORY_POOL` | cudaMalloc/Free timeline, pool grow/shrink — allocation churn and fragmentation findings | `--memory` |
-| `UNIFIED_MEMORY_COUNTER` | UM page faults, HtoD/DtoH migration bytes, thrashing | `--um` |
+| `UNIFIED_MEMORY_COUNTER` | UM page faults, HtoD/DtoH migration bytes, thrashing | **dead on GB10**: every counter kind fails configuration with `CUPTI_ERROR_UM_PROFILING_NOT_SUPPORTED`, because the GPU uses the host page tables and never migrates. Worth building only for discrete parts, and untestable here. See `research/GB10_PROFILING_TOOLCHAIN.md` §3 |
 | `GRAPH_TRACE` | whole-graph execution spans for CUDA Graphs workloads (increasingly the norm in inference) | on by default when graphs observed |
 | `MEMCPY2` | peer-to-peer copies for multi-GPU | on with multi-GPU |
 
