@@ -22,6 +22,6 @@ func main() {
 		if !cmd.ErrorAlreadyReported(err) {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		}
-		os.Exit(1)
+		os.Exit(cmd.ExitCode(err))
 	}
 }

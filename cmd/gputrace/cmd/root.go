@@ -100,6 +100,21 @@ func Execute() error {
 	return rootCmd.ExecuteContext(ctx)
 }
 
+type exitCoder interface {
+	error
+	exitCode() int
+}
+
+// ExitCode returns the process exit code for err. If err implements exitCode(),
+// that value is returned; otherwise 1 is returned.
+func ExitCode(err error) int {
+	var coder exitCoder
+	if errors.As(err, &coder) {
+		return coder.exitCode()
+	}
+	return 1
+}
+
 type alreadyReportedError interface {
 	error
 	alreadyReported()
