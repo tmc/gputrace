@@ -96,10 +96,7 @@ func runKernels(cmd *cobra.Command, args []string, opts *kernelsOptions) error {
 		timingStats = make(map[string]*gputrace.TimingStat)
 		captureLabels := trace.ParseComputeEncoders()
 		for _, dispatch := range profilerStats.Dispatches {
-			name := dispatch.FunctionName
-			if name == "" {
-				name = fmt.Sprintf("(pipeline_%d)", dispatch.PipelineIndex)
-			}
+			name := dispatch.DisplayName()
 			k := stats[name]
 			if k == nil {
 				k = &gputrace.KernelStat{

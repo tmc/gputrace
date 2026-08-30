@@ -769,7 +769,7 @@ func enhanceFromStreamData(t *trace.Trace, stats *PerfCounterStats) error {
 	for i := range streamStats.Pipelines {
 		p := &streamStats.Pipelines[i]
 		// Also index by pipeline ID for direct lookup
-		pipelineByFunc[fmt.Sprintf("pipeline_%d", p.PipelineID)] = p
+		pipelineByFunc[p.DisplayName()] = p
 	}
 
 	// Index function names for fuzzy matching

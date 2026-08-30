@@ -271,6 +271,16 @@ type DispatchCounterMetrics struct {
 	MemoryBandwidth uint64
 }
 
+// DisplayName returns the shader name used in Xcode-style reports. The counter
+// metrics carry no pipeline identity, so an unnamed dispatch falls straight
+// through to the terminal fallback DispatchInfo.DisplayName uses.
+func (m DispatchCounterMetrics) DisplayName() string {
+	if m.FunctionName != "" {
+		return m.FunctionName
+	}
+	return "(pipeline_unknown)"
+}
+
 // CounterSampler handles counter sample buffer creation and sampling during
 // replay. Without a backend it remains useful for analysis-only builds and
 // fails closed before claiming hardware data.
@@ -804,10 +814,7 @@ func FormatCounterSamplingResult(result *CounterSamplingResult) string {
 		for i := 0; i < count; i++ {
 			metric := dispatches[i]
 			durationMs := float64(metric.Duration) / 1e6
-			funcName := metric.FunctionName
-			if funcName == "" {
-				funcName = "(unknown)"
-			}
+			funcName := metric.DisplayName()
 
 			output += fmt.Sprintf("%-5d %-40s %12.3f %9.1f%%\n",
 				metric.DispatchIndex,

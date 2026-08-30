@@ -55,6 +55,23 @@ type PipelineStats struct {
 	CompilerRemarks                           []PipelineCompilerRemark    `json:"compiler_remarks,omitempty"`
 }
 
+// DisplayName returns the shader name used in Xcode-style reports. It matches
+// DispatchInfo.DisplayName so a pipeline row and a dispatch row that name the
+// same unnamed pipeline read the same. A pipeline record carries no pipeline
+// index, so the index fallback does not apply here.
+func (p *PipelineStats) DisplayName() string {
+	if p == nil {
+		return "(pipeline_unknown)"
+	}
+	if p.FunctionName != "" {
+		return p.FunctionName
+	}
+	if p.PipelineID != 0 {
+		return fmt.Sprintf("(pipeline_%d)", p.PipelineID)
+	}
+	return "(pipeline_unknown)"
+}
+
 // HasRecordedStatistic reports whether the source dictionary contained name.
 func (p *PipelineStats) HasRecordedStatistic(name string) bool {
 	if p == nil {

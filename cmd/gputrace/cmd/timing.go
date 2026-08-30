@@ -332,10 +332,7 @@ func convertStreamDataToTimingMetrics(tracePath string, stats *counter.StreamDat
 	// Aggregate by function name
 	kernelMap := make(map[string]*gputrace.KernelTiming)
 	for _, d := range stats.Dispatches {
-		name := d.FunctionName
-		if name == "" {
-			name = fmt.Sprintf("(pipeline_%d)", d.PipelineIndex)
-		}
+		name := d.DisplayName()
 		duration := time.Duration(d.DurationUs) * time.Microsecond
 
 		kt, exists := kernelMap[name]

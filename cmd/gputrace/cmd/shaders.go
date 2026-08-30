@@ -176,10 +176,12 @@ func writeShadersNoCost(report *gputrace.ShaderMetricsReport, tracePath string, 
 }
 
 func formatShadersNoCostText(w io.Writer, report *gputrace.ShaderMetricsReport) error {
+	libraries := splitShaderLibraryRows(report)
 	fmt.Fprintf(w, "Share     Name\n")
 	for _, shader := range report.Shaders {
 		fmt.Fprintf(w, "    ?     %s\n", shader.Name)
 	}
+	writeShaderInventoryNotes(w, report.Shaders, libraries)
 	return nil
 }
 
@@ -206,10 +208,7 @@ func runShadersFromFullTrace(tracePath string, opts *shadersOptions) error {
 			case "json":
 				return gputrace.ExportShaderMetricsJSON(os.Stdout, report)
 			case "text":
-				if opts.all {
-					return gputrace.FormatShadersXcodeStyle(os.Stdout, report, trace, opts.estimate)
-				}
-				return gputrace.FormatShadersSimple(os.Stdout, report)
+				return writeShadersText(os.Stdout, report, trace, opts)
 			default:
 				return invalidShadersFormatError(opts.format)
 			}
@@ -256,10 +255,8 @@ func runShadersFromFullTrace(tracePath string, opts *shadersOptions) error {
 			return fmt.Errorf("failed to export JSON: %w", err)
 		}
 	case "text":
-		if opts.all {
-			gputrace.FormatShadersXcodeStyle(os.Stdout, report, trace, opts.estimate)
-		} else {
-			gputrace.FormatShadersSimple(os.Stdout, report)
+		if err := writeShadersText(os.Stdout, report, trace, opts); err != nil {
+			return fmt.Errorf("format shaders: %w", err)
 		}
 	default:
 		return invalidShadersFormatError(opts.format)
@@ -305,13 +302,10 @@ func extractSIMDBasedMetrics(trace *gputrace.Trace, profilerDir string) (*gputra
 		simdGroups := dispatch.SIMDGroups()
 
 		// Get function name from profiler data
-		funcName := ""
+		funcName := "(pipeline_unknown)"
 		if i < len(stats.Dispatches) {
-			funcName = stats.Dispatches[i].FunctionName
+			funcName = stats.Dispatches[i].DisplayName()
 			funcDurations[funcName] += uint64(stats.Dispatches[i].DurationUs) * 1000 // Convert to ns
-		}
-		if funcName == "" {
-			funcName = fmt.Sprintf("(dispatch_%d)", i)
 		}
 
 		funcSIMDGroups[funcName] += simdGroups
@@ -423,16 +417,74 @@ func runShadersFromProfiler(tracePath string, opts *shadersOptions) error {
 		}
 	case "text":
 		writeShaderShareBasis(opts.format, "dispatch cumulative-offset span")
-		if opts.all {
-			// Format as Xcode Instruments style output (no trace available)
-			gputrace.FormatShadersXcodeStyle(os.Stdout, report, nil, opts.estimate)
-		} else {
-			gputrace.FormatShadersSimple(os.Stdout, report)
+		if err := writeShadersText(os.Stdout, report, nil, opts); err != nil {
+			return fmt.Errorf("format shaders: %w", err)
 		}
 	default:
 		return invalidShadersFormatError(opts.format)
 	}
 
+	return nil
+}
+
+// splitShaderLibraryRows removes the library-UUID rows from report and
+// returns them. Library records share the name field with function records,
+// so a shaders table that keeps them lists a library UUID as if a shader by
+// that name ran. kernels already separates them; this makes shaders say the
+// same thing.
+func splitShaderLibraryRows(report *gputrace.ShaderMetricsReport) []*gputrace.ShaderMetrics {
+	var libraries []*gputrace.ShaderMetrics
+	kept := report.Shaders[:0]
+	for _, s := range report.Shaders {
+		if gputrace.IsLibraryUUID(s.Name) {
+			libraries = append(libraries, s)
+			continue
+		}
+		kept = append(kept, s)
+	}
+	report.Shaders = kept
+	report.TotalShaders = len(kept)
+	return libraries
+}
+
+// writeShaderInventoryNotes says what the rows that are not shader names are,
+// in the same terms kernels uses.
+func writeShaderInventoryNotes(w io.Writer, shaders, libraries []*gputrace.ShaderMetrics) {
+	n := 0
+	for _, s := range shaders {
+		if gputrace.IsArchiveFunctionName(s.Name) {
+			n++
+		}
+	}
+	if n > 0 {
+		fmt.Fprintf(w, "\n%d %s named only by shader archive id (archive:...): the capture records\n"+
+			"which archive the function came from, not its name. Capture this trace with\n"+
+			"--profile to get the names.\n",
+			n, Pluralize(n, "shader", "shaders"))
+	}
+	if len(libraries) > 0 {
+		fmt.Fprintf(w, "\n%d library %s (not shader names):\n",
+			len(libraries), Pluralize(len(libraries), "UUID", "UUIDs"))
+		for _, s := range libraries {
+			fmt.Fprintf(w, "  %s\n", s.Name)
+		}
+	}
+}
+
+// writeShadersText renders the shader table and the inventory notes that say
+// which rows are not shader names.
+func writeShadersText(w io.Writer, report *gputrace.ShaderMetricsReport, t *gputrace.Trace, opts *shadersOptions) error {
+	libraries := splitShaderLibraryRows(report)
+	var err error
+	if opts.all {
+		err = gputrace.FormatShadersXcodeStyle(w, report, t, opts.estimate)
+	} else {
+		err = gputrace.FormatShadersSimple(w, report)
+	}
+	if err != nil {
+		return err
+	}
+	writeShaderInventoryNotes(w, report.Shaders, libraries)
 	return nil
 }
 
@@ -464,29 +516,21 @@ func convertPipelineStatsToShaderReport(stats *counter.StreamDataStats, execCost
 	funcCounts := make(map[string]int)    // function name -> invocation count
 	funcPipeIDs := make(map[string][]int) // function name -> pipeline IDs
 	for _, d := range stats.Dispatches {
-		name := d.FunctionName
-		if name == "" {
-			name = fmt.Sprintf("(pipeline_%d)", d.PipelineIndex)
-		}
+		name := d.DisplayName()
 		funcTotals[name] += d.DurationUs
 		funcCounts[name]++
 	}
 
 	// Map function names to pipeline IDs for execution cost lookup
 	for _, p := range stats.Pipelines {
-		name := p.FunctionName
-		if name == "" {
-			continue
-		}
-		funcPipeIDs[name] = append(funcPipeIDs[name], p.PipelineID)
+		funcPipeIDs[p.DisplayName()] = append(funcPipeIDs[p.DisplayName()], p.PipelineID)
 	}
 
-	// Convert pipelines to shader metrics
+	// Convert pipelines to shader metrics. An unnamed pipeline still gets a
+	// row: its time is already in the share denominator, so dropping it hid
+	// cost the percentages continued to count.
 	for _, p := range stats.Pipelines {
-		name := p.FunctionName
-		if name == "" {
-			continue
-		}
+		name := p.DisplayName()
 
 		m := &gputrace.ShaderMetrics{
 			Name:                   name,

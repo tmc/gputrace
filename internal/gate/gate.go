@@ -361,7 +361,7 @@ func evaluateMetal(bundlePath string, opts Options) (*Result, error) {
 			// Match the display name, not the raw field: a dispatch with no
 			// function name is still nameable as its pipeline, and matching
 			// the empty field made it invisible to -k instead of unmatched.
-			if strings.Contains(d.FunctionName, invariant) {
+			if strings.Contains(d.DisplayName(), invariant) {
 				// Use CumulativeUs converted to nanoseconds for stationarity
 				marks = append(marks, uint64(d.CumulativeUs)*1000)
 			}

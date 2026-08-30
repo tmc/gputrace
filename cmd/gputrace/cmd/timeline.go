@@ -302,6 +302,9 @@ func runTimeline(cmd *cobra.Command, args []string, opts *timelineOptions) error
 	if err := resolveTimelineNavigation(timeline, opts); err != nil {
 		return err
 	}
+	if opts.format == "chrome" || opts.format == "perfetto" {
+		warnDroppedDispatchEvents(cmd.ErrOrStderr(), fullTimeline)
+	}
 
 	// Export based on format
 	switch opts.format {
@@ -992,6 +995,44 @@ type Timeline struct {
 	RawProfilerArtifacts     *profilerraw.ArtifactInventory    `json:"raw_profiler_artifacts,omitempty"`
 	RawProfilerArtifactError string                            `json:"raw_profiler_artifact_error,omitempty"`
 	rawProfilerProfiles      []counter.EncoderProfile
+	// bundleDispatches is how many dispatches the bundle records, from either
+	// evidence source. An export that emits no dispatch slice needs it to say
+	// whether there was anything to emit.
+	bundleDispatches int
+}
+
+// timelineBundleDispatchCount counts the dispatches the bundle records.
+// streamData is preferred because it is what the dispatch lane is built from;
+// the capture records are the fallback source.
+func timelineBundleDispatchCount(stats *counter.StreamDataStats, trace *gputrace.Trace) int {
+	if stats != nil && len(stats.Dispatches) > 0 {
+		return len(stats.Dispatches)
+	}
+	if trace != nil {
+		if dispatches, err := trace.ParseAttributedDispatches(); err == nil {
+			return len(dispatches)
+		}
+	}
+	return 0
+}
+
+// warnDroppedDispatchEvents reports an export that carries no dispatch slice
+// at all although the bundle recorded dispatches. Such a trace opens in the
+// viewer looking like a run with no GPU work rather than one whose work could
+// not be placed.
+func warnDroppedDispatchEvents(w io.Writer, timeline *Timeline) {
+	if timeline == nil || timeline.bundleDispatches == 0 {
+		return
+	}
+	for _, event := range timeline.Events {
+		if event.Category == "kernel" || event.Category == "dispatch" {
+			return
+		}
+	}
+	fmt.Fprintf(w, "Warning: all %d dispatches were dropped from this export: the bundle carries\n"+
+		"no capture dispatch records and no streamData dispatch timing to place them on,\n"+
+		"so the exported trace holds encoder and command-buffer spans only.\n",
+		timeline.bundleDispatches)
 }
 
 func attachRawProfilerArtifacts(timeline *Timeline, tracePath string) {
@@ -1364,6 +1405,7 @@ func generateTimeline(trace *gputrace.Trace) (*Timeline, error) {
 			return nil, fmt.Errorf("add capture dispatches: %w", err)
 		}
 	}
+	timeline.bundleDispatches = timelineBundleDispatchCount(streamStats, trace)
 
 	// Add command buffer events - try to get real timing from APSTimelineData
 	if streamStats != nil && streamStats.Timeline != nil && len(streamStats.Timeline.CommandBufferTimestamps) > 0 {
@@ -2274,10 +2316,7 @@ func addDispatchKernelEvents(timeline *Timeline, stats *counter.StreamDataStats,
 	var fallbackStartNs uint64
 
 	for dispatchOrdinal, d := range stats.Dispatches {
-		name := d.FunctionName
-		if name == "" {
-			name = fmt.Sprintf("(pipeline_%d)", d.PipelineID)
-		}
+		name := d.DisplayName()
 		durationNs := uint64(d.DurationUs) * 1000
 
 		var startNs uint64
@@ -2484,11 +2523,7 @@ func timelineDispatchCaptureEvidence(t *gputrace.Trace, stats *counter.StreamDat
 		groups := d.SIMDGroups()
 		out.byIndex[i] = groups
 		out.total += groups
-		name := stats.Dispatches[i].FunctionName
-		if name == "" {
-			name = fmt.Sprintf("(pipeline_%d)", stats.Dispatches[i].PipelineID)
-		}
-		out.byName[name] += groups
+		out.byName[stats.Dispatches[i].DisplayName()] += groups
 	}
 	return out
 }
@@ -4542,10 +4577,7 @@ func appendEvidenceDetailEvents(trace *perfetto.Trace, timeline *Timeline) {
 		nextID++
 	}
 	for _, pipeline := range timeline.PipelineCompilerStats {
-		name := pipeline.FunctionName
-		if name == "" {
-			name = fmt.Sprintf("pipeline %d", pipeline.PipelineID)
-		}
+		name := pipeline.DisplayName()
 		args := map[string]any{
 			"pipeline_id":    pipeline.PipelineID,
 			"function_name":  pipeline.FunctionName,
@@ -5927,9 +5959,13 @@ func runTimelineFromProfiler(cmd *cobra.Command, tracePath string, opts *timelin
 		}
 		return nil
 	}
+	fullTimeline := timeline // Keep pre-clock-filtered timeline for the dropped-dispatch check.
 	timeline = timelineForClockWithRawSamples(timeline, opts.clock, opts.rawProfilerSamples)
 	if err := resolveTimelineNavigation(timeline, opts); err != nil {
 		return err
+	}
+	if opts.format == "chrome" || opts.format == "perfetto" {
+		warnDroppedDispatchEvents(cmd.ErrOrStderr(), fullTimeline)
 	}
 
 	// Export based on format
@@ -6131,6 +6167,7 @@ func buildTimelineFromProfilerData(tracePath string, stats *counter.StreamDataSt
 	if !addDispatchKernelEvents(timeline, stats, timelineDispatchCaptureStats{}, nil, nil, nil, nil) {
 		addEncoderKernelEvents(timeline, nil, nil, nil)
 	}
+	timeline.bundleDispatches = timelineBundleDispatchCount(stats, nil)
 
 	// Set timeline duration
 	if timeline.EndTime > timeline.StartTime {

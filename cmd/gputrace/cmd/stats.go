@@ -234,10 +234,7 @@ func runStats(cmd *cobra.Command, args []string, opts *statsOptions) error {
 			funcTotals := make(map[string]int)
 			funcCounts := make(map[string]int)
 			for _, d := range streamStats.Dispatches {
-				name := d.FunctionName
-				if name == "" {
-					name = fmt.Sprintf("pipeline_%d", d.PipelineIndex)
-				}
+				name := d.DisplayName()
 				funcTotals[name] += d.DurationUs
 				funcCounts[name]++
 			}
