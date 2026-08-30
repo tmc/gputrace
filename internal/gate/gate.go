@@ -503,12 +503,13 @@ func EvaluateStationarity(marks []uint64, opts Options) StationarityResult {
 	}
 
 	res.Evaluated = true
-	blockSize := opts.BlockSize
-	if blockSize <= 0 {
-		blockSize = 16
+	// An explicit block size is honored exactly so callers can re-block a
+	// trajectory (say, to isolate a steady-state window). Zero means auto:
+	// at least 16 gaps per block, at most 8 blocks.
+	block := opts.BlockSize
+	if block <= 0 {
+		block = max(16, len(gaps)/8)
 	}
-	// Dynamic block count if gaps is large
-	block := max(blockSize, len(gaps)/8)
 
 	var medians []float64
 	for i := 0; i+block <= len(gaps); i += block {

@@ -21,12 +21,15 @@ const validTiming = `{"kind":"clock_sample","cpu_ticks":100,"gpu_ticks":200,"run
 func TestReceipt(t *testing.T) {
 	host := write(t, "host.jsonl", validHost)
 	timing := write(t, "timing.jsonl", validTiming)
-	receipt, err := Receipt(host, timing)
+	receipt, withheld, err := Receipt(host, timing)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if receipt.Host.RunID != "run-1" || receipt.GPU.ClockDomain != "live" || len(receipt.Events) != 1 {
 		t.Fatalf("Receipt() = %+v", receipt)
+	}
+	if len(withheld) != 0 {
+		t.Fatalf("withheld = %+v, want none", withheld)
 	}
 	projected, err := receipt.Project()
 	if err != nil {
@@ -57,10 +60,39 @@ func TestReadRefusesMalformedEvidence(t *testing.T) {
 	}
 }
 
+func TestReceiptWithholdsUnbindableEvents(t *testing.T) {
+	early := `{"clock_domain":"cpu_uptime_ns","duration_ns":30,"id":"event-0","kind":"interval","name":"ModelLoad","run_id":"run-1","schema":"gputrace.host-event/v1","timestamp_ns":50}
+`
+	host := write(t, "host.jsonl", early+validHost)
+	timing := write(t, "timing.jsonl", validTiming)
+	receipt, withheld, err := Receipt(host, timing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(receipt.Events) != 1 || receipt.Events[0].ID != "event-1" {
+		t.Fatalf("Events = %+v, want event-1 only", receipt.Events)
+	}
+	if len(withheld) != 1 || withheld[0].ID != "event-0" {
+		t.Fatalf("withheld = %+v, want event-0", withheld)
+	}
+}
+
+func TestReceiptRefusesAllUnbindableEvents(t *testing.T) {
+	host := write(t, "host.jsonl", strings.Replace(validHost, `"timestamp_ns":120`, `"timestamp_ns":50`, 1))
+	timing := write(t, "timing.jsonl", validTiming)
+	_, withheld, err := Receipt(host, timing)
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("Receipt() error = %v, want ErrInvalid", err)
+	}
+	if len(withheld) != 1 {
+		t.Fatalf("withheld = %+v, want the one event", withheld)
+	}
+}
+
 func TestReceiptRefusesDifferentRun(t *testing.T) {
 	host := write(t, "host.jsonl", validHost)
 	timing := write(t, "timing.jsonl", strings.ReplaceAll(validTiming, "run-1", "run-2"))
-	_, err := Receipt(host, timing)
+	_, _, err := Receipt(host, timing)
 	if !errors.Is(err, ErrInvalid) {
 		t.Fatalf("Receipt() error = %v, want ErrInvalid", err)
 	}

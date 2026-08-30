@@ -33,7 +33,10 @@ func init() {
 }
 
 func runHostReceipt(cmd *cobra.Command, args []string, opts *hostReceiptOptions) error {
-	receipt, err := hostevents.Receipt(args[0], args[1])
+	receipt, withheld, err := hostevents.Receipt(args[0], args[1])
+	for _, event := range withheld {
+		fmt.Fprintf(cmd.ErrOrStderr(), "withholding %q: outside the sidecar's sampled clock range\n", event.ID)
+	}
 	if err != nil {
 		return fmt.Errorf("build host receipt: %w", err)
 	}

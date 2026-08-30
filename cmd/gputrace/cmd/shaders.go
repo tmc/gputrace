@@ -458,8 +458,8 @@ func writeShaderInventoryNotes(w io.Writer, shaders, libraries []*gputrace.Shade
 	}
 	if n > 0 {
 		fmt.Fprintf(w, "\n%d %s named only by shader archive id (archive:...): the capture records\n"+
-			"which archive the function came from, not its name. Capture this trace with\n"+
-			"--profile to get the names.\n",
+			"which archive the function came from, not its name. Run 'gputrace profile-replay'\n"+
+			"on this trace to get the names.\n",
 			n, Pluralize(n, "shader", "shaders"))
 	}
 	if len(libraries) > 0 {

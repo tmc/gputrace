@@ -110,21 +110,44 @@ func Read(path string) (Evidence, error) {
 }
 
 // Receipt binds host intervals to a live timing sidecar from the same run.
-func Receipt(hostPath, timingPath string) (hostcorrelation.Receipt, error) {
+// Host intervals that fall outside the sidecar's sampled clock range cannot
+// be bound and are returned as withheld rather than invalidating the events
+// that can: sampling starts at the first Metal device, so host phases that
+// begin earlier (process start, model load) are routinely unbindable while
+// the rest of the run is fine.
+func Receipt(hostPath, timingPath string) (hostcorrelation.Receipt, []hostcorrelation.Event, error) {
 	host, err := Read(hostPath)
 	if err != nil {
-		return hostcorrelation.Receipt{}, err
+		return hostcorrelation.Receipt{}, nil, err
 	}
 	timing, err := livetiming.Read(timingPath)
 	if err != nil {
-		return hostcorrelation.Receipt{}, err
+		return hostcorrelation.Receipt{}, nil, err
 	}
 	if host.RunID != timing.RunID {
-		return hostcorrelation.Receipt{}, fmt.Errorf("%w: run identity differs", ErrInvalid)
+		return hostcorrelation.Receipt{}, nil, fmt.Errorf("%w: run identity differs", ErrInvalid)
 	}
 	samples := make([]hostcorrelation.ClockSample, len(timing.ClockSamples))
 	for i, sample := range timing.ClockSamples {
 		samples[i] = hostcorrelation.ClockSample{HostNS: sample.CPUTimeNS, GPUNS: sample.GPUTimeNS}
+	}
+	events := append([]hostcorrelation.Event(nil), host.Events...)
+	var withheld []hostcorrelation.Event
+	if len(samples) > 0 {
+		first := samples[0].HostNS
+		last := samples[len(samples)-1].HostNS
+		bindable := events[:0]
+		for _, event := range events {
+			if event.TimestampNS < first || event.DurationNS > last-event.TimestampNS {
+				withheld = append(withheld, event)
+				continue
+			}
+			bindable = append(bindable, event)
+		}
+		events = bindable
+	}
+	if len(events) == 0 {
+		return hostcorrelation.Receipt{}, withheld, fmt.Errorf("%w: no host event falls inside the sampled clock range", ErrInvalid)
 	}
 	receipt := hostcorrelation.Receipt{
 		Schema: hostcorrelation.Schema,
@@ -140,10 +163,10 @@ func Receipt(hostPath, timingPath string) (hostcorrelation.Receipt, error) {
 			HostClock: ClockDomain, GPUClock: "live",
 			SourceDigest: timing.ContentDigest, Samples: samples,
 		},
-		Events: append([]hostcorrelation.Event(nil), host.Events...),
+		Events: events,
 	}
 	if err := receipt.Validate(); err != nil {
-		return hostcorrelation.Receipt{}, err
+		return hostcorrelation.Receipt{}, withheld, err
 	}
-	return receipt, nil
+	return receipt, withheld, nil
 }

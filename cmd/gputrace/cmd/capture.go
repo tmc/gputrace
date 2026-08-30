@@ -73,7 +73,7 @@ Examples:
 	}
 	f := cmd.Flags()
 	f.StringVarP(&opts.output, "output", "o", "", "path of the .gputrace bundle to write")
-	f.StringVar(&opts.timingOutput, "timing-sidecar", "", "write live command-buffer timing and clock samples as JSON lines")
+	f.StringVar(&opts.timingOutput, "timing-sidecar", "", "write live command-buffer timing and clock samples as JSON lines (requires --run-id)")
 	f.StringVar(&opts.runID, "run-id", "", "run identity shared by timing sidecar and host signposts")
 	f.StringVar(&opts.dir, "dir", "", "working directory for the target")
 	f.BoolVar(&opts.check, "check", false, "report whether the target accepts the interposer, then exit")

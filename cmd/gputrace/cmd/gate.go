@@ -61,7 +61,7 @@ Exit status:
 	cmd.Flags().StringVarP(&opts.invariant, "invariant", "k", "", "symbol substring for an op that fires once per token (default: arg_reduce on CUDA; required on Metal)")
 	cmd.Flags().IntVar(&opts.slack, "slack", 2, "tokens allowed missing: flush-window residual, not a loss budget")
 	cmd.Flags().Float64Var(&opts.stationarityThreshold, "stationarity-threshold", 0.15, "max allowed relative excursion for stationarity (0.15 = 15%)")
-	cmd.Flags().IntVar(&opts.blockSize, "block-size", 16, "token block size for trajectory stationarity analysis")
+	cmd.Flags().IntVar(&opts.blockSize, "block-size", 0, "gaps per block for trajectory stationarity (0 = auto; blocks over token gaps, or command-buffer gaps with --timing)")
 	cmd.Flags().BoolVar(&opts.json, "json", false, "output machine-readable JSON verdict")
 	cmd.Flags().StringVar(&opts.timingSidecar, "timing", "", "GT_TIMING_OUT sidecar for live command-buffer stationarity (outranks replay-derived streamData timing)")
 	cmd.Flags().StringSliceVar(&opts.ranges, "ranges", nil, "half-open token ranges lo:hi, one per bundle innermost first; checks invariant counts grow with range width")
