@@ -119,3 +119,22 @@ func TestDecodeAPIAndMeta(t *testing.T) {
 		t.Errorf("gpu total = %d, want 1000", oh.TotalGPUNS)
 	}
 }
+
+// A capture can carry more than one clock_sync for one pid, because
+// execve keeps the pid and the shim arms again after it. The first comes
+// from a process with no CUDA context; the decoder must keep the last.
+func TestDecodeKeepsLastClockSync(t *testing.T) {
+	const in = `{"kind":"clock_sync","unix_ns":100,"cupti_ns":90}
+{"kind":"clock_sync","unix_ns":200,"cupti_ns":195}
+`
+	cap, err := DecodeJSONL(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cap.ClockSync == nil {
+		t.Fatal("no clock sync decoded")
+	}
+	if cap.ClockSync.CuptiNS != 195 || cap.ClockSync.UnixNS != 200 {
+		t.Errorf("clock sync = %+v, want the last record (unix 200, cupti 195)", cap.ClockSync)
+	}
+}

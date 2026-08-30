@@ -271,8 +271,16 @@ func DecodeJSONL(r io.Reader) (Capture, error) {
 				cap.DroppedRecords += d.Records
 			}
 		case probe.Kind == "clock_sync":
+			// Last wins. A bundle can hold more than one sync for a single
+			// pid: execve keeps the pid, so wrapping the target in `env`
+			// arms the shim once in `env` and again in the target, and the
+			// first sync then comes from a process that never created a
+			// CUDA context. The last one comes from the process that did.
+			// The practical difference is small -- the two deltas measured
+			// 96ns apart on a GB10 capture -- so this is correctness
+			// hygiene, not a timing correction.
 			var cs ClockSync
-			if json.Unmarshal(data, &cs) == nil && cap.ClockSync == nil {
+			if json.Unmarshal(data, &cs) == nil {
 				cap.ClockSync = &cs
 			}
 		case probe.Kind == "marker":
