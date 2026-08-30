@@ -82,7 +82,30 @@ with no kernel symbols, so it cannot yet be matched against a `-k` invariant.
 maps to a stable number of command buffers) is the designed follow-up
 (`gate --timing <sidecar>` seam); not implemented.
 
-## 3. Invariant Rules for Metal
+## 3. Nested-Range Monotonicity (`gate --ranges`)
+
+The only check that catches a capture hook sitting downstream of already
+queued GPU work: capture nested half-open token ranges and require invariant
+dispatch counts to grow strictly with range width.
+
+[V] Verified on three real captures of the MLX argmax loop at 8/16/24 steps:
+
+```bash
+$ gputrace gate --ranges 0:8,0:16,0:24 -k argmax nest-8.gputrace nest-16.gputrace nest-24.gputrace
+Nested-range monotonicity:
+  [0,8)         8 argmax dispatches  (nest-8.gputrace)
+  [0,16)       16 argmax dispatches  (nest-16.gputrace)
+  [0,24)       24 argmax dispatches  (nest-24.gputrace)
+  monotonicity ok    counts grow with range width
+  [0,8) -> [0,16): +8 tokens, +8 dispatches ok
+  [0,16) -> [0,24): +8 tokens, +8 dispatches ok
+```
+
+Passing the same bundle twice fails with "count did not grow" (exit 1);
+an arm with 0 invariant matches is NOT_EVALUABLE (exit 2). Each width
+increase must add at least (added tokens - slack) invariant dispatches.
+
+## 4. Invariant Rules for Metal
 - Do not default invariant symbols on Metal until established from real captures.
 - In `mlx_lm` and MLX transformer models, `argmax` (specifically `argmax_bfloat16` / `argmax_float32`) reliably executes once per decode step during greedy sampling.
 - Require `-k` explicitly.
