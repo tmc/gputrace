@@ -19,6 +19,7 @@
 package gate
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -62,6 +63,12 @@ type Options struct {
 	BlockSize int `json:"block_size,omitempty"`
 	// Ranges is reserved for nested half-open range monotonicity checks.
 	Ranges []string `json:"ranges,omitempty"`
+	// TimingSidecar is a GT_TIMING_OUT sidecar (newline-delimited JSON from
+	// the capture interposer). When set, stationarity is scored from its
+	// live per-command-buffer wall clock instead of replay-derived
+	// streamData timing. Command-buffer granularity: the trajectory is over
+	// command buffers, not invariant-matched dispatches.
+	TimingSidecar string `json:"timing_sidecar,omitempty"`
 }
 
 // CompletenessResult reports whether the capture holds every record the
@@ -116,13 +123,13 @@ type StagingObservation struct {
 
 // Result is the composite outcome of all evaluated gates for a bundle.
 type Result struct {
-	Bundle       string              `json:"bundle"`
-	Backend      string              `json:"backend"`
-	Verdict      Verdict             `json:"verdict"`
-	Completeness CompletenessResult  `json:"completeness"`
-	Stationarity StationarityResult  `json:"stationarity"`
-	Staging      StagingObservation  `json:"staging"`
-	Summary      string              `json:"summary"`
+	Bundle       string             `json:"bundle"`
+	Backend      string             `json:"backend"`
+	Verdict      Verdict            `json:"verdict"`
+	Completeness CompletenessResult `json:"completeness"`
+	Stationarity StationarityResult `json:"stationarity"`
+	Staging      StagingObservation `json:"staging"`
+	Summary      string             `json:"summary"`
 }
 
 // DefaultOptions returns standard defaults for gate evaluation.
@@ -358,8 +365,19 @@ func evaluateMetal(bundlePath string, opts Options) (*Result, error) {
 	comp := EvaluateCompleteness(name, marks, invariant, opts)
 	res.Completeness = comp
 
-	// Gate 2: Stationarity
-	if streamStats == nil || len(streamStats.Dispatches) == 0 {
+	// Gate 2: Stationarity. A live sidecar outranks replay timing: replay
+	// cannot witness a mid-run excursion in the original execution.
+	if opts.TimingSidecar != "" {
+		marks, err := readSidecarMarks(opts.TimingSidecar)
+		if err != nil {
+			return nil, fmt.Errorf("timing sidecar: %w", err)
+		}
+		res.Stationarity = EvaluateStationarity(marks, opts)
+		res.Stationarity.TimingSource = "live (command-buffer wall clock from GT_TIMING_OUT sidecar)"
+		if res.Stationarity.Status == VerdictPass || res.Stationarity.Status == VerdictFail {
+			res.Stationarity.Reason += "  (live command-buffer timing)"
+		}
+	} else if streamStats == nil || len(streamStats.Dispatches) == 0 {
 		res.Stationarity = StationarityResult{
 			Status: VerdictNotEvaluable,
 			Reason: "stationarity UNSCORED (timing data absent from raw capture; add with profile-replay)",
@@ -521,6 +539,38 @@ func EvaluateStationarity(marks []uint64, opts Options) StationarityResult {
 	}
 
 	return res
+}
+
+// readSidecarMarks reads command-buffer GPU start timestamps from a
+// GT_TIMING_OUT sidecar, in nanoseconds, sorted ascending.
+func readSidecarMarks(path string) ([]uint64, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var marks []uint64
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var rec struct {
+			Kind            string  `json:"kind"`
+			GPUStartSeconds float64 `json:"gpu_start_seconds"`
+		}
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			continue // sidecar may hold other record kinds and partial tails
+		}
+		if rec.Kind != "command_buffer" || rec.GPUStartSeconds <= 0 {
+			continue
+		}
+		marks = append(marks, uint64(rec.GPUStartSeconds*1e9))
+	}
+	if len(marks) == 0 {
+		return nil, fmt.Errorf("%s holds no command_buffer records with gpu_start_seconds", path)
+	}
+	sort.Slice(marks, func(i, j int) bool { return marks[i] < marks[j] })
+	return marks, nil
 }
 
 func resolveVerdict(comp CompletenessResult, stat StationarityResult) Verdict {

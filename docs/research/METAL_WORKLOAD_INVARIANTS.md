@@ -78,9 +78,26 @@ execution. The capture interposer's timing sidecar (`GT_TIMING_OUT`,
 `GPUStartTime`/`GPUEndTime` wall-clock plus `sampleTimestamps:` clock pairs at
 schedule/complete — that is live timing, but at command-buffer granularity
 with no kernel symbols, so it cannot yet be matched against a `-k` invariant.
-[?] Scoring live stationarity from per-CB gaps (valid when each decode step
-maps to a stable number of command buffers) is the designed follow-up
-(`gate --timing <sidecar>` seam); not implemented.
+[V] `gate --timing <sidecar>` scores live stationarity from per-command-buffer
+gaps, valid when each decode step maps to a stable number of command buffers
+(MLX greedy decode: one CB per step). Verified end to end:
+
+```bash
+$ gputrace capture -o live.gputrace --timing-sidecar live.jsonl --run-id r1 -- python3 <40-step argmax loop>
+$ gputrace gate -t 39 -k argmax --timing live.jsonl --block-size 8 live.gputrace
+live.gputrace: completeness ok    40/40 argmax (want 40 = 39 tokens + 1 prefill)
+live.gputrace: stationarity FAIL  42.0% excursion  [0.7933 0.6148 0.5587 0.52 0.5256] ms  (live command-buffer timing)
+```
+
+(That FAIL is real: the loop has no warmup skip, and the settling shape is
+exactly the gate-2 "high, then settling" signature.)
+
+[V] Caveat found while verifying this: the sidecar interposer labels command
+buffers `gputrace.live.cb.<n>`, and that label surfaces as a CS record in the
+capture. The kernels reader used to mistake it for an encoder, which silently
+destroyed pipeline attribution — every kernel name became the CB label and
+`-k` matched 0 dispatches. Fixed in internal/trace/kernel_stats.go by
+excluding the interposer's own labels from encoder detection.
 
 ## 3. Nested-Range Monotonicity (`gate --ranges`)
 

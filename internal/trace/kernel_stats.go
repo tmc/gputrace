@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"sort"
+	"strings"
 )
 
 // KernelStat holds statistics for a kernel function.
@@ -121,7 +122,20 @@ func (t *Trace) AnalyzeKernels() (map[string]*KernelStat, error) {
 		// Treat all CS records as potential encoders.
 		// Previously we skipped the first one assuming it was the Command Buffer label,
 		// but this breaks single-encoder command buffers.
-		actualEncoders := encoders
+		//
+		// One exception: the capture interposer's timing sidecar labels every
+		// command buffer "gputrace.live.cb.<n>". That label surfaces here as a
+		// CS record, but it names a command buffer, not an encoder. Treating it
+		// as one makes every dispatch fall inside a phantom encoder whose
+		// address no Ct record matches, so pipeline attribution dies and the
+		// CB label leaks out as the kernel name.
+		actualEncoders := encoders[:0:0]
+		for _, enc := range encoders {
+			if strings.HasPrefix(enc.Label, "gputrace.live.cb.") {
+				continue
+			}
+			actualEncoders = append(actualEncoders, enc)
+		}
 
 		// Sort encoders by offset
 		sort.Slice(actualEncoders, func(i, j int) bool {

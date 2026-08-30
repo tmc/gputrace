@@ -19,6 +19,7 @@ type gateOptions struct {
 	json                  bool
 	ranges                []string
 	compare               bool
+	timingSidecar         string
 }
 
 var gateCmd = newGateCommand(&gateOptions{
@@ -62,6 +63,7 @@ Exit status:
 	cmd.Flags().Float64Var(&opts.stationarityThreshold, "stationarity-threshold", 0.15, "max allowed relative excursion for stationarity (0.15 = 15%)")
 	cmd.Flags().IntVar(&opts.blockSize, "block-size", 16, "token block size for trajectory stationarity analysis")
 	cmd.Flags().BoolVar(&opts.json, "json", false, "output machine-readable JSON verdict")
+	cmd.Flags().StringVar(&opts.timingSidecar, "timing", "", "GT_TIMING_OUT sidecar for live command-buffer stationarity (outranks replay-derived streamData timing)")
 	cmd.Flags().StringSliceVar(&opts.ranges, "ranges", nil, "half-open token ranges lo:hi, one per bundle innermost first; checks invariant counts grow with range width")
 	cmd.Flags().BoolVar(&opts.compare, "compare", false, "compare staging/residency observations between exactly two bundles")
 
@@ -81,6 +83,7 @@ func runGate(cmd *cobra.Command, args []string, opts *gateOptions) error {
 		StationarityThreshold: opts.stationarityThreshold,
 		BlockSize:             opts.blockSize,
 		Ranges:                opts.ranges,
+		TimingSidecar:         opts.timingSidecar,
 	}
 
 	var results []*gate.Result
