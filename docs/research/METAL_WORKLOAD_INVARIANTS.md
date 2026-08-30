@@ -58,7 +58,31 @@ qwen-decode-16.gputrace: blit calls: absent from streamData
 qwen-decode-16.gputrace: stationarity UNSCORED (timing data absent from raw capture; add with profile-replay)
 ```
 
-## 2. Invariant Rules for Metal
+## 2. Replay Timing vs Live-Run Timing
+
+[V] Stationarity scored on a Metal bundle uses `streamData` dispatch timing
+(`CumulativeUs`), which Xcode produces by **profile-replaying** the capture.
+It describes the replay execution, not the original live run: a mid-run
+excursion during the live workload (contention, thermal throttling) is
+invisible in replay timing. `gputrace gate` labels such results
+`(replay timing — does not witness the live run)`.
+
+[V] `CumulativeUs` is stored as integer microseconds in the raw record
+(`internal/counter/streamdata.go`, u64 at offset 16), so trajectory values
+have 1 µs source resolution — a block median printed as `0.04` ms is exactly
+40 µs at source, not display rounding (gate prints 4 significant figures).
+
+Live-run stationarity on Metal needs timestamps taken during the original
+execution. The capture interposer's timing sidecar (`GT_TIMING_OUT`,
+`internal/capture/inject.objc`) records per-command-buffer
+`GPUStartTime`/`GPUEndTime` wall-clock plus `sampleTimestamps:` clock pairs at
+schedule/complete — that is live timing, but at command-buffer granularity
+with no kernel symbols, so it cannot yet be matched against a `-k` invariant.
+[?] Scoring live stationarity from per-CB gaps (valid when each decode step
+maps to a stable number of command buffers) is the designed follow-up
+(`gate --timing <sidecar>` seam); not implemented.
+
+## 3. Invariant Rules for Metal
 - Do not default invariant symbols on Metal until established from real captures.
 - In `mlx_lm` and MLX transformer models, `argmax` (specifically `argmax_bfloat16` / `argmax_float32`) reliably executes once per decode step during greedy sampling.
 - Require `-k` explicitly.

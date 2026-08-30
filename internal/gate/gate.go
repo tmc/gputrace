@@ -93,7 +93,11 @@ type StationarityResult struct {
 	WorstExcursion float64   `json:"worst_excursion_pct,omitempty"`
 	Threshold      float64   `json:"threshold_pct,omitempty"`
 	Shape          string    `json:"shape,omitempty"`
-	Reason         string    `json:"reason"`
+	// TimingSource records where the timestamps came from. Timing derived
+	// from a profile-replay export describes the replay execution, not the
+	// original live run; a live mid-run excursion is invisible there.
+	TimingSource string `json:"timing_source,omitempty"`
+	Reason       string `json:"reason"`
 }
 
 // StagingObservation reports observed data movement or residency indicators.
@@ -236,6 +240,7 @@ func evaluateCUDA(bundlePath string, opts Options) (*Result, error) {
 
 	// Gate 2: Stationarity
 	res.Stationarity = EvaluateStationarity(kernelMarks, opts)
+	res.Stationarity.TimingSource = "live (CUPTI activity timestamps)"
 
 	// Gate 3: Staging observation
 	var htodCount int
@@ -361,6 +366,13 @@ func evaluateMetal(bundlePath string, opts Options) (*Result, error) {
 		}
 	} else {
 		res.Stationarity = EvaluateStationarity(marks, opts)
+		// streamData CumulativeUs timing comes from Xcode's profile-replay
+		// of the capture, not the original live run. A live mid-run
+		// excursion (contention, throttling) is invisible in replay timing.
+		res.Stationarity.TimingSource = "profile-replay (streamData) — does not witness the live run"
+		if res.Stationarity.Status == VerdictPass || res.Stationarity.Status == VerdictFail {
+			res.Stationarity.Reason += "  (replay timing — does not witness the live run)"
+		}
 	}
 
 	res.Verdict = resolveVerdict(res.Completeness, res.Stationarity)
@@ -494,16 +506,18 @@ func EvaluateStationarity(marks []uint64, opts Options) StationarityResult {
 		if i > 0 {
 			shapeBuilder.WriteString(" ")
 		}
-		shapeBuilder.WriteString(fmt.Sprintf("%.2f", m))
+		// Four significant figures so "flat within 0%" cannot be
+		// formatting quantization.
+		shapeBuilder.WriteString(fmt.Sprintf("%.4g", m))
 	}
 	res.Shape = shapeBuilder.String()
 
 	if worst <= opts.StationarityThreshold {
 		res.Status = VerdictPass
-		res.Reason = fmt.Sprintf("stationarity ok    flat within %.0f%%  [%s]", worst*100, res.Shape)
+		res.Reason = fmt.Sprintf("stationarity ok    flat within %.1f%%  [%s] ms", worst*100, res.Shape)
 	} else {
 		res.Status = VerdictFail
-		res.Reason = fmt.Sprintf("stationarity FAIL  %.0f%% excursion  [%s]", worst*100, res.Shape)
+		res.Reason = fmt.Sprintf("stationarity FAIL  %.1f%% excursion  [%s] ms", worst*100, res.Shape)
 	}
 
 	return res

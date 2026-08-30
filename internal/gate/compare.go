@@ -13,6 +13,10 @@ type CompareResult struct {
 	BlitDelta  *int64   `json:"blit_delta,omitempty"`
 	HtoDDelta  int      `json:"htod_delta"`
 	BytesDelta int64    `json:"bytes_delta"`
+	// DispatchDelta is the difference in invariant-matched dispatch counts
+	// (arm B minus arm A). Structural counts are load-independent, so any
+	// nonzero delta means the two arms did not run the same workload shape.
+	DispatchDelta int `json:"dispatch_delta"`
 	Notes      []string `json:"notes,omitempty"`
 	Summary    string   `json:"summary"`
 }
@@ -44,6 +48,9 @@ func Compare(bundleA, bundleB string, opts Options) (*CompareResult, error) {
 	cr.HtoDDelta = resB.Staging.HtoDTransfers - resA.Staging.HtoDTransfers
 	cr.BytesDelta = int64(resB.Staging.HtoDBytes) - int64(resA.Staging.HtoDBytes)
 
+	// Structural delta: invariant-matched dispatch counts per arm.
+	cr.DispatchDelta = resB.Completeness.MatchedCount - resA.Completeness.MatchedCount
+
 	// Build summary
 	var lines []string
 	lines = append(lines, fmt.Sprintf("Residency / Staging Comparison:\n  Arm A (%s, %s):\n    %s\n  Arm B (%s, %s):\n    %s",
@@ -60,6 +67,17 @@ func Compare(bundleA, bundleB string, opts Options) (*CompareResult, error) {
 		}
 	} else if resA.Staging.Recorded != resB.Staging.Recorded {
 		lines = append(lines, "  Delta: staging data recorded in one arm but absent in other")
+	}
+
+	if resA.Completeness.InvariantSymbol != "" {
+		if cr.DispatchDelta != 0 {
+			lines = append(lines, fmt.Sprintf("  Delta: %+d %s dispatches (%d vs %d) — arms did not run the same workload shape",
+				cr.DispatchDelta, resA.Completeness.InvariantSymbol,
+				resA.Completeness.MatchedCount, resB.Completeness.MatchedCount))
+		} else if resA.Completeness.MatchedCount > 0 {
+			lines = append(lines, fmt.Sprintf("  Delta: 0 %s dispatches (%d in each arm — structurally comparable)",
+				resA.Completeness.InvariantSymbol, resA.Completeness.MatchedCount))
+		}
 	}
 
 	if resA.Backend == "cuda" || resB.Backend == "cuda" {
