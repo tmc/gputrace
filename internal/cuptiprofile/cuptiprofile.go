@@ -90,6 +90,12 @@ type Stats struct {
 	Commits        int
 	GPUTimeNS      uint64
 	MedianQueueNS  uint64 // over QueueTimed kernels only
+	// Completeness says whether the capture behind these numbers kept
+	// every record the run produced. When it did not, every value above
+	// describes a share of the run rather than the run, and the share is
+	// not recoverable: the loss is uniform across kernel names and sizes,
+	// so nothing in the profile itself looks wrong.
+	Completeness gpuevent.Completeness
 }
 
 // SpanAttributedPct is the share of kernels that got a span stack.
@@ -98,6 +104,28 @@ func (s Stats) SpanAttributedPct() float64 {
 		return 0
 	}
 	return 100 * float64(s.SpanAttributed) / float64(s.Kernels)
+}
+
+// Complete reports whether the capture behind these numbers kept every
+// record the run produced. When it is false the profile is still worth
+// reading for structure — which kernels ran, in what stacks — and its
+// totals are not worth reading at all.
+func (s Stats) Complete() bool { return s.Completeness.Complete() }
+
+// NodeToLaunchRatio compares declared graph work against measured launches:
+// the kernel nodes a run's CUDA graphs committed, over the kernel launches
+// its activity records report. It is a completeness check that needs no
+// second instrument, because a capture supplies both halves.
+//
+// It returns 0 when either half is absent. A ratio near 1 means the two
+// agree; well below 1 means launches went unrecorded. Above 1 is not a
+// defect: a graph committed once and replayed many times launches more
+// kernels than it declares, which is the ordinary shape of a decode loop.
+func (s Stats) NodeToLaunchRatio() float64 {
+	if s.StructureNodes == 0 || s.Kernels == 0 {
+		return 0
+	}
+	return float64(s.Kernels) / float64(s.StructureNodes)
 }
 
 // Build converts a capture's kernel activity into a pprof profile with one
@@ -134,7 +162,11 @@ func Build(cap gpuevent.Capture, opts Options) (*profile.Profile, Stats, error) 
 	setCaptureWindow(prof, cap)
 
 	b := newBuilder(prof)
-	stats := Stats{Kernels: len(kernels), Spans: len(cap.Spans)}
+	stats := Stats{
+		Kernels:      len(kernels),
+		Spans:        len(cap.Spans),
+		Completeness: gpuevent.MeasureCompleteness(cap),
+	}
 
 	// idle_after is measured against every activity on the stream, not
 	// only kernels: a stream running a copy is busy.

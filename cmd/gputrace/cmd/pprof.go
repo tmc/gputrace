@@ -73,6 +73,18 @@ path: one sample per kernel launch, with four value types.
   idle_after    nanoseconds   device time on this kernel's stream before the
                               next activity starts
 
+queue_delay has a structural ceiling: CUDA-graph replays carry no queue
+timestamps at all, so on a graph-heavy decode it can only ever describe the
+eager remainder — often a few dozen launches out of tens of thousands. The
+export prints the coverage per run. Low coverage there is the workload's
+shape, not a capture failure.
+
+Every export also states whether the capture kept every record the run
+produced. A capture that dropped activity records loses them uniformly
+across kernel names and sizes, so it renders, diffs, and reads as a real
+result; the totals from one are a share of the run and not comparable
+against anything.
+
 The last two are what make a comparison conclusive. Diffing two captures at
 -sample_index=gpu_time and again at -sample_index=idle_after answers whether
 one side's extra time is inside kernels or between them:

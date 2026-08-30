@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/tmc/gputrace/internal/cupticapture"
 	"github.com/tmc/gputrace/internal/cuptitrace"
+	"github.com/tmc/gputrace/internal/gpuevent"
 )
 
 type cuptiOptions struct {
@@ -54,7 +55,7 @@ native counter tracks on the same normalized clock.`,
 				return printSpanTable(cmd, capData, opts.spansJSON)
 			}
 			if opts.stats {
-				return printCuptiStats(cmd, events)
+				return printCuptiStats(cmd, events, gpuevent.MeasureCompleteness(capData))
 			}
 			if opts.top > 0 {
 				return printCuptiTop(cmd, events, opts.top)
@@ -102,7 +103,7 @@ native counter tracks on the same normalized clock.`,
 	return cmd
 }
 
-func printCuptiStats(cmd *cobra.Command, events []cuptitrace.Event) error {
+func printCuptiStats(cmd *cobra.Command, events []cuptitrace.Event, health gpuevent.Completeness) error {
 	var kernels, memcpies int
 	var totalNS uint64
 	kernelTime := map[string]uint64{}
@@ -113,7 +114,11 @@ func printCuptiStats(cmd *cobra.Command, events []cuptitrace.Event) error {
 			kernels++
 			d := e.EndNS - e.StartNS
 			totalNS += d
-			name := cuptitrace.Demangle(e.Name)
+			// Through DisplayName, not Name: the shim writes the mangled
+			// symbol and leaves Name empty, so grouping on Name alone
+			// collapses every kernel into one unnamed bucket and reports
+			// it as "1 distinct kernels".
+			name := cuptitrace.Demangle(cuptitrace.DisplayName(e))
 			kernelTime[name] += d
 			counts[name]++
 		case "memcpy", "memset":
@@ -122,6 +127,11 @@ func printCuptiStats(cmd *cobra.Command, events []cuptitrace.Event) error {
 	}
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "CUPTI capture: %d kernels, %d memory transfers\n", kernels, memcpies)
+	if !health.Complete() {
+		fmt.Fprintf(out, "%s\n", health.Summary())
+		fmt.Fprintf(out, "The totals below are a share of the run; %s\n", firstLine(health.Remedy()))
+
+	}
 	fmt.Fprintf(out, "Total kernel time: %.2f ms across %d distinct kernels\n\n", float64(totalNS)/1e6, len(kernelTime))
 
 	type row struct {
@@ -158,10 +168,19 @@ func printCuptiTop(cmd *cobra.Command, events []cuptitrace.Event, n int) error {
 	for _, e := range sorted[:n] {
 		fmt.Fprintf(out, "%9.3f us  %-48s grid=%-12s block=%-10s regs=%d\n",
 			float64(e.EndNS-e.StartNS)/1e3,
-			cuptitrace.ShortName(cuptitrace.Demangle(e.Name)),
+			cuptitrace.ShortName(cuptitrace.Demangle(cuptitrace.DisplayName(e))),
 			e.Grid, e.Block, e.Registers)
 	}
 	return nil
+}
+
+// firstLine keeps a multi-line remedy to one line where the surrounding
+// output is a single status line.
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 func stripExt(path string) string {

@@ -246,7 +246,7 @@ func build(cap gpuevent.Capture, sourcePath string, opts Options) (*perfetto.Tra
 				trace.Events = append(trace.Events, perfetto.Event{
 					ID:         nextEventID,
 					TrackUUID:  trackUUID,
-					Name:       ShortName(Demangle(kernelDisplayName(k.Event))),
+					Name:       ShortName(Demangle(DisplayName(k.Event))),
 					Category:   "cuda_kernel",
 					StartNS:    k.StartNS,
 					DurationNS: k.DurationNS(),
@@ -479,7 +479,18 @@ func kernelKey(e gpuevent.Event) kernelKeyT {
 	return kernelKeyT{e.CorrelationID, e.StartNS, e.StreamID}
 }
 
-func kernelDisplayName(e gpuevent.Event) string {
+// DisplayName returns the name to show for one activity record: the
+// decoded name when the capture supplied one, and the vendor symbol
+// otherwise. It exists so every reader of a bundle resolves names the same
+// way. Three readers once did not, and the two that grouped on Name alone
+// reported a capture of twenty kernels as "1 distinct kernels" — the same
+// class of failure as a silently partial capture, arrived at by a
+// different route.
+//
+// Callers that want a readable name pass the result through Demangle; the
+// fallback and the demangling are separate steps because a structure dump
+// needs the fallback and has nothing to demangle.
+func DisplayName(e gpuevent.Event) string {
 	if e.Name != "" {
 		return e.Name
 	}

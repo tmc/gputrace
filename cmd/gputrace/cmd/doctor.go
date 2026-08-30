@@ -36,9 +36,16 @@ read as "the workload launched no kernels".
 Pass a workload binary to also diagnose it for capturability: dynamic
 CUDA linkage, and whether it is a Go binary needing an in-process flush.
 
+Pass a .gpucapture bundle instead to diagnose the capture itself. Empty is
+not the only way a capture goes wrong: one that lost activity records comes
+back half, and half renders, summarizes, and diffs into confident numbers.
+The bundle check reports the dropped-record count and cross-checks the
+CUDA-graph executions against what the recorded launch counts imply.
+
 Examples:
   gputrace doctor
   gputrace doctor ./my-workload
+  gputrace doctor run.gpucapture
   gputrace doctor --json`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {

@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/google/pprof/profile"
+	"github.com/tmc/gputrace/internal/cuptiprofile"
+	"github.com/tmc/gputrace/internal/gpuevent"
 )
 
 // writeBundle creates a minimal .gpucapture bundle holding the given JSONL
@@ -256,4 +258,87 @@ func TestPprofDotRejectedForMetalTraces(t *testing.T) {
 
 func resetDotPprofTestFlags() {
 	_ = dotPprofCmd.Flags().Set("output", "")
+}
+
+// TestCuptiPprofStatsDisqualifyAPartialCapture: a capture that dropped
+// records still builds a valid profile — which is the problem. Every total
+// in it is a share of the run presented as the run, and the loss is uniform
+// across kernel names and sizes, so nothing in the profile looks wrong.
+// The export has to say so before the numbers.
+func TestCuptiPprofStatsDisqualifyAPartialCapture(t *testing.T) {
+	partial := cuptiprofile.Stats{
+		Kernels:      38835,
+		GPUTimeNS:    943_610_000,
+		Completeness: gpuevent.Completeness{DroppedRecords: 31144},
+	}
+	out := formatCuptiPprofStats(partial)
+	for _, want := range []string{"INCOMPLETE", "31144", "share of the run"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stats do not mention %q:\n%s", want, out)
+		}
+	}
+	// The disqualification must come before the number it disqualifies.
+	if strings.Index(out, "INCOMPLETE") > strings.Index(out, "gpu_time") {
+		t.Errorf("the totals are printed before the warning about them:\n%s", out)
+	}
+
+	clean := cuptiprofile.Stats{Kernels: 200, GPUTimeNS: 1_000_000}
+	if got := formatCuptiPprofStats(clean); strings.Contains(got, "INCOMPLETE") {
+		t.Errorf("a complete capture was reported incomplete:\n%s", got)
+	}
+}
+
+// TestCuptiPprofCrossChecksDeclaredWorkAgainstLaunches is the completeness
+// alarm that needs no second instrument: with --dot the export already
+// holds both halves. The DOT dumps say how many kernel nodes were
+// committed, the activity records say how many launched, and a ratio far
+// below 1 is work that ran and was not recorded.
+func TestCuptiPprofCrossChecksDeclaredWorkAgainstLaunches(t *testing.T) {
+	short := cuptiprofile.Stats{
+		Kernels:        38835,
+		StructureNodes: 73486,
+		Commits:        3745,
+	}
+	out := formatCuptiPprofStats(short)
+	if !strings.Contains(out, "completeness:") {
+		t.Fatalf("no completeness line for a capture with graph structure:\n%s", out)
+	}
+	if !strings.Contains(out, "38835") || !strings.Contains(out, "73486") {
+		t.Errorf("completeness line does not show both halves:\n%s", out)
+	}
+	if !strings.Contains(out, "records were dropped") {
+		t.Errorf("a ratio of 0.53 is not called out as an alarm:\n%s", out)
+	}
+
+	// A graph replayed more often than it was committed pushes the ratio
+	// above 1, which is the ordinary shape of a decode loop, not a defect.
+	replayed := cuptiprofile.Stats{Kernels: 63650, StructureNodes: 5000, Commits: 40}
+	if got := formatCuptiPprofStats(replayed); strings.Contains(got, "records were dropped") {
+		t.Errorf("a ratio above 1 was reported as loss:\n%s", got)
+	}
+}
+
+// TestCuptiPprofStatesTheQueueDelayCeiling: on a graph-heavy decode the
+// coverage figure looks alarmingly low, and it is structural — CUDA-graph
+// replays carry no queue timestamps at all. Saying so where the number is
+// printed stops the next reader deriving it again.
+func TestCuptiPprofStatesTheQueueDelayCeiling(t *testing.T) {
+	out := formatCuptiPprofStats(cuptiprofile.Stats{
+		Kernels:       63678,
+		QueueTimed:    28,
+		MedianQueueNS: 389_070,
+	})
+	if !strings.Contains(out, "389.07 us") {
+		t.Errorf("the median is not rendered at a microsecond scale:\n%s", out)
+	}
+	for _, want := range []string{"CUDA-graph replays", "ceiling, not a gap"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stats do not explain the uncovered remainder (%q):\n%s", want, out)
+		}
+	}
+	// Full coverage has no remainder to explain.
+	full := formatCuptiPprofStats(cuptiprofile.Stats{Kernels: 200, QueueTimed: 200, MedianQueueNS: 1000})
+	if strings.Contains(full, "ceiling, not a gap") {
+		t.Errorf("a fully covered capture was given the ceiling note:\n%s", full)
+	}
 }

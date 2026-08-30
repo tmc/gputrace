@@ -18,6 +18,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/tmc/gputrace/internal/cupticapture"
+	"github.com/tmc/gputrace/internal/gpuevent"
 )
 
 // Status ranks a check's outcome.
@@ -89,7 +92,14 @@ func Run(opts Options) *Report {
 	checkNCU(rep)
 	checkShimPrereqs(rep)
 	if opts.Target != "" {
-		checkTarget(rep, opts.Target)
+		// A .gpucapture bundle is a finished capture, not a workload to
+		// diagnose for capturability; the useful question about it is
+		// whether it is complete.
+		if cupticapture.IsBundle(opts.Target) {
+			checkCapture(rep, opts.Target)
+		} else {
+			checkTarget(rep, opts.Target)
+		}
 	}
 	_ = driver
 	return rep
@@ -609,4 +619,68 @@ func plural(n int) string {
 		return ""
 	}
 	return "s"
+}
+
+// --- finished captures ----------------------------------------------------
+
+// checkCapture diagnoses a bundle that already exists, rather than an
+// environment that is about to produce one.
+//
+// The target checks warn that a Go binary without an in-process flush
+// yields a silently empty capture. That warning is well aimed and it is
+// not enough: a capture can also come back half, and half looks entirely
+// healthy — it renders, it summarizes, it diffs, and every number it
+// produces is a share of the run presented as the run. This check reads
+// the bundle and says which of the three it is.
+func checkCapture(rep *Report, path string) {
+	r, closers, err := cupticapture.OpenEvents(path)
+	if err != nil {
+		add(rep, Check{
+			Name:   "bundle " + filepath.Base(path),
+			Status: StatusFail,
+			Detail: fmt.Sprintf("cannot read %s: %v", path, err),
+		})
+		return
+	}
+	cap, decodeErr := gpuevent.DecodeJSONL(r)
+	closers()
+
+	var kernels int
+	for _, e := range cap.Events {
+		if e.Kind == gpuevent.KindKernel {
+			kernels++
+		}
+	}
+	c := Check{Name: "bundle " + filepath.Base(path), Status: StatusOK}
+	if decodeErr != nil {
+		c.Notes = append(c.Notes, fmt.Sprintf("decode stopped early: %v", decodeErr))
+	}
+	health := gpuevent.MeasureCompleteness(cap)
+	switch {
+	case kernels == 0:
+		c.Status = StatusFail
+		c.Detail = fmt.Sprintf("no kernel records (%d api, %d spans, %d device samples)",
+			len(cap.APIs), len(cap.Spans), len(cap.Samples))
+		c.Remedy = "the target likely exited without flushing CUPTI's activity buffers; a Go target needs an in-process cuptiActivityFlushAll before exit"
+	case !health.Complete():
+		c.Status = StatusFail
+		c.Detail = fmt.Sprintf("%d kernel records, but the %s", kernels, health.Summary())
+		c.Remedy = health.Remedy()
+	default:
+		c.Detail = fmt.Sprintf("%d kernel records; %s", kernels, health.Summary())
+	}
+	// Requested instrumentation that recorded nothing: a flag that did
+	// nothing and a workload that emits nothing read identically unless
+	// the count is stated.
+	if health.ExpectedGraphKernels > 0 {
+		c.Notes = append(c.Notes, fmt.Sprintf("%d of %d kernel executions came from CUDA graphs, which carry no queue timestamps; queue_delay can only describe the eager remainder",
+			health.GraphKernels, kernels))
+	}
+	if len(cap.Spans) == 0 {
+		c.Notes = append(c.Notes, "no application spans: pprof stacks will be the kernel name alone. Spans come from a GPUTRACE_APP_EVENTS sidecar, in-process labels, or --nvtx ranges the target actually emits.")
+	}
+	if cap.UnpairedMarkers > 0 {
+		c.Notes = append(c.Notes, fmt.Sprintf("%d NVTX markers never formed a range; the capture ended mid-range or the target emits unmatched markers", cap.UnpairedMarkers))
+	}
+	add(rep, c)
 }

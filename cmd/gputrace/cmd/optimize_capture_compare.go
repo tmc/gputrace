@@ -85,7 +85,10 @@ func loadCaptureReport(path string) (*gpuevent.Report, error) {
 			cap.Events[i].Name = cuptitrace.Demangle(cap.Events[i].RawSymbol)
 		}
 	}
-	return gpuevent.Analyze(cap.Events, cap.Samples), nil
+	rep := gpuevent.Analyze(cap.Events, cap.Samples)
+	health := gpuevent.MeasureCompleteness(cap)
+	rep.Completeness = &health
+	return rep, nil
 }
 
 func init() {

@@ -124,8 +124,21 @@ func loadGraphDumps(path string) ([]*cudagraphdot.File, error) {
 // Span attribution and queue timing are both partial on real captures —
 // CUDA-graph launches carry no queue timestamps at all — so the coverage
 // is printed rather than left for the reader to assume.
+//
+// Dropped records are reported first and disqualify the totals rather than
+// annotating them. Partial is the harder failure of the two the exporter
+// guards against: an empty capture is obvious, while one missing half its
+// records renders, diffs, and reads as a finding.
 func formatCuptiPprofStats(stats cuptiprofile.Stats) string {
 	var b strings.Builder
+	if !stats.Complete() {
+		fmt.Fprintf(&b, "  %s\n", stats.Completeness.Summary())
+		fmt.Fprintf(&b, "                every total below is a share of the run, not the run, and nothing in the profile\n")
+		fmt.Fprintf(&b, "                itself looks wrong.\n")
+		for _, line := range strings.Split(stats.Completeness.Remedy(), "\n") {
+			fmt.Fprintf(&b, "                %s\n", line)
+		}
+	}
 	fmt.Fprintf(&b, "  gpu_time:     %.2f ms summed over %d launches (not wall time; streams overlap)\n",
 		float64(stats.GPUTimeNS)/1e6, stats.Kernels)
 	if stats.Spans == 0 {
@@ -139,12 +152,48 @@ func formatCuptiPprofStats(stats cuptiprofile.Stats) string {
 	} else {
 		fmt.Fprintf(&b, "  queue_delay:  median %s over the %d of %d kernels that carry queue timestamps\n",
 			formatDurationNS(stats.MedianQueueNS), stats.QueueTimed, stats.Kernels)
+		// The uncovered remainder is structural, not a capture failure.
+		// Saying so here stops the next reader deriving it again from a
+		// coverage figure that looks alarmingly low on a graph-heavy run.
+		if stats.QueueTimed < stats.Kernels {
+			fmt.Fprintf(&b, "                the other %d are CUDA-graph replays, which carry no queue timestamps at all; this is a ceiling, not a gap\n",
+				stats.Kernels-stats.QueueTimed)
+		}
 	}
 	if stats.StructureNodes > 0 {
 		fmt.Fprintf(&b, "  structure:    %d graph kernel nodes across %d commits, joined on kernel name\n",
 			stats.StructureNodes, stats.Commits)
+		b.WriteString(formatCompleteness(stats))
 	}
 	return b.String()
+}
+
+// completenessFloor is the launches-per-declared-node ratio below which a
+// capture is reported as likely incomplete. A graph replayed more than
+// once pushes the ratio above 1, so only the low side is evidence; 0.9
+// leaves room for graphs committed near the end of a run that never got
+// replayed before it finished.
+const completenessFloor = 0.9
+
+// formatCompleteness cross-checks declared graph work against measured
+// launches. Both halves are already in hand whenever --dot is given, which
+// makes this the one completeness check that costs nothing extra: the DOT
+// dumps say how many kernel nodes were committed, the activity records say
+// how many launched, and a ratio far below 1 is unrecorded work.
+func formatCompleteness(stats cuptiprofile.Stats) string {
+	ratio := stats.NodeToLaunchRatio()
+	if ratio == 0 {
+		return ""
+	}
+	line := fmt.Sprintf("  completeness: %.2f launches per declared graph kernel node (%d / %d)\n",
+		ratio, stats.Kernels, stats.StructureNodes)
+	if ratio >= completenessFloor {
+		return line
+	}
+	return line + fmt.Sprintf(
+		"                below %.2f: the run declared more graph work than it recorded launching. Either records were dropped\n"+
+			"                (this capture reports %d) or graphs were committed and never replayed — check the capture before comparing.\n",
+		completenessFloor, stats.Completeness.DroppedRecords)
 }
 
 // formatDurationNS renders a duration at a scale that makes a wrong clock

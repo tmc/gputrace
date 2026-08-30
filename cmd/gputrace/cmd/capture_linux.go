@@ -4,6 +4,7 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"github.com/tmc/gputrace/internal/buildinfo"
 	"github.com/tmc/gputrace/internal/cupticapture"
 	"github.com/tmc/gputrace/internal/gpudoctor"
+	"github.com/tmc/gputrace/internal/gpuevent"
 	"github.com/tmc/gputrace/internal/nvidia"
 )
 
@@ -102,13 +104,10 @@ func runCaptureLinux(cmd *cobra.Command, opts *captureOptions, args []string) er
 	target.Env = append(os.Environ(), preloadEnv...)
 	target.Stdin = cmd.InOrStdin()
 	target.Stdout = cmd.OutOrStdout()
-	// Streamed, not buffered. Buffering hid the target's own diagnostics
-	// until the run ended and discarded them entirely when it succeeded --
-	// the case that matters, because a capture that succeeds while
-	// recording nothing is the failure this tool is worst at showing.
-	// GPUTRACE_CAPTURE_DEBUG writes to the target's stderr, so it was
-	// invisible through `gputrace capture` and diagnosing the shim meant
-	// bypassing the command entirely.
+	// Streamed, not buffered. Buffering it hid the target's own stderr
+	// on every successful run, which is where GPUTRACE_CAPTURE_DEBUG
+	// writes: the one channel for diagnosing the shim was invisible
+	// through the command that installs it.
 	target.Stderr = cmd.ErrOrStderr()
 
 	err = target.Run()
@@ -132,11 +131,56 @@ func runCaptureLinux(cmd *cobra.Command, opts *captureOptions, args []string) er
 	// A failing workload still produced a valid (possibly empty) bundle;
 	// report both facts rather than discarding evidence.
 	fmt.Fprintf(cmd.OutOrStdout(), "wrote %s\n", out)
+	reportCaptureContents(cmd.OutOrStdout(), out, captureLinuxOpts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "capture: target exited with error; bundle retained for inspection\n")
 		return reportedCaptureError{err}
 	}
 	return nil
+}
+
+// reportCaptureContents states what the bundle actually holds, at the end
+// of the run that produced it.
+//
+// Two failures this closes are the same failure: an arm that never ran and
+// an arm that ran and found nothing return identical output. A --nvtx that
+// recorded no markers is indistinguishable from a workload that emits
+// none, and a capture that lost activity records is indistinguishable from
+// a workload that launched less. Both are counts the tool already has and
+// was not printing.
+func reportCaptureContents(w io.Writer, bundle string, opts captureLinuxOptions) {
+	r, closers, err := cupticapture.OpenEvents(bundle)
+	if err != nil {
+		return // the bundle stands on its own; this line is a courtesy
+	}
+	cap, _ := gpuevent.DecodeJSONL(r)
+	closers()
+
+	var kernels, transfers, markers int
+	for _, e := range cap.Events {
+		switch e.Kind {
+		case gpuevent.KindKernel:
+			kernels++
+		case gpuevent.KindMemcpy, gpuevent.KindMemset:
+			transfers++
+		}
+	}
+	for _, sp := range cap.Spans {
+		if sp.Source == gpuevent.SourceNVTX {
+			markers++
+		}
+	}
+	fmt.Fprintf(w, "  %d kernels, %d transfers, %d spans\n", kernels, transfers, len(cap.Spans))
+	if opts.nvtx && markers == 0 {
+		fmt.Fprintf(w, "  --nvtx: 0 NVTX ranges recorded — either the target emits none, or nothing routed them into CUPTI\n")
+	}
+	health := gpuevent.MeasureCompleteness(cap)
+	if !health.Complete() {
+		fmt.Fprintf(w, "  %s\n", health.Summary())
+		for _, line := range strings.Split(health.Remedy(), "\n") {
+			fmt.Fprintf(w, "  %s\n", line)
+		}
+	}
 }
 
 func init() {
