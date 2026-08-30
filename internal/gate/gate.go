@@ -321,7 +321,7 @@ func evaluateMetal(bundlePath string, opts Options) (*Result, error) {
 		}
 		res.Stationarity = StationarityResult{
 			Status: VerdictNotEvaluable,
-			Reason: "invariant symbol (-k) is required on Metal: specify an op that runs once per token",
+			Reason: "stationarity UNSCORED (pass -k to identify per-token marks)",
 		}
 		res.Summary = formatSummary(name, res)
 		return res, nil

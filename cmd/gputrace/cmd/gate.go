@@ -40,7 +40,7 @@ Evaluates three independent checks:
                      counter which reads zero when records are stranded.
   2. stationarity  - the per-token trajectory must be flat across blocks; a mid-run
                      excursion leaves per-kernel medians intact while inflating
-                     summed time.
+                     summed time (requires timing data from streamData or profile-replay).
   3. staging       - reports observed data movement (CUDA HtoD transfers or Metal
                      streamData blit calls) with explicit distinction between
                      recorded zero and absent data.
