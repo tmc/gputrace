@@ -185,6 +185,11 @@ func Run(ctx context.Context, opts Options, argv ...string) (string, error) {
 			return "", err
 		}
 	}
+	if info, err := os.Stat(opts.Output); err == nil && info.IsDir() {
+		if err := writeMeta(opts.Output, argv, opts.RunID); err != nil {
+			return "", err
+		}
+	}
 	return opts.Output, nil
 }
 

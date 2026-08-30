@@ -3,7 +3,49 @@ package gate
 import (
 	"fmt"
 	"strings"
+
+	"github.com/tmc/gputrace/internal/capture"
+	"github.com/tmc/gputrace/internal/cupticapture"
 )
+
+// HostProvenance identifies where a capture arm was produced, read from the
+// bundle's provenance sidecar (meta.json on CUDA, gputrace-meta.json on
+// Metal). Absence means the bundle predates the sidecar or was produced by
+// another tool — a cross-session comparison then cannot be labeled.
+type HostProvenance struct {
+	Recorded bool   `json:"recorded"`
+	Hostname string `json:"hostname,omitempty"`
+	Platform string `json:"platform,omitempty"`
+	Device   string `json:"device,omitempty"`
+}
+
+func readProvenance(res *Result) HostProvenance {
+	switch res.Backend {
+	case "cuda":
+		meta, err := cupticapture.ReadMeta(res.Bundle)
+		if err != nil {
+			return HostProvenance{}
+		}
+		return HostProvenance{
+			Recorded: true,
+			Hostname: meta.Hostname,
+			Platform: "driver " + meta.DriverVersion,
+			Device:   meta.GPUName,
+		}
+	case "metal":
+		meta, err := capture.ReadMeta(res.Bundle)
+		if err != nil {
+			return HostProvenance{}
+		}
+		return HostProvenance{
+			Recorded: true,
+			Hostname: meta.Hostname,
+			Platform: meta.OS,
+			Device:   meta.Chip,
+		}
+	}
+	return HostProvenance{}
+}
 
 // CompareResult stores the residency and data movement delta between two
 // captures (Arm A and Arm B).
@@ -13,6 +55,10 @@ type CompareResult struct {
 	BlitDelta  *int64   `json:"blit_delta,omitempty"`
 	HtoDDelta  int      `json:"htod_delta"`
 	BytesDelta int64    `json:"bytes_delta"`
+	// HostA and HostB label where each arm was captured; a cross-host
+	// comparison is noise for timing but still valid for structure.
+	HostA HostProvenance `json:"host_a"`
+	HostB HostProvenance `json:"host_b"`
 	// DispatchDelta is the difference in invariant-matched dispatch counts
 	// (arm B minus arm A). Structural counts are load-independent, so any
 	// nonzero delta means the two arms did not run the same workload shape.
@@ -51,8 +97,28 @@ func Compare(bundleA, bundleB string, opts Options) (*CompareResult, error) {
 	// Structural delta: invariant-matched dispatch counts per arm.
 	cr.DispatchDelta = resB.Completeness.MatchedCount - resA.Completeness.MatchedCount
 
+	cr.HostA = readProvenance(resA)
+	cr.HostB = readProvenance(resB)
+
 	// Build summary
 	var lines []string
+	switch {
+	case cr.HostA.Recorded && cr.HostB.Recorded && cr.HostA.Hostname != cr.HostB.Hostname:
+		lines = append(lines, fmt.Sprintf("CROSS-HOST comparison: arm A on %s (%s), arm B on %s (%s) — timing deltas are noise; structural counts remain comparable",
+			cr.HostA.Hostname, cr.HostA.Device, cr.HostB.Hostname, cr.HostB.Device))
+	case cr.HostA.Recorded && cr.HostB.Recorded:
+		lines = append(lines, fmt.Sprintf("Same host: %s (%s)", cr.HostA.Hostname, cr.HostA.Device))
+	default:
+		var missing []string
+		if !cr.HostA.Recorded {
+			missing = append(missing, "arm A")
+		}
+		if !cr.HostB.Recorded {
+			missing = append(missing, "arm B")
+		}
+		lines = append(lines, fmt.Sprintf("Host provenance absent from %s: cross-session comparison cannot be labeled",
+			strings.Join(missing, " and ")))
+	}
 	lines = append(lines, fmt.Sprintf("Residency / Staging Comparison:\n  Arm A (%s, %s):\n    %s\n  Arm B (%s, %s):\n    %s",
 		resA.Bundle, resA.Backend, resA.Staging.Summary,
 		resB.Bundle, resB.Backend, resB.Staging.Summary))
