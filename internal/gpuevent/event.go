@@ -172,6 +172,14 @@ type Capture struct {
 	// range, so "no NVTX spans" stays distinguishable from "ranges the
 	// capture truncated".
 	UnpairedMarkers int
+	// DroppedRecords counts activity records the tracer discarded because
+	// no buffer was free to hold them. It is the difference between a
+	// capture and a sample of one: the loss is uniform across kinds and
+	// deterministic across runs, so every count, total, and ratio derived
+	// from an incomplete capture looks entirely healthy. Readers must
+	// state a nonzero value rather than present derived timing as a
+	// finding.
+	DroppedRecords int
 }
 
 // Normalize shifts every timestamp so the earliest event starts at zero,
@@ -250,6 +258,17 @@ func DecodeJSONL(r io.Reader) (Capture, error) {
 			var m CaptureMeta
 			if json.Unmarshal(data, &m) == nil {
 				cap.Meta = &m
+			}
+		case probe.Kind == "dropped":
+			// One record per completed buffer that lost records, summed
+			// here: the shim cannot emit a single total at exit because
+			// its destructor does not run for a target that exits
+			// through exit_group.
+			var d struct {
+				Records int `json:"records"`
+			}
+			if json.Unmarshal(data, &d) == nil {
+				cap.DroppedRecords += d.Records
 			}
 		case probe.Kind == "clock_sync":
 			var cs ClockSync

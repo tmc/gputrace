@@ -77,10 +77,29 @@ func CompareCaptures(base, variant *Report) *CaptureComparison {
 	if base == nil || variant == nil || len(base.Kernels) == 0 || len(variant.Kernels) == 0 {
 		c.Verdict = CaptureInconclusive
 		side := "variant"
-		if len(base.Kernels) == 0 {
+		if base == nil || len(base.Kernels) == 0 {
 			side = "base"
 		}
 		c.Summary = fmt.Sprintf("%s capture has no kernels; nothing to compare", side)
+		return c
+	}
+	// A capture that lost records is a sample, not a measurement, and the
+	// loss is uniform enough to read as a real difference: an MLX decode
+	// missing 48% of its records diffed as a 43.9% kernel-time win over
+	// the arm that kept them. Refusing here is the same call the empty
+	// capture gets, for the same reason. Reports whose decoder never
+	// checked (Completeness nil) are compared as before rather than
+	// blocked on evidence nobody gathered.
+	for _, side := range []struct {
+		name string
+		rep  *Report
+	}{{"base", base}, {"variant", variant}} {
+		if side.rep.Completeness == nil || side.rep.Completeness.Complete() {
+			continue
+		}
+		c.Verdict = CaptureInconclusive
+		c.Summary = fmt.Sprintf("%s %s; the totals would be a share of the run, not the run",
+			side.name, side.rep.Completeness.Summary())
 		return c
 	}
 	c.BaseTotalNS = base.TotalKernelNS

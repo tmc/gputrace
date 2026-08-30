@@ -90,6 +90,12 @@ type Report struct {
 	Utilization    Utilization     `json:"utilization"`
 	LaunchLatency  *LaunchLatency  `json:"launch_latency,omitempty"`
 	Graphs         *GraphAnalysis  `json:"graphs,omitempty"`
+	// Completeness says whether the capture behind this report kept
+	// every record the run produced. Analyze does not fill it in — only
+	// whoever decoded the capture can — and everything else here is
+	// derived from what survived, so a partial capture disqualifies the
+	// totals rather than annotating them. Nil means nobody checked.
+	Completeness *Completeness `json:"completeness,omitempty"`
 }
 
 // Analyze reduces events into per-kernel statistics and ordered findings.
