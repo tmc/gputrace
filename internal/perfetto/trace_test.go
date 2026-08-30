@@ -217,3 +217,45 @@ func TestWriteStreamsPackets(t *testing.T) {
 		t.Fatalf("written bytes = %d, receipt = %d", w.bytes, receipt.LogicalBytes)
 	}
 }
+
+// TestDeviceNamingComesFromTheTrace pins the device strings to the Trace
+// fields. They were once the literals "Apple GPU compute queue", "Metal
+// compute dispatch", and an "Apple" vendor, which the CUDA exporter
+// inherited wholesale: an NVIDIA capture named an Apple queue running
+// Metal. Nothing asserted them, so nothing caught it.
+func TestDeviceNamingComesFromTheTrace(t *testing.T) {
+	track := TrackUUID("test", "compute")
+	cuda := &Trace{
+		ClockDomain: "wall",
+		API:         "CUDA",
+		GPUName:     "NVIDIA GPU",
+		GPUVendor:   "NVIDIA",
+		Tracks:      []Track{{UUID: track, Name: "kernels"}},
+		Events:      []Event{{ID: 1, TrackUUID: track, Name: "saxpy", StartNS: 10, DurationNS: 5}},
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, cuda); err != nil {
+		t.Fatal(err)
+	}
+	got := buf.String()
+	for _, want := range []string{"NVIDIA GPU compute queue", "CUDA compute dispatch", "NVIDIA"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("CUDA trace does not name %q", want)
+		}
+	}
+	for _, unwanted := range []string{"Apple", "Metal"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("CUDA trace names %q", unwanted)
+		}
+	}
+
+	// A trace that declares no API or vendor says neither rather than
+	// inheriting whichever backend was written first.
+	var bare bytes.Buffer
+	if err := Write(&bare, &Trace{ClockDomain: "wall", Tracks: cuda.Tracks, Events: cuda.Events}); err != nil {
+		t.Fatal(err)
+	}
+	if got := bare.String(); !strings.Contains(got, "GPU compute queue") || strings.Contains(got, "CUDA") {
+		t.Error("a trace with no API set should fall back to unbranded names")
+	}
+}

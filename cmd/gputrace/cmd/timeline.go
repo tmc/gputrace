@@ -2873,7 +2873,9 @@ func exportPerfettoForClockWithBudget(timeline *Timeline, outputPath string, clo
 	trace := &perfetto.Trace{
 		Identity:    timeline.TraceUUID,
 		ClockDomain: string(clock),
+		API:         "Metal",
 		GPUName:     gpuName,
+		GPUVendor:   "Apple",
 		GPUModel:    timeline.MetalPluginName,
 		Metadata: map[string]any{
 			"schema":                                         "gputrace.perfetto/v1",

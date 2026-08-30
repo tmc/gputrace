@@ -84,12 +84,18 @@ type CounterSample struct {
 type Trace struct {
 	Identity    string
 	ClockDomain string
-	GPUName     string
-	GPUModel    string
-	Tracks      []Track
-	Events      []Event
-	Counters    []Counter
-	Metadata    map[string]any
+	// API names the graphics API the events were captured through, e.g.
+	// "Metal" or "CUDA". It labels the render-stage category, so leaving
+	// it empty is better than guessing: a trace that says the wrong API
+	// misleads more than one that says none.
+	API       string
+	GPUName   string
+	GPUVendor string
+	GPUModel  string
+	Tracks    []Track
+	Events    []Event
+	Counters  []Counter
+	Metadata  map[string]any
 }
 
 // WriteOptions controls optional lossy export. A zero MaxBytes writes every
@@ -447,15 +453,27 @@ func initialPacket(trace *Trace) []byte {
 	snapshot = appendBytes(snapshot, 1, clock)
 	snapshot = appendUint(snapshot, 2, 11) // primary trace clock
 
+	// The queue and stage names describe the device the trace came from.
+	// They were once the literals "Apple GPU compute queue" and "Metal
+	// compute dispatch", which the CUDA exporter then reused: an NVIDIA
+	// capture rendered under an Apple queue.
+	queueName := "GPU compute queue"
+	if trace.GPUName != "" {
+		queueName = trace.GPUName + " compute queue"
+	}
+	stageName := "compute dispatch"
+	if trace.API != "" {
+		stageName = trace.API + " compute dispatch"
+	}
 	var queue []byte
 	queue = appendUint(queue, 1, 1)
-	queue = appendString(queue, 2, "Apple GPU compute queue")
+	queue = appendString(queue, 2, queueName)
 	queue = appendString(queue, 3, trace.ClockDomain+" clock")
 	queue = appendUint(queue, 4, 0) // OTHER
 	var stage []byte
 	stage = appendUint(stage, 1, 2)
 	stage = appendString(stage, 2, "Compute")
-	stage = appendString(stage, 3, "Metal compute dispatch")
+	stage = appendString(stage, 3, stageName)
 	stage = appendUint(stage, 4, 2) // COMPUTE
 	var interned []byte
 	interned = appendBytes(interned, 24, queue)
@@ -469,7 +487,9 @@ func initialPacket(trace *Trace) []byte {
 	if trace.GPUName != "" || trace.GPUModel != "" {
 		var gpu []byte
 		gpu = appendString(gpu, 1, trace.GPUName)
-		gpu = appendString(gpu, 2, "Apple")
+		if trace.GPUVendor != "" {
+			gpu = appendString(gpu, 2, trace.GPUVendor)
+		}
 		if trace.GPUModel != "" {
 			gpu = appendString(gpu, 3, trace.GPUModel)
 		}

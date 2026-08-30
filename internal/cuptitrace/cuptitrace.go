@@ -110,7 +110,9 @@ func build(cap gpuevent.Capture, sourcePath string, opts Options) (*perfetto.Tra
 
 	trace := &perfetto.Trace{
 		ClockDomain: "wall",
+		API:         "CUDA",
 		GPUName:     "NVIDIA GPU",
+		GPUVendor:   "NVIDIA",
 		Metadata: map[string]any{
 			"schema":         "gputrace.cupti/v1",
 			"source":         sourcePath,
