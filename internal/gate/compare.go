@@ -49,11 +49,11 @@ func readProvenance(res *Result) HostProvenance {
 // CompareResult stores the residency and data movement delta between two
 // captures (Arm A and Arm B).
 type CompareResult struct {
-	ArmA       *Result  `json:"arm_a"`
-	ArmB       *Result  `json:"arm_b"`
-	BlitDelta  *int64   `json:"blit_delta,omitempty"`
-	HtoDDelta  int      `json:"htod_delta"`
-	BytesDelta int64    `json:"bytes_delta"`
+	ArmA       *Result `json:"arm_a"`
+	ArmB       *Result `json:"arm_b"`
+	BlitDelta  *int64  `json:"blit_delta,omitempty"`
+	HtoDDelta  int     `json:"htod_delta"`
+	BytesDelta int64   `json:"bytes_delta"`
 	// HostA and HostB label where each arm was captured; a cross-host
 	// comparison is noise for timing but still valid for structure.
 	HostA HostProvenance `json:"host_a"`
@@ -61,9 +61,9 @@ type CompareResult struct {
 	// DispatchDelta is the difference in invariant-matched dispatch counts
 	// (arm B minus arm A). Structural counts are load-independent, so any
 	// nonzero delta means the two arms did not run the same workload shape.
-	DispatchDelta int `json:"dispatch_delta"`
-	Notes      []string `json:"notes,omitempty"`
-	Summary    string   `json:"summary"`
+	DispatchDelta int      `json:"dispatch_delta"`
+	Notes         []string `json:"notes,omitempty"`
+	Summary       string   `json:"summary"`
 }
 
 // Compare evaluates two bundles and compares their staging/residency observations.

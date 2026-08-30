@@ -180,15 +180,15 @@ func printGateResult(w io.Writer, r *gate.Result) {
 
 type gateFailedError struct{}
 
-func (gateFailedError) Error() string     { return "capture failed gate" }
-func (gateFailedError) exitCode() int     { return 1 }
-func (gateFailedError) alreadyReported()  {}
+func (gateFailedError) Error() string    { return "capture failed gate" }
+func (gateFailedError) exitCode() int    { return 1 }
+func (gateFailedError) alreadyReported() {}
 
 type gateNotEvaluableError struct{}
 
-func (gateNotEvaluableError) Error() string     { return "capture not evaluable" }
-func (gateNotEvaluableError) exitCode() int     { return 2 }
-func (gateNotEvaluableError) alreadyReported()  {}
+func (gateNotEvaluableError) Error() string    { return "capture not evaluable" }
+func (gateNotEvaluableError) exitCode() int    { return 2 }
+func (gateNotEvaluableError) alreadyReported() {}
 
 var (
 	errGateFailed       = gateFailedError{}
