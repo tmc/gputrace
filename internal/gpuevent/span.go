@@ -108,9 +108,14 @@ func AttributeSpans(cap Capture) []AttributedSpan {
 	return spans
 }
 
-// declaresStream reports whether the span covers the given stream. A span
-// with no declared streams covers every stream (legacy producers).
+// declaresStream reports whether the span covers the given stream.
 func (s *AttributedSpan) declaresStream(streamID uint32) bool {
+	return s.Span.coversStream(streamID)
+}
+
+// coversStream reports whether the span covers the given stream. A span
+// with no declared streams covers every stream (legacy producers).
+func (s Span) coversStream(streamID uint32) bool {
 	if len(s.Streams) == 0 {
 		return true
 	}
