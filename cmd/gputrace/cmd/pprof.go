@@ -25,6 +25,7 @@ type pprofOptions struct {
 	showStats   bool
 	searchPaths []string
 	sourceLines bool
+	dot         string
 }
 
 func newPprofCommand(opts *pprofOptions) *cobra.Command {
@@ -61,7 +62,46 @@ The pprof profile shows GPU time organized hierarchically:
         └─ Encoder
             └─ Kernel (shader)
 
-This makes it easy to identify which shaders are consuming the most GPU time.`,
+This makes it easy to identify which shaders are consuming the most GPU time.
+
+CUDA captures (a .gpucapture bundle or an activity .jsonl) take a different
+path: one sample per kernel launch, with four value types.
+
+  gpu_time      nanoseconds   kernel end - start
+  launch_count  count         1 per kernel record
+  queue_delay   nanoseconds   queued until device start
+  idle_after    nanoseconds   device time on this kernel's stream before the
+                              next activity starts
+
+The last two are what make a comparison conclusive. Diffing two captures at
+-sample_index=gpu_time and again at -sample_index=idle_after answers whether
+one side's extra time is inside kernels or between them:
+
+  gputrace pprof py.gpucapture -o py.pb.gz
+  gputrace pprof go.gpucapture -o go.pb.gz
+  go tool pprof -top -diff_base=py.pb.gz go.pb.gz
+  go tool pprof -top -sample_index=idle_after -diff_base=py.pb.gz go.pb.gz
+
+A diff needs both profiles to carry identical sample type lists, so pass
+--dot to both sides or to neither.
+
+Stacks come from the application spans in the capture (the ones a target
+writes to GPUTRACE_APP_EVENTS, or NVTX ranges), innermost span last and the
+kernel name as the leaf. Span frames are the span name, so every decode step
+aggregates into one frame; the step number rides along as the eval_seq
+label, sliceable with -tagfocus. A kernel no span encloses is stacked under
+an "unattributed" root rather than dropped.
+
+gpu_time is the SUM of kernel durations, not wall time. Kernels on different
+streams overlap, so the total can exceed the capture's wall span, and it is
+not rescaled to fit. Sum-of-durations is the right answer to "which kernel
+costs most"; a flame graph built from it is not a timeline. For wall span and
+occupancy, use gputrace summary — they are deliberately not folded in here.
+
+  --dot <dir>   join CUDA-graph structure from MLX_SAVE_CUDA_GRAPHS_DOT_FILE
+                dumps into the same profile, adding kernel_count and
+                graph_commits joined on kernel name. That turns "+56 kernels"
+                into "+56 kernels worth X ms". See gputrace dot-pprof.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runPprof(cmd, args, opts)
@@ -76,6 +116,7 @@ This makes it easy to identify which shaders are consuming the most GPU time.`,
 	cmd.Flags().BoolVar(&opts.showStats, "stats", opts.showStats, "Show trace statistics only")
 	cmd.Flags().StringSliceVar(&opts.searchPaths, "search-path", opts.searchPaths, "Search paths for shader source files")
 	cmd.Flags().BoolVar(&opts.sourceLines, "source-lines", opts.sourceLines, "Generate pprof with per-source-line samples (enables go tool pprof -list)")
+	cmd.Flags().StringVar(&opts.dot, "dot", opts.dot, "CUDA-graph DOT dump directory to join into the profile (CUDA captures only)")
 	return cmd
 }
 
@@ -91,6 +132,9 @@ func runPprof(cmd *cobra.Command, args []string, opts *pprofOptions) error {
 	// shader timing. Everything else keeps the Metal flow.
 	if cupticapture.IsBundle(tracePath) || filepath.Ext(tracePath) == ".jsonl" {
 		return runCuptiPprof(cmd, args, opts)
+	}
+	if opts.dot != "" {
+		return fmt.Errorf("--dot joins CUDA-graph dumps into a CUDA capture profile; %s is a Metal trace", tracePath)
 	}
 
 	// Verify trace file exists

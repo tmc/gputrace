@@ -33,7 +33,8 @@ Kernel & Shader Analysis:
 Timing & Profiling:
   timing           - Timing metrics with measured/estimated provenance
   profiler         - Profiler spans, active time, dispatches, and pipelines
-  pprof            - pprof format export
+  pprof            - pprof format export (Metal traces and CUDA captures)
+  dot-pprof        - CUDA-graph DOT dumps as a pprof structure profile
   correlate        - Correlate timing with hardware metrics
 
 Command Buffers & Encoders:

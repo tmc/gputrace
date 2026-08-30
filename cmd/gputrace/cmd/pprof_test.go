@@ -276,6 +276,7 @@ func resetPprofTestFlags() {
 	_ = flags.Set("stats", "false")
 	_ = flags.Set("search-path", "")
 	_ = flags.Set("source-lines", "false")
+	_ = flags.Set("dot", "")
 }
 
 func captureStdout(t *testing.T, run func() error) (string, error) {
