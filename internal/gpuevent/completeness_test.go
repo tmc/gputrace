@@ -130,9 +130,12 @@ func TestCompareCapturesRefusesPartialCaptures(t *testing.T) {
 	kernels := []Event{{Kind: KindKernel, Name: "saxpy", StartNS: 0, EndNS: 1000}}
 	base := Analyze(kernels, nil)
 	variant := Analyze(kernels, nil)
-	healthy := Completeness{}
+	// Built by hand rather than measured, so Records must be set: the zero
+	// value of Completeness describes a capture holding nothing, which is
+	// never healthy.
+	healthy := Completeness{Records: len(kernels)}
 	base.Completeness = &healthy
-	partial := Completeness{DroppedRecords: 4000}
+	partial := Completeness{Records: len(kernels), DroppedRecords: 4000}
 	variant.Completeness = &partial
 
 	c := CompareCaptures(base, variant)
@@ -152,5 +155,38 @@ func TestCompareCapturesRefusesPartialCaptures(t *testing.T) {
 	base.Completeness, variant.Completeness = nil, nil
 	if got := CompareCaptures(base, variant); got.Verdict == CaptureInconclusive {
 		t.Errorf("unchecked captures were refused: %s", got.Summary)
+	}
+}
+
+// TestEmptyCaptureIsNeverComplete: zero records is the terminal state of
+// the stranding failure, not a separate error and not an inability to
+// check. The tracer arms, the flush period returns success, the drop
+// counter reads zero, and nothing is ever handed back -- on a GB10 MLX
+// decode a 16 MiB buffer produced exactly that, a capture with nothing in
+// it and every self-report saying fine. A type that answered "looks
+// complete" here would be agreeing with all of them.
+func TestEmptyCaptureIsNeverComplete(t *testing.T) {
+	c := MeasureCompleteness(Capture{})
+	if c.Complete() {
+		t.Error("a capture holding no records reports itself complete")
+	}
+	if got := c.Summary(); !strings.Contains(got, "EMPTY") {
+		t.Errorf("Summary = %q, want it to name the capture empty", got)
+	}
+	// The remedy must not send the reader the way that caused this: a
+	// larger buffer strands more, and is what empties a capture outright.
+	got := c.Remedy()
+	if !strings.Contains(got, "FLUSH_MS") {
+		t.Errorf("Remedy = %q, want the flush interval", got)
+	}
+	if !strings.Contains(got, "do not raise") {
+		t.Errorf("Remedy = %q; it must warn against the buffer knob, which is what produces an empty capture", got)
+	}
+
+	// The zero value is not usable as "healthy", which is the hazard of
+	// making Records load-bearing; assert it so a hand-built Completeness
+	// cannot quietly claim a clean capture.
+	if (Completeness{}).Complete() {
+		t.Error("the zero value reports complete")
 	}
 }

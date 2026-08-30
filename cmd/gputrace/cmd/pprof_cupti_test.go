@@ -269,7 +269,7 @@ func TestCuptiPprofStatsDisqualifyAPartialCapture(t *testing.T) {
 	partial := cuptiprofile.Stats{
 		Kernels:      38835,
 		GPUTimeNS:    943_610_000,
-		Completeness: gpuevent.Completeness{DroppedRecords: 31144},
+		Completeness: gpuevent.Completeness{Records: 38835, DroppedRecords: 31144},
 	}
 	out := formatCuptiPprofStats(partial)
 	for _, want := range []string{"INCOMPLETE", "31144", "share of the run"} {
@@ -282,7 +282,11 @@ func TestCuptiPprofStatsDisqualifyAPartialCapture(t *testing.T) {
 		t.Errorf("the totals are printed before the warning about them:\n%s", out)
 	}
 
-	clean := cuptiprofile.Stats{Kernels: 200, GPUTimeNS: 1_000_000}
+	clean := cuptiprofile.Stats{
+		Kernels:      200,
+		GPUTimeNS:    1_000_000,
+		Completeness: gpuevent.Completeness{Records: 200},
+	}
 	if got := formatCuptiPprofStats(clean); strings.Contains(got, "INCOMPLETE") {
 		t.Errorf("a complete capture was reported incomplete:\n%s", got)
 	}
@@ -298,6 +302,7 @@ func TestCuptiPprofCrossChecksDeclaredWorkAgainstLaunches(t *testing.T) {
 		Kernels:        38835,
 		StructureNodes: 73486,
 		Commits:        3745,
+		Completeness:   gpuevent.Completeness{Records: 38835},
 	}
 	out := formatCuptiPprofStats(short)
 	if !strings.Contains(out, "completeness:") {
@@ -312,7 +317,12 @@ func TestCuptiPprofCrossChecksDeclaredWorkAgainstLaunches(t *testing.T) {
 
 	// A graph replayed more often than it was committed pushes the ratio
 	// above 1, which is the ordinary shape of a decode loop, not a defect.
-	replayed := cuptiprofile.Stats{Kernels: 63650, StructureNodes: 5000, Commits: 40}
+	replayed := cuptiprofile.Stats{
+		Kernels:        63650,
+		StructureNodes: 5000,
+		Commits:        40,
+		Completeness:   gpuevent.Completeness{Records: 63650},
+	}
 	if got := formatCuptiPprofStats(replayed); strings.Contains(got, "records were dropped") {
 		t.Errorf("a ratio above 1 was reported as loss:\n%s", got)
 	}
@@ -327,6 +337,7 @@ func TestCuptiPprofStatesTheQueueDelayCeiling(t *testing.T) {
 		Kernels:       63678,
 		QueueTimed:    28,
 		MedianQueueNS: 389_070,
+		Completeness:  gpuevent.Completeness{Records: 63678},
 	})
 	if !strings.Contains(out, "389.07 us") {
 		t.Errorf("the median is not rendered at a microsecond scale:\n%s", out)
@@ -337,7 +348,12 @@ func TestCuptiPprofStatesTheQueueDelayCeiling(t *testing.T) {
 		}
 	}
 	// Full coverage has no remainder to explain.
-	full := formatCuptiPprofStats(cuptiprofile.Stats{Kernels: 200, QueueTimed: 200, MedianQueueNS: 1000})
+	full := formatCuptiPprofStats(cuptiprofile.Stats{
+		Kernels:       200,
+		QueueTimed:    200,
+		MedianQueueNS: 1000,
+		Completeness:  gpuevent.Completeness{Records: 200},
+	})
 	if strings.Contains(full, "ceiling, not a gap") {
 		t.Errorf("a fully covered capture was given the ceiling note:\n%s", full)
 	}

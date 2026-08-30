@@ -27,6 +27,13 @@ import "fmt"
 // `gputrace gate -k` scores, and it is the thing to gate on. This type is
 // what you check when you have not got it.
 type Completeness struct {
+	// Records is how many activity records the capture holds. Zero is the
+	// terminal state of the stranding failure rather than a separate
+	// error: the shim arms, the flush period returns rc=0, the drop
+	// counter reads zero, and nothing is ever handed back. A capture with
+	// no records is never complete, so the zero value of this type is not
+	// usable as "healthy" -- build one with MeasureCompleteness.
+	Records int
 	// DroppedRecords is what the tracer said it discarded.
 	DroppedRecords int
 	// GraphKernels counts kernel node executions recorded from CUDA
@@ -65,7 +72,7 @@ type Completeness struct {
 // Conditional graph nodes, which by design do not fire on every launch,
 // would also register here; none have been seen in a capture yet [?].
 func MeasureCompleteness(cap Capture) Completeness {
-	c := Completeness{DroppedRecords: cap.DroppedRecords}
+	c := Completeness{Records: len(cap.Events), DroppedRecords: cap.DroppedRecords}
 	g := AnalyzeGraphs(cap.Events)
 	for _, gs := range g.Graphs {
 		c.GraphKernels += gs.Kernels
@@ -93,7 +100,7 @@ func (c Completeness) MissingGraphKernels() int {
 // because nothing contradicts it, which is the honest answer and not a
 // guarantee.
 func (c Completeness) Complete() bool {
-	return c.DroppedRecords == 0 && c.MissingGraphKernels() == 0
+	return c.Records > 0 && c.DroppedRecords == 0 && c.MissingGraphKernels() == 0
 }
 
 // Summary renders the verdict as one self-contained clause, and exists so
@@ -113,6 +120,10 @@ func (c Completeness) Summary() string {
 				c.ExpectedGraphKernels)
 		}
 		return "capture looks complete: no records dropped, and no CUDA graphs to cross-check against (nothing contradicts it, which is weaker than a guarantee)"
+	}
+	if c.Records == 0 {
+		return "capture is EMPTY: it holds no activity records at all, which is what stranding looks like at its limit — " +
+			"the tracer arms, reports success, and hands nothing back"
 	}
 	switch {
 	case c.DroppedRecords > 0 && c.MissingGraphKernels() > 0:
@@ -160,6 +171,15 @@ func (c Completeness) Remedy() string {
 	switch {
 	case c.Complete():
 		return ""
+	case c.Records == 0:
+		// Never "raise the buffer" here. Raising it is what produces this
+		// state: on a GB10 MLX decode the recorded kernel count fell
+		// monotonically as the buffer grew -- 1 MiB kept 119 of 129
+		// argmax launches, the 4 MiB default 102, and at 16 MiB CUPTI
+		// requested two buffers, completed zero, and wrote a capture with
+		// nothing in it while every self-report still said fine [V].
+		return "the tracer recorded nothing: shorten the flush interval, GPUTRACE_CAPTURE_FLUSH_MS=5 gputrace capture ...\n" +
+			"do not raise GPUTRACE_CAPTURE_BUFSIZE_MB — a larger buffer is what strands a whole capture"
 	case c.DroppedRecords > 0:
 		return "the activity buffers overflowed: re-capture with a larger one, GPUTRACE_CAPTURE_BUFSIZE_MB=8 gputrace capture ...\n" +
 			"nothing derived from this bundle should be compared against another capture until it reports complete"
