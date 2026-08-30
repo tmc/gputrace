@@ -94,6 +94,8 @@ func printAnalysis(cmd *cobra.Command, rep *gpuevent.Report) error {
 	if rep.MemcpyCount > 0 {
 		fmt.Fprintf(out, "Transfers: %d memcpys (%.2f ms), %d memsets\n",
 			rep.MemcpyCount, float64(rep.MemcpyNS)/1e6, rep.MemsetCount)
+	} else {
+		fmt.Fprintf(out, "Transfers: 0 memcpys, %d memsets\n", rep.MemsetCount)
 	}
 
 	fmt.Fprintln(out, "\nKernels by GPU time:")

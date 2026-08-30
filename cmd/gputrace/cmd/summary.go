@@ -96,6 +96,8 @@ func runCaptureSummary(cmd *cobra.Command, path string, opts *summaryOptions) er
 	if rep.MemcpyCount > 0 || rep.MemsetCount > 0 {
 		fmt.Fprintf(out, "Transfers: %d copies (%s), %d fills\n",
 			rep.MemcpyCount, dur(rep.MemcpyNS), rep.MemsetCount)
+	} else {
+		fmt.Fprintln(out, "Transfers: 0 copies, 0 fills")
 	}
 
 	fmt.Fprintln(out, "\nTop work")

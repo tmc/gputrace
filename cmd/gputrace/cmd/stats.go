@@ -212,6 +212,9 @@ func runStats(cmd *cobra.Command, args []string, opts *statsOptions) error {
 			if streamStats.CommandBufferWallNs > 0 {
 				fmt.Printf("  CB Wall Time:     %s\n", FormatDurationNs(streamStats.CommandBufferWallNs))
 			}
+			if streamStats.Metadata.NumBlitCalls != nil {
+				fmt.Printf("  Blit Calls:       %d\n", *streamStats.Metadata.NumBlitCalls)
+			}
 			if streamStats.TimingSource != "" {
 				fmt.Printf("  Timing Source:    %s\n", streamStats.TimingSource)
 			}
