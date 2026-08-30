@@ -9,11 +9,23 @@ import "fmt"
 // uniform across kernel names and sizes and nothing in the output looks
 // wrong. On an MLX decode that shape read as a 43.9% kernel-time win.
 //
-// Two independent sources answer it, because they fail independently. The
-// tracer's own drop count is authoritative when present, but a tracer that
-// never queried it reports zero. The graph invariant needs no cooperation
-// from the tracer at all, but a capture with no CUDA graphs has nothing to
-// check.
+// Two sources answer it, and they are not independent where it matters.
+// The tracer's own drop count catches an overflow; the graph invariant
+// needs no cooperation from the tracer at all. But a launch that left no
+// record anywhere is invisible to both: it leaves every node of its graph
+// even, and a record stranded in a buffer that was never completed was
+// never dropped, so the counter reads zero honestly. That pairing is what
+// let a capture missing 20-47% of its records report itself healthy and
+// diff as a 43.9% kernel-time win [V].
+//
+// So this type detects loss; it does not bound it, and a clean result is
+// "nothing contradicts it" rather than a guarantee. Bounding needs an
+// instrument outside both — a quantity a missing launch makes wrong
+// rather than absent. The workload supplies one: an op that fires once
+// per token means a 128-token decode must show 129 of it, and a launch
+// that left no record makes that count wrong out loud. That is what
+// `gputrace gate -k` scores, and it is the thing to gate on. This type is
+// what you check when you have not got it.
 type Completeness struct {
 	// DroppedRecords is what the tracer said it discarded.
 	DroppedRecords int
