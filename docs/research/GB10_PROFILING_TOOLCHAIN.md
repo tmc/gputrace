@@ -137,28 +137,75 @@ launches fired **zero** times — for MLX *and* for an ordinary
 `nvcc -cudart=shared` fixture, which resolves driver entry points the
 same way. That approach was implemented, measured, and deleted.
 
-[V] What works is `cuptiActivityFlushPeriod`, which asks CUPTI's own
-worker to flush on a timer and needs nothing from the target. With it,
-the unmodified stale `mlx-lm-generate` — the binary that predates the
-in-process flush and that nsys collects one event from — captures
-**19,417 kernel launches**, with full CUDA-graph attribution: 49 graphs,
-100% of kernel time, per-node breakdown (node #15 of graph 1013 owns
-89.6% of that graph at 2.13 ms mean). This is the attribution nsys's node
-mode cannot produce here at all (§2a).
+[V] What works is a timed flush that needs nothing from the target. With
+one, the unmodified stale `mlx-lm-generate` — the binary that predates the
+in-process flush and that nsys collects one event from — captures kernels
+with full CUDA-graph attribution: 49 graphs, 100% of kernel time, per-node
+breakdown (node #15 of graph 1013 owns 89.6% of that graph at 2.13 ms
+mean). This is the attribution nsys's node mode cannot produce here at
+all (§2a).
 
-[V] The period bounds tail loss, because a target that exits without
-synchronizing still loses whatever it buffered since the last flush:
+[V] It must be `cuptiActivityFlushAll`, not `cuptiActivityFlushPeriod`.
+The two are not interchangeable, and the difference is most of the
+capture. `FlushPeriod` delivers only buffers that filled, so whatever
+sits in a partial buffer at exit is lost — roughly outstanding buffers
+times the buffer size. That has three visible consequences, all measured
+against an invariant: a 128-token decode must run `arg_reduce_general`
+exactly 129 times.
 
-| Period | MLX decode, two runs | Generation throughput |
+First, changing the period does nothing at all. Periods of 100, 25 and
+10 ms each recorded exactly 102 of 129, byte-identical, reproduced
+independently in two sessions. The period fires and completes nothing.
+
+Second, the buffer size runs the wrong way — bigger loses more, because
+each unfilled buffer strands more:
+
+| Buffer | argmax of 129 | kernels |
 |---|---|---|
-| 500 ms | 15,809 then 10,263 launches | 110.8, 109.0 tok/s |
-| 100 ms | 19,417 both | 109.5, 110.4 tok/s |
-| 25 ms | 19,417 both | 109.7, 111.7 tok/s |
+| 1 MiB | 119 | 67,955 |
+| 2 MiB | 117 | 66,679 |
+| 4 MiB (old default) | 102 | 58,253 |
+| 16 MiB | **0** | **0** |
+| 64 MiB | **0** | **0** |
 
-100 ms is the shortest period that buys completeness here; 25 ms bought
-nothing more, and no period moved throughput. Shim overhead on the CUDA
-fixture is unchanged at +5.3% (§4), inside the run-to-run spread of the
-+5.1% measured before the periodic flush existed.
+At 16 MiB and above no buffer fills inside the run, so the capture comes
+back empty while the shim reports itself correctly armed. This is why a
+"raise the buffer" remedy is exactly backwards.
+
+Third, a short run captures nothing at any buffer size: `--max-tokens 32`
+recorded 0. Nothing rescues it, because the destructor's forced flush
+never runs — a Go target exits through `exit_group`, and `shutdown
+complete` does not print in any of these runs.
+
+[V] A detached thread calling `cuptiActivityFlushAll(0)` on a timer fixes
+all three. Non-forced is what completes partial buffers; the FORCED flag
+is the one that deadlocks against a live context, and stays confined to
+the destructor.
+
+| Flush interval | argmax of 129 | kernels | wall |
+|---|---|---|---|
+| 100 ms | 106 | 60,912 | 2.95 s |
+| 50 ms | 122 | 69,700 | 2.82 s |
+| 25 ms | 123 | 70,755 | 2.90 s |
+| 10 ms | 127 | 72,695 | 3.00 s |
+| uncaptured control | — | — | 3.28 s |
+
+Cost is below the noise: every captured run finished inside the spread of
+the uncaptured control, so the default is the short end. With the thread
+at 10 ms the buffer size stops mattering — 1, 4, 16 and 64 MiB all record
+127–128 of 129 — and the short run recovers to 31 of 33.
+
+The residual 2 of 129 is the last flush window plus the buffers still
+outstanding at exit. It cannot be closed from the destructor for the
+`exit_group` reason above, so the interval bounds the loss rather than
+eliminating it. Treat a capture as complete to within one flush interval,
+not as complete.
+
+[!] Score this with the argmax invariant, not with the capture's own
+completeness check. The graph invariant sees only graph-resident kernels
+and only the ragged edge of a loss — a whole stranded graph launch leaves
+every node of that graph even — so it reported 18 missing on a capture
+that was 27 argmax short. It is a detector, not a measure.
 
 [?] Still not established: a fresh *side-by-side* on a target that also
 carries the in-process flush. The installed `mlx-lm-generate` predates

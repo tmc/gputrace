@@ -9,19 +9,31 @@
  *
  * Flushing happens two ways. Interposed CUDA synchronization points
  * (Device/Event/StreamSynchronize, Memcpy) flush on the application's own
- * thread, and cuptiActivityFlushPeriod asks CUPTI's own worker to flush on
- * a timer. The destructor performs one FORCED flush only when no flush
- * ever fired; flushing after context teardown otherwise deadlocks, so the
- * common path never relies on it.
+ * thread, and a flush thread calls cuptiActivityFlushAll on a timer. The
+ * destructor performs one FORCED flush only when no flush ever fired;
+ * flushing after context teardown otherwise deadlocks, so the common path
+ * never relies on it.
  *
- * The periodic flush is what makes interposition-proof targets capturable
+ * The flush thread is what makes interposition-proof targets capturable
  * [V]. A target that links the CUDA runtime statically -- MLX's libmlx.so
  * carries cudaDeviceSynchronize and cudaLaunchKernel as local symbols --
  * makes those calls internally, where LD_PRELOAD cannot see them, and its
  * CUDA-graph launches reach the driver through cuGetProcAddress rather
  * than the PLT, so no driver entry point is interposable either. Before
- * the periodic flush, capturing MLX yielded zero kernels while the
- * workload ran perfectly; after it, 19,417.
+ * any timed flush, capturing MLX yielded zero kernels while the workload
+ * ran perfectly.
+ *
+ * The flush must be cuptiActivityFlushAll, not cuptiActivityFlushPeriod
+ * [V]. FlushPeriod delivers only buffers that filled, so whatever sits in
+ * a partial buffer when the target exits is lost -- roughly outstanding
+ * buffers times the buffer size, which is why a bigger buffer loses more
+ * and a 16 MiB one captures nothing at all. FlushPeriod does not move
+ * that: on an MLX decode whose argmax must run 129 times, periods of 100,
+ * 25 and 10 ms all recorded the same 102. Calling FlushAll on a timer
+ * completes partial buffers and recovers them -- 127 at 10 ms -- and
+ * makes the buffer size stop mattering. Non-forced is what does this; the
+ * FORCED flag is the one that deadlocks, and is still confined to the
+ * destructor.
  *
  * Environment:
  *   GPUTRACE_CAPTURE_OUT   - output path for the JSONL event file (required;
@@ -30,8 +42,10 @@
  *                            the shim does not read or write it
  *   GPUTRACE_CAPTURE_API   - enable runtime/driver API call records
  *   GPUTRACE_CAPTURE_NVTX  - enable NVTX marker (range) records
- *   GPUTRACE_CAPTURE_FLUSH_MS - CUPTI periodic flush interval in ms
- *                            (default 100; 0 disables the periodic flush)
+ *   GPUTRACE_CAPTURE_FLUSH_MS - flush interval in ms (default 10; 0
+ *                            disables the flush thread). Records still
+ *                            unflushed when the target exits are lost, so
+ *                            this bounds the loss.
  *   GPUTRACE_CAPTURE_DEBUG - diagnostics on stderr
  *
  * Pure C: no runtime beyond libc and libcuda/libcupti. The Go parent never
@@ -257,6 +271,27 @@ static void emit_marker(const CUpti_ActivityMarker2 *m) {
             m->id, (unsigned long long)m->timestamp);
 }
 
+/* Flush thread. cuptiActivityFlushAll(0) completes buffers that have not
+ * filled, which is the only way records leave a target that never reaches
+ * an interposed synchronization point. It runs non-forced: the FORCED flag
+ * is what deadlocks against a live context, and it stays in the destructor.
+ *
+ * Detached and never joined, because the targets this exists for do not run
+ * destructors -- a Go binary exits through exit_group -- so there is no
+ * shutdown path to join it from. It touches only CUPTI, which is safe to
+ * call from any thread, and stops on a flag when a destructor does run. */
+static volatile int g_flush_stop = 0;
+
+static void *flush_thread(void *arg) {
+    unsigned long ms = (unsigned long)(uintptr_t)arg;
+    while (!g_flush_stop) {
+        usleep((useconds_t)(ms * 1000));
+        if (g_flush_stop) break;
+        cuptiActivityFlushAll(0);
+    }
+    return NULL;
+}
+
 /* --- CUPTI callbacks ----------------------------------------------------- */
 
 static void CUPTIAPI bufferRequested(uint8_t **buffer, size_t *size,
@@ -381,23 +416,21 @@ static void arm_cupti(void) {
         ar = cuptiActivityEnable(CUPTI_ACTIVITY_KIND_DRIVER);
         debug(ar == CUPTI_SUCCESS ? "driver api records on" : "driver api enable failed");
     }
-    /* Periodic flush, handled by CUPTI's own worker: the one mechanism
-     * that needs nothing from the target. A target that links the CUDA
-     * runtime statically and launches through CUDA graphs -- MLX -- makes
-     * no interposable call at all in steady state: its graph launches
-     * reach the driver through cuGetProcAddress, not the PLT. Without a
-     * period, CUPTI requests buffers and never completes one, and the
-     * capture ends empty while the workload runs perfectly.
+    /* Timed flush: the one mechanism that needs nothing from the target.
+     * A target that links the CUDA runtime statically and launches through
+     * CUDA graphs -- MLX -- makes no interposable call at all in steady
+     * state, so without this the capture ends empty while the workload runs
+     * perfectly.
      *
-     * A target that exits without synchronizing still loses whatever it
-     * buffered since the last flush, so the period sets how much. Measured
-     * on MLX decode [V]: 500ms lost between a quarter and a half of the
-     * records and varied run to run (15,809 then 10,263 launches), while
-     * 100ms and 25ms both recorded 19,417 every time. 100ms is the
-     * shortest period that buys completeness here; going shorter bought
-     * nothing, and neither period moved generation throughput. */
+     * The period bounds the loss rather than eliminating it: whatever has
+     * not been flushed when the target exits is gone, and the destructor
+     * cannot recover it because a Go target exits through exit_group and
+     * never runs one. Measured on an MLX decode whose argmax must run 129
+     * times [V]: 100ms recorded 106, 50ms 122, 25ms 123, 10ms 127. Cost is
+     * below the noise -- every captured run finished inside the spread of
+     * the uncaptured control -- so the default is the short end. */
     {
-        unsigned long period_ms = 100;
+        unsigned long period_ms = 10;
         const char *p = getenv("GPUTRACE_CAPTURE_FLUSH_MS");
         if (p && *p) {
             char *end = NULL;
@@ -405,9 +438,12 @@ static void arm_cupti(void) {
             if (end && *end == 0) period_ms = v;
         }
         if (period_ms > 0) {
-            CUptiResult fr = cuptiActivityFlushPeriod((uint32_t)period_ms);
+            pthread_t th;
+            int rc = pthread_create(&th, NULL, flush_thread,
+                                    (void *)(uintptr_t)period_ms);
+            if (rc == 0) pthread_detach(th);
             if (getenv("GPUTRACE_CAPTURE_DEBUG"))
-                fprintf(stderr, "gputrace-shim: flush period %lums rc=%d\n", period_ms, (int)fr);
+                fprintf(stderr, "gputrace-shim: flush thread %lums rc=%d\n", period_ms, rc);
         }
     }
     g_enabled = 1;
@@ -462,6 +498,7 @@ static void shim_init(void) {
 __attribute__((destructor))
 static void shim_shutdown(void) {
     g_enabled = 0;
+    g_flush_stop = 1;
     if (!g_flushed_once && g_out) {
         /* No sync-point flush ever ran. Try once; CUPTI's context may be
          * gone, in which case this returns an error rather than hanging

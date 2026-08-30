@@ -91,15 +91,22 @@ capture command unless noted.
    (`atexit` + forced `cuptiActivityFlushAll(CUPTI_ACTIVITY_FLAG_FLUSH_FORCED)`
    before CUDA teardown, or a driver-callback-based flush on context
    destroy) rather than "hope the app called cudaDeviceSynchronize".
-   **DONE (2026-08-29):** `cuptiActivityFlushPeriod(100)` at arm time.
-   This was worse than described: MLX links the CUDA runtime statically
-   and launches through graphs resolved by `cuGetProcAddress`, so *no*
-   interposition point exists at any level — capturing it yielded zero
-   kernels while the workload ran. With the periodic flush the same
-   unmodified binary yields 19,417 launches and full graph attribution.
-   See `docs/research/GB10_PROFILING_TOOLCHAIN.md` §2c, including why
-   driver-level launch interposition was implemented, measured at zero
-   hits, and deleted.
+   **DONE (2026-08-29):** a flush thread calling
+   `cuptiActivityFlushAll(0)` every 10 ms at arm time. This was worse
+   than described: MLX links the CUDA runtime statically and launches
+   through graphs resolved by `cuGetProcAddress`, so *no* interposition
+   point exists at any level — capturing it yielded zero kernels while
+   the workload ran.
+   `cuptiActivityFlushPeriod` was tried first and is not sufficient: it
+   delivers only buffers that filled, which strands the rest and makes a
+   larger buffer lose *more* — at 16 MiB nothing fills and the capture is
+   empty. The explicit non-forced flush completes partial buffers and
+   takes a 128-token MLX decode from 102 to 127 of its 129 required
+   argmax launches, at no measurable cost, with the buffer size no longer
+   mattering. Loss is now bounded by the flush interval rather than
+   unbounded. See `docs/research/GB10_PROFILING_TOOLCHAIN.md` §2c,
+   including why driver-level launch interposition was implemented,
+   measured at zero hits, and deleted.
 6. **NVML overlay clock alignment is unproven in general.**
    [verified] On this host `cuptiGetTimestamp` == CLOCK_REALTIME within
    tens of ns, so joining CUPTI activity timestamps with the sampler's
