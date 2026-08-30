@@ -103,3 +103,43 @@ func fmtInt(n uint64) string {
 	buf[i] = byte('0' + n)
 	return string(buf[i:])
 }
+
+func TestGateCommandCompare(t *testing.T) {
+	dirA := t.TempDir()
+	eventsPathA := filepath.Join(dirA, "events.jsonl")
+	var contentA strings.Builder
+	contentA.WriteString(`{"kind":"kernel","raw_symbol":"_Z18arg_reduce_generali","start_ns":1000000,"end_ns":2000000}` + "\n")
+	contentA.WriteString(`{"kind":"memcpy","src_kind":"host","dst_kind":"device","bytes":1048576,"start_ns":500000,"end_ns":600000}` + "\n")
+	if err := os.WriteFile(eventsPathA, []byte(contentA.String()), 0o644); err != nil {
+		t.Fatalf("write events A: %v", err)
+	}
+
+	dirB := t.TempDir()
+	eventsPathB := filepath.Join(dirB, "events.jsonl")
+	var contentB strings.Builder
+	contentB.WriteString(`{"kind":"kernel","raw_symbol":"_Z18arg_reduce_generali","start_ns":1000000,"end_ns":2000000}` + "\n")
+	for i := 0; i < 5; i++ {
+		contentB.WriteString(`{"kind":"memcpy","src_kind":"host","dst_kind":"device","bytes":1048576,"start_ns":500000,"end_ns":600000}` + "\n")
+	}
+	if err := os.WriteFile(eventsPathB, []byte(contentB.String()), 0o644); err != nil {
+		t.Fatalf("write events B: %v", err)
+	}
+
+	var buf bytes.Buffer
+	cmd := newGateCommand(&gateOptions{compare: true})
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+	cmd.SetArgs([]string{"--compare", dirA, dirB})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("gate --compare failed: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "Residency / Staging Comparison") {
+		t.Errorf("expected residency comparison header, got:\n%s", out)
+	}
+	if !strings.Contains(out, "+4 transfers") {
+		t.Errorf("expected +4 transfers delta, got:\n%s", out)
+	}
+}

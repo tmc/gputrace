@@ -89,6 +89,23 @@ func runGate(cmd *cobra.Command, args []string, opts *gateOptions) error {
 
 	out := cmd.OutOrStdout()
 
+	if opts.compare {
+		if len(args) != 2 {
+			return fmt.Errorf("--compare requires exactly 2 bundles, got %d", len(args))
+		}
+		cmpRes, err := gate.Compare(args[0], args[1], gateOpts)
+		if err != nil {
+			return fmt.Errorf("compare: %w", err)
+		}
+		if opts.json {
+			enc := json.NewEncoder(out)
+			enc.SetIndent("", "  ")
+			return enc.Encode(cmpRes)
+		}
+		fmt.Fprintln(out, cmpRes.Summary)
+		return nil
+	}
+
 	for _, bundle := range args {
 		res, err := gate.Evaluate(bundle, gateOpts)
 		if err != nil {
