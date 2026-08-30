@@ -42,6 +42,7 @@ overhead dominates wall clock — e.g. integrated-GPU hosts where a real
 			enc.SetIndent("", "  ")
 			return enc.Encode(cmp)
 		}
+		warnCrossHost(out, args[0], args[1])
 		fmt.Fprintf(out, "verdict: %s\n", cmp.Verdict)
 		fmt.Fprintf(out, "%s\n", cmp.Summary)
 		fmt.Fprintf(out, "total kernel time: %.2f ms -> %.2f ms (%+.1f%%)\n\n",

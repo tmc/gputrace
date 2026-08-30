@@ -7,8 +7,24 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/tmc/gputrace/internal/cupticapture"
+	"github.com/tmc/gputrace/internal/gate"
 	"github.com/tmc/gputrace/internal/gpuevent"
 )
+
+// warnCrossHost labels a two-bundle comparison with its host provenance.
+// Timing deltas between bundles from different hosts (or unverifiable
+// sessions) are noise; saying so belongs to the tool, not the reader.
+func warnCrossHost(out io.Writer, base, variant string) {
+	a := gate.ReadHostProvenance(base)
+	b := gate.ReadHostProvenance(variant)
+	switch {
+	case a.Recorded && b.Recorded && a.Hostname != b.Hostname:
+		fmt.Fprintf(out, "warning: CROSS-HOST comparison: %s (%s) vs %s (%s) — timing deltas are noise; structural counts remain comparable\n\n",
+			a.Hostname, a.Device, b.Hostname, b.Device)
+	case !a.Recorded || !b.Recorded:
+		fmt.Fprint(out, "warning: host provenance absent from at least one bundle: cross-session comparison cannot be verified\n\n")
+	}
+}
 
 // isCaptureInput reports whether a diff argument names a CUDA capture: a
 // .gpucapture bundle, or a bare JSONL activity file.
@@ -65,6 +81,7 @@ func runCaptureDiff(cmd *cobra.Command, base, variant string, opts diffOptions) 
 		enc.SetIndent("", "  ")
 		return enc.Encode(cmp)
 	}
+	warnCrossHost(out, base, variant)
 	writeCaptureDiff(out, cmp, base, variant, opts.Limit)
 	return nil
 }

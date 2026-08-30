@@ -19,24 +19,19 @@ type HostProvenance struct {
 	Device   string `json:"device,omitempty"`
 }
 
-func readProvenance(res *Result) HostProvenance {
-	switch res.Backend {
-	case "cuda":
-		meta, err := cupticapture.ReadMeta(res.Bundle)
-		if err != nil {
-			return HostProvenance{}
-		}
+// ReadHostProvenance reads a bundle's host identity from whichever
+// provenance sidecar it carries: meta.json (CUDA) or gputrace-meta.json
+// (Metal). The zero value means the bundle records no provenance.
+func ReadHostProvenance(bundle string) HostProvenance {
+	if meta, err := cupticapture.ReadMeta(bundle); err == nil {
 		return HostProvenance{
 			Recorded: true,
 			Hostname: meta.Hostname,
 			Platform: "driver " + meta.DriverVersion,
 			Device:   meta.GPUName,
 		}
-	case "metal":
-		meta, err := capture.ReadMeta(res.Bundle)
-		if err != nil {
-			return HostProvenance{}
-		}
+	}
+	if meta, err := capture.ReadMeta(bundle); err == nil {
 		return HostProvenance{
 			Recorded: true,
 			Hostname: meta.Hostname,
@@ -45,6 +40,10 @@ func readProvenance(res *Result) HostProvenance {
 		}
 	}
 	return HostProvenance{}
+}
+
+func readProvenance(res *Result) HostProvenance {
+	return ReadHostProvenance(res.Bundle)
 }
 
 // CompareResult stores the residency and data movement delta between two
