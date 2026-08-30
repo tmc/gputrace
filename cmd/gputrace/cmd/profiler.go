@@ -165,6 +165,9 @@ func runProfiler(cmd *cobra.Command, args []string, opts *profilerOptions) error
 	if stats.TimingSource != "" {
 		fmt.Printf("  Timing Source:     %s\n", stats.TimingSource)
 	}
+	if stats.Metadata.NumBlitCalls != nil {
+		fmt.Printf("  Blit Calls:        %s\n", FormatCount(int(*stats.Metadata.NumBlitCalls)))
+	}
 	if totalThreadgroupMem > 0 {
 		fmt.Printf("  Threadgroup Mem:   %s (max per pipeline)\n", FormatBytes(uint64(totalThreadgroupMem)))
 	}
