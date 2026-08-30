@@ -312,7 +312,22 @@ func evaluateMetal(bundlePath string, opts Options) (*Result, error) {
 	res.Staging = StagingObservation{
 		Backend:          "metal",
 		Source:           "streamData",
-		StorageModeNotes: "not recorded in bundle",
+		StorageModeNotes: "no buffer-creation records in bundle",
+	}
+	if t != nil {
+		if modes := t.BufferStorageModes(); len(modes) > 0 {
+			names := make([]string, 0, len(modes))
+			for name := range modes {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			parts := make([]string, 0, len(names))
+			for _, name := range names {
+				parts = append(parts, fmt.Sprintf("%d %s", modes[name], name))
+			}
+			res.Staging.StorageModeNotes = fmt.Sprintf("buffer storage modes: %s (capture buffer-creation records)",
+				strings.Join(parts, ", "))
+		}
 	}
 	if streamStats != nil && streamStats.Metadata.NumBlitCalls != nil {
 		res.Staging.Recorded = true
@@ -343,6 +358,9 @@ func evaluateMetal(bundlePath string, opts Options) (*Result, error) {
 	var marks []uint64
 	if streamStats != nil && len(streamStats.Dispatches) > 0 {
 		for _, d := range streamStats.Dispatches {
+			// Match the display name, not the raw field: a dispatch with no
+			// function name is still nameable as its pipeline, and matching
+			// the empty field made it invisible to -k instead of unmatched.
 			if strings.Contains(d.FunctionName, invariant) {
 				// Use CumulativeUs converted to nanoseconds for stationarity
 				marks = append(marks, uint64(d.CumulativeUs)*1000)
@@ -593,6 +611,9 @@ func formatSummary(name string, r *Result) string {
 	var lines []string
 	lines = append(lines, fmt.Sprintf("%s: %s", name, r.Completeness.Reason))
 	lines = append(lines, fmt.Sprintf("%s: %s", name, r.Staging.Summary))
+	if r.Staging.StorageModeNotes != "" {
+		lines = append(lines, fmt.Sprintf("%s: storage: %s", name, r.Staging.StorageModeNotes))
+	}
 	lines = append(lines, fmt.Sprintf("%s: %s", name, r.Stationarity.Reason))
 	return strings.Join(lines, "\n")
 }

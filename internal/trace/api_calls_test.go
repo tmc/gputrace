@@ -261,7 +261,7 @@ func TestParseInitCalls_BufferFromHeap(t *testing.T) {
 	for _, call := range calls {
 		if call.Type == "newBuffer" && call.Address == 0x106da6190 {
 			foundBuffer = true
-			expected := "[0x106da56b0 newBufferWithLength:16 options:HazardTrackingModeUntracked]"
+			expected := "[0x106da56b0 newBufferWithLength:16 options:StorageModeShared]"
 			if call.Info != expected {
 				t.Errorf("Expected info %s, got %s", expected, call.Info)
 			}
@@ -1065,5 +1065,25 @@ func TestFormatAPICallList(t *testing.T) {
 
 	if !bytes.Contains(buf.Bytes(), []byte("dispatchThreads")) {
 		t.Error("Output missing dispatch call")
+	}
+}
+
+func TestFormatResourceOptions(t *testing.T) {
+	tests := []struct {
+		opts uint64
+		want string
+	}{
+		{0x0, "StorageModeShared"},
+		{0x20, "StorageModePrivate"},
+		{0x100, "StorageModeShared|HazardTrackingModeUntracked"},
+		{0x120, "StorageModePrivate|HazardTrackingModeUntracked"},
+		{0x200, "StorageModeShared|HazardTrackingModeTracked"},
+		{0x1, "StorageModeShared|CPUCacheModeWriteCombined"},
+		{0x30, "StorageModeMemoryless"},
+	}
+	for _, tt := range tests {
+		if got := FormatResourceOptions(tt.opts); got != tt.want {
+			t.Errorf("FormatResourceOptions(%#x) = %q, want %q", tt.opts, got, tt.want)
+		}
 	}
 }

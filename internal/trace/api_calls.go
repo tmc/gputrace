@@ -17,6 +17,78 @@ type InitCall struct {
 	Info       string `json:"info"`
 	Label      string `json:"label,omitempty"`
 	Offset     int64  `json:"offset"`
+	// ResourceOptions is the MTLResourceOptions value recorded at buffer
+	// creation. Meaningful only for Type "newBuffer" (0 is a valid value:
+	// shared storage, default cache and hazard tracking).
+	ResourceOptions uint64 `json:"resource_options,omitempty"`
+}
+
+// FormatResourceOptions renders an MTLResourceOptions bit set the way the
+// Metal headers name its components: storage mode (bits 4-7), CPU cache
+// mode (bits 0-3), hazard tracking mode (bits 8-11).
+func FormatResourceOptions(opts uint64) string {
+	var parts []string
+	switch (opts >> 4) & 0xf {
+	case 0:
+		parts = append(parts, "StorageModeShared")
+	case 1:
+		parts = append(parts, "StorageModeManaged")
+	case 2:
+		parts = append(parts, "StorageModePrivate")
+	case 3:
+		parts = append(parts, "StorageModeMemoryless")
+	default:
+		parts = append(parts, fmt.Sprintf("StorageMode(%d)", (opts>>4)&0xf))
+	}
+	if opts&0xf == 1 {
+		parts = append(parts, "CPUCacheModeWriteCombined")
+	}
+	switch (opts >> 8) & 0xf {
+	case 1:
+		parts = append(parts, "HazardTrackingModeUntracked")
+	case 2:
+		parts = append(parts, "HazardTrackingModeTracked")
+	}
+	return strings.Join(parts, "|")
+}
+
+// StorageModeName returns just the storage-mode component of an
+// MTLResourceOptions value: "shared", "managed", "private", or "memoryless".
+func StorageModeName(opts uint64) string {
+	switch (opts >> 4) & 0xf {
+	case 0:
+		return "shared"
+	case 1:
+		return "managed"
+	case 2:
+		return "private"
+	case 3:
+		return "memoryless"
+	}
+	return fmt.Sprintf("mode%d", (opts>>4)&0xf)
+}
+
+// BufferStorageModes counts buffer-creation records in the capture by
+// storage mode. An empty map means the capture holds no buffer-creation
+// records, which is distinct from recording zero buffers of some mode.
+func (t *Trace) BufferStorageModes() map[string]int {
+	counts := make(map[string]int)
+	data := t.CaptureData
+	marker := []byte("Culul")
+	offset := 0
+	for {
+		pos := bytes.Index(data[offset:], marker)
+		if pos == -1 {
+			break
+		}
+		absolutePos := offset + pos
+		if absolutePos+0x20 <= len(data) {
+			options := binary.LittleEndian.Uint64(data[absolutePos+0x18 : absolutePos+0x20])
+			counts[StorageModeName(options)]++
+		}
+		offset = absolutePos + 5
+	}
+	return counts
 }
 
 // FormattedAPICall represents a complete API call with all details.
@@ -287,11 +359,15 @@ func parseInitCalls(data []byte, startCallNum int, csRecords []FunctionRecord, l
 		}
 	}
 
-	// Find Culul records (buffer creation from heap)
+	// Find Culul records (buffer creation, from device or heap)
 	// Structure:
 	// +0x00: "Culul\x00\x00\x00"
 	// +0x08: heap/device address (8 bytes)
 	// +0x10: buffer length (8 bytes)
+	// +0x18: MTLResourceOptions (8 bytes) [V] — verified 2026-08-29 with a
+	//        controlled capture creating buffers at options 0x0, 0x20,
+	//        0x100, 0x120, 0x200; the field round-trips each value exactly
+	//        (docs/research/METAL_STORAGE_MODE_RECORDS.md)
 	// +0x24: buffer address (8 bytes)
 	// +0x80: "Cuw\x00" companion record
 	// +0x84: buffer address repeated by the companion record (8 bytes)
@@ -309,15 +385,17 @@ func parseInitCalls(data []byte, startCallNum int, csRecords []FunctionRecord, l
 		if absolutePos+0x2c <= len(data) {
 			heapAddr := binary.LittleEndian.Uint64(data[absolutePos+0x08 : absolutePos+0x10])
 			bufLen := binary.LittleEndian.Uint64(data[absolutePos+0x10 : absolutePos+0x18])
+			options := binary.LittleEndian.Uint64(data[absolutePos+0x18 : absolutePos+0x20])
 			bufAddr := binary.LittleEndian.Uint64(data[absolutePos+0x24 : absolutePos+0x2c])
 
-			// Buffer created from heap uses HazardTrackingModeUntracked option
 			calls = append(calls, InitCall{
-				CallNumber: callNum,
-				Type:       "newBuffer",
-				Address:    bufAddr,
-				Info:       fmt.Sprintf("[0x%x newBufferWithLength:%d options:HazardTrackingModeUntracked]", heapAddr, bufLen),
-				Offset:     int64(absolutePos),
+				CallNumber:      callNum,
+				Type:            "newBuffer",
+				Address:         bufAddr,
+				ResourceOptions: options,
+				Info: fmt.Sprintf("[0x%x newBufferWithLength:%d options:%s]",
+					heapAddr, bufLen, FormatResourceOptions(options)),
+				Offset: int64(absolutePos),
 			})
 
 			if heapOffset, ok := parseCululHeapOffset(data, absolutePos, bufAddr); ok {
