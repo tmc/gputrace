@@ -133,3 +133,70 @@ func TestPermissionDenied(t *testing.T) {
 		t.Error("PermissionDenied() fired on clean output")
 	}
 }
+
+// ncu reports a kernel with its return type and without its namespace,
+// while a capture carries the demangled symbol with the namespace and no
+// return type. Matching them is what tells "this kernel was measured" from
+// "this kernel was silently skipped".
+func TestSameKernelAcrossNcuAndCaptureSpelling(t *testing.T) {
+	tests := []struct {
+		name string
+		ncu  string
+		capt string
+		want bool
+	}{
+		{
+			name: "namespaced capture symbol vs ncu return-typed name",
+			ncu:  "void gemv_single<__nv_bfloat16, 8, 4>(const T1 *, const T1 *, T1 *, int, int)",
+			capt: "void mlx::core::cu::gemv_single<__nv_bfloat16, 8, 4>",
+			want: true,
+		},
+		{
+			name: "same base name, different template arguments still match",
+			ncu:  "void rms_norm_small<__nv_bfloat16, 16, 16, 8>(const T1 *)",
+			capt: "void mlx::core::cu::rms_norm_small<__nv_bfloat16, 128, 32, 8>",
+			want: true,
+		},
+		{
+			name: "different kernels do not match",
+			ncu:  "void gemv_single<__nv_bfloat16, 8, 4>(const T1 *)",
+			capt: "void mlx::core::cu::rms_norm_small<__nv_bfloat16, 16, 16, 8>",
+			want: false,
+		},
+		{
+			name: "bare names match",
+			ncu:  "gemv_single",
+			capt: "gemv_single",
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := SameKernel(tt.ncu, tt.capt); got != tt.want {
+				t.Errorf("SameKernel(%q, %q) = %v, want %v", tt.ncu, tt.capt, got, tt.want)
+			}
+		})
+	}
+}
+
+// One kernel per invocation: ncu's --launch-count is a budget over every
+// launch matching the filter, so asking for several names in one run spends
+// it all on whichever launches first.
+func TestCommandFiltersOneKernelAtATime(t *testing.T) {
+	cmd, err := Command(Options{Kernels: []string{"gemv_single"}, LaunchCount: 3, Path: "/usr/bin/true"}, []string{"prog"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pattern string
+	for i, a := range cmd.Args {
+		if a == "--kernel-name" && i+1 < len(cmd.Args) {
+			pattern = cmd.Args[i+1]
+		}
+	}
+	if pattern == "" {
+		t.Fatal("no --kernel-name filter in the command")
+	}
+	if strings.Contains(pattern, "|") {
+		t.Errorf("--kernel-name = %q, want a single kernel; a multi-kernel filter lets one crowd out the rest", pattern)
+	}
+}

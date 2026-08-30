@@ -94,51 +94,90 @@ func runNCU(cmd *cobra.Command, args []string, opts *ncuOptions) error {
 		}
 	}
 
-	ncuOpts := ncu.Options{
-		Kernels:     names,
-		LaunchCount: opts.launchCount,
-		Sudo:        opts.sudo,
-	}
-	if opts.metrics != "" {
-		ncuOpts.Metrics = strings.Split(opts.metrics, ",")
-	}
-	command, err := ncu.Command(ncuOpts, workload)
-	if err != nil {
-		return err
-	}
-
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "Escalating %d of %d kernels by GPU time:\n", top, len(rep.Kernels))
 	for _, k := range rep.Kernels[:top] {
 		fmt.Fprintf(out, "  %5.1f%%  %5dx  mean %-9s %s\n", k.SharePct, k.Count, dur(k.MeanNS), shortKernel(k.Name))
 	}
-	fmt.Fprintf(out, "\n%s\n\n", strings.Join(command.Args, " "))
+
+	// One ncu run per kernel. ncu's --launch-count is a budget over every
+	// launch that matches the name filter, not a budget per name, so a
+	// single run asking for several kernels spends the whole budget on
+	// whichever one launches first and silently returns nothing for the
+	// rest. That crowds out exactly the kernel worth escalating: the hot
+	// one is rarely the first to launch. Observed on an MLX decode, where
+	// --top 2 --launch-count 3 profiled three rms_norm_small launches and
+	// none of gemv_single, which was 86.6% of GPU time [V].
+	result := &ncu.Result{Schema: ncu.SchemaV1}
+	var runErr error
+	var profiled int
+	for _, name := range names {
+		ncuOpts := ncu.Options{
+			Kernels:     []string{name},
+			LaunchCount: opts.launchCount,
+			Sudo:        opts.sudo,
+		}
+		if opts.metrics != "" {
+			ncuOpts.Metrics = strings.Split(opts.metrics, ",")
+		}
+		command, err := ncu.Command(ncuOpts, workload)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "\n%s\n\n", strings.Join(command.Args, " "))
+		if opts.dryRun {
+			continue
+		}
+		// ncu writes its CSV table and its diagnostics to the same
+		// streams, so both are captured and the workload's own output is
+		// forwarded.
+		var buf bytes.Buffer
+		command.Stdout = io.MultiWriter(&buf, cmd.ErrOrStderr())
+		command.Stderr = io.MultiWriter(&buf, cmd.ErrOrStderr())
+		command.Stdin = cmd.InOrStdin()
+		if err := command.Run(); err != nil && runErr == nil {
+			runErr = err
+		}
+		if ncu.PermissionDenied(buf.String()) {
+			return fmt.Errorf("ncu: the driver refused GPU performance counters for this user (ERR_NVGPUCTRPERM)\n" +
+				"  re-run with --sudo, or lift the restriction permanently:\n" +
+				"    echo 'options nvidia NVreg_RestrictProfilingToAdminUsers=0' | sudo tee /etc/modprobe.d/nvidia-profiling.conf\n" +
+				"    sudo update-initramfs -u && sudo reboot")
+		}
+		one, parseErr := ncu.ParseCSV(&buf)
+		if parseErr != nil {
+			if runErr != nil {
+				return fmt.Errorf("ncu: %v (%w)", runErr, parseErr)
+			}
+			return parseErr
+		}
+		if len(one.Kernels) > 0 {
+			profiled++
+		}
+		result.Kernels = append(result.Kernels, one.Kernels...)
+		result.Command = append(result.Command, command.Args...)
+	}
 	if opts.dryRun {
 		return nil
 	}
-
-	// ncu writes its CSV table and its diagnostics to the same streams,
-	// so both are captured and the workload's own output is forwarded.
-	var buf bytes.Buffer
-	command.Stdout = io.MultiWriter(&buf, cmd.ErrOrStderr())
-	command.Stderr = io.MultiWriter(&buf, cmd.ErrOrStderr())
-	command.Stdin = cmd.InOrStdin()
-	runErr := command.Run()
-
-	if ncu.PermissionDenied(buf.String()) {
-		return fmt.Errorf("ncu: the driver refused GPU performance counters for this user (ERR_NVGPUCTRPERM)\n" +
-			"  re-run with --sudo, or lift the restriction permanently:\n" +
-			"    echo 'options nvidia NVreg_RestrictProfilingToAdminUsers=0' | sudo tee /etc/modprobe.d/nvidia-profiling.conf\n" +
-			"    sudo update-initramfs -u && sudo reboot")
-	}
-	result, parseErr := ncu.ParseCSV(&buf)
-	if parseErr != nil {
-		if runErr != nil {
-			return fmt.Errorf("ncu: %v (%w)", runErr, parseErr)
+	// A kernel the capture ranked but ncu never measured is reported, not
+	// omitted. Silence here reads as "this kernel is fine".
+	if profiled < len(names) {
+		fmt.Fprintf(out, "\nncu returned no counters for %d of the %d kernels requested:\n", len(names)-profiled, len(names))
+		for _, name := range names {
+			var got bool
+			for _, kc := range result.Kernels {
+				if ncu.SameKernel(kc.Kernel, name) {
+					got = true
+					break
+				}
+			}
+			if !got {
+				fmt.Fprintf(out, "  %s\n", shortKernel(name))
+			}
 		}
-		return parseErr
+		fmt.Fprintf(out, "  the workload may not have launched them before the replay budget ran out; raise --launch-count\n")
 	}
-	result.Command = command.Args
 
 	if opts.merge && cupticapture.IsBundle(capturePath) {
 		path := filepath.Join(capturePath, "ncu.json")

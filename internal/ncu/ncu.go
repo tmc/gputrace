@@ -19,16 +19,25 @@ import (
 )
 
 // DefaultMetrics are counters that exist on current parts and answer the
-// question analyze cannot: whether a kernel is actually using the machine.
+// question analyze cannot: whether a kernel is actually using the machine,
+// and whether it is waiting on memory.
 //
-// dram__throughput is deliberately absent: it reads n/a on unified-memory
-// parts such as GB10 [V], and asking for a metric that does not exist
-// collects nothing while looking like it collected something.
+// The dram__ counters are deliberately absent. They are not merely n/a on
+// GB10: the whole domain is missing from --query-metrics [V], because the
+// part has no separate device DRAM to instrument. Asking for one collects
+// nothing while looking like it collected something. What stands in for
+// them is the cache hierarchy plus compute_memory_throughput, all three of
+// which return real values here [V]; on a memory-bound kernel a low
+// lts__t_sector_hit_rate with low throughput is the signature of reading
+// something that does not live in device memory.
 var DefaultMetrics = []string{
 	"gpu__time_duration.sum",
 	"sm__throughput.avg.pct_of_peak_sustained_elapsed",
 	"sm__warps_active.avg.pct_of_peak_sustained_active",
 	"launch__occupancy_limit_registers",
+	"gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed",
+	"l1tex__t_sector_hit_rate.pct",
+	"lts__t_sector_hit_rate.pct",
 }
 
 // Options configures one escalation run.
@@ -65,6 +74,33 @@ func KernelNamePattern(names []string) string {
 
 // baseName strips template arguments and parameter lists so a C++ symbol
 // matches the base name ncu reports.
+// SameKernel reports whether an ncu-reported kernel name and a name taken
+// from a capture denote the same kernel. The two spell it differently: a
+// capture carries the demangled symbol with its namespace
+// (mlx::core::cu::gemv_single<__nv_bfloat16, 8, 4>), while ncu under
+// --kernel-name-base function reports it with the namespace stripped and a
+// return type and parameter list attached. Comparing the base names is what
+// makes them meet.
+func SameKernel(a, b string) bool {
+	return baseName(stripReturnType(a)) == baseName(stripReturnType(b))
+}
+
+// stripReturnType removes a leading return type, which ncu prints and a
+// demangled capture symbol does not.
+func stripReturnType(name string) string {
+	name = strings.TrimSpace(name)
+	if i := strings.IndexAny(name, "<("); i >= 0 {
+		if j := strings.LastIndex(name[:i], " "); j >= 0 {
+			return name[j+1:]
+		}
+		return name
+	}
+	if j := strings.LastIndex(name, " "); j >= 0 {
+		return name[j+1:]
+	}
+	return name
+}
+
 func baseName(name string) string {
 	if i := strings.IndexAny(name, "<("); i > 0 {
 		name = name[:i]
