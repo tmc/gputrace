@@ -75,16 +75,30 @@ type Options struct {
 // CompletenessResult reports whether the capture holds every record the
 // workload produced.
 type CompletenessResult struct {
-	Status              Verdict `json:"status"`
-	Evaluated           bool    `json:"evaluated"`
-	InvariantSymbol     string  `json:"invariant_symbol"`
-	MatchedCount        int     `json:"matched_count"`
-	ExpectedCount       int     `json:"expected_count,omitempty"`
-	Tokens              int     `json:"tokens,omitempty"`
-	PrefillTokens       int     `json:"prefill_tokens,omitempty"`
-	Slack               int     `json:"slack,omitempty"`
-	MissingCount        int     `json:"missing_count,omitempty"`
-	MissingPct          float64 `json:"missing_pct,omitempty"`
+	Status          Verdict `json:"status"`
+	Evaluated       bool    `json:"evaluated"`
+	InvariantSymbol string  `json:"invariant_symbol"`
+	MatchedCount    int     `json:"matched_count"`
+	ExpectedCount   int     `json:"expected_count,omitempty"`
+	Tokens          int     `json:"tokens,omitempty"`
+	PrefillTokens   int     `json:"prefill_tokens,omitempty"`
+	Slack           int     `json:"slack,omitempty"`
+	MissingCount    int     `json:"missing_count,omitempty"`
+	MissingPct      float64 `json:"missing_pct,omitempty"`
+	// ExcessCount is how far the match count runs past the expectation, and
+	// is always positive. A shortfall is MissingCount. The two were one
+	// signed field, which let an overshoot report itself as a negative
+	// shortfall inside a reason string that claimed a flush residual.
+	ExcessCount int `json:"excess_count,omitempty"`
+	// DispatchRatio is matched/expected on an overshoot.
+	//
+	// It is an observed dispatch-to-expected-mark ratio and nothing more. It
+	// is not a draft acceptance rate: the two coincide only if the invariant
+	// op fires exactly once per draft candidate, which is a property of the
+	// model rather than something a capture can establish. Naming it for the
+	// inference instead of the measurement would rebuild the defect this
+	// field exists to remove.
+	DispatchRatio       float64 `json:"dispatch_ratio,omitempty"`
 	DroppedRecords      int     `json:"dropped_records,omitempty"`
 	MissingGraphKernels int     `json:"missing_graph_kernels,omitempty"`
 	Reason              string  `json:"reason"`
@@ -432,6 +446,11 @@ func evaluateMetal(bundlePath string, opts Options) (*Result, error) {
 	return res, nil
 }
 
+// EvaluateCompleteness reports whether a capture holds the marks the invariant
+// predicts. The count can miss the expectation in either direction, and the two
+// directions mean different things: a shortfall is lost work, while an overshoot
+// is work the invariant did not predict. Only the shortfall is scored against
+// the flush-residual slack.
 func EvaluateCompleteness(name string, marks []uint64, invariant string, opts Options) CompletenessResult {
 	res := CompletenessResult{
 		InvariantSymbol: invariant,
@@ -473,6 +492,19 @@ func EvaluateCompleteness(name string, marks []uint64, invariant string, opts Op
 		} else {
 			res.Reason = fmt.Sprintf("completeness ok    %d/%d %s", matched, want, invariant)
 		}
+	case matched > want:
+		// Overshoot. Completeness asks whether records are missing, and none
+		// are, so this passes -- but it is not the count the invariant
+		// predicts and the reason has to say so rather than borrow the
+		// shortfall wording. Two things produce it and a capture cannot
+		// separate them: an op that legitimately fires more than once per
+		// token, as under speculative decoding, or an invariant symbol that
+		// matches more than the caller meant.
+		res.Status = VerdictPass
+		res.ExcessCount = matched - want
+		res.DispatchRatio = float64(matched) / float64(want)
+		res.Reason = fmt.Sprintf("completeness ok    %d/%d %s (+%d over expected, %.2fx; overshoot, not a shortfall)",
+			matched, want, invariant, res.ExcessCount, res.DispatchRatio)
 	case matched >= want-opts.Slack:
 		res.Status = VerdictPass
 		res.MissingCount = want - matched

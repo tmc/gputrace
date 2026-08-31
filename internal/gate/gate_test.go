@@ -2,6 +2,7 @@ package gate
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -56,6 +57,13 @@ func TestEvaluateCompleteness(t *testing.T) {
 			exact:      true,
 			wantStatus: VerdictPass,
 		},
+		{
+			name:       "overshoot passes",
+			marksCount: 250,
+			tokens:     100,
+			slack:      2,
+			wantStatus: VerdictPass,
+		},
 	}
 
 	for _, tt := range tests {
@@ -71,6 +79,64 @@ func TestEvaluateCompleteness(t *testing.T) {
 				t.Errorf("EvaluateCompleteness() status = %v, want %v (reason: %s)", res.Status, tt.wantStatus, res.Reason)
 			}
 		})
+	}
+}
+
+// An overshoot passed before the count was split in two, so a status-only
+// assertion cannot see this defect. What was wrong was the arithmetic and the
+// reason: 250 marks against 101 expected reported "-149 missing, within flush
+// residual of 2", which is a shortfall claim, a negative count, and a slack
+// comparison the overshoot never underwent.
+func TestEvaluateCompletenessOvershoot(t *testing.T) {
+	marks := make([]uint64, 250)
+	for i := range marks {
+		marks[i] = uint64(i) * 1000
+	}
+	res := EvaluateCompleteness("test", marks, "arg_reduce", Options{Tokens: 100, Slack: 2})
+
+	if res.Status != VerdictPass {
+		t.Errorf("status = %v, want %v", res.Status, VerdictPass)
+	}
+	if res.MissingCount < 0 {
+		t.Errorf("MissingCount = %d, must never be negative", res.MissingCount)
+	}
+	if res.MissingCount != 0 {
+		t.Errorf("MissingCount = %d, want 0: nothing is missing on an overshoot", res.MissingCount)
+	}
+	if want := 149; res.ExcessCount != want {
+		t.Errorf("ExcessCount = %d, want %d", res.ExcessCount, want)
+	}
+	if got, want := res.DispatchRatio, 250.0/101.0; got != want {
+		t.Errorf("DispatchRatio = %v, want %v", got, want)
+	}
+	if strings.Contains(res.Reason, "flush residual") {
+		t.Errorf("overshoot reason borrows the shortfall wording: %s", res.Reason)
+	}
+	if !strings.Contains(res.Reason, "overshoot") {
+		t.Errorf("overshoot reason does not say it is one: %s", res.Reason)
+	}
+}
+
+// A shortfall inside the slack keeps reporting a positive missing count, so
+// splitting the overshoot out must not disturb the direction that was correct.
+func TestEvaluateCompletenessShortfallStillReportsMissing(t *testing.T) {
+	marks := make([]uint64, 127)
+	for i := range marks {
+		marks[i] = uint64(i) * 1000
+	}
+	res := EvaluateCompleteness("test", marks, "arg_reduce", Options{Tokens: 128, Slack: 2})
+
+	if res.Status != VerdictPass {
+		t.Errorf("status = %v, want %v", res.Status, VerdictPass)
+	}
+	if want := 2; res.MissingCount != want {
+		t.Errorf("MissingCount = %d, want %d", res.MissingCount, want)
+	}
+	if res.ExcessCount != 0 {
+		t.Errorf("ExcessCount = %d, want 0 on a shortfall", res.ExcessCount)
+	}
+	if res.DispatchRatio != 0 {
+		t.Errorf("DispatchRatio = %v, want 0 on a shortfall", res.DispatchRatio)
 	}
 }
 
