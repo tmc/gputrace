@@ -10,8 +10,8 @@ import (
 )
 
 // printSpanTable renders the per-span setup/launch/GPU/tail decomposition.
-// Every row names its provenance: values from API records are [V] (measured
-// host-side), device-fallback rows are [D] (derived, lower confidence).
+// Every row names its provenance: a pre-span API is shown separately from
+// setup, because its launch work cannot be assigned to either adjacent span.
 func printSpanTable(cmd *cobra.Command, cap gpuevent.Capture, asJSON bool) error {
 	spans := gpuevent.AttributeSpans(cap)
 	decomp := gpuevent.Decompositions(spans, cap.APIs)
@@ -30,15 +30,19 @@ func printSpanTable(cmd *cobra.Command, cap gpuevent.Capture, asJSON bool) error
 	}
 
 	w := tabwriter.NewWriter(out, 2, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "SPAN\tEVAL\tSETUP\tSRC\tLAUNCH LAT\tGPU TIME\tTAIL\tKERNELS\tCONF")
+	fmt.Fprintln(w, "SPAN\tEVAL\tSETUP\tSRC\tPRE-SPAN API [V]\tLAUNCH LAT\tGPU TIME\tTAIL\tKERNELS\tCONF")
 	for _, d := range decomp {
-		src := "[V]"
-		if d.SetupSource != "api" {
-			src = "[D]"
+		src := "[D] " + d.SetupSource + " fallback"
+		if d.SetupSource == "api" {
+			src = "[V] " + d.SetupSource
 		}
-		fmt.Fprintf(w, "%s\t%d\t%s\t%s %s\t%s\t%s\t%s\t%d\t%s\n",
+		preSpan := "-"
+		if d.PreSpanAPINS > 0 {
+			preSpan = dur(d.PreSpanAPINS)
+		}
+		fmt.Fprintf(w, "%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\n",
 			d.SpanName, d.EvalSeq,
-			dur(d.SetupNS), src, "setup",
+			dur(d.SetupNS), src, preSpan,
 			dur(uint64(max64(d.LaunchLatencyNS, 0))),
 			dur(d.GPUTimeNS), dur(d.TailNS),
 			d.KernelCount, d.Confidence)

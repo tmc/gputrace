@@ -131,9 +131,13 @@ func (s Span) coversStream(streamID uint32) bool {
 // timestamps. Every field names its source records so provenance is
 // checkable rather than asserted:
 //
-//	SetupNS [D]: first launch-API record start − span start. Lower
-//	  confidence when no API records exist; falls back to first kernel
-//	  device start − span start with Confidence "device-fallback".
+//	SetupNS [D]: first launch-API record start − span start when that API
+//	  begins inside the span. Otherwise it falls back to first kernel device
+//	  start − span start. SetupSource names whether the fallback had no API,
+//	  a pre-span API, or an API ordered after the kernel.
+//	PreSpanAPINS [V]: span start − matching API record start when the API
+//	  begins before the span. It observes launch-ahead pipelining without
+//	  assigning that work to either neighboring span.
 //	LaunchLatencyNS [D]: first kernel device start − its API record end
 //	  (submission-to-device latency). Zero-meaningful only with API records.
 //	GPUTimeNS [V]: sum of attributed kernel durations (measured).
@@ -145,13 +149,16 @@ type SpanDecomposition struct {
 	SpanName        string `json:"span_name"`
 	EvalSeq         uint64 `json:"eval_seq,omitempty"`
 	SetupNS         uint64 `json:"setup_ns"`
-	SetupSource     string `json:"setup_source"` // "api" | "device-fallback"
+	SetupSource     string `json:"setup_source"` // "api" | "no-api" | "pre-span-api" | "post-kernel-api"
+	PreSpanAPINS    uint64 `json:"pre_span_api_ns,omitempty"`
 	LaunchLatencyNS int64  `json:"launch_latency_ns"`
-	HasLaunchAPI    bool   `json:"has_launch_api"`
-	GPUTimeNS       uint64 `json:"gpu_time_ns"`
-	TailNS          uint64 `json:"tail_ns"`
-	KernelCount     int    `json:"kernel_count"`
-	Confidence      string `json:"confidence"`
+	// HasLaunchAPI reports a matching API record in usable in-span order.
+	// A pre-span or post-kernel record is named by SetupSource instead.
+	HasLaunchAPI bool   `json:"has_launch_api"`
+	GPUTimeNS    uint64 `json:"gpu_time_ns"`
+	TailNS       uint64 `json:"tail_ns"`
+	KernelCount  int    `json:"kernel_count"`
+	Confidence   string `json:"confidence"`
 }
 
 // Decompose computes the per-span breakdown for one attributed span. apiByCorrelation
@@ -171,14 +178,23 @@ func (s *AttributedSpan) Decompose(apiByCorrelation map[uint64]APIEvent) SpanDec
 	last := s.Kernels[len(s.Kernels)-1]
 
 	out.Confidence = "derived"
-	if api, ok := apiByCorrelation[first.CorrelationID]; ok && api.StartNS >= s.StartNS && api.StartNS <= first.StartNS {
+	api, ok := apiByCorrelation[first.CorrelationID]
+	switch {
+	case !ok:
+		out.SetupSource = "no-api"
+	case api.StartNS < s.StartNS:
+		out.SetupSource = "pre-span-api"
+		out.PreSpanAPINS = s.StartNS - api.StartNS
+	case api.StartNS > first.StartNS || api.EndNS > first.StartNS:
+		out.SetupSource = "post-kernel-api"
+	default:
 		out.SetupNS = api.StartNS - s.StartNS
 		out.SetupSource = "api"
 		out.HasLaunchAPI = true
 		out.LaunchLatencyNS = int64(first.StartNS - api.EndNS)
-	} else {
+	}
+	if out.SetupSource != "api" {
 		out.SetupNS = first.StartNS - s.StartNS
-		out.SetupSource = "device-fallback"
 	}
 	for _, k := range s.Kernels {
 		out.GPUTimeNS += k.DurationNS()

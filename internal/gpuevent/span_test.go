@@ -161,3 +161,56 @@ func TestUnixClockSpanWithoutSyncStaysUntranslated(t *testing.T) {
 		t.Fatalf("span mutated without clock_sync: [%d,%d] clock=%q", s.StartNS, s.EndNS, s.Clock)
 	}
 }
+
+func TestSpanDecomposeLaunchAPIProvenance(t *testing.T) {
+	span := AttributedSpan{
+		Span: Span{Name: "token", StartNS: 100, EndNS: 400},
+		Kernels: []AttributedKernel{{Event: Event{
+			Kind: KindKernel, StartNS: 200, EndNS: 300, CorrelationID: 7,
+		}}},
+	}
+	tests := []struct {
+		name        string
+		apis        map[uint64]APIEvent
+		wantSource  string
+		wantSetup   uint64
+		wantPreSpan uint64
+		wantHasAPI  bool
+		wantLatency int64
+	}{
+		{
+			name:       "no api",
+			wantSource: "no-api",
+			wantSetup:  100,
+		},
+		{
+			name:        "pre span api",
+			apis:        map[uint64]APIEvent{7: {StartNS: 25, EndNS: 50, CorrelationID: 7}},
+			wantSource:  "pre-span-api",
+			wantSetup:   100,
+			wantPreSpan: 75,
+		},
+		{
+			name:        "in span api",
+			apis:        map[uint64]APIEvent{7: {StartNS: 125, EndNS: 150, CorrelationID: 7}},
+			wantSource:  "api",
+			wantSetup:   25,
+			wantHasAPI:  true,
+			wantLatency: 50,
+		},
+		{
+			name:       "post kernel api",
+			apis:       map[uint64]APIEvent{7: {StartNS: 225, EndNS: 250, CorrelationID: 7}},
+			wantSource: "post-kernel-api",
+			wantSetup:  100,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := span.Decompose(test.apis)
+			if got.SetupSource != test.wantSource || got.SetupNS != test.wantSetup || got.PreSpanAPINS != test.wantPreSpan || got.HasLaunchAPI != test.wantHasAPI || got.LaunchLatencyNS != test.wantLatency {
+				t.Fatalf("Decompose = %+v", got)
+			}
+		})
+	}
+}
