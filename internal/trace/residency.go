@@ -45,6 +45,15 @@ type ResidencyReport struct {
 	// Storage is the per-mode footprint, largest first.
 	Storage []StorageFootprint `json:"storage"`
 	// Buffers and Bytes are the totals across every mode.
+	//
+	// Buffers counts buffer-creation records, not distinct buffer resources.
+	// A program that creates and releases a transient buffer in a loop
+	// contributes one record per creation. "gputrace buffers" counts the other
+	// population, distinct resources plus their aliases, and reports 204 where
+	// this reports 3180 on the same capture. Both are right about different
+	// questions, and the byte totals reconcile (1.11 GB against 1.2 GB), but
+	// the two commands say "buffers" and mean different things, so each says
+	// which one it means.
 	Buffers int    `json:"buffers"`
 	Bytes   uint64 `json:"bytes"`
 
@@ -56,14 +65,19 @@ type ResidencyReport struct {
 	// much they held.
 	Unsized int `json:"unsized"`
 
-	// Scanned is a second, independent count of buffer records per storage
-	// mode, from BufferStorageModes rather than from the record decoder.
+	// Scanned is a second count of buffer records per storage mode, from
+	// BufferStorageModes rather than from the record decoder.
 	//
-	// Two scanners are kept deliberately. The bug this field exists to catch
-	// was a single confident number carrying a disclaimer that pointed away
-	// from its actual error, and no amount of care in one decoder would have
-	// surfaced it. Disagreement between two is reported rather than resolved,
-	// because which one is right is exactly what is not known at that moment.
+	// Disagreement is reported rather than resolved, because which one is
+	// right is exactly what is not known at that moment.
+	//
+	// Both scanners read the same Culul records, so they are correlated: they
+	// catch a decoder that mis-walks the stream, and they cannot catch an
+	// error in what the record population means. That is a real limit and it
+	// is where the previous bug lived. The uncorrelated check is "gputrace
+	// buffers", which reads the device-resources directory instead and counts
+	// distinct resources: 204 there against 3180 records here on one capture,
+	// a 10x gap that is expected rather than wrong. See Buffers below.
 	Scanned map[string]int `json:"scanned,omitempty"`
 }
 

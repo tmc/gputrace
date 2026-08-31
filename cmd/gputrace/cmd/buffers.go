@@ -603,6 +603,11 @@ func formatBuffersTable(w io.Writer, buffers []BufferInfo, trace *gputrace.Trace
 		fmt.Fprintf(w, ", %d %s", totalAliases, Pluralize(totalAliases, "alias", "aliases"))
 	}
 	fmt.Fprintln(w)
+	// "gputrace residency" also prints a buffer count, from creation records
+	// rather than from distinct resources, and is roughly 10x larger on the
+	// same capture with reconciling bytes. Both are right about different
+	// populations; the word "buffers" is what collides.
+	fmt.Fprintln(w, "(distinct resources; \"gputrace residency\" counts creation records instead)")
 	fmt.Fprintln(w)
 
 	// Print table header

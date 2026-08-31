@@ -72,7 +72,7 @@ func writeResidencyReport(w io.Writer, r *trace.ResidencyReport) {
 	if len(r.Storage) == 0 {
 		fmt.Fprintln(w, "  (no buffer-creation records in this capture)")
 	} else {
-		fmt.Fprintf(w, "  %-12s %8s %12s\n", "mode", "buffers", "bytes")
+		fmt.Fprintf(w, "  %-12s %8s %12s\n", "mode", "records", "bytes")
 		for _, f := range r.Storage {
 			fmt.Fprintf(w, "  %-12s %8d %12s\n", f.Mode, f.Buffers, fmtutil.FormatBytes(int64(f.Bytes), 1))
 		}
@@ -121,6 +121,12 @@ func writeResidencyReport(w io.Writer, r *trace.ResidencyReport) {
 	fmt.Fprintln(w, "  shapes it knows; a shape it does not know is absent, not counted.")
 	fmt.Fprintln(w, "  Residency-set membership is not decoded, so there is no wired-bytes figure")
 	fmt.Fprintln(w, "  separate from the allocated one.")
+	fmt.Fprintln(w, "  The counts above are buffer-creation RECORDS, not distinct buffer resources.")
+	fmt.Fprintln(w, "  \"gputrace buffers\" counts resources and their aliases instead, and reports a")
+	fmt.Fprintln(w, "  number roughly 10x smaller with reconciling bytes. Neither is wrong; they")
+	fmt.Fprintln(w, "  answer different questions under the same word. The cross-check above shares")
+	fmt.Fprintln(w, "  this command's record scan, so it catches a mis-walked stream and not a")
+	fmt.Fprintln(w, "  misread of what the records represent.")
 	if r.Unsized > 0 {
 		fmt.Fprintf(w, "  %d buffer record(s) carried a zero length, which Metal does not create;\n", r.Unsized)
 		fmt.Fprintln(w, "  the byte totals understate by whatever those held.")
