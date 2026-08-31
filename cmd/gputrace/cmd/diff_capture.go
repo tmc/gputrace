@@ -119,16 +119,29 @@ func writeCaptureDiff(out io.Writer, c *gpuevent.CaptureComparison, base, varian
 		case "variant":
 			mark = "+ "
 		}
-		fmt.Fprintf(out, "%s%9s  %5d->%-5d  %9s -> %-9s  %5s -> %-5s  %s\n",
+		mean := fmt.Sprintf("%9s -> %-9s", dur(d.BaseMeanNS), dur(d.VariantMeanNS))
+		if d.Heterogeneous() {
+			// The mean is an average over launch geometries that are not
+			// comparable. Withhold it rather than print a number the reader
+			// would have no reason to distrust.
+			mean = fmt.Sprintf("%-22s", fmt.Sprintf("(%d shapes)", d.ShapeCount))
+		}
+		fmt.Fprintf(out, "%s%9s  %5d->%-5d  %s  %5s -> %-5s  %s\n",
 			mark, signedDur(d.TotalDeltaNS),
 			d.BaseCount, d.VariantCount,
-			dur(d.BaseMeanNS), dur(d.VariantMeanNS),
+			mean,
 			occupancyOrDash(d.BaseOccupancy), occupancyOrDash(d.VarOccupancy),
 			shortKernel(d.Name))
 	}
 	if n := len(c.KernelDeltas) - len(rows); n > 0 {
 		fmt.Fprintf(out, "  ... %d more (raise --limit)\n", n)
 	}
+	if n := len(c.HeterogeneousKernels); n > 0 {
+		fmt.Fprintf(out, "\n%d kernel%s launched at more than one geometry; those means are\n"+
+			"withheld above because a mean across geometries describes no launch that\n"+
+			"occurred. Per-geometry rows follow.\n", n, plural(n))
+	}
+	writeShapeDeltas(out, c, limit)
 	if len(c.OnlyInBase) > 0 {
 		fmt.Fprintf(out, "\nOnly in base (%d): %s\n", len(c.OnlyInBase), joinShort(c.OnlyInBase, 3))
 	}
@@ -169,4 +182,54 @@ func joinShort(names []string, max int) string {
 		out += fmt.Sprintf(", and %d more", len(names)-len(shown))
 	}
 	return out
+}
+
+// writeShapeDeltas prints the comparison keyed on launch geometry. This is
+// the table to read when asking whether a kernel got slower: every row is a
+// single population on each side, and blocks-per-launch is printed beside
+// the duration because it, not duration, distinguishes a launch that fills
+// the device from one that leaves it idle.
+func writeShapeDeltas(out io.Writer, c *gpuevent.CaptureComparison, limit int) {
+	rows := c.ShapeDeltas
+	if len(rows) == 0 {
+		return
+	}
+	if limit > 0 && len(rows) > limit {
+		rows = rows[:limit]
+	}
+	fmt.Fprintf(out, "\nPer-launch-geometry deltas (by GPU time moved):\n")
+	fmt.Fprintf(out, "  %9s  %8s  %-12s  %-22s  %s\n", "TOTAL Δ", "BLOCKS", "COUNT", "MEAN", "KERNEL / GRID / BLOCK")
+	for _, d := range rows {
+		mark := "  "
+		switch d.OnlyIn {
+		case "base":
+			mark = "- "
+		case "variant":
+			mark = "+ "
+		}
+		// An unequal launch count means the totals differ partly because the
+		// work differs. Mark it so the total column is not read as a speed
+		// statement.
+		count := fmt.Sprintf("%5d->%-5d", d.BaseCount, d.VariantCount)
+		if !d.CountsMatch && d.OnlyIn == "" {
+			count = fmt.Sprintf("%5d->%-5d!", d.BaseCount, d.VariantCount)
+		}
+		fmt.Fprintf(out, "%s%9s  %8s  %-12s  %9s -> %-9s  %s %s/%s\n",
+			mark, signedDur(d.TotalDeltaNS),
+			blocksOrDash(d.Blocks),
+			count,
+			dur(d.BaseMeanNS), dur(d.VariantMeanNS),
+			shortKernel(d.Name), d.Grid, d.Block)
+	}
+	if n := len(c.ShapeDeltas) - len(rows); n > 0 {
+		fmt.Fprintf(out, "  ... %d more (raise --limit)\n", n)
+	}
+	fmt.Fprintf(out, "  ! = launch counts differ, so the total mixes per-launch cost with work done\n")
+}
+
+func blocksOrDash(n uint64) string {
+	if n == 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%d", n)
 }

@@ -33,6 +33,41 @@ type KernelDelta struct {
 	BaseOccupancy  float64 `json:"base_occupancy_pct"`    // [H] theoretical, from launch geometry
 	VarOccupancy   float64 `json:"variant_occupancy_pct"` // [H]
 	OnlyIn         string  `json:"only_in,omitempty"`     // "base" | "variant"
+	// ShapeCount is how many distinct launch geometries this symbol was
+	// launched at, taking the larger of the two sides. Above one, the mean
+	// columns average populations that are not comparable and DeltaPct is
+	// not a per-launch fact about any launch that happened. Read ShapeDeltas
+	// instead.
+	ShapeCount int `json:"shape_count,omitempty"`
+}
+
+// Heterogeneous reports whether this symbol spans more than one launch
+// geometry, which makes its mean-to-mean delta uninterpretable as a
+// per-launch statement.
+func (d KernelDelta) Heterogeneous() bool { return d.ShapeCount > 1 }
+
+// LaunchShapeDelta is the difference between two captures at one launch
+// geometry. Unlike KernelDelta it is always a single population on each
+// side, so its mean-to-mean delta is a statement about a launch that
+// actually occurred.
+type LaunchShapeDelta struct {
+	LaunchKey
+	BaseCount      int     `json:"base_count"`
+	VariantCount   int     `json:"variant_count"`
+	BaseMeanNS     uint64  `json:"base_mean_ns"`
+	VariantMeanNS  uint64  `json:"variant_mean_ns"`
+	BaseP50NS      uint64  `json:"base_p50_ns"`
+	VariantP50NS   uint64  `json:"variant_p50_ns"`
+	BaseTotalNS    uint64  `json:"base_total_ns"`
+	VariantTotalNS uint64  `json:"variant_total_ns"`
+	DeltaPct       float64 `json:"delta_pct"`      // mean-to-mean; negative = faster
+	TotalDeltaNS   int64   `json:"total_delta_ns"` // variant total - base total
+	Blocks         uint64  `json:"blocks"`         // grid block count, 0 = unknown
+	// CountsMatch is true when both sides launched this geometry the same
+	// number of times. When false the totals differ partly because the work
+	// differs, so only the means compare like for like.
+	CountsMatch bool   `json:"counts_match"`
+	OnlyIn      string `json:"only_in,omitempty"` // "base" | "variant"
 }
 
 // UtilizationDelta compares the busy/idle budget of two captures. It is
@@ -66,6 +101,14 @@ type CaptureComparison struct {
 	// a table sorted by delta.
 	OnlyInBase    []string `json:"only_in_base,omitempty"`
 	OnlyInVariant []string `json:"only_in_variant,omitempty"`
+	// ShapeDeltas is the same comparison keyed on the full launch geometry
+	// rather than the symbol. It is the only one of the two whose mean
+	// columns compare a single population on each side.
+	ShapeDeltas []LaunchShapeDelta `json:"shape_deltas,omitempty"`
+	// HeterogeneousKernels names the symbols launched at more than one
+	// geometry, whose KernelDeltas rows therefore average populations that
+	// are not comparable.
+	HeterogeneousKernels []string `json:"heterogeneous_kernels,omitempty"`
 }
 
 // CompareCaptures diffs two capture reports kernel by kernel, ordered by
@@ -116,6 +159,20 @@ func CompareCaptures(base, variant *Report) *CaptureComparison {
 	for _, k := range variant.Kernels {
 		variantBy[k.Name] = k
 	}
+	// A symbol's per-launch mean is only interpretable if it was launched at
+	// one geometry. Count the geometries on each side and keep the larger:
+	// a symbol that is single-shape in one capture and multi-shape in the
+	// other still cannot be compared mean to mean.
+	shapeCount := map[string]int{}
+	for name, n := range ShapeCountsByName(base.LaunchShapes) {
+		shapeCount[name] = n
+	}
+	for name, n := range ShapeCountsByName(variant.LaunchShapes) {
+		if n > shapeCount[name] {
+			shapeCount[name] = n
+		}
+	}
+
 	names := make([]string, 0, len(baseBy)+len(variantBy))
 	for n := range baseBy {
 		names = append(names, n)
@@ -156,6 +213,9 @@ func CompareCaptures(base, variant *Report) *CaptureComparison {
 		} else {
 			d.DeltaPct = 100 // vanished
 		}
+		if n := shapeCount[n]; n > 1 {
+			d.ShapeCount = n
+		}
 		c.KernelDeltas = append(c.KernelDeltas, d)
 	}
 	sort.Slice(c.KernelDeltas, func(i, j int) bool {
@@ -165,6 +225,14 @@ func CompareCaptures(base, variant *Report) *CaptureComparison {
 		}
 		return c.KernelDeltas[i].Name < c.KernelDeltas[j].Name
 	})
+	c.ShapeDeltas = compareLaunchShapes(base.LaunchShapes, variant.LaunchShapes)
+	for name, n := range shapeCount {
+		if n > 1 {
+			c.HeterogeneousKernels = append(c.HeterogeneousKernels, name)
+		}
+	}
+	sort.Strings(c.HeterogeneousKernels)
+
 	c.Utilization = UtilizationDelta{
 		BaseOccupancyPct:    base.Utilization.OccupancyPct,
 		VariantOccupancyPct: variant.Utilization.OccupancyPct,
@@ -260,4 +328,83 @@ func verdictFor(c *CaptureComparison) (CaptureVerdict, string) {
 	default:
 		return CaptureUnchanged, fmt.Sprintf("no kernel moved beyond %.0f%%", threshold)
 	}
+}
+
+// compareLaunchShapes diffs two captures at the level of the launch key, so
+// each row's mean columns describe one population on each side.
+//
+// Rows are ordered by GPU time moved. A row whose counts differ between the
+// arms is still reported -- the work itself differing is a finding -- but it
+// is marked, because its total delta then mixes "each launch is slower" with
+// "there are more launches", and only the mean separates them.
+func compareLaunchShapes(base, variant []LaunchShapeStats) []LaunchShapeDelta {
+	baseBy := map[LaunchKey]LaunchShapeStats{}
+	for _, s := range base {
+		baseBy[s.LaunchKey] = s
+	}
+	variantBy := map[LaunchKey]LaunchShapeStats{}
+	for _, s := range variant {
+		variantBy[s.LaunchKey] = s
+	}
+	keys := make([]LaunchKey, 0, len(baseBy)+len(variantBy))
+	for k := range baseBy {
+		keys = append(keys, k)
+	}
+	for k := range variantBy {
+		if _, ok := baseBy[k]; !ok {
+			keys = append(keys, k)
+		}
+	}
+	out := make([]LaunchShapeDelta, 0, len(keys))
+	for _, k := range keys {
+		b, v := baseBy[k], variantBy[k]
+		blocks := b.Blocks
+		if blocks == 0 {
+			blocks = v.Blocks
+		}
+		d := LaunchShapeDelta{
+			LaunchKey:      k,
+			BaseCount:      b.Count,
+			VariantCount:   v.Count,
+			BaseMeanNS:     b.MeanNS,
+			VariantMeanNS:  v.MeanNS,
+			BaseP50NS:      b.P50NS,
+			VariantP50NS:   v.P50NS,
+			BaseTotalNS:    b.TotalNS,
+			VariantTotalNS: v.TotalNS,
+			TotalDeltaNS:   int64(v.TotalNS) - int64(b.TotalNS),
+			Blocks:         blocks,
+			CountsMatch:    b.Count == v.Count && b.Count > 0,
+		}
+		switch {
+		case b.Count == 0:
+			d.OnlyIn = "variant"
+		case v.Count == 0:
+			d.OnlyIn = "base"
+		}
+		switch {
+		case b.MeanNS > 0 && v.MeanNS > 0:
+			d.DeltaPct = pct(v.MeanNS, b.MeanNS)
+		case b.MeanNS == 0:
+			d.DeltaPct = -100
+		default:
+			d.DeltaPct = 100
+		}
+		out = append(out, d)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		ai, aj := abs64(out[i].TotalDeltaNS), abs64(out[j].TotalDeltaNS)
+		if ai != aj {
+			return ai > aj
+		}
+		return out[i].LaunchKey.String() < out[j].LaunchKey.String()
+	})
+	return out
+}
+
+func abs64(v int64) int64 {
+	if v < 0 {
+		return -v
+	}
+	return v
 }

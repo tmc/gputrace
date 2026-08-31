@@ -77,19 +77,24 @@ type Finding struct {
 
 // Report is the analysis of one capture.
 type Report struct {
-	Kernels        []KernelStats   `json:"kernels"`
-	Findings       []Finding       `json:"findings"`
-	TotalKernelNS  uint64          `json:"total_kernel_ns"`
-	KernelLaunches int             `json:"kernel_launches"`
-	MemcpyCount    int             `json:"memcpy_count"`
-	MemsetCount    int             `json:"memset_count"`
-	MemcpyNS       uint64          `json:"memcpy_ns"`
-	PageableNS     uint64          `json:"pageable_ns,omitempty"` // memcpy time touching pageable memory [V]
-	SpanNS         uint64          `json:"span_ns"`               // first start to last end
-	LaunchOverhead *LaunchOverhead `json:"launch_overhead,omitempty"`
-	Utilization    Utilization     `json:"utilization"`
-	LaunchLatency  *LaunchLatency  `json:"launch_latency,omitempty"`
-	Graphs         *GraphAnalysis  `json:"graphs,omitempty"`
+	Kernels []KernelStats `json:"kernels"`
+	// LaunchShapes is Kernels regrouped by full launch geometry. Kernels
+	// answers "where did the time go"; LaunchShapes is what a cross-capture
+	// comparison must use, because a symbol launched at several geometries
+	// has no single per-launch mean.
+	LaunchShapes   []LaunchShapeStats `json:"launch_shapes,omitempty"`
+	Findings       []Finding          `json:"findings"`
+	TotalKernelNS  uint64             `json:"total_kernel_ns"`
+	KernelLaunches int                `json:"kernel_launches"`
+	MemcpyCount    int                `json:"memcpy_count"`
+	MemsetCount    int                `json:"memset_count"`
+	MemcpyNS       uint64             `json:"memcpy_ns"`
+	PageableNS     uint64             `json:"pageable_ns,omitempty"` // memcpy time touching pageable memory [V]
+	SpanNS         uint64             `json:"span_ns"`               // first start to last end
+	LaunchOverhead *LaunchOverhead    `json:"launch_overhead,omitempty"`
+	Utilization    Utilization        `json:"utilization"`
+	LaunchLatency  *LaunchLatency     `json:"launch_latency,omitempty"`
+	Graphs         *GraphAnalysis     `json:"graphs,omitempty"`
 	// Completeness says whether the capture behind this report kept
 	// every record the run produced. Analyze does not fill it in — only
 	// whoever decoded the capture can — and everything else here is
@@ -148,6 +153,7 @@ func Analyze(events []Event, _ []Sample) *Report {
 	sort.Slice(rep.Kernels, func(i, j int) bool {
 		return rep.Kernels[i].TotalNS > rep.Kernels[j].TotalNS
 	})
+	rep.LaunchShapes = AnalyzeLaunchShapes(events)
 	rep.Utilization = UtilizationOf(events)
 	rep.LaunchLatency = LaunchLatencyAnalysis(events)
 	if g := AnalyzeGraphs(events); len(g.Graphs) > 0 {
