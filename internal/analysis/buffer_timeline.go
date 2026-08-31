@@ -25,7 +25,7 @@ type BufferTimelineAnalysis struct {
 	MaxRecordIndex int
 
 	ExpectedEncoders    int
-	AttributedEncoders  int
+	AttributedGroups    int
 	AttributionComplete bool
 	AttributionNote     string
 }
@@ -138,14 +138,14 @@ func ExtractBufferTimeline(t *trace.Trace) (*BufferTimelineAnalysis, error) {
 			encoderIDs[id] = struct{}{}
 		}
 	}
-	analysis.AttributedEncoders = len(encoderIDs)
+	analysis.AttributedGroups = len(encoderIDs)
 	// This decoder currently observes structured Ct bindings only. Cul and
 	// other resource records are not decoded, so matching bucket counts alone
 	// cannot prove complete attribution.
 	analysis.AttributionComplete = false
 	analysis.AttributionNote = fmt.Sprintf(
 		"attributed encoder buckets: %d; trace-reported compute encoders: %d; Cul and other resource records are not attributed",
-		analysis.AttributedEncoders, analysis.ExpectedEncoders)
+		analysis.AttributedGroups, analysis.ExpectedEncoders)
 
 	return analysis, nil
 }

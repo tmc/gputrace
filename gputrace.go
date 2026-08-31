@@ -43,7 +43,7 @@ type (
 	// Buffer access analysis types (gputrace-93)
 	BufferAccessAnalysis = analysis.BufferAccessAnalysis
 	BufferAccessInfo     = analysis.BufferAccessInfo
-	EncoderAccessInfo    = analysis.EncoderAccessInfo
+	BindingGroupInfo     = analysis.BindingGroupInfo
 	BufferAlias          = analysis.BufferAlias
 
 	// Buffer timeline types (gputrace-94)

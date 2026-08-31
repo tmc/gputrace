@@ -50,7 +50,7 @@ func TestBufferTimelineSuppressesAdviceWhenAttributionIncomplete(t *testing.T) {
 		TotalBuffers:        1,
 		TotalAllocations:    1,
 		ExpectedEncoders:    3,
-		AttributedEncoders:  1,
+		AttributedGroups:    1,
 		AttributionComplete: false,
 		AttributionNote:     "test attribution gap",
 	}

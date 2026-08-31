@@ -158,7 +158,7 @@ type bufferTimelineJSON struct {
 	MinRecordIndex      int                        `json:"min_record_index"`
 	MaxRecordIndex      int                        `json:"max_record_index"`
 	ExpectedEncoders    int                        `json:"expected_encoders"`
-	AttributedEncoders  int                        `json:"attributed_encoders"`
+	AttributedGroups    int                        `json:"attributed_encoders"`
 	AttributionComplete bool                       `json:"attribution_complete"`
 	AttributionNote     string                     `json:"attribution_note,omitempty"`
 	Buffers             []bufferTimelineJSONBuffer `json:"buffers"`
@@ -213,7 +213,7 @@ func formatBufferTimelineJSON(timeline *gputrace.BufferTimelineAnalysis) (string
 		MinRecordIndex:      timeline.MinRecordIndex,
 		MaxRecordIndex:      timeline.MaxRecordIndex,
 		ExpectedEncoders:    timeline.ExpectedEncoders,
-		AttributedEncoders:  timeline.AttributedEncoders,
+		AttributedGroups:    timeline.AttributedGroups,
 		AttributionComplete: timeline.AttributionComplete,
 		AttributionNote:     timeline.AttributionNote,
 	}
