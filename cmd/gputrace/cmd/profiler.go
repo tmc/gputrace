@@ -174,6 +174,26 @@ func runProfiler(cmd *cobra.Command, args []string, opts *profilerOptions) error
 	if totalDeviceLoads > 0 || totalDeviceStores > 0 {
 		fmt.Printf("  Memory Ops:        %s loads, %s stores\n", FormatCount(totalDeviceLoads), FormatCount(totalDeviceStores))
 	}
+	// The GRC counter stream is machine wide, so a capture accounts for only
+	// part of it and the rest belongs to whatever else was on the GPU. The
+	// share was computed and printed nowhere, which left the Execution Cost
+	// table below reading as if it covered the whole stream. It covers the
+	// attributed part.
+	//
+	// The encoder counts are spelled out rather than folded into one number
+	// because they are three different populations: ids carrying counter
+	// samples, ids declared in Encoder Infos, and the capture's own compute
+	// encoders printed above. On one trace those are 48, 96, and 3. A single
+	// unlabeled "encoders" here would read as a contradiction of the line
+	// above it, which is the same conflation 40a39534 removed from buffers.
+	if a := stats.CounterArchive; a != nil && a.TotalSamples > 0 {
+		fmt.Printf("  Counter Samples:   %s/%s attributed to this capture (%s), %s machine-wide\n",
+			FormatCount(a.AttributedSamples), FormatCount(a.TotalSamples),
+			FormatPercent(100*a.AttributedFraction()), FormatCount(a.MachineWideSamples))
+		fmt.Printf("  Counter Encoders:  %s with samples, %s declared in Encoder Infos (GPU-wide ids, not the compute encoders above)\n",
+			FormatCount(len(a.Encoders)), FormatCount(a.KnownEncoderIDs))
+	}
+
 	// Compilation is host-side and absent from every duration above.
 	writeCompileSummary(os.Stdout, summarizeCompilation(stats.Pipelines))
 
