@@ -82,6 +82,16 @@ type ShaderMetrics struct {
 	// from a missing one, and every field in this block is legitimately
 	// zero for some kernels.
 	HasPipelineStats bool `json:"has_pipeline_stats"`
+
+	// CompilationTimeMs is host-side shader compilation time. It is in none
+	// of the durations above, which are GPU execution, so a run that
+	// compiled inside its measured window shows the cost only here.
+	CompilationTimeMs float64 `json:"compilation_time_ms,omitempty"`
+	// FunctionWasCached reports whether the function came from the compile
+	// cache. It is a pointer because the archive frequently records a
+	// compilation time without recording this, and false and absent mean
+	// different things: false is a cache miss, absent is no cache record.
+	FunctionWasCached *bool `json:"function_was_cached,omitempty"`
 }
 
 const (
@@ -565,6 +575,10 @@ func applyPipelineStatsToMetrics(metrics *ShaderMetrics, p *counter.PipelineStat
 	metrics.DeviceLoadCount = p.DeviceLoadCount
 	metrics.DeviceStoreCount = p.DeviceStoreCount
 	metrics.HasPipelineStats = true
+	metrics.CompilationTimeMs = p.CompilationTimeMs
+	if p.CompilePerformance != nil {
+		metrics.FunctionWasCached = p.CompilePerformance.FunctionWasCached
+	}
 }
 
 // populateInstructionCounts populates instruction counts from PipelineStats (streamData).
@@ -867,6 +881,7 @@ func ExportShaderMetricsCSV(w io.Writer, report *ShaderMetricsReport) error {
 		"Estimated Bandwidth (GB/s)", "Bytes Accessed",
 		"Temporary Registers", "Spilled Bytes",
 		"Device Load Count", "Device Store Count",
+		"Compilation Time (ms)", "Function Was Cached",
 	}
 	if err := writer.Write(header); err != nil {
 		return err
@@ -896,6 +911,8 @@ func ExportShaderMetricsCSV(w io.Writer, report *ShaderMetricsReport) error {
 			pipelineStatCell(metrics.HasPipelineStats, metrics.SpilledBytes),
 			pipelineStatCell(metrics.HasPipelineStats, metrics.DeviceLoadCount),
 			pipelineStatCell(metrics.HasPipelineStats, metrics.DeviceStoreCount),
+			compileTimeCell(metrics.CompilationTimeMs),
+			cachedCell(metrics.FunctionWasCached),
 		}
 		if err := writer.Write(row); err != nil {
 			return err
@@ -913,6 +930,29 @@ func pipelineStatCell(present bool, v int) string {
 		return ""
 	}
 	return fmt.Sprintf("%d", v)
+}
+
+// compileTimeCell renders a compilation time, empty when none was recorded.
+// A shader whose compilation the archive did not time is not a shader that
+// compiled in zero milliseconds.
+func compileTimeCell(ms float64) string {
+	if ms == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%.3f", ms)
+}
+
+// cachedCell renders the compile-cache flag, empty when the trace carries no
+// cache record. An empty cell and "false" are different findings: no record
+// versus a recorded miss.
+func cachedCell(cached *bool) string {
+	if cached == nil {
+		return ""
+	}
+	if *cached {
+		return "true"
+	}
+	return "false"
 }
 
 // ExportShaderMetricsJSON exports shader metrics to JSON format.

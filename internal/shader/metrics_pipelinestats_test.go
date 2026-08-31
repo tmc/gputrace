@@ -94,6 +94,64 @@ func TestFormatShadersXcodeStyleCompilerStatColumns(t *testing.T) {
 	}
 }
 
+// csvCell returns the single data row's value for the named column.
+func csvCell(rows [][]string, column string) (string, bool) {
+	for i, name := range rows[0] {
+		if name == column {
+			return rows[1][i], true
+		}
+	}
+	return "", false
+}
+
+// An empty compile cell means the trace recorded nothing. Zero milliseconds
+// and a recorded cache miss are different findings and must not collapse into
+// the same cell as "absent".
+func TestExportShaderMetricsCSVCompileCells(t *testing.T) {
+	cached := false
+	tests := []struct {
+		name       string
+		metrics    ShaderMetrics
+		wantTime   string
+		wantCached string
+	}{
+		{name: "absent", metrics: ShaderMetrics{}, wantTime: "", wantCached: ""},
+		{
+			name:       "time without cache record",
+			metrics:    ShaderMetrics{CompilationTimeMs: 8.262},
+			wantTime:   "8.262",
+			wantCached: "",
+		},
+		{
+			name:       "recorded cache miss is not absence",
+			metrics:    ShaderMetrics{CompilationTimeMs: 1.5, FunctionWasCached: &cached},
+			wantTime:   "1.500",
+			wantCached: "false",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := tt.metrics
+			m.Name = "kernel"
+			var buf bytes.Buffer
+			if err := ExportShaderMetricsCSV(&buf, &ShaderMetricsReport{Shaders: []*ShaderMetrics{&m}}); err != nil {
+				t.Fatal(err)
+			}
+			rows, err := csv.NewReader(&buf).ReadAll()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, _ := csvCell(rows, "Compilation Time (ms)"); got != tt.wantTime {
+				t.Errorf("Compilation Time (ms) = %q, want %q", got, tt.wantTime)
+			}
+			if got, _ := csvCell(rows, "Function Was Cached"); got != tt.wantCached {
+				t.Errorf("Function Was Cached = %q, want %q", got, tt.wantCached)
+			}
+		})
+	}
+}
+
 func TestExportShaderMetricsCSVCompilerStatCells(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -135,10 +193,18 @@ func TestExportShaderMetricsCSVCompilerStatCells(t *testing.T) {
 			if len(rows) != 2 {
 				t.Fatalf("got %d CSV rows, want 2", len(rows))
 			}
-			got := rows[1][len(rows[1])-4:]
-			for i := range tt.want {
-				if got[i] != tt.want[i] {
-					t.Errorf("column %q = %q, want %q", rows[0][len(rows[0])-4+i], got[i], tt.want[i])
+			// Located by header rather than by offset from the end: the
+			// columns these assert are a named set, not the last four,
+			// and a test that says "last four" fails whenever an
+			// unrelated column is appended.
+			columns := []string{"Temporary Registers", "Spilled Bytes", "Device Load Count", "Device Store Count"}
+			for i, name := range columns {
+				got, ok := csvCell(rows, name)
+				if !ok {
+					t.Fatalf("no %q column in header %q", name, rows[0])
+				}
+				if got != tt.want[i] {
+					t.Errorf("column %q = %q, want %q", name, got, tt.want[i])
 				}
 			}
 		})

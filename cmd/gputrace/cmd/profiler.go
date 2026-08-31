@@ -174,6 +174,8 @@ func runProfiler(cmd *cobra.Command, args []string, opts *profilerOptions) error
 	if totalDeviceLoads > 0 || totalDeviceStores > 0 {
 		fmt.Printf("  Memory Ops:        %s loads, %s stores\n", FormatCount(totalDeviceLoads), FormatCount(totalDeviceStores))
 	}
+	// Compilation is host-side and absent from every duration above.
+	writeCompileSummary(os.Stdout, summarizeCompilation(stats.Pipelines))
 
 	// Show function call counts (always)
 	if len(sortedFuncs) > 0 {
@@ -240,6 +242,7 @@ func runProfiler(cmd *cobra.Command, args []string, opts *profilerOptions) error
 					fmt.Printf("      Memory Ops: device(load=%d store=%d) threadgroup(load=%d store=%d)\n",
 						p.DeviceLoadCount, p.DeviceStoreCount, p.ThreadgroupLoadCount, p.ThreadgroupStoreCount)
 				}
+				writePipelineCompileDetail(os.Stdout, &p)
 			}
 		}
 

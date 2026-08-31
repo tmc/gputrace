@@ -54,6 +54,13 @@ pipelinePerformanceStatistics and are available for profiler-only traces too.
 They read "?" when the trace carries no statistics for that shader; zero is a
 real count and is printed as 0.
 
+The csv and json formats also carry per-shader host-side compilation time and
+the compile-cache flag. They are absent from the --all table because that table
+reproduces Xcode's All Shaders columns and these are not among them; for a
+whole-capture compilation total see "gputrace profiler". Both cells are empty
+when the trace recorded nothing, which is not the same as a zero compile time
+or a cache miss.
+
 Examples:
   gputrace shaders trace.gputrace                    # Simple cost + name output
   gputrace shaders trace.gputrace --all              # Full Xcode format
@@ -353,6 +360,10 @@ func extractSIMDBasedMetrics(trace *gputrace.Trace, profilerDir string) (*gputra
 			m.DeviceLoadCount = ps.DeviceLoadCount
 			m.DeviceStoreCount = ps.DeviceStoreCount
 			m.HasPipelineStats = true
+			m.CompilationTimeMs = ps.CompilationTimeMs
+			if ps.CompilePerformance != nil {
+				m.FunctionWasCached = ps.CompilePerformance.FunctionWasCached
+			}
 		}
 
 		report.Shaders = append(report.Shaders, m)
@@ -551,8 +562,12 @@ func convertPipelineStatsToShaderReport(stats *counter.StreamDataStats, execCost
 			DeviceLoadCount:        p.DeviceLoadCount,
 			DeviceStoreCount:       p.DeviceStoreCount,
 			HasPipelineStats:       true,
+			CompilationTimeMs:      p.CompilationTimeMs,
 			Bottlenecks:            make([]string, 0),
 			OptimizationHints:      make([]string, 0),
+		}
+		if p.CompilePerformance != nil {
+			m.FunctionWasCached = p.CompilePerformance.FunctionWasCached
 		}
 
 		if m.InvocationCount > 0 {
