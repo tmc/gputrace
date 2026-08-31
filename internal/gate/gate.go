@@ -119,6 +119,14 @@ type StationarityResult struct {
 	// from a profile-replay export describes the replay execution, not the
 	// original live run; a live mid-run excursion is invisible there.
 	TimingSource string `json:"timing_source,omitempty"`
+	// DroppedMarks counts command-buffer records the sidecar carried that
+	// held no usable timestamp, plus lines that would not parse. Gaps are
+	// consecutive differences over the marks that survived, so a dropped
+	// mark does not shrink the trajectory -- it merges two gaps into one of
+	// roughly twice the duration. Enough of those in one block moves its
+	// median and fails a run that was stationary. The count is reported
+	// because the excursion cannot be told from an artifact without it.
+	DroppedMarks int    `json:"dropped_marks,omitempty"`
 	Reason       string `json:"reason"`
 }
 
@@ -416,14 +424,26 @@ func evaluateMetal(bundlePath string, opts Options) (*Result, error) {
 	// Gate 2: Stationarity. A live sidecar outranks replay timing: replay
 	// cannot witness a mid-run excursion in the original execution.
 	if opts.TimingSidecar != "" {
-		marks, err := readSidecarMarks(opts.TimingSidecar)
+		marks, dropped, err := readSidecarMarks(opts.TimingSidecar)
 		if err != nil {
 			return nil, fmt.Errorf("timing sidecar: %w", err)
 		}
 		res.Stationarity = EvaluateStationarity(marks, opts)
 		res.Stationarity.TimingSource = "live (command-buffer wall clock from GT_TIMING_OUT sidecar)"
+		res.Stationarity.DroppedMarks = dropped
 		if res.Stationarity.Status == VerdictPass || res.Stationarity.Status == VerdictFail {
 			res.Stationarity.Reason += "  (live command-buffer timing)"
+		}
+		// Said on a pass as well as a fail. On a fail it is the first thing
+		// to rule out; on a pass it bounds how much of the trajectory the
+		// verdict actually saw.
+		if dropped > 0 {
+			noun := "marks"
+			if dropped == 1 {
+				noun = "mark"
+			}
+			res.Stationarity.Reason += fmt.Sprintf("  [%d unusable %s dropped; each hole merges two gaps into one, which can manufacture an excursion]",
+				dropped, noun)
 		}
 	} else if streamStats == nil || len(streamStats.Dispatches) == 0 {
 		res.Stationarity = StationarityResult{
@@ -612,13 +632,23 @@ func EvaluateStationarity(marks []uint64, opts Options) StationarityResult {
 }
 
 // readSidecarMarks reads command-buffer GPU start timestamps from a
-// GT_TIMING_OUT sidecar, in nanoseconds, sorted ascending.
-func readSidecarMarks(path string) ([]uint64, error) {
+// GT_TIMING_OUT sidecar, in nanoseconds, sorted ascending. It also returns
+// how many marks were dropped.
+//
+// Three things get skipped and only one of them is uninteresting. A record of
+// another kind is not a mark and never was. A line that will not parse and a
+// command_buffer record whose gpu_start_seconds is absent or non-positive are
+// both marks the run produced and this function could not use, and dropping
+// them quietly is not free: the caller takes consecutive differences over what
+// survives, so a hole does not shorten the trajectory, it merges two gaps into
+// one of about twice the duration.
+func readSidecarMarks(path string) ([]uint64, int, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	var marks []uint64
+	var dropped int
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -629,18 +659,25 @@ func readSidecarMarks(path string) ([]uint64, error) {
 			GPUStartSeconds float64 `json:"gpu_start_seconds"`
 		}
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
-			continue // sidecar may hold other record kinds and partial tails
+			// A partial tail is the common cause and is one line. Many of
+			// these is a different problem and the count is what shows it.
+			dropped++
+			continue
 		}
-		if rec.Kind != "command_buffer" || rec.GPUStartSeconds <= 0 {
+		if rec.Kind != "command_buffer" {
+			continue
+		}
+		if rec.GPUStartSeconds <= 0 {
+			dropped++
 			continue
 		}
 		marks = append(marks, uint64(rec.GPUStartSeconds*1e9))
 	}
 	if len(marks) == 0 {
-		return nil, fmt.Errorf("%s holds no command_buffer records with gpu_start_seconds", path)
+		return nil, dropped, fmt.Errorf("%s holds no command_buffer records with gpu_start_seconds", path)
 	}
 	sort.Slice(marks, func(i, j int) bool { return marks[i] < marks[j] })
-	return marks, nil
+	return marks, dropped, nil
 }
 
 func resolveVerdict(comp CompletenessResult, stat StationarityResult) Verdict {

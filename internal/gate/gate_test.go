@@ -2,6 +2,8 @@ package gate
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -211,4 +213,58 @@ func ExampleEvaluateCompleteness() {
 	fmt.Printf("%s: %s\n", res.Status, res.Reason)
 	// Output:
 	// PASS: completeness ok    129/129 arg_reduce (want 129 = 128 tokens + 1 prefill)
+}
+
+// A command_buffer record with no usable timestamp is a mark the run produced
+// and the reader could not use. Dropping it quietly does not shorten the
+// trajectory: gaps are consecutive differences over the survivors, so a hole
+// merges two gaps into one of roughly twice the duration, which is
+// indistinguishable from a real excursion unless the drop is reported.
+func TestReadSidecarMarksCountsUnusableRecords(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "timing.jsonl")
+	lines := []string{
+		`{"kind":"command_buffer","gpu_start_seconds":1.0}`,
+		`{"kind":"command_buffer","gpu_start_seconds":0}`, // present, no timestamp
+		`{"kind":"command_buffer"}`,                       // field absent entirely
+		`{"kind":"shader","gpu_start_seconds":1.5}`,       // not a mark, never was
+		`{"kind":"command_buffer","gpu_start_seconds":2.0}`,
+		`{"kind":"command_buffer","gpu_start_`, // truncated tail
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	marks, dropped, err := readSidecarMarks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(marks) != 2 {
+		t.Errorf("marks = %d, want 2", len(marks))
+	}
+	// Two timestamp-less command buffers and one truncated line. The shader
+	// record is not counted: it is not a mark, so it is not a loss.
+	if dropped != 3 {
+		t.Errorf("dropped = %d, want 3", dropped)
+	}
+}
+
+func TestReadSidecarMarksDoesNotCountOtherKindsAsDropped(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "timing.jsonl")
+	lines := []string{
+		`{"kind":"command_buffer","gpu_start_seconds":1.0}`,
+		`{"kind":"shader"}`,
+		`{"kind":"encoder"}`,
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, dropped, err := readSidecarMarks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dropped != 0 {
+		t.Errorf("dropped = %d, want 0: a record of another kind is not a lost mark", dropped)
+	}
 }
