@@ -29,8 +29,16 @@ type compileSummary struct {
 	// Cached and Compiled count pipelines by "Function was cached". They come
 	// from a separate dictionary than the times above and are frequently
 	// absent when the times are present, so they are counted, not derived.
-	Cached   int
-	Compiled int
+	//
+	// NoCacheRecord is the third bucket: a pipeline that compiled but carries
+	// no cache flag, because the Compile Performance dictionary is missing or
+	// does not hold the field. It is counted rather than left as Timed minus
+	// the other two, since a reader who does that subtraction in their head
+	// reads the remainder as a cache miss. On one trace 13 cached and 0
+	// compiled against 14 pipelines is one absent record, not one miss.
+	Cached        int
+	Compiled      int
+	NoCacheRecord int
 
 	// Phases sums the compiler phase timings that were recorded as
 	// non-negative. The archive uses -1 for a phase it did not measure, which
@@ -74,7 +82,8 @@ func summarizeCompilation(pipelines []counter.PipelineStats) *compileSummary {
 	}
 	for i := range pipelines {
 		p := &pipelines[i]
-		if p.CompilationTimeMs > 0 || p.HasRecordedStatistic("Compilation time in milliseconds") {
+		timed := p.CompilationTimeMs > 0 || p.HasRecordedStatistic("Compilation time in milliseconds")
+		if timed {
 			s.Timed++
 			s.TotalMs += p.CompilationTimeMs
 			if p.CompilationTimeMs > s.SlowestMs {
@@ -83,15 +92,18 @@ func summarizeCompilation(pipelines []counter.PipelineStats) *compileSummary {
 			}
 		}
 		cp := p.CompilePerformance
+		switch {
+		case cp == nil || cp.FunctionWasCached == nil:
+			if timed {
+				s.NoCacheRecord++
+			}
+		case *cp.FunctionWasCached:
+			s.Cached++
+		default:
+			s.Compiled++
+		}
 		if cp == nil {
 			continue
-		}
-		if cp.FunctionWasCached != nil {
-			if *cp.FunctionWasCached {
-				s.Cached++
-			} else {
-				s.Compiled++
-			}
 		}
 		add("translator", cp.CompilerTranslatorNanoseconds)
 		add("optimization", cp.CompilerOptimizationNanoseconds)
@@ -130,7 +142,13 @@ func writeCompileSummary(w io.Writer, s *compileSummary) {
 	}
 	switch {
 	case s.Cached > 0 || s.Compiled > 0:
-		fmt.Fprintf(w, "  Compile Cache:      %d cached, %d compiled\n", s.Cached, s.Compiled)
+		line := fmt.Sprintf("%d cached, %d compiled", s.Cached, s.Compiled)
+		// Named rather than left as the remainder of the subtraction. A
+		// pipeline with no cache record did not miss the cache.
+		if s.NoCacheRecord > 0 {
+			line += fmt.Sprintf(", %d with no cache record", s.NoCacheRecord)
+		}
+		fmt.Fprintf(w, "  Compile Cache:      %s\n", line)
 	default:
 		fmt.Fprintf(w, "  Compile Cache:      (not recorded in this trace)\n")
 	}
@@ -139,7 +157,15 @@ func writeCompileSummary(w io.Writer, s *compileSummary) {
 			compilePhaseLabel(p.Name), FormatDurationNs(uint64(p.NS)), p.N,
 			Pluralize(p.N, "pipeline", "pipelines"))
 	}
-	if s.NegativePhases > 0 {
+	switch {
+	case len(s.Phases) == 0 && s.NegativePhases > 0:
+		// Every recorded phase is the -1 sentinel. Printing this only as an
+		// exclusion footnote reads as "no phase data in this section", when
+		// what happened is that the archive carried the fields and measured
+		// none of them. That is a fact about the capture, not about the
+		// section, and no trace on hand has ever recorded otherwise.
+		fmt.Fprintf(w, "  Compiler Phases:    none measured (all %d recorded as -1)\n", s.NegativePhases)
+	case s.NegativePhases > 0:
 		fmt.Fprintf(w, "  %d phase %s recorded as -1 and are excluded; the archive uses -1 for a phase it did not measure.\n",
 			s.NegativePhases, Pluralize(s.NegativePhases, "timing", "timings"))
 	}

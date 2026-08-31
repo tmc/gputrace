@@ -154,3 +154,51 @@ func TestWritePipelineCompileDetail(t *testing.T) {
 		}
 	}
 }
+
+// A pipeline that compiled but carries no cache flag is a third bucket. On
+// qwen25-05b-rotmask-warm-tokens2-4, 13 cached and 0 compiled against 14 timed
+// pipelines is one absent Compile Performance dictionary, not one cache miss,
+// and the reader must not be left to infer the difference by subtraction.
+func TestSummarizeCompilationCountsMissingCacheRecords(t *testing.T) {
+	cached := true
+	pipelines := []counter.PipelineStats{
+		{FunctionName: "a", CompilationTimeMs: 5, CompilePerformance: &counter.PipelineCompilePerformance{FunctionWasCached: &cached}},
+		// Timed, but no dictionary at all: the real shape of the 14th pipeline.
+		{FunctionName: "v_copybfloat16bfloat16", CompilationTimeMs: 3.598},
+		// A dictionary that omits the flag is the same finding.
+		{FunctionName: "c", CompilationTimeMs: 1, CompilePerformance: &counter.PipelineCompilePerformance{}},
+	}
+	s := summarizeCompilation(pipelines)
+	if s == nil {
+		t.Fatal("summarizeCompilation() = nil")
+	}
+	if s.Cached != 1 || s.Compiled != 0 || s.NoCacheRecord != 2 {
+		t.Errorf("cached/compiled/no-record = %d/%d/%d, want 1/0/2", s.Cached, s.Compiled, s.NoCacheRecord)
+	}
+	var buf bytes.Buffer
+	writeCompileSummary(&buf, s)
+	if !strings.Contains(buf.String(), "2 with no cache record") {
+		t.Errorf("absent cache records are left to subtraction:\n%s", buf.String())
+	}
+}
+
+// Every phase timing on every trace available is the -1 sentinel. Reporting
+// that only as an exclusion footnote reads as "this section has no phase
+// data", when the archive carried the fields and measured none of them.
+func TestWriteCompileSummarySaysWhenNoPhaseWasMeasured(t *testing.T) {
+	minusOne := int64(-1)
+	s := summarizeCompilation([]counter.PipelineStats{{
+		FunctionName:      "a",
+		CompilationTimeMs: 2,
+		CompilePerformance: &counter.PipelineCompilePerformance{
+			CompilerBackendNanoseconds: &minusOne,
+			CompilerTotalNanoseconds:   &minusOne,
+		},
+	}})
+	var buf bytes.Buffer
+	writeCompileSummary(&buf, s)
+	out := buf.String()
+	if !strings.Contains(out, "none measured (all 2 recorded as -1)") {
+		t.Errorf("a fully unmeasured phase set does not say so:\n%s", out)
+	}
+}
