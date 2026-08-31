@@ -25,6 +25,12 @@ const plainBundleJSONL = `{"kind":"capture_meta","concurrent_kernel":true,"pid":
 {"kind":"kernel","raw_symbol":"_Zsolo","name":"solo_kernel","start_ns":10,"end_ns":110,"grid":"1x1x1","block":"32x1x1","correlation_id":1,"stream_id":7}
 `
 
+const repeatedSpanNameBundleJSONL = `{"kind":"capture_meta","concurrent_kernel":true,"pid":3}
+{"kind":"span","name":"token","start_ns":100,"end_ns":200,"eval_seq":1}
+{"kind":"span","name":"token","start_ns":300,"end_ns":400,"eval_seq":2}
+{"kind":"kernel","raw_symbol":"_Ztoken","name":"token_kernel","start_ns":120,"end_ns":180,"grid":"1x1x1","block":"32x1x1","correlation_id":1,"stream_id":7}
+`
+
 func writeBundle(t *testing.T, events string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -104,5 +110,28 @@ func TestPlainBundleUnchangedBySpanPath(t *testing.T) {
 		if bytes.Contains(buf.Bytes(), []byte(banned)) {
 			t.Errorf("span-only artifact %q leaked into a span-less capture", banned)
 		}
+	}
+}
+
+func TestRepeatedSpanNamesShareTrack(t *testing.T) {
+	dir := writeBundle(t, repeatedSpanNameBundleJSONL)
+	_, _ = render(t, dir)
+
+	capData, err := ReadCapture(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trace, err := BuildCapture(capData, dir, Options{PerKernelTracks: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tracks int
+	for _, track := range trace.Tracks {
+		if track.Name == "token" {
+			tracks++
+		}
+	}
+	if tracks != 1 {
+		t.Errorf("token tracks = %d, want 1", tracks)
 	}
 }

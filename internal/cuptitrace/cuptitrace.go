@@ -216,12 +216,13 @@ func build(cap gpuevent.Capture, sourcePath string, opts Options) (*perfetto.Tra
 		}
 	}
 
-	// Spans render luminal-style: each span is a parent slice on its own
-	// track (grouped under an "Application" group), with attributed kernels
-	// emitted as child slices on the same track — SLICE_BEGIN/Slice_END
-	// nesting puts them inside the span on the timeline. Span labels become
-	// debug annotations. Kernels attributed to a span are not duplicated on
-	// the flat tracks; unattributed kernels stay there.
+	// Spans render luminal-style: each named phase has a track under an
+	// "Application" group, with attributed kernels emitted as child slices on
+	// that track — SLICE_BEGIN/Slice_END nesting puts them inside the span on
+	// the timeline. Repeated phase names share their track; they are distinct
+	// slices, not duplicate track descriptors. Span labels become debug
+	// annotations. Kernels attributed to a span are not duplicated on the flat
+	// tracks; unattributed kernels stay there.
 	attributedKernelIDs := make(map[kernelKeyT]bool)
 	nextEventID := uint64(len(events) + 1) // flat loop reuses i+1; spans take IDs beyond it
 	if len(spans) > 0 {
@@ -231,13 +232,18 @@ func build(cap gpuevent.Capture, sourcePath string, opts Options) (*perfetto.Tra
 			Name:        "Application spans",
 			Description: "Host-declared eval/phase spans from the app-events sidecar; attributed kernels nested beneath",
 		})
+		spanTracks := make(map[string]uint64)
 		for _, s := range spans {
-			trackUUID := perfetto.TrackUUID("gputrace.cupti/span", s.Name)
-			trace.Tracks = append(trace.Tracks, perfetto.Track{
-				UUID:       trackUUID,
-				ParentUUID: appGroupUUID,
-				Name:       ShortName(s.Name),
-			})
+			trackUUID, ok := spanTracks[s.Name]
+			if !ok {
+				trackUUID = perfetto.TrackUUID("gputrace.cupti/span", s.Name)
+				spanTracks[s.Name] = trackUUID
+				trace.Tracks = append(trace.Tracks, perfetto.Track{
+					UUID:       trackUUID,
+					ParentUUID: appGroupUUID,
+					Name:       ShortName(s.Name),
+				})
+			}
 			args := map[string]any{"eval_seq": s.EvalSeq}
 			for k, v := range s.Labels {
 				args["label."+k] = v
