@@ -15,8 +15,24 @@ all: build
 build:
 	go install ./cmd/gputrace
 
+# test reports how many cases it skipped, because "ok" and a skip are the same
+# line in go test's default output. Most of the skips are opt-in integration
+# tests waiting on an environment variable (see docs/TESTING.md); a suite that
+# says ok while a third of it sat out is telling the truth and meaning less
+# than it reads.
 test:
-	go test ./...
+	@go test -json ./... | go run ./internal/cmd/testcensus
+
+# test-gated reports which opt-in variables are set and which are not, so the
+# skip count above is attributable rather than merely known.
+test-gated:
+	@echo "Opt-in test variables (see docs/TESTING.md):"
+	@for v in TRACE_PROCESSOR_SHELL GPUTRACE_TEST_TRACE GPUTRACE_MIO_SETUP_DATA_PATH \
+	          GPUTRACE_PERF_FIXTURE GPUTRACE_TEST_METALLIB GPUTRACE_PARITY_TRACE; do \
+		eval val=\$$$$v; \
+		if [ -n "$$val" ]; then echo "  set    $$v=$$val"; else echo "  unset  $$v"; fi; \
+	done
+	@echo "Unset variables leave their tests skipped; go test reports that as ok."
 
 vet:
 	go vet ./...

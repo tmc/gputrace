@@ -25,6 +25,23 @@ when they are present and skips fixture-dependent cases when they are not.
 Set `GPUTRACE_REQUIRE_PERF_FIXTURES=1` to make missing optional perf fixtures
 under the legacy test paths fail instead of skip.
 
+## A skipped test and a passing test look the same
+
+`go test` prints `ok` for a package whether its tests ran or sat out, so the
+suite can report green end to end while a large share of it never executed.
+Measured 2026-08-31 on a default `go test ./...`: **1722 passed, 113 skipped,
+0 failed**. Setting two variables that were already present on the development
+machine — `TRACE_PROCESSOR_SHELL` and `GPUTRACE_TEST_TRACE` — took that to
+**1754 passed, 81 skipped, 0 failed**. Thirty-two tests, no new fixtures, no
+code changes; the coverage was simply never asked for.
+
+`make test` therefore reports the skip count and the packages it concentrates
+in, and `make test-gated` shows which opt-in variables are set. Treat a green
+run with a large skip count as a partial result, because that is what it is.
+
+(An earlier note below cites 77 skips falling to 62. That predates this
+measurement and the suite has grown since; 113 is the current default.)
+
 The checked-in fixture set covers structural traces and focused scenario
 captures. It does not include `.gpuprofiler_raw` profiler exports or Xcode
 `Counters.csv` files; tests that need those assets skip by default unless a
@@ -68,6 +85,7 @@ checked in. They are opt-in through environment variables:
 
 | Variable | Used for |
 | --- | --- |
+| `TRACE_PROCESSOR_SHELL` | Perfetto `trace_processor_shell` binary. Gates the PerfettoSQL integration tests, which assert the exported trace against real queries rather than against the exporter's own idea of its output. The single largest gate in the suite at 16 tests, and the one most likely to be available already — a build of the shell is a download, not a capture. |
 | `GPUTRACE_ANALYZE_TEST_TRACE` | `internal/analysis` trace structure report |
 | `GPUTRACE_API_CALL_TRACE` | `internal/trace` API-call integration parsing |
 | `GPUTRACE_API_CALL_EXPECTED` | `internal/trace` API-call golden output comparison |
