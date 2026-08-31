@@ -267,6 +267,64 @@ That table is **not** in the trace:
 against an AGX disassembly it obtains from the compiler service, neither of
 which the trace stores. Nothing in gputrace should print those percentages.
 
+#### Compile Performance carries no measured phase timing
+
+The `Compile Performance` dictionary holds seven fields. One of them has signal
+and six do not, on every capture available:
+
+| Key | Go field | Observed |
+|-----|----------|----------|
+| `Function was cached` | `FunctionWasCached` | `true` on every pipeline that records it. Never once `false`. |
+| `Compiler translator pass time in ns` | `CompilerTranslatorNanoseconds` | `-1` |
+| `Compiler optimization pass time in ns` | `CompilerOptimizationNanoseconds` | `-1` |
+| `Compiler backend pass time in ns` | `CompilerBackendNanoseconds` | `-1` |
+| `Compiler total time in ns` | `CompilerTotalNanoseconds` | `-1` |
+| `Driver total compile time in ns` | `DriverTotalNanoseconds` | `-1` |
+| `Total time for synchronous compile service in ns` | `SynchronousServiceNanoseconds` | `-1` |
+
+`-1` is the archive's sentinel for a phase it did not measure, not a duration.
+Summing the fields without excluding it produces a total smaller than its own
+parts.
+
+[D] Established by scanning captures with the parser rather than by searching
+the bundles. Over 17 `-perfdata` bundles carrying the dictionary, all 1,088
+phase fields are `-1` and no pipeline records `Function was cached` as `false`.
+A second sweep over the 501 remaining `.gputrace` and `.gpuprofiler_raw` paths
+on the development machine — a disjoint set, 67 of them carrying the
+dictionary, 20 distinct captures once nested shards are deduplicated —
+reproduced both zeros.
+
+Count captures, not paths, when repeating this. A bundle and the
+`.gpuprofiler_raw` shard nested inside it are two paths holding one capture and
+both scan, so a raw path total roughly quadruples the apparent sample. The two
+zeros are unaffected by the distinction; the sample size is not.
+
+**Consequence.** These fields cannot separate a compile-cache miss from a slow
+optimizer, which is the use they invite. The optimizer half is unanswerable
+because the phase timings are unmeasured; the cache half has never been
+observed taking its other value, so it discriminates nothing that has been
+seen. `Compilation time in milliseconds` is the field with real signal here. It
+is host-side and appears in no dispatch, encoder, or execution-cost number.
+
+Capture totals run from 9.100 ms to 225.974 ms across the bundles measured, but
+that is a sum over pipelines and the two ends differ in pipeline count as well
+as in cost (1 against 20). Compare per pipeline, not per capture.
+
+**A pipeline can record a compile time and no dictionary at all.** In
+`qwen25-05b-rotmask-warm-tokens2-4`, `v_copybfloat16bfloat16` compiles in
+3.598 ms and carries no `Compile Performance` entry, while the other thirteen
+pipelines do. That is a missing record, not a cache miss, and a reader who
+recovers it by subtracting `cached + compiled` from the pipeline count will
+read it as one. It is the only instance found in the sweep and is unexplained.
+
+**Do not search the bundle for these keys.** `grep` for `Compile Performance`
+or `Compilation time in milliseconds` returns zero matches on
+`parity-asymmetric-perfdata.gputrace`, a bundle whose pipelines demonstrably
+carry 19.434 ms of compile time. The keys live inside the NSKeyedArchiver
+shard and a byte search does not see them, so a null from `grep` here is an
+artifact of the method and not evidence of absence. Run the control before
+trusting the negative.
+
 ## Implementation
 
 ### Parsing Example
