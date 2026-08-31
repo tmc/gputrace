@@ -47,7 +47,6 @@ native counter tracks on the same normalized clock.`,
 				return err
 			}
 			events := capData.Events
-			apis := capData.APIs
 			if len(events) == 0 {
 				return fmt.Errorf("no CUPTI events in %s", args[0])
 			}
@@ -66,7 +65,12 @@ native counter tracks on the same normalized clock.`,
 			if err != nil {
 				return fmt.Errorf("read NVML samples: %w", err)
 			}
-			trace, err := cuptitrace.Build(events, samples, apis, args[0], cuptitrace.Options{
+			// Build from the decoded capture rather than its unpacked
+			// fields: the fields drop ClockSync, and without it the trace
+			// declares its own clock anchored to nothing, so two captures
+			// cannot be placed on a shared timeline.
+			capData.Samples = samples
+			trace, err := cuptitrace.BuildCapture(capData, args[0], cuptitrace.Options{
 				PerKernelTracks: opts.perKernel,
 			})
 			if err != nil {

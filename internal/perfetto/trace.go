@@ -14,8 +14,13 @@ import (
 const SchemaRevision = "Perfetto v57.2 (da1d152cff27890903d158fe96751de3aab883cc)"
 
 const (
-	clockID    = 64 // Sequence-scoped user clock.
-	sequenceID = 1
+	clockID = 64 // Sequence-scoped user clock.
+	// builtinClockRealtime is perfetto's BUILTIN_CLOCK_REALTIME. Anchoring the
+	// sequence-scoped clock to it is what lets two traces from two processes
+	// share a timeline: without it each trace declares its own clock against
+	// nothing, and a viewer asked to merge them has no relation to use.
+	builtinClockRealtime = 1
+	sequenceID           = 1
 )
 
 // EventKind describes how an event is represented in Perfetto.
@@ -84,6 +89,12 @@ type CounterSample struct {
 type Trace struct {
 	Identity    string
 	ClockDomain string
+	// RealtimeAnchorNS is the CLOCK_REALTIME nanosecond value corresponding
+	// to source timestamp zero. When set, the trace declares its clock
+	// against BUILTIN_CLOCK_REALTIME so it can be placed on a shared
+	// timeline with any other trace that does the same. Zero means unknown,
+	// and the trace then stands alone on its own clock.
+	RealtimeAnchorNS uint64
 	// API names the graphics API the events were captured through, e.g.
 	// "Metal" or "CUDA". It labels the render-stage category, so leaving
 	// it empty is better than guessing: a trace that says the wrong API
@@ -442,16 +453,27 @@ func (w traceWriter) packet(packet []byte) error {
 }
 
 func initialPacket(trace *Trace) []byte {
+	// Relate the sequence-scoped clock to a builtin one. With a realtime
+	// anchor the builtin is CLOCK_REALTIME and the snapshot carries the wall
+	// time of source timestamp zero, so two traces recorded by two processes
+	// land in their true relative positions. Without one there is nothing to
+	// anchor to and the trace keeps its own clock, which loads on its own and
+	// cannot be merged -- the honest representation of what is known.
+	reference := uint64(builtinClockRealtime)
+	referenceNS := trace.RealtimeAnchorNS
+	if referenceNS == 0 {
+		reference = 11 // BUILTIN_CLOCK_PERF, kept for traces with no anchor
+	}
 	var traceClock []byte
-	traceClock = appendUint(traceClock, 1, 11) // BUILTIN_CLOCK_TRACE_FILE
-	traceClock = appendUint(traceClock, 2, 0)
+	traceClock = appendUint(traceClock, 1, reference)
+	traceClock = appendUint(traceClock, 2, referenceNS)
 	var clock []byte
 	clock = appendUint(clock, 1, clockID)
 	clock = appendUint(clock, 2, 0)
 	var snapshot []byte
 	snapshot = appendBytes(snapshot, 1, traceClock)
 	snapshot = appendBytes(snapshot, 1, clock)
-	snapshot = appendUint(snapshot, 2, 11) // primary trace clock
+	snapshot = appendUint(snapshot, 2, reference) // primary trace clock
 
 	// The queue and stage names describe the device the trace came from.
 	// They were once the literals "Apple GPU compute queue" and "Metal

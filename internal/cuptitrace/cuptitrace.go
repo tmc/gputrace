@@ -127,6 +127,19 @@ func build(cap gpuevent.Capture, sourcePath string, opts Options) (*perfetto.Tra
 	if origin != 0 {
 		trace.Metadata["clock_origin_ns"] = origin
 	}
+	// Normalize() rebased every timestamp to the capture's own start, so on
+	// its own this trace begins at zero and so does every other one -- which
+	// is why two captures could not be placed on a shared timeline. The shim
+	// records a CLOCK_REALTIME/CUPTI pair; carry the wall time of that zero
+	// so a viewer can put two processes' traces in their true relative
+	// positions. Without a sync record the anchor stays unset and the trace
+	// keeps its own clock rather than claiming a wall time it does not have.
+	if cs := cap.ClockSync; cs != nil && cs.UnixNS != 0 && cs.CuptiNS != 0 {
+		if anchor, ok := realtimeAnchor(origin, *cs); ok {
+			trace.RealtimeAnchorNS = anchor
+			trace.Metadata["clock_realtime_anchor_ns"] = anchor
+		}
+	}
 
 	kernelGroupUUID := perfetto.TrackUUID("gputrace.cupti", "kernels")
 	kernelTrackUUID := perfetto.TrackUUID("gputrace.cupti", "kernels/all")
@@ -495,4 +508,26 @@ func DisplayName(e gpuevent.Event) string {
 		return e.Name
 	}
 	return e.RawSymbol
+}
+
+// realtimeAnchor converts a capture-relative origin into the CLOCK_REALTIME
+// nanosecond value of source timestamp zero.
+//
+// The shim records one (unix, cupti) pair. On the machines seen so far CUPTI
+// activity timestamps are already unix-epoch nanoseconds and the two differ by
+// a few hundred nanoseconds, but the delta is applied rather than assumed --
+// nothing in CUPTI's contract promises that epoch.
+//
+// The delta is signed even though both inputs are unsigned, so it is computed
+// in that direction explicitly. A capture whose arithmetic would underflow
+// gets no anchor rather than a wrapped one.
+func realtimeAnchor(origin uint64, cs gpuevent.ClockSync) (uint64, bool) {
+	if cs.UnixNS >= cs.CuptiNS {
+		return origin + (cs.UnixNS - cs.CuptiNS), true
+	}
+	back := cs.CuptiNS - cs.UnixNS
+	if back > origin {
+		return 0, false
+	}
+	return origin - back, true
 }
