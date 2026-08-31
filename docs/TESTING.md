@@ -25,6 +25,26 @@ when they are present and skips fixture-dependent cases when they are not.
 Set `GPUTRACE_REQUIRE_PERF_FIXTURES=1` to make missing optional perf fixtures
 under the legacy test paths fail instead of skip.
 
+Those legacy paths are two files, and naming them here because "legacy test
+paths" gave no way to find them:
+
+```bash
+gputrace profile-replay testdata/traces/01-single-encoder/01-single-encoder-run1.gputrace \
+  -o testdata/traces/01-single-encoder/01-single-encoder-run1-perf.gputrace
+gputrace profile-replay testdata/traces/06-six-encoders/06-six-encoders-run1.gputrace \
+  -o testdata/traces/06-six-encoders/06-six-encoders-run1-perf.gputrace
+```
+
+Generate them locally and **do not commit them**. They account for 33 of
+`internal/counter`'s skips, which makes committing them look like an easy win;
+it is not. No `-perf` bundle has ever been tracked in this repository's history
+— `git log --all --diff-filter=A` over those paths is empty — and replay output
+carries the timing of the machine that produced it. Committed, it becomes a
+fixture that disagrees with itself on the next person's hardware, failing for
+reasons unrelated to their change. The structural bundles beside them are
+committed because they carry no timing. The absence of these two from
+`.gitignore` is not evidence they were meant to be added.
+
 ## A skipped test and a passing test look the same
 
 `go test` prints `ok` for a package whether its tests ran or sat out, so the
