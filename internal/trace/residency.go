@@ -55,24 +55,68 @@ type ResidencyReport struct {
 	// scan matched and did not fully decode, and Bytes understates by however
 	// much they held.
 	Unsized int `json:"unsized"`
+
+	// Scanned is a second, independent count of buffer records per storage
+	// mode, from BufferStorageModes rather than from the record decoder.
+	//
+	// Two scanners are kept deliberately. The bug this field exists to catch
+	// was a single confident number carrying a disclaimer that pointed away
+	// from its actual error, and no amount of care in one decoder would have
+	// surfaced it. Disagreement between two is reported rather than resolved,
+	// because which one is right is exactly what is not known at that moment.
+	Scanned map[string]int `json:"scanned,omitempty"`
+}
+
+// Disagreements returns the storage modes where the decoder and the independent
+// scan differ, with both counts. An empty result means they agree.
+func (r *ResidencyReport) Disagreements() map[string][2]int {
+	if r.Scanned == nil {
+		return nil
+	}
+	decoded := make(map[string]int, len(r.Storage))
+	for _, f := range r.Storage {
+		decoded[f.Mode] = f.Buffers
+	}
+	out := map[string][2]int{}
+	for mode, n := range r.Scanned {
+		if decoded[mode] != n {
+			out[mode] = [2]int{decoded[mode], n}
+		}
+	}
+	for mode, n := range decoded {
+		if _, ok := r.Scanned[mode]; !ok {
+			out[mode] = [2]int{n, 0}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // ResidencyReport builds the report for a trace.
 //
-// It reads the decoded init calls rather than rescanning the capture, so its
-// numbers agree with "gputrace api-calls" by construction. That matters more
+// It reads decoded resource calls rather than rescanning the capture itself, so
+// its numbers agree with the other decoders by construction. That matters more
 // than the cost of the parse: a second scanner that disagrees with the first is
 // worse than no second scanner, because both look authoritative.
 //
-// The init records this reads are found by scanning the whole capture for
-// record markers, which is independent of the dispatch decoding that
-// "api-calls" reports coverage for. A capture whose dispatches are almost
-// entirely undecoded can still have a complete buffer and residency picture,
-// and saying otherwise would understate a number that is not in doubt. The
-// real limit is different and narrower: the scan finds the record shapes it
-// knows, so a shape it does not know is missing rather than counted.
+// The records are found by scanning the whole capture for record markers, which
+// is independent of the dispatch decoding that "api-calls" reports coverage
+// for. A capture whose dispatches are almost entirely undecoded can still have
+// a complete buffer and residency picture.
+//
+// That independence is a property of ResourceCalls, not something this comment
+// can assert on its own. An earlier version read a variant that stopped at the
+// first command buffer while this comment claimed a whole-capture scan, so the
+// report undercounted by up to 96% and said in its own output that it could
+// not. TestResidencyCountsBuffersAfterFirstCommandBuffer exists to keep the
+// claim and the code from drifting apart again.
+//
+// The real limit is narrower: the scan finds the record shapes it knows, so a
+// shape it does not know is missing rather than counted.
 func (t *Trace) ResidencyReport() (*ResidencyReport, error) {
-	calls, err := t.InitCalls()
+	calls, err := t.ResourceCalls()
 	if err != nil {
 		return nil, err
 	}
@@ -101,6 +145,9 @@ func (t *Trace) ResidencyReport() (*ResidencyReport, error) {
 		case "addResidencySet":
 			r.Residency.AddResidencySet++
 		}
+	}
+	if scanned := t.BufferStorageModes(); len(scanned) > 0 {
+		r.Scanned = scanned
 	}
 	for _, f := range byMode {
 		r.Storage = append(r.Storage, *f)

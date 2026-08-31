@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 
 	"github.com/spf13/cobra"
 	"github.com/tmc/gputrace/internal/fmtutil"
@@ -91,6 +92,21 @@ func writeResidencyReport(w io.Writer, r *trace.ResidencyReport) {
 	default:
 		fmt.Fprintln(w, "  No residency records were decoded, which is not the same as")
 		fmt.Fprintln(w, "  observing that the program manages no residency.")
+	}
+
+	if d := r.Disagreements(); len(d) > 0 {
+		modes := make([]string, 0, len(d))
+		for mode := range d {
+			modes = append(modes, mode)
+		}
+		sort.Strings(modes)
+		fmt.Fprintln(w, "\nScanner disagreement")
+		fmt.Fprintf(w, "  %-12s %10s %10s\n", "mode", "decoded", "scanned")
+		for _, mode := range modes {
+			fmt.Fprintf(w, "  %-12s %10d %10d\n", mode, d[mode][0], d[mode][1])
+		}
+		fmt.Fprintln(w, "  Two independent scans of the same capture disagree, so neither")
+		fmt.Fprintln(w, "  count above is trustworthy. Both are shown rather than one picked.")
 	}
 
 	if f := r.Finding(); f != "" {

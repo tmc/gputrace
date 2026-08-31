@@ -14,18 +14,30 @@ import (
 // ParseAPICallList reads the capture from disk rather than from CaptureData, so
 // the file has to exist; CaptureData is set as well because BufferStorageModes
 // reads that instead, and the two are compared below.
+//
+// A CUUU command-buffer marker is written after the first buffer record. Real
+// captures allocate long after their first command buffer, and an earlier
+// version of ResidencyReport stopped reading there and so counted only the
+// records ahead of it. Every test here passed anyway, because this helper built
+// captures with no CUUU in them at all: the agreement test asserted a property
+// of a file shape that does not occur in practice. The marker is inert for a
+// whole-capture scan and fatal for a truncating one, which is the point.
 func residencyTrace(t *testing.T, buffers []struct {
 	options uint64
 	length  uint64
 }, newSets, requests int) *Trace {
 	t.Helper()
-	data := make([]byte, 0x400+0x200*(len(buffers)+newSets+requests+2))
+	data := make([]byte, 0x400+0x200*(len(buffers)+newSets+requests+3))
 
 	off := 0x100
 	for i, b := range buffers {
 		putCululBufferRecord(data, off, 0x106da56b0, b.length, 256, uint64(0x200000000+i*0x1000))
 		binary.LittleEndian.PutUint64(data[off+0x18:], b.options)
 		off += 0x100
+		if i == 0 {
+			copy(data[off:], []byte("CUUU"))
+			off += 0x100
+		}
 	}
 	// A residency set address the request records can refer back to.
 	const setAddr = 0x9df0ec000
@@ -233,5 +245,57 @@ func TestResidencyFindingSeparatesAbsentRecordsFromAbsentResidency(t *testing.T)
 	}
 	if rn.Residency.Any() {
 		t.Error("Any() = true with no residency records")
+	}
+}
+
+// The truncation bug: buffers created after the first command buffer were
+// dropped. On one real capture the first CUUU sits 0.2% into the file, so 3066
+// of 3180 records were lost. The helper writes a CUUU after the first record,
+// so a count below the full set means the truncation is back.
+func TestResidencyCountsBuffersAfterFirstCommandBuffer(t *testing.T) {
+	type buf = struct {
+		options uint64
+		length  uint64
+	}
+	tr := residencyTrace(t, []buf{{0x00, 100}, {0x00, 200}, {0x00, 400}}, 0, 0)
+	r, err := tr.ResidencyReport()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Buffers != 3 {
+		t.Errorf("Buffers = %d, want 3: records after the first command buffer were dropped", r.Buffers)
+	}
+	if r.Bytes != 700 {
+		t.Errorf("Bytes = %d, want 700", r.Bytes)
+	}
+}
+
+// Two scanners are kept so that a divergence is visible instead of a single
+// confident number. If they diverge, the report must say so with both counts.
+func TestResidencyReportsScannerDisagreement(t *testing.T) {
+	agree := &ResidencyReport{
+		Storage: []StorageFootprint{{Mode: "shared", Buffers: 4}},
+		Scanned: map[string]int{"shared": 4},
+	}
+	if d := agree.Disagreements(); d != nil {
+		t.Errorf("Disagreements() = %v on agreeing counts, want nil", d)
+	}
+
+	diverge := &ResidencyReport{
+		Storage: []StorageFootprint{{Mode: "shared", Buffers: 114}},
+		Scanned: map[string]int{"shared": 3180},
+	}
+	d := diverge.Disagreements()
+	if got, want := d["shared"], [2]int{114, 3180}; got != want {
+		t.Errorf("Disagreements()[shared] = %v, want %v", got, want)
+	}
+
+	// A mode only one scanner saw is a disagreement, not an absence.
+	missing := &ResidencyReport{
+		Storage: []StorageFootprint{{Mode: "shared", Buffers: 2}},
+		Scanned: map[string]int{"shared": 2, "private": 9},
+	}
+	if got, want := missing.Disagreements()["private"], [2]int{0, 9}; got != want {
+		t.Errorf("Disagreements()[private] = %v, want %v", got, want)
 	}
 }

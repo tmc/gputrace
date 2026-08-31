@@ -224,23 +224,27 @@ func (t *Trace) ParseAPICallList() (*APICallList, error) {
 	return list, nil
 }
 
-// InitCalls returns the initialization calls a capture records before its first
+// ResourceCalls returns every resource-creation and residency call in a
+// capture, from the whole file rather than from the section before the first
 // command buffer.
 //
 // ParseAPICallList refuses a capture holding no command buffers, which is the
 // right answer for an API-call listing and the wrong one for a caller that
-// needs only the init section. A capture can allocate buffers and create
-// residency sets without this decoder recognising a single command buffer, and
-// failing the whole read in that case reports an absent decode as an absent
-// program. When no command buffer is found the whole capture is scanned, since
-// there is no first CUUU to stop at.
-func (t *Trace) InitCalls() ([]InitCall, error) {
+// wants resource records. A capture can allocate buffers and create residency
+// sets without this decoder recognising a single command buffer, and failing
+// the whole read in that case reports an absent decode as an absent program.
+//
+// The whole file is scanned because programs allocate throughout a run, not
+// only during startup. Stopping at the first CUUU marker, as ParseAPICallList
+// correctly does when separating init calls from command-buffer calls, drops
+// most of the record: the first command buffer appears 0.2% into one measured
+// capture, and truncating there hid 3066 of its 3180 buffer records. The
+// resulting undercount is not uniform across captures, so it silently
+// manufactures differences between two traces of the same workload.
+func (t *Trace) ResourceCalls() ([]InitCall, error) {
 	data, err := t.readCaptureFile()
 	if err != nil {
 		return nil, fmt.Errorf("read capture: %w", err)
-	}
-	if i := bytes.Index(data, []byte("CUUU")); i >= 0 {
-		data = data[:i]
 	}
 	calls, _, err := parseInitCalls(data, 0, nil, nil)
 	return calls, err
