@@ -21,6 +21,11 @@ type InitCall struct {
 	// creation. Meaningful only for Type "newBuffer" (0 is a valid value:
 	// shared storage, default cache and hazard tracking).
 	ResourceOptions uint64 `json:"resource_options,omitempty"`
+	// Length is the buffer length recorded at creation, in bytes. Meaningful
+	// only for Type "newBuffer". It was previously kept only inside Info,
+	// which meant the allocated footprint could be read by a person and not
+	// by a program.
+	Length uint64 `json:"length,omitempty"`
 }
 
 // FormatResourceOptions renders an MTLResourceOptions bit set the way the
@@ -219,6 +224,28 @@ func (t *Trace) ParseAPICallList() (*APICallList, error) {
 	return list, nil
 }
 
+// InitCalls returns the initialization calls a capture records before its first
+// command buffer.
+//
+// ParseAPICallList refuses a capture holding no command buffers, which is the
+// right answer for an API-call listing and the wrong one for a caller that
+// needs only the init section. A capture can allocate buffers and create
+// residency sets without this decoder recognising a single command buffer, and
+// failing the whole read in that case reports an absent decode as an absent
+// program. When no command buffer is found the whole capture is scanned, since
+// there is no first CUUU to stop at.
+func (t *Trace) InitCalls() ([]InitCall, error) {
+	data, err := t.readCaptureFile()
+	if err != nil {
+		return nil, fmt.Errorf("read capture: %w", err)
+	}
+	if i := bytes.Index(data, []byte("CUUU")); i >= 0 {
+		data = data[:i]
+	}
+	calls, _, err := parseInitCalls(data, 0, nil, nil)
+	return calls, err
+}
+
 // parseInitCalls parses initialization calls before the first command buffer.
 func parseInitCalls(data []byte, startCallNum int, csRecords []FunctionRecord, labelMap map[uint64]string) ([]InitCall, int, error) {
 	var calls []InitCall
@@ -393,6 +420,7 @@ func parseInitCalls(data []byte, startCallNum int, csRecords []FunctionRecord, l
 				Type:            "newBuffer",
 				Address:         bufAddr,
 				ResourceOptions: options,
+				Length:          bufLen,
 				Info: fmt.Sprintf("[0x%x newBufferWithLength:%d options:%s]",
 					heapAddr, bufLen, FormatResourceOptions(options)),
 				Offset: int64(absolutePos),

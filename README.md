@@ -325,6 +325,7 @@ into a controlled regression.
 | **Buffer Analysis** | `buffers` | Buffer listing and properties |
 | | `buffer-access` | Buffer access patterns |
 | | `buffer-timeline` | Buffer allocation timeline |
+| | `residency` | Allocated footprint by storage mode, and whether residency is explicit |
 | **Visualization** | `timeline` | Text timeline and Chrome/Perfetto export |
 | | `graph` | Graph visualization |
 | | `tree` | Execution tree view |
@@ -348,6 +349,37 @@ into a controlled regression.
 | | `version` | Print build version |
 
 Run `gputrace [command] --help` for details on any command.
+
+### Storage modes and residency
+
+    gputrace residency trace.gputrace
+
+Reports the allocated footprint per `MTLStorageMode` alongside the counts of
+`newResidencySet`, `requestResidency`, and `addResidencySet`. The two belong in
+one report because they are one finding seen from two directions: an all-shared
+allocation profile and an uncommitted residency set both mean the process is
+leaving placement and residency to the driver. Read either alone and the
+default looks like a decision.
+
+Two limits are printed with the numbers rather than left to be discovered.
+
+The first is that these counts are **not** bounded by the decoded-dispatch
+fraction `api-calls` reports. Buffer and residency records are found by scanning
+the whole capture for record markers, which is independent of dispatch
+decoding, so a capture reporting `Decoded API subset: 0 of 39014` can still have
+a complete buffer and residency picture. The narrower real limit is that the
+scan finds the record shapes it knows; a shape it does not know is absent rather
+than counted.
+
+The second is that residency-set *membership* is not decoded, so there is no
+wired-bytes figure separate from the allocated one. When no residency set is
+committed, every allocation is under the driver's automatic residency and the
+allocated total is the working upper bound on what can be made resident. A
+number labelled "wired" that was really "allocated" would be worse than no
+number.
+
+`gputrace gate` carries the same observation in `staging.allocated_bytes` and
+`staging.residency_notes`.
 
 ## Linux / NVIDIA
 

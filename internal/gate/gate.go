@@ -119,7 +119,17 @@ type StagingObservation struct {
 	HtoDTransfers    int    `json:"htod_transfers,omitempty"`
 	HtoDBytes        uint64 `json:"htod_bytes,omitempty"`
 	StorageModeNotes string `json:"storage_mode_notes,omitempty"`
-	Summary          string `json:"summary"`
+	// AllocatedBytes is the buffer footprint the capture records, summed over
+	// every storage mode. With no residency set committed it is also the upper
+	// bound on what the driver can make resident, since every allocation falls
+	// under automatic residency.
+	AllocatedBytes uint64 `json:"allocated_bytes,omitempty"`
+	// ResidencyNotes says whether the capture commits a residency set. An
+	// all-shared storage profile and an uncommitted residency set are the same
+	// observation, so reporting the first without the second invites the
+	// conclusion that placement was chosen rather than defaulted.
+	ResidencyNotes string `json:"residency_notes,omitempty"`
+	Summary        string `json:"summary"`
 }
 
 // Result is the composite outcome of all evaluated gates for a bundle.
@@ -312,6 +322,15 @@ func evaluateMetal(bundlePath string, opts Options) (*Result, error) {
 		StorageModeNotes: "no buffer-creation records in bundle",
 	}
 	if t != nil {
+		if r, err := t.ResidencyReport(); err == nil {
+			res.Staging.AllocatedBytes = r.Bytes
+			res.Staging.ResidencyNotes = fmt.Sprintf(
+				"residency: %d newResidencySet, %d requestResidency, %d addResidencySet",
+				r.Residency.NewResidencySet, r.Residency.RequestResidency, r.Residency.AddResidencySet)
+			if f := r.Finding(); f != "" && r.Buffers > 0 {
+				res.Staging.ResidencyNotes += " -- " + f
+			}
+		}
 		if modes := t.BufferStorageModes(); len(modes) > 0 {
 			names := make([]string, 0, len(modes))
 			for name := range modes {
