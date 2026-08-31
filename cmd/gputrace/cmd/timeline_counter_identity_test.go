@@ -1133,8 +1133,9 @@ func TestExportPipelineCompilerDiagnosticsReachPerfettoSQL(t *testing.T) {
 	}
 	query := perfettosql.Module + `
 SELECT pipeline_id, function_name, pipeline_address, pipeline_identity_scope,
-       remarks, function_was_cached, compiler_backend_ns, compiler_total_ns,
-       compiler_optimization_ns, spilled_bytes, device_atomic_instruction_count,
+       remarks, function_was_cached, compiler_backend_ns, compiler_backend_ns_unmeasured,
+       compiler_total_ns, compiler_optimization_ns, compiler_optimization_ns_unmeasured,
+       spilled_bytes, device_atomic_instruction_count,
        constant_calculation_phase_present, recorded_statistic_count,
        hex(recorded_statistics_json), source, semantics, clock_domain, timing_quality
 FROM gputrace_pipeline_compiler;
@@ -1150,7 +1151,11 @@ FROM gputrace_pipeline_compiler;
 		t.Fatal(err)
 	}
 	want := []string{
-		"989", "kernel", "65244", "capture-local", remarks, "0", "-1", "0", "[NULL]",
+		// backend_ns was recorded as -1: the duration column is NULL and the
+		// unmeasured flag is 1. total_ns was a recorded zero and stays 0.
+		// optimization_ns was absent entirely, so both columns are NULL.
+		"989", "kernel", "65244", "capture-local", remarks, "0",
+		"[NULL]", "1", "0", "[NULL]", "[NULL]",
 		"0", "[NULL]", "0", "2", strings.ToUpper(hex.EncodeToString([]byte(`["Constant calculation phase present","Spilled bytes"]`))),
 		"streamData pipelinePerformanceStatistics",
 		"static compilation evidence; remarks are not measured source-line GPU cost; no clock or dispatch join",

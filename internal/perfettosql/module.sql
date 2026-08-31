@@ -1474,6 +1474,18 @@ SELECT
   cast(extract_arg(arg_set_id, 'debug.compiler_total_ns') AS INT) AS compiler_total_ns,
   cast(extract_arg(arg_set_id, 'debug.driver_total_ns') AS INT) AS driver_total_ns,
   cast(extract_arg(arg_set_id, 'debug.synchronous_service_ns') AS INT) AS synchronous_service_ns,
+  -- The archive writes -1 for a compiler phase it did not measure. That value
+  -- is not a duration, so it is kept out of the _ns columns above and surfaced
+  -- here instead: NULL in both means the field was absent, a value in the _ns
+  -- column means it was measured, and 1 here means the field was present and
+  -- recorded as unmeasured. On every capture measured so far these are 1 for
+  -- every pipeline and the _ns columns are entirely NULL.
+  cast(extract_arg(arg_set_id, 'debug.compiler_backend_ns_unmeasured') AS INT) AS compiler_backend_ns_unmeasured,
+  cast(extract_arg(arg_set_id, 'debug.compiler_optimization_ns_unmeasured') AS INT) AS compiler_optimization_ns_unmeasured,
+  cast(extract_arg(arg_set_id, 'debug.compiler_translator_ns_unmeasured') AS INT) AS compiler_translator_ns_unmeasured,
+  cast(extract_arg(arg_set_id, 'debug.compiler_total_ns_unmeasured') AS INT) AS compiler_total_ns_unmeasured,
+  cast(extract_arg(arg_set_id, 'debug.driver_total_ns_unmeasured') AS INT) AS driver_total_ns_unmeasured,
+  cast(extract_arg(arg_set_id, 'debug.synchronous_service_ns_unmeasured') AS INT) AS synchronous_service_ns_unmeasured,
   cast(extract_arg(arg_set_id, 'debug.allocated_registers') AS INT) AS allocated_registers,
   cast(extract_arg(arg_set_id, 'debug.uniform_registers') AS INT) AS uniform_registers,
   cast(extract_arg(arg_set_id, 'debug.spilled_bytes') AS INT) AS spilled_bytes,

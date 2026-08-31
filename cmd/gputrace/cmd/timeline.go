@@ -4779,9 +4779,26 @@ func appendPipelineCompilePerformanceArgs(args map[string]any, performance *coun
 		{"driver_total_ns", performance.DriverTotalNanoseconds},
 		{"synchronous_service_ns", performance.SynchronousServiceNanoseconds},
 	} {
-		if field.value != nil {
-			args[field.name] = *field.value
+		if field.value == nil {
+			continue
 		}
+		// The archive writes -1 for a phase it did not measure. Emitting that
+		// into a column named _ns puts a non-duration in a duration field, and
+		// every aggregate over it is then wrong without saying so: MIN returns
+		// -1 as the fastest pass, AVG is pulled below zero. On every capture
+		// measured, all six of these fields are -1 on every pipeline, so the
+		// column is not merely at risk of a sentinel, it is entirely sentinel.
+		//
+		// The three states the archive distinguishes are all still
+		// distinguishable: absent leaves both columns NULL, a recorded zero
+		// sets the duration to 0, and a recorded -1 leaves the duration NULL
+		// and sets _unmeasured. What changes is that the duration column now
+		// only ever holds durations.
+		if *field.value < 0 {
+			args[field.name+"_unmeasured"] = true
+			continue
+		}
+		args[field.name] = *field.value
 	}
 }
 
