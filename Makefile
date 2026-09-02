@@ -6,18 +6,50 @@ AXPERMS_BIN := $(HOME)/go/bin/axperms
 BUNDLE_ID := com.tmc.gputrace
 AXPERMS_BUNDLE_ID := com.github.tmc.gputrace.axperms
 
-.PHONY: all build test vet install reinstall clean sign-bundle setup-permissions reset-permissions fullreinstall reset test-permissions axperms setup-axperms help
+.PHONY: all build test vet fmt checkfmt check install reinstall clean sign-bundle setup-permissions reset-permissions fullreinstall reset test-permissions axperms setup-axperms help
+
+GO_FILES = $(shell git ls-files '*.go')
 
 all: build
 
 build:
 	go install ./cmd/gputrace
 
+# test reports how many cases it skipped, because "ok" and a skip are the same
+# line in go test's default output. Most of the skips are opt-in integration
+# tests waiting on an environment variable (see docs/TESTING.md); a suite that
+# says ok while a third of it sat out is telling the truth and meaning less
+# than it reads.
 test:
-	go test ./...
+	@go test -json ./... | go run ./internal/cmd/testcensus
+
+# test-gated reports which opt-in variables are set and which are not, so the
+# skip count above is attributable rather than merely known.
+test-gated:
+	@echo "Opt-in test variables (see docs/TESTING.md):"
+	@for v in TRACE_PROCESSOR_SHELL GPUTRACE_TEST_TRACE GPUTRACE_MIO_SETUP_DATA_PATH \
+	          GPUTRACE_PERF_FIXTURE GPUTRACE_TEST_METALLIB GPUTRACE_PARITY_TRACE; do \
+		eval val=\$$$$v; \
+		if [ -n "$$val" ]; then echo "  set    $$v=$$val"; else echo "  unset  $$v"; fi; \
+	done
+	@echo "Unset variables leave their tests skipped; go test reports that as ok."
 
 vet:
 	go vet ./...
+
+fmt:
+	gofmt -w $(GO_FILES)
+
+# checkfmt fails instead of rewriting, so CI and pre-push can use it.
+checkfmt:
+	@unformatted=$$(gofmt -l $(GO_FILES)); \
+	if [ -n "$$unformatted" ]; then \
+		echo "These files are not gofmt-formatted; run 'make fmt':"; \
+		echo "$$unformatted"; \
+		exit 1; \
+	fi
+
+check: checkfmt vet test
 
 install: clean build setup-permissions
 	@echo "Reinstall complete with fresh permissions"
@@ -149,6 +181,9 @@ help:
 	@echo "  build              - Build gputrace"
 	@echo "  test               - Run Go tests"
 	@echo "  vet                - Run go vet"
+	@echo "  fmt                - Rewrite tracked Go files with gofmt"
+	@echo "  checkfmt           - Fail if any tracked Go file is unformatted"
+	@echo "  check              - checkfmt + vet + test"
 	@echo "  reinstall          - Rebuild binary and refresh signed app bundle"
 	@echo "  fullreinstall      - Clean + rebuild + fresh permissions (resets TCC)"
 	@echo "  clean              - Remove app bundle (forces macgo to recreate)"

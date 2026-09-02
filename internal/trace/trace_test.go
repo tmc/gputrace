@@ -4,10 +4,66 @@ import (
 	"bytes"
 	"compress/zlib"
 	"encoding/binary"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// TestOpenProfilerOnlyBundle checks that a bundle with a .gpuprofiler_raw
+// payload but no capture stream opens, is marked ProfilerOnly, and refuses
+// capture-derived work with a message that names what is missing.
+func TestOpenProfilerOnlyBundle(t *testing.T) {
+	tracePath := writeSyntheticTraceBundle(t)
+	if err := os.Remove(filepath.Join(tracePath, "capture")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Without a profiler payload the bundle is still unopenable.
+	if _, err := Open(tracePath); err == nil {
+		t.Fatal("Open succeeded on a bundle with neither capture nor profiler data")
+	}
+
+	perfDir := tracePath + ".gpuprofiler_raw"
+	if err := os.Mkdir(perfDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(perfDir, "streamData"), []byte("bplist00"))
+
+	tr, err := Open(tracePath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if !tr.ProfilerOnly {
+		t.Error("ProfilerOnly = false, want true")
+	}
+	if len(tr.CaptureData) != 0 {
+		t.Errorf("CaptureData = %d bytes, want none", len(tr.CaptureData))
+	}
+	err = tr.RequireCaptureRecords()
+	if !errors.Is(err, ErrNoCaptureRecords) {
+		t.Fatalf("RequireCaptureRecords() = %v, want ErrNoCaptureRecords", err)
+	}
+	if !strings.Contains(err.Error(), tracePath) {
+		t.Errorf("error %q does not name the bundle", err)
+	}
+}
+
+// TestOpenFullTraceRequiresCaptureRecords checks the tolerance did not weaken
+// the guard for a normal bundle.
+func TestOpenFullTraceRequiresCaptureRecords(t *testing.T) {
+	tr, err := Open(writeSyntheticTraceBundle(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr.ProfilerOnly {
+		t.Error("ProfilerOnly = true on a bundle with a capture file")
+	}
+	if err := tr.RequireCaptureRecords(); err != nil {
+		t.Errorf("RequireCaptureRecords() = %v, want nil", err)
+	}
+}
 
 func TestOpen(t *testing.T) {
 	testPath := writeSyntheticTraceBundle(t)
@@ -108,6 +164,48 @@ func TestDecompressStore(t *testing.T) {
 	}
 	if !bytes.Equal(decompressed, want) {
 		t.Fatalf("DecompressStore = %q, want %q", decompressed, want)
+	}
+}
+
+func TestDecompressStoreSections(t *testing.T) {
+	testPath := writeSyntheticTraceBundle(t)
+	want := [][]byte{[]byte("first section"), []byte("second section"), []byte("third section")}
+
+	var store []byte
+	for _, section := range want {
+		store = append(store, zlibData(t, section)...)
+	}
+	writeFile(t, filepath.Join(testPath, "store1"), store)
+
+	trace := &Trace{Path: testPath}
+	sections, err := trace.DecompressStoreSections(1)
+	if err != nil {
+		t.Fatalf("DecompressStoreSections failed: %v", err)
+	}
+	if len(sections) != len(want) {
+		t.Fatalf("sections = %d, want %d", len(sections), len(want))
+	}
+	for i, section := range sections {
+		if !bytes.Equal(section, want[i]) {
+			t.Errorf("section %d = %q, want %q", i, section, want[i])
+		}
+	}
+
+	// DecompressStore reports only the first section; callers that depend on
+	// that behavior must keep working.
+	first, err := trace.DecompressStore(1)
+	if err != nil {
+		t.Fatalf("DecompressStore failed: %v", err)
+	}
+	if !bytes.Equal(first, want[0]) {
+		t.Fatalf("DecompressStore = %q, want %q", first, want[0])
+	}
+}
+
+func TestDecompressStoreSectionsMissing(t *testing.T) {
+	trace := &Trace{Path: writeSyntheticTraceBundle(t)}
+	if _, err := trace.DecompressStoreSections(9); err == nil {
+		t.Fatal("expected an error for a store that does not exist")
 	}
 }
 

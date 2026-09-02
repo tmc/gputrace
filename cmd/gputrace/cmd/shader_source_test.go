@@ -2,8 +2,21 @@ package cmd
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestFormatShaderSourceProvenance(t *testing.T) {
+	got := formatShaderSourceProvenance("synthetic fallback", true)
+	for _, want := range []string{
+		"static per-line cost heuristic",
+		"synthetic fallback (approximate)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("provenance missing %q:\n%s", want, got)
+		}
+	}
+}
 
 func TestValidateShaderSourceFormatAcceptsKnownValues(t *testing.T) {
 	for _, format := range []string{"text", "html", "json"} {

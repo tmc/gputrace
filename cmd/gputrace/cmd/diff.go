@@ -9,29 +9,31 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/tmc/gputrace/internal/difftrace"
+	"github.com/tmc/gputrace/internal/environment"
 )
 
 type diffOptions struct {
-	JSON          bool
-	CSV           bool
-	By            string
-	Limit         int
-	MinDeltaUs    int
-	OnlyEncoder   int
-	OnlyFunction  string
-	ShowMatches   bool
-	ShowUnmatched bool
-	ShowOccur     bool
-	Explain       bool
-	Quick         bool
-	Divergence    bool
-	DivergenceUs  int
-	ByEncoder     bool
-	MDOut         string
-	PerfettoOut   string
-	BenchDir      string
-	Left          string
-	Right         string
+	JSON                  bool
+	CSV                   bool
+	By                    string
+	Limit                 int
+	MinDeltaUs            int
+	OnlyEncoder           int
+	OnlyFunction          string
+	ShowMatches           bool
+	ShowUnmatched         bool
+	ShowOccur             bool
+	Explain               bool
+	Quick                 bool
+	Divergence            bool
+	DivergenceUs          int
+	ByEncoder             bool
+	MDOut                 string
+	PerfettoOut           string
+	BenchDir              string
+	Left                  string
+	Right                 string
+	AllowCrossEnvironment bool
 }
 
 var diffCmd = newDiffCommand(&diffOptions{Limit: 20, OnlyEncoder: -1})
@@ -46,9 +48,15 @@ This command supports .gputrace bundles and -perfdata.gputrace bundles.
 It reports total deltas, function-level contributors, encoder/pipeline deltas,
 spike windows, unnamed dispatch impact, and matched/unmatched dispatches.
 
+Given two .gpucapture bundles (Linux/NVIDIA), it compares them kernel by
+kernel instead: GPU time moved per kernel, launch counts, theoretical
+occupancy, the busy/idle budget, and the kernels present in only one of
+the two captures.
+
 Examples:
+  gputrace diff base.gpucapture variant.gpucapture
   gputrace diff go-perfdata.gputrace py-perfdata.gputrace
-  gputrace diff --bench-dir ~/bench-traces --quick --by-encoder
+  gputrace diff --bench-dir ~/bench-traces --quick --explain --by-encoder
   gputrace diff --bench-dir ~/bench-traces --left go.gputrace --right py.gputrace
   gputrace diff a.gputrace b.gputrace --by function --limit 25 --explain
   gputrace diff a.gputrace b.gputrace --by encoder --only-encoder 2
@@ -80,6 +88,7 @@ Examples:
 	cmd.Flags().StringVar(&opts.BenchDir, "bench-dir", "", "Auto-discover newest Go/Python perfdata pair from benchmark directory")
 	cmd.Flags().StringVar(&opts.Left, "left", "", "Explicit left trace path (overrides auto-discovery)")
 	cmd.Flags().StringVar(&opts.Right, "right", "", "Explicit right trace path (overrides auto-discovery)")
+	cmd.Flags().BoolVar(&opts.AllowCrossEnvironment, "allow-cross-environment", false, "Show descriptive deltas when exact environment gates differ or are unavailable")
 	return cmd
 }
 
@@ -88,6 +97,12 @@ func init() {
 }
 
 func runDiff(cmd *cobra.Command, args []string, opts diffOptions) error {
+	// CUDA captures carry no encoder structure to align dispatches
+	// against, so they take the kernel-name comparison instead of the
+	// Metal dispatch-alignment one.
+	if len(args) == 2 && isCaptureInput(args[0]) && isCaptureInput(args[1]) {
+		return runCaptureDiff(cmd, args[0], args[1], opts)
+	}
 	if err := opts.validate(args); err != nil {
 		return err
 	}
@@ -114,6 +129,15 @@ func runDiff(cmd *cobra.Command, args []string, opts diffOptions) error {
 	if err != nil {
 		return fmt.Errorf("load trace B: %w", err)
 	}
+	environmentComparison, err := environment.Compare(a.Environment, b.Environment, opts.AllowCrossEnvironment)
+	if err != nil {
+		return err
+	}
+	if environmentComparison.Label == "incompatible" {
+		mismatches := append([]string(nil), environmentComparison.ExactMismatches...)
+		mismatches = append(mismatches, environmentComparison.CapabilityMismatches...)
+		return fmt.Errorf("compare traces: incompatible or unavailable environment evidence (%s); use --allow-cross-environment for descriptive, non-causal deltas", strings.Join(mismatches, ", "))
+	}
 
 	aligned := difftrace.AlignDispatches(a, b, difftrace.AlignOptions{
 		OnlyEncoder:  opts.OnlyEncoder,
@@ -121,6 +145,10 @@ func runDiff(cmd *cobra.Command, args []string, opts diffOptions) error {
 		MinDeltaUs:   opts.MinDeltaUs,
 	})
 	report := difftrace.BuildReport(a, b, aligned, difftrace.ReportOptions{Limit: opts.Limit, MinDeltaUs: opts.MinDeltaUs})
+	report.Environment = &environmentComparison
+	if environmentComparison.Label == "cross-environment, not causally attributable" {
+		report.Warnings = append(report.Warnings, "cross-environment comparison: deltas are descriptive and not causally attributable")
+	}
 	if diffByIncludes(opts.By, "pipeline-pairs") {
 		report.PipelinePairs = difftrace.BuildPipelinePairs(a, b)
 	}
@@ -167,7 +195,7 @@ func runDiff(cmd *cobra.Command, args []string, opts diffOptions) error {
 
 	var text string
 	if opts.Quick {
-		text = difftrace.RenderQuick(report, 10)
+		text = difftrace.RenderQuick(report, 10, opts.Explain)
 		if opts.ByEncoder {
 			text += "\n" + difftrace.RenderEncoderFocus(report, opts.Limit)
 		}
@@ -242,8 +270,8 @@ func (o diffOptions) validate(args []string) error {
 		if strings.TrimSpace(o.By) != "" {
 			return fmt.Errorf("--quick cannot be combined with --by")
 		}
-		if o.ShowMatches || o.ShowUnmatched || o.ShowOccur || o.Explain {
-			return fmt.Errorf("--quick cannot be combined with --show-matches/--show-unmatched/--show-occurrences/--explain")
+		if o.ShowMatches || o.ShowUnmatched || o.ShowOccur {
+			return fmt.Errorf("--quick cannot be combined with --show-matches/--show-unmatched/--show-occurrences")
 		}
 	}
 	if o.ByEncoder && strings.TrimSpace(o.By) != "" {

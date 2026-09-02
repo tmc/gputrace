@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"sort"
 	"time"
 
@@ -19,21 +18,24 @@ var timingCmd = newTimingCommand(&timingOptions{
 })
 
 type timingOptions struct {
-	json    string
-	csv     string
-	compare string
-	table   bool
+	json        string
+	csv         string
+	compare     string
+	table       bool
+	minCalls    int
+	benchfmt    bool
+	benchConfig benchfmtConfigFlags
 }
 
 func newTimingCommand(opts *timingOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "timing <trace.gputrace>",
-		Short: "Extract and export GPU timing metrics from traces",
-		Long: `Extract GPU timing metrics including per-kernel execution times,
+		Short: "Summarize measured or approximate GPU timing",
+		Long: `Summarize GPU timing including per-function dispatch spans,
 command buffer timings, and statistical analysis.
 
 This command extracts timing data from GPU traces and provides:
-  - Per-kernel execution statistics (min/max/avg/percentiles)
+  - Per-function dispatch-span statistics (min/max/avg)
   - Command buffer and encoder timing
   - Memory transfer timing (when available)
   - Export formats: JSON, CSV, and human-readable tables
@@ -68,6 +70,8 @@ supported timing source such as streamData/APSTimelineData.`,
 	cmd.Flags().StringVar(&opts.csv, "csv", opts.csv, "Export timing metrics to CSV file")
 	cmd.Flags().StringVar(&opts.compare, "compare", opts.compare, "Compare with baseline trace for regression detection")
 	cmd.Flags().BoolVar(&opts.table, "table", opts.table, "Show human-readable table output")
+	cmd.Flags().IntVar(&opts.minCalls, "min-calls", opts.minCalls, "Only table rows for functions dispatched at least N times (off by default; reports what it drops; JSON and CSV are never filtered)")
+	addBenchfmtFlags(cmd, &opts.benchfmt, &opts.benchConfig)
 	return cmd
 }
 
@@ -75,8 +79,31 @@ func init() {
 	rootCmd.AddCommand(timingCmd)
 }
 
+// tableMetrics applies --min-calls to a copy of metrics and returns the note
+// naming what it dropped. The original is left alone: JSON and CSV exports
+// carry every row regardless of the flag, because a filtered export is a
+// partial file that reads as a complete one long after the flag is forgotten.
+func tableMetrics(metrics *gputrace.TimingMetrics, minCalls int) (*gputrace.TimingMetrics, string) {
+	kept, dropped := gputrace.FilterMinCalls(metrics.KernelTimings, minCalls)
+	if dropped == 0 {
+		return metrics, ""
+	}
+	filtered := *metrics
+	filtered.KernelTimings = kept
+	return &filtered, gputrace.MinCallsNote(minCalls, dropped, len(metrics.KernelTimings))
+}
+
 func runTiming(cmd *cobra.Command, args []string, opts *timingOptions) error {
 	tracePath := args[0]
+	if opts.minCalls < 0 {
+		return fmt.Errorf("--min-calls must be >= 0")
+	}
+	if err := validateBenchfmtFlags(opts.benchfmt, opts.benchConfig); err != nil {
+		return err
+	}
+	if opts.benchfmt && (opts.json != "" || opts.csv != "" || opts.compare != "") {
+		return fmt.Errorf("--benchfmt cannot be combined with --json, --csv, or --compare")
+	}
 	if err := validateTimingOutputPaths(opts); err != nil {
 		return err
 	}
@@ -85,11 +112,28 @@ func runTiming(cmd *cobra.Command, args []string, opts *timingOptions) error {
 	if err := checkTraceFile(tracePath); err != nil {
 		return err
 	}
+	if opts.benchfmt {
+		_, stats, err := loadProfilerStats(tracePath)
+		if err != nil {
+			return fmt.Errorf("benchfmt requires measured profiler streamData: %w", err)
+		}
+		return writeProfilerBenchfmt(cmd.OutOrStdout(), tracePath, stats, nil, opts.benchConfig)
+	}
+
+	// A profiled bundle may also contain unsorted-capture. Prefer streamData:
+	// its dispatch and command-buffer records are more specific than the
+	// capture fallback. Keep comparison on the common extractor until it can
+	// compare profiler records on both sides.
+	if opts.compare == "" && findProfilerDir(tracePath) != "" {
+		return runTimingFromProfiler(tracePath, opts)
+	}
 
 	// Try to open full trace first
 	trace, err := gputrace.Open(tracePath)
-	if err != nil {
-		// Fall back to profiler-only mode if unsorted-capture is missing
+	if err != nil || trace.ProfilerOnly {
+		// Fall back to profiler-only mode when there is no capture stream.
+		// Open now succeeds on such bundles, so the flag, not the error, is
+		// what distinguishes them.
 		return runTimingFromProfiler(tracePath, opts)
 	}
 
@@ -102,8 +146,11 @@ func runTiming(cmd *cobra.Command, args []string, opts *timingOptions) error {
 
 	// Show table if requested
 	if opts.table {
-		report := gputrace.FormatTimingMetrics(metrics)
-		fmt.Fprintln(timingReportWriter(opts), report)
+		shown, note := tableMetrics(metrics, opts.minCalls)
+		fmt.Fprintln(timingReportWriter(opts), gputrace.FormatTimingMetrics(shown)+note)
+	}
+	if metrics.TimingSource == gputrace.TimingSourceUnavailable {
+		fmt.Fprint(os.Stderr, profileReplayHint(tracePath))
 	}
 
 	// Export JSON if requested
@@ -159,25 +206,7 @@ func runTimingFromProfiler(tracePath string, opts *timingOptions) error {
 		return err
 	}
 
-	// Find .gpuprofiler_raw directory
-	profilerDir := ""
-
-	// Check if it's directly a .gpuprofiler_raw directory
-	if filepath.Ext(tracePath) == ".gpuprofiler_raw" {
-		profilerDir = tracePath
-	} else {
-		// Look inside for .gpuprofiler_raw
-		entries, err := os.ReadDir(tracePath)
-		if err != nil {
-			return fmt.Errorf("read directory: %w", err)
-		}
-		for _, e := range entries {
-			if e.IsDir() && filepath.Ext(e.Name()) == ".gpuprofiler_raw" {
-				profilerDir = filepath.Join(tracePath, e.Name())
-				break
-			}
-		}
-	}
+	profilerDir := findProfilerDir(tracePath)
 
 	if profilerDir == "" {
 		fmt.Fprintf(os.Stderr, "Hint: To generate profiled timing data with streamData/APSTimelineData, run:\n")
@@ -196,8 +225,8 @@ func runTimingFromProfiler(tracePath string, opts *timingOptions) error {
 
 	// Show table if requested
 	if opts.table {
-		report := formatProfilerTimingMetrics(metrics)
-		fmt.Fprintln(timingReportWriter(opts), report)
+		shown, note := tableMetrics(metrics, opts.minCalls)
+		fmt.Fprintln(timingReportWriter(opts), formatProfilerTimingMetrics(shown)+note)
 	}
 
 	// Export JSON if requested
@@ -274,12 +303,17 @@ func convertStreamDataToTimingMetrics(tracePath string, stats *counter.StreamDat
 	}
 	metrics := &gputrace.TimingMetrics{
 		TracePath:            tracePath,
-		TotalDuration:        time.Duration(stats.TotalTimeUs) * time.Microsecond,
+		TotalDuration:        time.Duration(stats.TotalDispatchTimeUs) * time.Microsecond,
 		TotalEncoders:        len(stats.EncoderTimings),
 		TotalCommandBuffers:  cbCount,
+		TimingSource:         "profiler",
+		TimingApproximate:    false,
 		KernelTimings:        make([]*gputrace.KernelTiming, 0),
 		EncoderTimings:       make([]*gputrace.EncoderTiming, 0),
 		CommandBufferTimings: make([]*gputrace.CommandBufferTiming, 0),
+	}
+	if metrics.TotalDuration == 0 {
+		metrics.TotalDuration = time.Duration(stats.TotalEncoderTimeUs) * time.Microsecond
 	}
 
 	// Convert encoder timings
@@ -298,10 +332,7 @@ func convertStreamDataToTimingMetrics(tracePath string, stats *counter.StreamDat
 	// Aggregate by function name
 	kernelMap := make(map[string]*gputrace.KernelTiming)
 	for _, d := range stats.Dispatches {
-		name := d.FunctionName
-		if name == "" {
-			name = fmt.Sprintf("(pipeline_%d)", d.PipelineIndex)
-		}
+		name := d.DisplayName()
 		duration := time.Duration(d.DurationUs) * time.Microsecond
 
 		kt, exists := kernelMap[name]
@@ -343,8 +374,21 @@ func convertStreamDataToTimingMetrics(tracePath string, stats *counter.StreamDat
 
 	// Sort by total duration descending
 	sort.Slice(metrics.KernelTimings, func(i, j int) bool {
-		return metrics.KernelTimings[i].TotalDuration > metrics.KernelTimings[j].TotalDuration
+		if metrics.KernelTimings[i].TotalDuration != metrics.KernelTimings[j].TotalDuration {
+			return metrics.KernelTimings[i].TotalDuration > metrics.KernelTimings[j].TotalDuration
+		}
+		return metrics.KernelTimings[i].Name < metrics.KernelTimings[j].Name
 	})
+
+	if stats.Timeline != nil {
+		for _, cb := range stats.Timeline.CommandBufferTimestamps {
+			metrics.CommandBufferTimings = append(metrics.CommandBufferTimings, &gputrace.CommandBufferTiming{
+				Index:    cb.Index,
+				Label:    "(profiler command buffer)",
+				Duration: time.Duration(cb.DurationNs(stats.Timeline.TimebaseNumer, stats.Timeline.TimebaseDenom)),
+			})
+		}
+	}
 
 	return metrics
 }
@@ -354,15 +398,19 @@ func formatProfilerTimingMetrics(metrics *gputrace.TimingMetrics) string {
 	var out string
 
 	// Summary line
-	out += fmt.Sprintf("%d %s, %d %s (%s)\n\n",
+	out += fmt.Sprintf("Trace: %s\n", metrics.TracePath)
+	out += "Source: profiler streamData (measured cumulative dispatch offsets)\n"
+	out += fmt.Sprintf("Dispatch span: %s\n", FormatDuration(int(metrics.TotalDuration.Microseconds())))
+	out += fmt.Sprintf("%d %s, %d timed %s, %d command %s\n",
 		metrics.TotalEncoders, Pluralize(metrics.TotalEncoders, "encoder", "encoders"),
-		len(metrics.KernelTimings), Pluralize(len(metrics.KernelTimings), "kernel", "kernels"),
-		FormatDuration(int(metrics.TotalDuration.Microseconds())))
+		len(metrics.KernelTimings), Pluralize(len(metrics.KernelTimings), "function", "functions"),
+		metrics.TotalCommandBuffers, Pluralize(metrics.TotalCommandBuffers, "buffer", "buffers"))
+	out += "Note: per-dispatch spans come from cumulative offsets and may include boundary or gap time.\n\n"
 
-	out += Colorize("Top Kernels by Time", ColorBold) + "\n"
+	out += Colorize("Functions by Dispatch Span", ColorBold) + "\n"
 	out += TableSeparator(80) + "\n"
 	out += fmt.Sprintf("%-50s %8s %10s %10s %10s %8s\n",
-		"Kernel Name", "Invokes", "Total(us)", "Avg(us)", "Max(us)", "Cost")
+		"Function", "Dispatches", "Span(us)", "Avg(us)", "Max(us)", "Span Share")
 	out += TableSeparator(100) + "\n"
 
 	for _, kt := range metrics.KernelTimings {
@@ -370,14 +418,20 @@ func formatProfilerTimingMetrics(metrics *gputrace.TimingMetrics) string {
 		if len(name) > 50 {
 			name = name[:47] + "..."
 		}
-		out += fmt.Sprintf("%-50s %8s %10s %10s %10s %7s\n",
+		marker := ""
+		if kt.IsLowSample() {
+			marker = gputrace.LowSampleMarker
+		}
+		out += fmt.Sprintf("%-50s %8s %10s %10s %10s %7s%s\n",
 			name,
 			FormatCount(kt.InvocationCount),
 			FormatCount(int(kt.TotalDuration.Microseconds())),
 			FormatCount(int(kt.AvgDuration.Microseconds())),
 			FormatCount(int(kt.MaxDuration.Microseconds())),
-			FormatPercent(kt.PercentOfTotal))
+			FormatPercent(kt.PercentOfTotal),
+			marker)
 	}
+	out += gputrace.LowSampleFootnote(metrics.KernelTimings)
 
 	return out
 }

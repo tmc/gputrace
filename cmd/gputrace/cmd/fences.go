@@ -23,8 +23,9 @@ func newFencesCommand(opts *fencesOptions) *cobra.Command {
 		Use:    "fences <trace.gputrace>",
 		Short:  "List fence operations in the trace",
 		Hidden: true,
-		Long:   `Scans the trace for fence operations (e.g. waitForFence, updateFence) encoded as ICB executions.`,
-		Args:   cobra.ExactArgs(1),
+		Long: `Scans Culul records for heuristic fence-operation candidates.
+The result is not a decoded Metal waitForFence/updateFence API sequence.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runFences(cmd, args, opts)
 		},
@@ -118,7 +119,8 @@ func runFences(cmd *cobra.Command, args []string, opts *fencesOptions) error {
 		return err
 	}
 
-	fmt.Fprintln(w, "Scanning for fence operations...")
+	fmt.Fprintln(w, "Heuristic fence candidates from Culul records")
+	fmt.Fprintln(w, "Note: operation types marked ? are inferred, not decoded Metal API calls.")
 	fmt.Fprintf(w, "%-10s %-18s %-30s %s\n", "Offset", "Address", "Label", "Details")
 	fmt.Fprintln(w, "--------------------------------------------------------------------------------")
 	for _, f := range fences {

@@ -1,6 +1,9 @@
 package export
 
 import (
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -67,12 +70,12 @@ func TestDispatchSIMDGroups(t *testing.T) {
 		ThreadsPerGroupY: 1,
 		ThreadsPerGroupZ: 1,
 	}
-	if got, want := dispatchSIMDGroups(dispatch), int64(32); got != want {
+	if got, want := int64(dispatch.SIMDGroups()), int64(32); got != want {
 		t.Fatalf("dispatchSIMDGroups = %d, want %d", got, want)
 	}
 
 	dispatch.ThreadsPerGroupX = 0
-	if got := dispatchSIMDGroups(dispatch); got != 0 {
+	if got := int64(dispatch.SIMDGroups()); got != 0 {
 		t.Fatalf("dispatchSIMDGroups with missing group size = %d, want 0", got)
 	}
 }
@@ -143,17 +146,16 @@ func TestPprofValueIndexes(t *testing.T) {
 	if pprofValueCount <= pprofUniformRegsIdx {
 		t.Fatalf("pprofValueCount = %d, uniform index = %d", pprofValueCount, pprofUniformRegsIdx)
 	}
-	if pprofExecutionCostIdx != 34 || pprofProfilerCountIdx != 35 || pprofUniformRegsIdx != 36 {
-		t.Fatalf("pprof indexes changed: execution=%d profiler=%d uniform=%d", pprofExecutionCostIdx, pprofProfilerCountIdx, pprofUniformRegsIdx)
+	if pprofExecutionCostIdx != 33 || pprofProfilerCountIdx != 34 || pprofUniformRegsIdx != 35 || pprofUnattributedRowsIdx != 36 {
+		t.Fatalf("pprof indexes changed: execution=%d profiler=%d uniform=%d unattributed=%d", pprofExecutionCostIdx, pprofProfilerCountIdx, pprofUniformRegsIdx, pprofUnattributedRowsIdx)
 	}
 }
 
 func TestApplyEncoderCounterMetricsIncludesBytesAndBandwidth(t *testing.T) {
 	values := make([]int64, pprofValueCount)
-	values[19] = 7
+	values[18] = 7
 	applyEncoderCounterMetrics(values, &counter.EncoderCounterMetrics{
 		ALUUtilization:                 1.25,
-		KernelOccupancy:                0.81,
 		BytesReadFromDeviceMemory:      100,
 		BytesWrittenToDeviceMemory:     200,
 		BufferDeviceMemoryBytesRead:    300,
@@ -165,29 +167,86 @@ func TestApplyEncoderCounterMetricsIncludesBytesAndBandwidth(t *testing.T) {
 	if got := values[7]; got != 125 {
 		t.Fatalf("alu_util = %d, want 125", got)
 	}
-	if got := values[8]; got != 81 {
-		t.Fatalf("occupancy = %d, want 81", got)
-	}
-	if got := values[19]; got != 7 {
+	if got := values[18]; got != 7 {
 		t.Fatalf("read_bytes overwritten with %d, want 7", got)
 	}
-	if got := values[20]; got != 200 {
+	if got := values[19]; got != 200 {
 		t.Fatalf("write_bytes = %d, want 200", got)
 	}
-	if got := values[21]; got != 300 {
+	if got := values[20]; got != 300 {
 		t.Fatalf("buffer_read_bytes = %d, want 300", got)
 	}
-	if got := values[22]; got != 400 {
+	if got := values[21]; got != 400 {
 		t.Fatalf("buffer_write_bytes = %d, want 400", got)
 	}
-	if got := values[23]; got != 1500 {
+	if got := values[22]; got != 1500 {
 		t.Fatalf("device_bandwidth = %d, want 1500", got)
 	}
-	if got := values[24]; got != 2500 {
+	if got := values[23]; got != 2500 {
 		t.Fatalf("buffer_l1_read_bw = %d, want 2500", got)
 	}
-	if got := values[25]; got != 3500 {
+	if got := values[24]; got != 3500 {
 		t.Fatalf("buffer_l1_write_bw = %d, want 3500", got)
+	}
+}
+
+func TestPprofRendersUnknownCounterMetricsAsUnattributed(t *testing.T) {
+	metrics := []counter.EncoderCounterMetrics{
+		{
+			EncoderIndex:   0, // A stale/default index must not override attribution.
+			EncoderLabel:   "pipeline0",
+			Attribution:    counter.CounterAttributionUnknown,
+			ALUUtilization: 71.25,
+		},
+		{
+			EncoderIndex: 1,
+			Attribution:  counter.CounterAttributionEncoder,
+		},
+	}
+	attributed, unknown := splitEncoderCounterMetrics(metrics)
+	if attributed[0] != nil {
+		t.Fatal("unknown metric was indexed as encoder 0")
+	}
+	if attributed[1] == nil || len(unknown) != 1 {
+		t.Fatalf("split = %d attributed, %d unknown; want 1 and 1", len(attributed), len(unknown))
+	}
+
+	traceDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(traceDir, "capture"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prof, err := ToPprofWithMetrics(&trace.Trace{Path: traceDir}, nil, &counter.PerfCounterStats{
+		ShaderMetrics: []counter.ShaderHardwareMetrics{{
+			ShaderName:     "pipeline0",
+			ALUUtilization: 71.25,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := prof.CheckValid(); err != nil {
+		t.Fatalf("invalid profile: %v", err)
+	}
+	if got, want := len(prof.Sample), 1; got != want {
+		t.Fatalf("samples = %d, want %d", got, want)
+	}
+	sample := prof.Sample[0]
+	if got, want := sample.Label["attribution"], []string{"unknown"}; !slices.Equal(got, want) {
+		t.Fatalf("attribution = %#v, want %#v", got, want)
+	}
+	if _, ok := sample.NumLabel["encoder_idx"]; ok {
+		t.Fatal("unattributed sample contains encoder_idx")
+	}
+	if got, want := sample.Value[7], int64(7125); got != want {
+		t.Fatalf("alu_util = %d, want %d", got, want)
+	}
+	if got, want := sample.Value[pprofUnattributedRowsIdx], int64(1); got != want {
+		t.Fatalf("unattributed_counter_rows = %d, want %d", got, want)
+	}
+	if !slices.ContainsFunc(prof.Function, func(fn *profile.Function) bool {
+		return fn.Name == "[unattributed] pipeline0"
+	}) {
+		t.Fatal("profile is missing [unattributed] pipeline0 function")
 	}
 }
 

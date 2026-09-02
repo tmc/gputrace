@@ -1,0 +1,78 @@
+digraph dot {
+subgraph cluster_130 {
+label="graph_130" graph[style="dashed"];
+"graph_130_node_0"[style="bold" shape="octagon" label="0
+_ZN3mlx4core2cu6copy_sIiijLi4EEEvPKT_PT0_T1_
+"];
+
+"graph_130_node_1"[style="bold" shape="octagon" label="1
+_ZN3mlx4core2cu15qmm_sm80_kernelILi64EN7cutlass6half_tENS3_15integer_subbyteILi4ELb0EEES4_N4cute5tupleIJNS7_1CILi16EEENS9_ILi128EEENS9_ILi64EEEEEEEEvPKT0_PKT1_PKT2_SG_PKjSO_PSE_iiiib
+"];
+
+"graph_130_node_2"[style="bold" shape="octagon" label="2
+_ZN3mlx4core2cu11binary_g_ndINS1_3AddE6__halfS4_iLi2ELi4EEEvPKT0_S7_PT1_T2_N4cuda3std3__45arrayIiXT3_EEENSE_IlXT3_EEESG_
+"];
+
+"graph_130_node_3"[style="bold" shape="octagon" label="3
+_ZN3mlx4core2cu4ropeI6__halfLb0ELb1EEEvPKT_PS4_PKiffN4cuda3std3__45arrayIlLm4EEESE_li5uint3
+"];
+
+"graph_130_node_4"[style="solid" shape="rectangle" label="4
+graph_131
+"];
+
+"graph_130_node_5"[style="bold" shape="octagon" label="5
+_ZN3mlx4core2cu15qmm_sm80_kernelILi64EN7cutlass6half_tENS3_15integer_subbyteILi4ELb0EEES4_N4cute5tupleIJNS7_1CILi16EEENS9_ILi128EEENS9_ILi64EEEEEEEEvPKT0_PKT1_PKT2_SG_PKjSO_PSE_iiiib
+"];
+
+"graph_130_node_6"[style="bold" shape="octagon" label="6
+_ZN3mlx4core2cu9binary_vvINS1_3AddE6__halfS4_jLi8EEEvPKT0_S7_PT1_T2_
+"];
+
+"graph_130_node_7"[style="bold" shape="octagon" label="7
+_ZN3mlx4core2cu14rms_norm_smallI6__halfLi64ELi7ELb1ELi8EEEvPKT_S6_PS4_fjjl
+"];
+
+"graph_130_node_8"[style="bold" shape="octagon" label="8
+_ZN3mlx4core2cu15qmm_sm80_kernelILi64EN7cutlass6half_tENS3_15integer_subbyteILi4ELb0EEES4_N4cute5tupleIJNS7_1CILi16EEENS9_ILi128EEENS9_ILi64EEEEEEEEvPKT0_PKT1_PKT2_SG_PKjSO_PSE_iiiib
+"];
+
+"graph_130_node_9"[style="bold" shape="octagon" label="9
+_ZN3mlx4core2cu15qmm_sm80_kernelILi64EN7cutlass6half_tENS3_15integer_subbyteILi4ELb0EEES4_N4cute5tupleIJNS7_1CILi16EEENS9_ILi128EEENS9_ILi64EEEEEEEEvPKT0_PKT1_PKT2_SG_PKjSO_PSE_iiiib
+"];
+
+"graph_130_node_10"[style="bold" shape="octagon" label="10
+_ZN3mlx4core2cu139Cf2ISigmoidADf2IBroadcastACEf2IBroadcastCAFf2IMultiplyDEGf2IBroadcastFBHf2IBroadcastBFIf2OMultiplyGH_VV_f2f2_6142509188972423790_contiguousIjLi8EEEvPK6__halfS5_PS3_T_
+"];
+
+"graph_130_node_11"[style="bold" shape="octagon" label="11
+_ZN3mlx4core2cu15qmm_sm80_kernelILi64EN7cutlass6half_tENS3_15integer_subbyteILi4ELb0EEES4_N4cute5tupleIJNS7_1CILi16EEENS9_ILi128EEENS9_ILi64EEEEEEEEvPKT0_PKT1_PKT2_SG_PKjSO_PSE_iiiib
+"];
+
+"graph_130_node_1" -> "graph_130_node_2";
+"graph_130_node_2" -> "graph_130_node_3";
+"graph_130_node_3" -> "graph_130_node_4";
+"graph_130_node_4" -> "graph_130_node_5";
+"graph_130_node_5" -> "graph_130_node_6";
+"graph_130_node_6" -> "graph_130_node_7";
+"graph_130_node_7" -> "graph_130_node_8";
+"graph_130_node_7" -> "graph_130_node_9";
+"graph_130_node_8" -> "graph_130_node_10";
+"graph_130_node_9" -> "graph_130_node_10";
+"graph_130_node_10" -> "graph_130_node_11";
+}
+subgraph cluster_131 {
+label="graph_131" graph[style="dashed"];
+"graph_131_node_0"[style="solid" shape="rectangle" label="0
+graph_132
+"];
+
+}
+subgraph cluster_132 {
+label="graph_132" graph[style="dashed"];
+"graph_132_node_0"[style="bold" shape="octagon" label="0
+cudnn_generated_fort_native_sdpa_sm80_flash_fprop_wmma_f16_knob_1_64x64x128_4x1x1_cga1x1x1_kernel0_0
+"];
+
+}
+}

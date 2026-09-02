@@ -17,6 +17,83 @@ type InitCall struct {
 	Info       string `json:"info"`
 	Label      string `json:"label,omitempty"`
 	Offset     int64  `json:"offset"`
+	// ResourceOptions is the MTLResourceOptions value recorded at buffer
+	// creation. Meaningful only for Type "newBuffer" (0 is a valid value:
+	// shared storage, default cache and hazard tracking).
+	ResourceOptions uint64 `json:"resource_options,omitempty"`
+	// Length is the buffer length recorded at creation, in bytes. Meaningful
+	// only for Type "newBuffer". It was previously kept only inside Info,
+	// which meant the allocated footprint could be read by a person and not
+	// by a program.
+	Length uint64 `json:"length,omitempty"`
+}
+
+// FormatResourceOptions renders an MTLResourceOptions bit set the way the
+// Metal headers name its components: storage mode (bits 4-7), CPU cache
+// mode (bits 0-3), hazard tracking mode (bits 8-11).
+func FormatResourceOptions(opts uint64) string {
+	var parts []string
+	switch (opts >> 4) & 0xf {
+	case 0:
+		parts = append(parts, "StorageModeShared")
+	case 1:
+		parts = append(parts, "StorageModeManaged")
+	case 2:
+		parts = append(parts, "StorageModePrivate")
+	case 3:
+		parts = append(parts, "StorageModeMemoryless")
+	default:
+		parts = append(parts, fmt.Sprintf("StorageMode(%d)", (opts>>4)&0xf))
+	}
+	if opts&0xf == 1 {
+		parts = append(parts, "CPUCacheModeWriteCombined")
+	}
+	switch (opts >> 8) & 0xf {
+	case 1:
+		parts = append(parts, "HazardTrackingModeUntracked")
+	case 2:
+		parts = append(parts, "HazardTrackingModeTracked")
+	}
+	return strings.Join(parts, "|")
+}
+
+// StorageModeName returns just the storage-mode component of an
+// MTLResourceOptions value: "shared", "managed", "private", or "memoryless".
+func StorageModeName(opts uint64) string {
+	switch (opts >> 4) & 0xf {
+	case 0:
+		return "shared"
+	case 1:
+		return "managed"
+	case 2:
+		return "private"
+	case 3:
+		return "memoryless"
+	}
+	return fmt.Sprintf("mode%d", (opts>>4)&0xf)
+}
+
+// BufferStorageModes counts buffer-creation records in the capture by
+// storage mode. An empty map means the capture holds no buffer-creation
+// records, which is distinct from recording zero buffers of some mode.
+func (t *Trace) BufferStorageModes() map[string]int {
+	counts := make(map[string]int)
+	data := t.CaptureData
+	marker := []byte("Culul")
+	offset := 0
+	for {
+		pos := bytes.Index(data[offset:], marker)
+		if pos == -1 {
+			break
+		}
+		absolutePos := offset + pos
+		if absolutePos+0x20 <= len(data) {
+			options := binary.LittleEndian.Uint64(data[absolutePos+0x18 : absolutePos+0x20])
+			counts[StorageModeName(options)]++
+		}
+		offset = absolutePos + 5
+	}
+	return counts
 }
 
 // FormattedAPICall represents a complete API call with all details.
@@ -145,6 +222,32 @@ func (t *Trace) ParseAPICallList() (*APICallList, error) {
 	}
 
 	return list, nil
+}
+
+// ResourceCalls returns every resource-creation and residency call in a
+// capture, from the whole file rather than from the section before the first
+// command buffer.
+//
+// ParseAPICallList refuses a capture holding no command buffers, which is the
+// right answer for an API-call listing and the wrong one for a caller that
+// wants resource records. A capture can allocate buffers and create residency
+// sets without this decoder recognising a single command buffer, and failing
+// the whole read in that case reports an absent decode as an absent program.
+//
+// The whole file is scanned because programs allocate throughout a run, not
+// only during startup. Stopping at the first CUUU marker, as ParseAPICallList
+// correctly does when separating init calls from command-buffer calls, drops
+// most of the record: the first command buffer appears 0.2% into one measured
+// capture, and truncating there hid 3066 of its 3180 buffer records. The
+// resulting undercount is not uniform across captures, so it silently
+// manufactures differences between two traces of the same workload.
+func (t *Trace) ResourceCalls() ([]InitCall, error) {
+	data, err := t.readCaptureFile()
+	if err != nil {
+		return nil, fmt.Errorf("read capture: %w", err)
+	}
+	calls, _, err := parseInitCalls(data, 0, nil, nil)
+	return calls, err
 }
 
 // parseInitCalls parses initialization calls before the first command buffer.
@@ -287,11 +390,15 @@ func parseInitCalls(data []byte, startCallNum int, csRecords []FunctionRecord, l
 		}
 	}
 
-	// Find Culul records (buffer creation from heap)
+	// Find Culul records (buffer creation, from device or heap)
 	// Structure:
 	// +0x00: "Culul\x00\x00\x00"
 	// +0x08: heap/device address (8 bytes)
 	// +0x10: buffer length (8 bytes)
+	// +0x18: MTLResourceOptions (8 bytes) [V] — verified 2026-08-29 with a
+	//        controlled capture creating buffers at options 0x0, 0x20,
+	//        0x100, 0x120, 0x200; the field round-trips each value exactly
+	//        (docs/research/METAL_STORAGE_MODE_RECORDS.md)
 	// +0x24: buffer address (8 bytes)
 	// +0x80: "Cuw\x00" companion record
 	// +0x84: buffer address repeated by the companion record (8 bytes)
@@ -309,15 +416,18 @@ func parseInitCalls(data []byte, startCallNum int, csRecords []FunctionRecord, l
 		if absolutePos+0x2c <= len(data) {
 			heapAddr := binary.LittleEndian.Uint64(data[absolutePos+0x08 : absolutePos+0x10])
 			bufLen := binary.LittleEndian.Uint64(data[absolutePos+0x10 : absolutePos+0x18])
+			options := binary.LittleEndian.Uint64(data[absolutePos+0x18 : absolutePos+0x20])
 			bufAddr := binary.LittleEndian.Uint64(data[absolutePos+0x24 : absolutePos+0x2c])
 
-			// Buffer created from heap uses HazardTrackingModeUntracked option
 			calls = append(calls, InitCall{
-				CallNumber: callNum,
-				Type:       "newBuffer",
-				Address:    bufAddr,
-				Info:       fmt.Sprintf("[0x%x newBufferWithLength:%d options:HazardTrackingModeUntracked]", heapAddr, bufLen),
-				Offset:     int64(absolutePos),
+				CallNumber:      callNum,
+				Type:            "newBuffer",
+				Address:         bufAddr,
+				ResourceOptions: options,
+				Length:          bufLen,
+				Info: fmt.Sprintf("[0x%x newBufferWithLength:%d options:%s]",
+					heapAddr, bufLen, FormatResourceOptions(options)),
+				Offset: int64(absolutePos),
 			})
 
 			if heapOffset, ok := parseCululHeapOffset(data, absolutePos, bufAddr); ok {
@@ -772,10 +882,7 @@ func parseCommandBufferCalls(data []byte, cb *CommandBuffer, startCallNum int, i
 		return nil, 0, err
 	}
 
-	allDispatches, err := (&Trace{}).ParseDispatchInRegion(data, 0)
-	if err != nil {
-		return nil, 0, err
-	}
+	allDispatches := (&Trace{}).ParseDispatchInRegion(data, 0)
 
 	// Generate calls for each encoder
 	for _, encoder := range encoders {

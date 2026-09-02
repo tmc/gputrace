@@ -27,12 +27,284 @@ gputrace profiler trace.gputrace
 gputrace pprof trace.gputrace -o trace.pb
 go tool pprof -http=:8080 trace.pb
 
-# View text timeline or export Chrome/Perfetto timeline
-gputrace timeline trace.gputrace --format perfetto -o trace.json
+# Export the readable, cumulative-GPU-busy native Perfetto timeline (default)
+gputrace timeline trace.gputrace --format perfetto -o trace.pftrace
+
+# Inspect command-buffer scheduling on its separate wall-clock axis
+gputrace timeline trace.gputrace --format perfetto --clock wall -o command-buffers.pftrace
 
 # Compare two traces
 gputrace diff A.gputrace B.gputrace --explain
+
+# Permit descriptive deltas when exact environment evidence is unavailable
+gputrace diff A.gputrace B.gputrace --allow-cross-environment
+
+# Serve a native trace through the hosted Perfetto UI without uploading it
+gputrace timeline trace.gputrace --format perfetto --open --remote-ui
+
+# Reproducible mode with a pinned local Perfetto UI build
+# The directory must contain index.html and perfetto-ui.json; see below.
+gputrace timeline trace.gputrace --format perfetto --open \
+  --ui-dir /path/to/perfetto-ui
+
+# Focus one exact occurrence; repeated names require the occurrence flag
+gputrace timeline trace.gputrace --format perfetto --open --remote-ui \
+  --kernel rmsbfloat16 --kernel-occurrence 0
+
+# Write stable PerfettoSQL views for trace_processor_shell
+gputrace timeline trace.gputrace --format perfetto \
+  --sql-out gputrace.sql -o trace.pftrace
 ```
+
+A local Perfetto UI directory must identify the upstream build in
+`perfetto-ui.json`:
+
+```json
+{"schema":"gputrace.perfetto-ui/v1","revision":"UPSTREAM_REVISION"}
+```
+
+Perfetto has one global time axis. `--clock busy` therefore contains encoders,
+dispatches, and only counter series whose timestamps are proven in that
+domain; `--clock wall` contains APSTimelineData command buffers and wall-clock
+profiler events. Per-encoder APS GPU cycles and derived cost remain selectable
+encoder details because their counter clock is not joined to the busy clock.
+Lossless busy exports default to an Xcode-like `Shaders / pipelines` group,
+with one measured dispatch lane per recorded pipeline and extra lanes only
+when uses overlap. Compact encoder spans remain above it. A secondary
+`Dispatch sequence by encoder` group contains only strictly contained
+dispatches; unproven associations appear separately rather than as track
+parentage. All are presentation duplicates: native `gpu_slice` rows remain the
+accounting source, and constrained exports omit the duplicate rows.
+When profiler timing is unavailable, capture launch records instead appear as
+generic instant events with pipeline identity and dispatch geometry. They do
+not enter `gpu_slice`, and CS/debug labels are reported separately as observed
+annotations rather than encoder or dispatch instances.
+Dispatch details and the `gputrace_pipeline` SQL view include every static
+compiler statistic carried by the attributed pipeline record, including
+register, spill, instruction-family, threadgroup, and compilation-time facts.
+The `metrics_source` argument identifies the backing trace section.
+The `gputrace_dispatch` view normalizes timing provenance, attribution,
+geometry, source location, and profiler-sample coverage across measured GPU
+events and capture-only launch records; unavailable fields remain `NULL`.
+GPRWCNTR sample counts include their scaled-window attribution basis and raw
+mach-absolute tick bounds; they are not presented as measured dispatch timing.
+It also exposes capture command-buffer membership and byte offset as structural
+identity. Those fields do not imply that wall-clock command-buffer spans
+contain busy-clock dispatch intervals.
+Per-launch SIMD groups remain dispatch facts. The `gputrace_function` view
+holds one row per function for aggregate duration, total SIMD work, and work
+share, avoiding repeated aggregates that produce misleading sums. Profiled
+function names retain their `gpuCommandInfoData` attribution; capture-only
+names retain their capture attribution. Source-reported aggregate SIMD work is
+kept in separate `source_aggregate_*` columns and remains `NULL` when absent.
+The `gputrace_encoder` view exposes profiled encoder timing and archive-backed
+cycle aggregates, including their derivation, coverage, and unjoined counter
+clock status. Capture-only traces do not manufacture encoder rows.
+The `gputrace_command_buffer` view exposes measured APSTimelineData wall spans
+when present. Capture-only command buffers retain their record index and byte
+offset but leave wall timing `NULL`. Encoder detail tracks are ordered by their
+first event, so multi-digit encoder names do not sort ahead of earlier work.
+gputrace does not invent a mapping between these domains.
+
+See [MLX GPU Trace Rendering in Perfetto](docs/MLX_PERFETTO_RENDERING_SPEC.md)
+for the native Perfetto roadmap and proposed MLX semantic view.
+`--format perfetto` writes binary protobuf; `--format chrome` retains Chrome
+Trace JSON compatibility.
+The optional SQL file defines `gputrace_capture`, `gputrace_command_buffer`, `gputrace_dispatch`,
+`gputrace_dispatch_arg`, `gputrace_encoder`, `gputrace_encoder_arg`, `gputrace_function`, `gputrace_pipeline`, `gputrace_semantic_node`, `gputrace_semantic_link`,
+`gputrace_counter_series`, `gputrace_counter_encoder_sample`,
+`gputrace_counter_encoder_aggregate`,
+`gputrace_unattributed_counter`,
+`gputrace_evidence_gap`, `gputrace_aps_data_blob`,
+`gputrace_aps_data_key`, `gputrace_stream_data_archive_blob`,
+`gputrace_stream_data_archive_key`, `gputrace_stream_data_table`,
+`gputrace_stream_data_string`, `gputrace_pipeline_compiler`,
+`gputrace_pipeline_compiler_remark`,
+`gputrace_pipeline_compiler_remark_arg`,
+`gputrace_semantic_label_conflict`, and
+`gputrace_unmatched` views over the native trace. The file's header splits
+every view into two tiers: the stable views named there are part of the v1
+contract, and the rest project recorded private archive structure for
+inspection and may change with the decoder. The same split applies to the
+evidence manifest; see
+[the v1 contract surface](docs/MLX_PERFETTO_RENDERING_SPEC.md#the-v1-contract-surface).
+`gputrace_capture` provides typed trace identity, environment, clock, coverage,
+timing-summary, and loss-receipt columns. Timing columns keep encoder span,
+dispatch span, command-buffer active time, command-buffer wall span, restore
+timing, display duration, and optional Xcode Effective GPU Time distinct.
+Profiled traces also carry the archive's exact Metal device name, Metal plugin
+name, and GPU generation into canonical JSON, native GPU metadata, and typed
+SQL columns. GPU generation is nullable so a recorded zero remains distinct
+from absence. Capture-only traces report streamData identity as unavailable.
+The same projection retains streamData archive version, source trace name,
+timestamp, profiling-mode scalars, capture-range scalars, completeness flags,
+and blit-call count. Private enum and range meanings remain explicitly
+uninterpreted; recorded zero and false values remain distinct from absence.
+For each fixed-record streamData table, the manifest and SQL expose byte
+length, declared record size, computed record count, trailing remainder, and an
+integrity status. The untimed `gputrace_stream_data_table` view also retains
+each complete table as exact hexadecimal bytes with its whole-table SHA-256
+digest. Recorded size and count delimit rows; any trailing bytes remain in the
+same payload. This makes truncation and record-layout mismatches visible while
+leaving unknown words and cross-table relationships uninterpreted.
+A missing table key and a malformed recorded reference are distinct: the
+former reports absent, while the latter carries a decode error and emits no raw
+table payload. A valid empty table retains the SHA-256 digest of empty input.
+The untimed `gputrace_stream_data_string` view retains the archive's complete
+ordered strings array, including empty entries and source paths. Its index is
+only the source NSArray position; the view does not classify values or infer a
+pipeline, function, source-file, clock, or timing relationship.
+`gputrace_pipeline_compiler` retains one untimed static compiler-diagnostic row
+per pipeline. It includes exact optimization remarks and nullable compile-stage
+timings and cache status from streamData or capture store sections. Compiler
+remarks may name source lines, but they are not measured instruction samples or
+source-line GPU cost and are never repeated per dispatch.
+The raw YAML remains authoritative. `gputrace_pipeline_compiler_remark` adds
+one searchable row per YAML document with its kind, pass, name, function, and
+source coordinate when recorded. A `Line: 0` sentinel is retained as
+`unresolved_source_location`, not presented as a usable source line. The
+manifest distinguishes recorded, resolved, unresolved, and malformed location
+counts.
+`gputrace_pipeline_compiler_remark_arg` expands the ordered scalar entries
+beneath each remark's `Args` key. It preserves duplicate names, empty values,
+the raw source line and scalar spelling, and a decoded string value. Values
+remain strings: the view does not infer that a quoted number is a metric or
+assign pass-specific meaning. Under a constrained export, argument rows are
+retained with their parent remark; compare the source argument count in
+`gputrace_capture` with the projected view count.
+The manifest count is the decoded source count; under an explicit output budget
+the SQL row count may be lower, with the difference covered by the export loss
+receipt.
+Each pipeline also carries the sorted exact names of all recorded top-level
+statistics. SQL and dispatch details omit an absent metric, while preserving a
+recorded zero or false. Opaque keys such as `ComputeBufferPrefetch` remain
+presence-only evidence and are not assigned a meaning.
+Archive-family inventory separately reports top-level APS, timeline, counter,
+shader-profiler, GPU-timeline, and batch-filtered array entry counts. These are
+presence counts, not decoded samples; an explicit zero differs from absence.
+Source inventory counts remain stable across clock selection; separate
+projected counts report what was placed on the selected axis.
+When APSTimelineData supplies them, the same view exposes `absolute_time`,
+`timebase_numer`, and `timebase_denom` with an explicit wall-domain source and
+conversion formula. These fields convert source ticks within the wall domain;
+they do not align the wall and cumulative GPU-busy timelines. Missing inputs
+remain `NULL` with a `clock_conversion_availability` reason.
+The raw `continuous_time` field is retained separately with an availability
+receipt and an explicitly unverified clock relationship. gputrace does not use
+it to move or align events.
+The APSTimelineData `pstate` value is likewise retained as a raw replay
+performance-state scalar. Its unit and operating-point mapping are not assumed;
+the nullable representation preserves a recorded zero without mistaking it for
+missing evidence.
+Wall-clock exports retain each APSTimelineData `Restore Timestamps` range on a
+separate replay-restore track. These intervals describe replay restore
+activity, not GPU execution, and are queryable through the
+`gputrace_restore_interval` PerfettoSQL view.
+Busy-clock encoder rows retain APSCounterData batch and sample-index identities
+when the TraceId tables cover that execution ordinal. The relationship is
+positional only: TraceId values are not equated with GRC encoder or kick IDs,
+and these identities do not join the counter and busy clocks.
+`gputrace_manifest_arg` exposes every manifest field
+as a key/value row, including per-class loss fields added by constrained
+exports and fields introduced by newer exporters.
+With `--clock wall --include-raw-samples`, `gputrace_profiler_stream` exposes
+raw stream aggregates and `gputrace_raw_profiler_sample` exposes GPRWCNTR
+source record ordinals, original mach-absolute ticks, the seven fixed GRC
+fields, exact ShaderProfilerData source and ring-buffer identity, variable
+record stride, and hardware-counter column count. Hardware
+counter columns remain uninterpreted and are not exported as named metrics.
+`gputrace_raw_profiler_sample_arg` retains each payload value by its recorded
+zero-based ordinal without assigning a counter name, unit, or meaning. Its
+decimal `raw_value_uint64` text preserves the full unsigned range; the
+companion `raw_value_int64` column is Perfetto's signed integer projection.
+The untimed `gputrace_counter_catalog` view preserves every recorded
+APSCounterData pass-column name with its group and column ordinal. Names beyond
+the seven fixed GRC fields remain opaque; the catalog supplies no unit, decoded
+value series, encoder attribution, or clock mapping.
+`gputrace_counter_trace_id` preserves each recorded APSCounterData TraceId,
+batch ID, and sample index as untimed source evidence. Only the row ordinal has
+a positional relation to encoder execution order; TraceId itself is not a GRC
+encoder or kick ID and carries no timing relationship. `trace_id_uint64`
+preserves its full unsigned decimal value; `trace_id_int64` is Perfetto's
+signed SQL projection.
+`gputrace_counter_encoder_aggregate` retains every capture-attributed
+APSCounterData aggregate row, rather than collapsing all pass groups onto the
+visible encoder list. Rows include the exact encoder and optional kick IDs,
+pass group, execution ordinal, optional TraceId-derived batch and sample
+index, sample and end-record counts, GPU cycles, and raw counter timestamp
+range. Unsigned identifiers and counters have exact decimal columns alongside
+Perfetto's signed projections. These are untimed evidence rows: their raw
+counter clock has no verified mapping to busy or wall time, and the ordinal is
+not a Metal encoder foreign key. A constrained export may retain fewer rows;
+the manifest source count and loss receipt remain explicit.
+`gputrace_counter_encoder_sample` retains every capture-attributed GPRWCNTR
+source record before aggregation. Rows include the source blob and record
+ordinals, fixed GRC fields, encoder-placement evidence, and the exact opaque
+hardware-counter vector as JSON in recorded order. The archive does not prove
+which `passList` names belong to each sample blob, so the view does not assign
+counter names, units, derived meaning, a Metal encoder foreign key, or a
+timeline coordinate. Full-range unsigned timestamps, cycles, and identifiers
+have exact decimal columns alongside Perfetto's signed projections.
+`gputrace_aps_data_blob` content-identifies every raw APSData archive entry and
+reports its byte count, dictionary status, and root-key count.
+`gputrace_aps_data_key` exposes each root key and its decoded structural value
+kind in stable lexical order. These views make capture-shape differences
+queryable without interpreting private values or duplicating the roughly
+megabyte-scale raw blobs into the Perfetto trace. The manifest retains source
+blob and key counts when an output budget samples the optional detail rows.
+The generic `gputrace_stream_data_archive_blob` and
+`gputrace_stream_data_archive_key` views apply the same contract to APSData,
+APSTimelineData, and APSCounterData. Their `family` column makes source archive
+counts, bytes, digests, and root shapes comparable even when higher-level
+decoders produce different coverage. `gputrace_aps_data_*` are filtered views
+of this shared evidence model.
+Archive key rows also retain exact non-object value descriptors: canonical JSON
+plus the recorded scalar type, NSData byte count and digest, or array/dictionary
+cardinality. Values with an opaque representation carry `descriptor_error`
+instead of a guessed value. Manifest source counts distinguish retained scalar,
+data, container, and refused descriptors from rows sampled by an output budget.
+`gputrace_track_event_arg` retains every argument for low-volume generic events
+such as command buffers and profiler streams; its `event_id` is a trace-local
+join key, not a persistent source identity. These are raw profiler input,
+not decoded counter values or GPU encoder intervals. They are never joined to
+busy-domain dispatches by comparing their displayed timestamps.
+Original-execution timing attached with `--clock live --live-timing` appears in
+`gputrace_live_command_buffer`, including the command buffer's GPU interval and
+the separately reported kernel start and duration; its run, sidecar digest,
+and match counts are also in `gputrace_capture`. Verified `--host-correlation` events appear in
+`gputrace_host_signpost` with both artifact digests, clocks, bridge identity,
+and declared maximum error.
+MLX semantic nodes expose parent identity, and links expose their sidecar link
+id and exact target index. `gputrace_semantic_arg` retains arbitrary node
+attributes such as dtype and shape as key/value rows; filter `event_kind` to
+distinguish untimed declarations from timed target projections.
+`gputrace_dispatch` includes Xcode's workload type and view classifications.
+`gputrace_dispatch_arg` and `gputrace_encoder_arg` expose every event argument
+as key/value rows, including fields also available through typed columns.
+Pipeline identity includes a numeric address, its capture-local scope, and the
+archive record that supplied it. `gputrace_pipeline` groups by that identity
+and reports total, measured, and recorded-only dispatch counts plus measured
+duration. Pipeline addresses and IDs are not stable cross-trace identifiers.
+Pipeline counter rows that lack a capture-backed encoder identity remain
+untimed and appear in `gputrace_unattributed_counter`; arbitrary metric values
+remain available through `gputrace_unattributed_counter_arg`. Evidence families
+that cannot be placed on the selected clock appear in `gputrace_evidence_gap`.
+Native Perfetto and timeline JSON exports also content-identify regular files
+in the resolved profiler directory. `gputrace_raw_profiler_artifact` exposes
+the basename, family, optional numeric index, byte size, and SHA-256 as untimed
+evidence; `gputrace_capture` carries the deterministic inventory digest and
+aggregate size. The exporter does not retain host directory paths or follow
+symlinks. Hashing a large profiler directory may add several seconds to export.
+For `Timeline_f_*.raw`, `gputrace_raw_profiler_timeline` also exposes the
+fixed header's raw identity, counter count, data-section byte offset, entry
+count, and profiler-sampling timestamp. That timestamp remains raw and
+unaligned; it is not command-buffer time or cumulative GPU-busy time.
+
+`diff` fails closed when workload, device/driver, runtime, capture mode, or
+timing-source gates differ or are unavailable. The explicit
+`--allow-cross-environment` override labels the result
+`cross-environment, not causally attributable`; it does not turn the result
+into a controlled regression.
 
 ## Commands
 
@@ -53,19 +325,286 @@ gputrace diff A.gputrace B.gputrace --explain
 | **Buffer Analysis** | `buffers` | Buffer listing and properties |
 | | `buffer-access` | Buffer access patterns |
 | | `buffer-timeline` | Buffer allocation timeline |
+| | `residency` | Allocated footprint by storage mode, and whether residency is explicit |
 | **Visualization** | `timeline` | Text timeline and Chrome/Perfetto export |
 | | `graph` | Graph visualization |
 | | `tree` | Execution tree view |
 | | `diff` | Compare two traces |
 | | `insights` | Actionable performance insights |
-| **Capture** | `xcode-profile` | Xcode GPU profiler automation |
+| **Capture** | `capture` | Run a Metal workload under the capture interposer |
+| | `profile-replay` | Replay a capture under the profiler to add timing |
+| | `xcode-profile` | Xcode GPU profiler automation |
 | | `xcode-bindings` | Inspect private Xcode GTShaderProfiler bindings |
 | | `xcode-parity` | Audit Xcode metric parity for a trace |
 | **Utilities** | `mtlb` | Metal Library Binary inspection |
 | | `clear-buffers` | Zero out buffers to reduce trace size |
+| | `nvidia` | Report NVIDIA GPU status via NVML (Linux) |
+| | `doctor` | Diagnose the GPU profiling environment and print fixes |
+| | `cupti` | Convert CUPTI activity captures to Perfetto traces (Linux) |
+| | `ncu` | Escalate a capture's hottest kernels to Nsight Compute counters (Linux) |
+| | `overhead` | Measure how much the capture shim perturbs a workload (Linux) |
+| | `devices` | List GPUs and capture backend capabilities |
+| | `analyze` | Report kernel metrics and optimization findings (Linux) |
+| | `optimize` | Run, compare, and iterate on workload performance |
 | | `version` | Print build version |
 
 Run `gputrace [command] --help` for details on any command.
+
+### Storage modes and residency
+
+    gputrace residency trace.gputrace
+
+Reports the allocated footprint per `MTLStorageMode` alongside the counts of
+`newResidencySet`, `requestResidency`, and `addResidencySet`. The two belong in
+one report because they are one finding seen from two directions: an all-shared
+allocation profile and an uncommitted residency set both mean the process is
+leaving placement and residency to the driver. Read either alone and the
+default looks like a decision.
+
+Two limits are printed with the numbers rather than left to be discovered.
+
+The first is that these counts are **not** bounded by the decoded-dispatch
+fraction `api-calls` reports. Buffer and residency records are found by scanning
+the whole capture for record markers, which is independent of dispatch
+decoding, so a capture reporting `Decoded API subset: 0 of 39014` can still have
+a complete buffer and residency picture. The narrower real limit is that the
+scan finds the record shapes it knows; a shape it does not know is absent rather
+than counted.
+
+The second is that residency-set *membership* is not decoded, so there is no
+wired-bytes figure separate from the allocated one. When no residency set is
+committed, every allocation is under the driver's automatic residency and the
+allocated total is the working upper bound on what can be made resident. A
+number labelled "wired" that was really "allocated" would be worse than no
+number.
+
+`gputrace gate` carries the same observation in `staging.allocated_bytes` and
+`staging.residency_notes`.
+
+## Linux / NVIDIA
+
+gputrace is developed against Apple Metal; on Linux the trace-analysis
+commands work unchanged, while capture, replay, and Xcode automation report
+that they are darwin-only. The `nvidia` command reports local NVIDIA GPU
+status through NVML:
+
+```
+$ gputrace nvidia
+NVIDIA driver: 580.95.05 (1 device)
+
+GPU 0: NVIDIA GB10
+  UUID:     GPU-...
+  Memory:   2.3 GiB used / 121.5 GiB total
+  Util:     gpu 7%, memory 0%
+  Power:    7103 mW
+```
+
+It uses `github.com/tmc/lib/nvidia/nvml` (purego, no cgo) and loads
+`libnvidia-ml.so.1` from the standard driver search paths at runtime.
+
+### CUPTI kernel tracing
+
+`gputrace cupti` converts CUPTI activity captures into native Perfetto
+traces. Any tracer that enables `CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL` (and
+optionally memcpy/memset) and emits newline-delimited JSON records of the
+form:
+
+```json
+{"kind":"kernel","name":"_ZN3mlx...","start_ns":...,"end_ns":...,"grid":"112x1x1","block":"32x8x1","registers":40}
+{"kind":"memcpy","start_ns":...,"end_ns":...,"bytes":9216}
+```
+
+can feed it. `gputrace capture` produces exactly this format natively: it
+compiles a small CUPTI shim on demand, preloads it into the target, and
+writes a `.gpucapture` bundle (events plus concurrent NVML samples and
+provenance metadata).
+
+```console
+$ gputrace capture -o run.gpucapture --samples -- ./workload
+wrote run.gpucapture
+$ gputrace analyze run.gpucapture            # findings with evidence
+$ gputrace cupti run.gpucapture --stats
+CUPTI capture: 27550 kernels, 630 memory transfers
+Total kernel time: 150.85 ms across 21 distinct kernels
+
+Top kernels by total GPU time:
+    111.70 ms   9506x  void mlx::core::cu::qmv_kernel<8, 16, 64, ...>
+     11.68 ms   6680x  void mlx::core::cu::binary_vv<mlx::core::cu::Add, ...>
+$ gputrace cupti cupti_events.jsonl --samples nvml_samples.jsonl \
+    --per-kernel-tracks -o trace.pftrace
+Wrote 28180 events -> trace.pftrace
+```
+
+Open `trace.pftrace` at [ui.perfetto.dev](https://ui.perfetto.dev): kernel
+launches appear as GPU compute slices (one track per distinct kernel with
+`--per-kernel-tracks`), memory transfers on their own track, and the NVML
+power/utilization/temperature series as counter tracks aligned to the same
+normalized clock.
+
+### Diagnosing the environment
+
+Two ways a CUDA profiling setup fails silently rather than loudly: an
+`nsys` whose default `-t cuda` routes to hardware event tracing drops
+every kernel record while still writing a healthy-looking report, and a
+CUPTI older than the running driver records nothing at all. Both read as
+"the workload launched no kernels".
+
+```console
+$ gputrace doctor
+ok     nvidia driver    NVIDIA GB10: driver 580.95.05, CUDA 13.0
+warn   libcupti         1 match the CUDA 13 driver, 2 predate it
+warn   nsight systems   4 nsys installs found
+         * 2026.1.1  /opt/nvidia/nsight-systems/2026.1.1/.../nsys
+             -t cuda enables hardware tracing, which drops every kernel record
+             on GB10-class parts while the capture still looks healthy
+           2025.3.2  /opt/nvidia/nsight-systems/2025.3.2/.../nsys
+             -t cuda falls back to software tracing correctly
+  fix: always pass -t cuda-sw with this version
+warn   nsight compute   GPU performance counters refused for this user
+ok     capture shim     built with gcc -> ~/.cache/gputrace/libcupticapture-....so
+```
+
+Pass a workload binary to also check it for capturability: static linkage
+defeats `LD_PRELOAD` entirely, and a Go target needs an in-process
+`cuptiActivityFlushAll` because it crosses no interposed synchronization
+point and exits via `exit_group`.
+
+### Budget, latency, and comparison
+
+`analyze` and `summary` report where a capture's wall time went, not just
+which kernels ran:
+
+```console
+$ gputrace summary run.gpucapture
+GPU budget: 634.6us busy of 36.49ms wall span (1.7% occupancy), 35.85ms idle across 51 gaps
+  idle gaps:         mean 703.0us, p95 1.46ms, max 20.73ms
+    20.73ms   after scale -> saxpy
+
+CUDA graphs: 1 graph, 54.4% of kernel time (32 graph kernels vs 17 direct launches)
+  graph 2: 4 launches x 8 nodes, 225.9us (54.4% of kernel time)
+    node #0    14.5% of graph      4x  mean 8.2us     saxpy
+
+Launch latency (queue -> submit -> start, 17 of 49 launches timed):
+  queued -> submitted: mean 93.8us, p50 93.2us, p95 139.5us
+  coverage:          computed over the 34.7% of kernels with latency
+                     timestamps; the rest (CUDA-graph launches) report none
+```
+
+Launch latency is reported as a coverage-gated metric rather than a bare
+number. CUPTI leaves its queued/submitted timestamps unset for launches it
+cannot time — CUDA-graph nodes among them — and a stale value in a reused
+record buffer once made 45,943 of 46,138 kernels share one queued
+timestamp, implying 1.16 s of launch latency that never happened. When too
+few launches carry a consistent triple, the analysis says so instead of
+averaging the rest.
+
+Two bundles compare kernel by kernel, ordered by GPU time moved:
+
+```console
+$ gputrace diff base.gpucapture variant.gpucapture
+verdict: regressed — slower overall (13.2%)
+kernel time: 415.5us -> 470.5us (+13.2%)
+occupancy:   1.7% -> 2.8% (+1.0 points)
+idle budget: 35.85ms across 51 gaps -> 25.25ms across 51 gaps
+```
+
+### Counters and capture cost
+
+`gputrace ncu` re-runs the workload a bundle recorded, profiling only the
+kernels the capture ranked highest and merging the counters into the
+bundle as `ncu.json`. `gputrace overhead` measures what the capture itself
+costs, against the effect size under study:
+
+```console
+$ gputrace overhead --effect-size 5 -- ./workload
+baseline:     median 372.82ms  IQR [369.68ms..374.88ms]
+instrumented: median 391.84ms  IQR [389.72ms..395.39ms]
+overhead:     +5.1% (+19.02ms)
+
+NOT usable for this effect size: the shim moves wall time by 5.1%, at or
+beyond the 5.0% effect under study
+```
+
+### Agentic optimization loop
+
+`analyze`, `optimize run`, and `optimize compare` close the loop from
+capture to verified improvement:
+
+```console
+$ gputrace analyze events.jsonl            # findings with evidence + hypotheses
+$ gputrace analyze events.jsonl --suggest  # playbook actions, one per finding
+Suggested actions (apply ONE, then re-measure):
+1. tile for cache/tensor-core reuse before micro-optimizing inner loops
+   verify: dominant kernel share drops
+...
+$ gputrace optimize run --iterations 7 -o base.json -- <workload>
+median 10.92ms  q1 10.88ms  q3 10.99ms
+# ... apply the one action ...
+$ gputrace optimize run --iterations 7 -o variant.json -- <workload>
+$ gputrace optimize compare base.json variant.json
+verdict: improved
+base:    median 10.92ms
+variant: median 5.81ms (-46.8%)
+variant IQR [5794749..5819517] sits entirely below baseline IQR [10883246..10987607]
+```
+
+Compare verdicts are noise-aware: when interquartile ranges overlap, the
+verdict is `noisy-change` and the delta is unproven regardless of how good
+the medians look — the only sound response is more iterations. The loop,
+its guardrails, and the findings-to-actions catalog are documented in
+[docs/OPTIMIZATION_PLAYBOOK.md](docs/OPTIMIZATION_PLAYBOOK.md).
+
+## Headless timing
+
+A capture records what a Metal workload did and carries no timing. `profile-replay`
+replays it on the GPU under Apple's MTLReplayer with the profiler attached, which
+takes seconds and opens no window:
+
+```
+gputrace capture -o run.gputrace -- python3 bench.py
+gputrace profile-replay run.gputrace          # writes run-perfdata.gputrace
+gputrace profiler run-perfdata.gputrace
+```
+
+`capture --timing-sidecar timing.jsonl --run-id ID` records command-buffer
+intervals from the original execution. If Metal writes resources but no
+replayable command stream, capture still fails and the sidecar ends with a
+`capture_attempt` record whose status is `timing_only`. That record identifies
+the attempted bundle; it does not make the intervals attributable to trace
+commands or eligible for host-to-GPU projection.
+
+Replay processes are exclusive. A second invocation normally returns a busy
+error; pass `--wait` to queue it and guarantee non-overlapping replay. Go
+programs can use `github.com/tmc/gputrace/capture` and
+`github.com/tmc/gputrace/profilereplay` for the same operations.
+
+This serializes separate MTLReplayer jobs. It does not force command buffers or
+encoders inside a captured workload to execute without overlap. The replay is
+headless: MTLReplayer is an agent process, no Xcode window opens, and the
+frontmost application does not change.
+
+The default output is self-contained: it preserves the capture and adds the
+profiler payload, so Xcode and capture-dependent commands can open it. Use
+`--profiler-only` to write the smaller `.gpuprofiler_raw` payload when only
+`profiler`, `timing`, `timeline`, or `pprof` is needed. Profiler-only output
+cannot be opened by Xcode.
+
+This produces no derived counters. Utilization, limiter and occupancy values are
+unavailable on recent GPU generations; see `docs/research/` for why.
+
+Commands that need performance data say so on stderr when a trace lacks it,
+and name the command that would add it.
+
+To reproduce Xcode's All Shaders `Cost` column, use its processed pipeline
+timing rather than the default SIMD-group share:
+
+```bash
+gputrace shaders run-perfdata.gputrace --xcode-cost
+```
+
+This runs Xcode's private stream-data processor and can take several seconds.
+It follows `DEVELOPER_DIR` or `xcode-select`; `GPUTRACE_XCODE_APP` pins a
+different Xcode and causes the command to restart itself with that framework.
 
 ## Trace Diff
 
@@ -93,6 +632,60 @@ gputrace diff A.gputrace B.gputrace --md-out /tmp/report.md
 ```
 
 See [docs/TRACE_DIFF_WORKFLOW.md](./docs/TRACE_DIFF_WORKFLOW.md) for the full workflow and sample output.
+
+## Go benchmark output
+
+`bench`, `stats`, `profiler`, and `timing` can write Go benchmark format for direct use
+with `benchstat`:
+
+```bash
+gputrace profiler trace.gputrace --benchfmt \
+  --bench-config runtime=go \
+  --bench-config model=Qwen2.5-0.5B > go.txt
+benchstat -ignore trace-uuid go.txt python.txt
+```
+
+For new integrations, `gputrace bench` emits trace-scoped totals by default and
+normalizes only when given `--bench-work` and `--bench-work-unit`. Go programs
+can use `github.com/tmc/gputrace/tracebench` to obtain the same sectioned report
+and report values directly through `testing.B.ReportMetric`.
+
+```bash
+gputrace bench run-perfdata.gputrace \
+  --format benchfmt \
+  --bench-name BenchmarkDecode \
+  --bench-work 32 --bench-work-unit token \
+  --bench-config arm=candidate > gpu.bench
+benchstat gpu.bench
+```
+
+The Go-facing packages are deliberately separate:
+
+- `capture` runs an eligible workload under the Metal capture interposer.
+- `profilereplay` adds measured profiler data headlessly and supports queued,
+  non-overlapping replay with `Options.Wait`.
+- `tracebench` analyzes retained artifacts, writes JSON or benchfmt, and reports
+  metrics directly to `testing.B` without parsing CLI prose.
+
+Benchmark suites that do not want the parent module's dependencies can instead
+require `github.com/tmc/gputrace/gpubench`. It is a nested, standard-library-only
+module that invokes an installed `gputrace` binary and consumes the stable JSON
+report:
+
+```go
+client := gpubench.Client{}
+report, err := client.Report(ctx, tracePath, gpubench.ReportOptions{
+	Work: &gpubench.Work{Count: 32, Unit: "token"},
+})
+if err != nil {
+	b.Fatal(err)
+}
+if err := report.ReportMetrics(b); err != nil {
+	b.Fatal(err)
+}
+```
+
+See [docs/BENCHFMT.md](./docs/BENCHFMT.md) for the unit and provenance mapping.
 
 ## Testing
 
@@ -124,6 +717,7 @@ Detailed format and workflow documentation lives in `docs/`:
 
 - [README.md](./docs/README.md) -- docs index
 - [ENVIRONMENT.md](./docs/ENVIRONMENT.md) -- environment variables
+- [BENCHFMT.md](./docs/BENCHFMT.md) -- Go benchmark and benchstat output
 - [TESTING.md](./docs/TESTING.md) -- test fixtures and opt-in integration tests
 - [TRACE_DIFF_WORKFLOW.md](./docs/TRACE_DIFF_WORKFLOW.md) -- trace diff workflow and output interpretation
 - [STREAMDATA_FORMAT.md](./docs/STREAMDATA_FORMAT.md) -- streamData plist format

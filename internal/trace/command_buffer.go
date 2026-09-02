@@ -3,6 +3,7 @@ package trace
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/tmc/apple/x/plist"
+	"github.com/tmc/gputrace/internal/profilerraw"
 )
 
 // CommandBuffer represents a Metal command buffer captured in the trace.
@@ -171,8 +173,10 @@ func (t *Trace) CountCommandBuffers() (int, error) {
 }
 
 // ParseComputeEncoders extracts all compute command encoders from the trace.
-// Scans the capture file and device-resources for CS (Command Submission) records.
-func (t *Trace) ParseComputeEncoders() ([]*ComputeEncoder, error) {
+// Scans the capture file and device-resources for CS (Command Submission)
+// records. A trace with no such records yields no encoders; scanning bytes
+// already in memory cannot fail.
+func (t *Trace) ParseComputeEncoders() []*ComputeEncoder {
 	var encoders []*ComputeEncoder
 
 	// Helper to scan a data slice for CS records
@@ -228,7 +232,7 @@ func (t *Trace) ParseComputeEncoders() ([]*ComputeEncoder, error) {
 		}
 	}
 
-	return encoders, nil
+	return encoders
 }
 
 // isActualFunctionName returns true if the name looks like an actual kernel function
@@ -255,46 +259,52 @@ func isActualFunctionName(name string) bool {
 	return true
 }
 
-// CountComputeEncoders returns the number of unique compute encoders (Cuw) in the trace.
+// ComputeEncoderCount describes an authoritative compute-encoder count.
+type ComputeEncoderCount struct {
+	Count     int
+	Available bool
+	Source    string
+}
+
+const (
+	// ComputeEncoderSourceStreamData identifies Xcode profiler encoder metadata.
+	ComputeEncoderSourceStreamData = "profiler streamData encoderInfoData"
+	// ComputeEncoderSourceUnavailable explains why raw capture records are not counted.
+	ComputeEncoderSourceUnavailable = "unavailable: raw capture lacks command-buffer-scoped encoder lifecycle evidence"
+)
+
+// ErrComputeEncoderCountUnavailable reports that the trace lacks an
+// authoritative command-buffer-scoped or profiler encoder count.
+var ErrComputeEncoderCountUnavailable = errors.New("compute encoder count unavailable")
+
+// InspectComputeEncoderCount returns the best authoritative compute-encoder count.
+//
+// Cuw records describe buffer writes or updates. Their addresses are not encoder
+// identities and must not be counted as compute encoders. CS records similarly
+// describe observed submissions, not encoder lifetimes. Raw counts remain
+// unavailable until the capture parser can identify encoder creation and end
+// events within command-buffer boundaries.
+func (t *Trace) InspectComputeEncoderCount() ComputeEncoderCount {
+	if n := t.countEncodersFromStreamData(); n > 0 {
+		return ComputeEncoderCount{
+			Count:     n,
+			Available: true,
+			Source:    ComputeEncoderSourceStreamData,
+		}
+	}
+	return ComputeEncoderCount{Source: ComputeEncoderSourceUnavailable}
+}
+
+// CountComputeEncoders returns the authoritative compute-encoder count.
+//
+// It returns ErrComputeEncoderCountUnavailable when the trace has no
+// authoritative source. Call InspectComputeEncoderCount for provenance.
 func (t *Trace) CountComputeEncoders() (int, error) {
-	records, err := t.ParseMTSPRecords()
-	if err != nil {
-		return 0, err
+	count := t.InspectComputeEncoderCount()
+	if !count.Available {
+		return 0, ErrComputeEncoderCountUnavailable
 	}
-
-	uniqueEncoders := make(map[uint64]struct{})
-	cuwRecordCount := 0
-
-	for _, rec := range records {
-		if rec.Type == RecordTypeCuw {
-			cuwRecordCount++
-			cuw, err := rec.ParseCuwRecord()
-			if err == nil {
-				uniqueEncoders[cuw.BufferAddr] = struct{}{}
-			}
-		}
-	}
-
-	// Fallback logic: if Cuw records yield 0 or 1 encoder, try other sources
-	// and return the highest count. Python Metal traces often have only 1 Cuw
-	// record despite having many encoders.
-	if len(uniqueEncoders) <= 1 {
-		best := len(uniqueEncoders)
-
-		// Try CS records from capture data
-		if encoders, err := t.ParseComputeEncoders(); err == nil && len(encoders) > best {
-			best = len(encoders)
-		}
-
-		// Try streamData's encoderInfoData (works for profiler-only and Python traces)
-		if n := t.countEncodersFromStreamData(); n > best {
-			best = n
-		}
-
-		return best, nil
-	}
-
-	return len(uniqueEncoders), nil
+	return count.Count, nil
 }
 
 // countEncodersFromStreamData counts encoders from the streamData plist's encoderInfoData.
@@ -392,17 +402,7 @@ func plistNumberToInt(v any) (int, bool) {
 
 // findGPUProfilerDir returns the path to the .gpuprofiler_raw directory, or empty string.
 func (t *Trace) findGPUProfilerDir() string {
-	// Check inside the trace bundle
-	entries, err := os.ReadDir(t.Path)
-	if err != nil {
-		return ""
-	}
-	for _, e := range entries {
-		if e.IsDir() && filepath.Ext(e.Name()) == ".gpuprofiler_raw" {
-			return filepath.Join(t.Path, e.Name())
-		}
-	}
-	return ""
+	return profilerraw.FindDir(t.Path)
 }
 
 // ParseDispatchCalls extracts all compute kernel dispatch calls from the trace.
@@ -413,10 +413,7 @@ func (t *Trace) ParseDispatchCalls() ([]*DispatchCall, error) {
 	}
 
 	// Use ParseDispatchInRegion on the entire capture file
-	dispatchThreads, err := t.ParseDispatchInRegion(data, 0)
-	if err != nil {
-		return nil, err
-	}
+	dispatchThreads := t.ParseDispatchInRegion(data, 0)
 
 	// Convert DispatchThreads to DispatchCall
 	var dispatches []*DispatchCall
@@ -466,8 +463,47 @@ type DispatchThreads struct {
 	Offset int64
 }
 
+// SIMDWidth is the number of threads in an Apple Silicon SIMD group.
+const SIMDWidth uint64 = 32
+
+// Threadgroups reports how many threadgroups the dispatch covers in each
+// dimension, rounding up: a dispatchThreads call gives a thread count, and a
+// partial threadgroup still runs. A dimension with no threadgroup size is
+// reported as 1 rather than 0, so the product stays usable.
+func (d DispatchThreads) Threadgroups() (x, y, z uint64) {
+	x, y, z = 1, 1, 1
+	if d.ThreadsPerGroupX > 0 {
+		x = (d.ThreadsX + d.ThreadsPerGroupX - 1) / d.ThreadsPerGroupX
+	}
+	if d.ThreadsPerGroupY > 0 {
+		y = (d.ThreadsY + d.ThreadsPerGroupY - 1) / d.ThreadsPerGroupY
+	}
+	if d.ThreadsPerGroupZ > 0 {
+		z = (d.ThreadsZ + d.ThreadsPerGroupZ - 1) / d.ThreadsPerGroupZ
+	}
+	return x, y, z
+}
+
+// SIMDGroups reports the number of SIMD groups the dispatch launches, which is
+// what Xcode shows as "# SIMD Groups". It is the total thread count rounded up
+// to a whole number of groups.
+//
+// A dispatch whose threadgroup size is zero in any dimension reports 0. Metal
+// records 1 for unused dimensions, so a zero means the dispatch was not read
+// from the capture, and the thread count is unknown rather than zero.
+func (d DispatchThreads) SIMDGroups() uint64 {
+	threadsPerGroup := d.ThreadsPerGroupX * d.ThreadsPerGroupY * d.ThreadsPerGroupZ
+	if threadsPerGroup == 0 {
+		return 0
+	}
+	x, y, z := d.Threadgroups()
+	return (x*y*z*threadsPerGroup + SIMDWidth - 1) / SIMDWidth
+}
+
 // ParseDispatchInRegion parses dispatch calls within a command buffer region.
-func (t *Trace) ParseDispatchInRegion(data []byte, baseOffset int64) ([]DispatchThreads, error) {
+// A region with no dispatch markers yields none; scanning bytes already in
+// memory cannot fail.
+func (t *Trace) ParseDispatchInRegion(data []byte, baseOffset int64) []DispatchThreads {
 	var dispatches []DispatchThreads
 	dispatchMarker := []byte("ul@3")
 
@@ -513,5 +549,5 @@ func (t *Trace) ParseDispatchInRegion(data []byte, baseOffset int64) ([]Dispatch
 		offset += pos + 4
 	}
 
-	return dispatches, nil
+	return dispatches
 }

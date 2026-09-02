@@ -3,7 +3,11 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
+	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -25,11 +29,17 @@ func runCloseTrace(cmd *cobra.Command, args []string) error {
 	defer cfRelease(appAX)
 
 	var windowAX uintptr
-	windowAX, err = findTargetWindow(cmd.Context(), appAX, traceFile)
+	if traceFile != "" {
+		windowAX, err = waitForExactTraceWindow(cmd.Context(), appAX, traceFile, 10*time.Second)
+	} else {
+		windowAX, err = findTargetWindow(cmd.Context(), appAX, "")
+	}
 	if err != nil {
 		return err
 	}
 	title := axString(windowAX, "AXTitle")
+	document := axString(windowAX, "AXDocument")
+	initialWindows := deduplicateAXWindows(GetAllWindows(appAX))
 	if traceFile != "" {
 		fmt.Fprintf(xcodeProfileStatusWriter(), "Closing window for: %s\n", traceFile)
 	} else if title != "" {
@@ -47,12 +57,90 @@ func runCloseTrace(cmd *cobra.Command, args []string) error {
 	if err := axAction(closeBtn, "AXPress"); err != nil {
 		return fmt.Errorf("failed to click close button: %w", err)
 	}
+	if err := waitForClosedTraceWindow(cmd.Context(), appAX, title, document, len(initialWindows), 5*time.Second); err != nil {
+		return err
+	}
 
-	fmt.Fprintln(xcodeProfileStatusWriter(), "Done")
+	fmt.Fprintln(xcodeProfileStatusWriter(), "Trace window closed (verified absent from Xcode window list).")
 	return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
-		Action: "close",
-		Target: traceFile,
+		Action:           "close",
+		Target:           traceFile,
+		SelectedTitle:    title,
+		SelectedDocument: document,
+		Phase:            "closed",
+		Evidence:         "selected trace window is absent from the Xcode AX window list",
 	})
+}
+
+// waitForExactTraceWindow finds the one Xcode window whose AXDocument names
+// traceFile. It does not use the GPU UI fallback: close is destructive, and an
+// untitled replay window cannot be safely attributed to a requested trace.
+func waitForExactTraceWindow(ctx context.Context, appAX uintptr, traceFile string, timeout time.Duration) (uintptr, error) {
+	traceIdentity := strings.ToLower(filepath.Clean(traceFile))
+	deadline := time.Now().Add(timeout)
+	for {
+		windows := deduplicateAXWindows(GetAllWindows(appAX))
+		window, err := exactTraceWindow(windows, traceIdentity)
+		if err == nil {
+			return window, nil
+		}
+		if len(exactTraceWindows(windows, traceIdentity)) == 0 {
+			if time.Now().After(deadline) {
+				return 0, fmt.Errorf("find exact Xcode trace window for %q: no AXDocument match", filepath.Base(traceFile))
+			}
+		} else {
+			return 0, fmt.Errorf("find exact Xcode trace window for %q: %w", filepath.Base(traceFile), err)
+		}
+		if err := waitForAutomation(ctx, 100*time.Millisecond); err != nil {
+			return 0, err
+		}
+	}
+}
+
+func exactTraceWindow(windows []xcodeAXWindow, traceIdentity string) (uintptr, error) {
+	matches := exactTraceWindows(windows, traceIdentity)
+	if len(matches) != 1 {
+		return 0, fmt.Errorf("found %d AXDocument matches", len(matches))
+	}
+	return matches[0], nil
+}
+
+func waitForClosedTraceWindow(ctx context.Context, appAX uintptr, title, document string, initialCount int, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		windows := deduplicateAXWindows(GetAllWindows(appAX))
+		if !windowSnapshotContainsTarget(windows, title, document, initialCount) {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("close trace window: selected window is still present (title %q, document %q)", title, document)
+		}
+		if err := waitForAutomation(ctx, 100*time.Millisecond); err != nil {
+			return err
+		}
+	}
+}
+
+func windowSnapshotContainsTarget(windows []xcodeAXWindow, title, document string, initialCount int) bool {
+	if document != "" {
+		want := strings.ToLower(filepath.Clean(document))
+		for _, window := range windows {
+			if strings.ToLower(filepath.Clean(window.Document)) == want {
+				return true
+			}
+		}
+		return false
+	}
+	if title != "" {
+		want := strings.ToLower(strings.TrimSpace(title))
+		for _, window := range windows {
+			if strings.ToLower(strings.TrimSpace(window.Title)) == want {
+				return true
+			}
+		}
+		return false
+	}
+	return len(windows) >= initialCount
 }
 
 // findCloseButton finds the close button in a window.

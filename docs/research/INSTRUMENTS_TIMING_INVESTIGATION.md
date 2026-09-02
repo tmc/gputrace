@@ -132,5 +132,5 @@ Current shader metrics prefer real profiler timing when available and label ever
 
 - Process: `GPUToolsReplayService` (part of Xcode GPU debugging tools)
 - Location: `/Applications/Xcode.app/Contents/Developer/...`
-- Trace format: [TRACE_FORMAT.md](./TRACE_FORMAT.md)
+- Trace format: [XDIC_INDEX_FORMAT.md](./XDIC_INDEX_FORMAT.md)
 - MTSP records: [RECORD_FORMATS.md](./RECORD_FORMATS.md)

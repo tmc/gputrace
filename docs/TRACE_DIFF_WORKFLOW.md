@@ -61,7 +61,14 @@ gputrace diff A.gputrace B.gputrace --by occurrences --show-occurrences
 
 # Encoder dominance triage
 gputrace diff A.gputrace B.gputrace --by-encoder
+
+# First divergent encoder and tail slopes
+gputrace diff A.gputrace B.gputrace --by encoder --divergence
 ```
+
+`--by-encoder` and `--divergence` are separate reports and cannot be combined:
+`--divergence` requires `--by encoder`, and `--by-encoder` rejects any `--by`.
+`--quick` likewise cannot be combined with `--by`.
 
 ## Machine-Readable Output
 

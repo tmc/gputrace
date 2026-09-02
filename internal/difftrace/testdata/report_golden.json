@@ -8,8 +8,12 @@
     "dispatch_count_a": 3,
     "dispatch_count_b": 3,
     "dispatch_count_delta": 0,
+    "timing_available": true,
     "total_gpu_time_a_us": 170,
     "total_gpu_time_b_us": 169,
+    "dispatch_span_a_us": 170,
+    "dispatch_span_b_us": 169,
+    "timing_metric": "cumulative_offset_delta",
     "total_delta_us": 1,
     "matched_delta_us": 1,
     "unmatched_delta_us": 0,
@@ -304,5 +308,6 @@
       "confidence": 0.95
     }
   ],
-  "unmatched": []
+  "unmatched": [],
+  "comparability": {}
 }

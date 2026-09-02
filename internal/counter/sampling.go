@@ -47,8 +47,8 @@ func DefaultCounterSamplingConfig() *CounterSamplingConfig {
 	}
 }
 
-// CounterSampleBuffer describes an MTLCounterSampleBuffer.
-// The current implementation does not create this Metal object.
+// CounterSampleBuffer describes a configured counter sample buffer. A backend
+// may associate it with a platform object through CounterSampler.BackendBuffers.
 type CounterSampleBuffer struct {
 	// Device reference (MTLDevice in actual Metal implementation)
 	Device any
@@ -77,6 +77,19 @@ type CounterSampleBufferDescriptor struct {
 
 	// Sample count (number of samples this buffer can hold)
 	SampleCount int
+}
+
+// CounterSampleBackend supplies platform-specific operations for replay-time
+// counter collection. Implementations preserve resolved bytes without
+// interpreting an unverified hardware layout.
+type CounterSampleBackend interface {
+	CreateSampleBuffer(counterSet string, sampleCount int) (any, error)
+	SampleCounters(encoder, sampleBuffer any, sampleIndex int) error
+	ResolveCounterSamples(commandBuffer, sampleBuffer any, startIndex, count int) ([]byte, error)
+}
+
+type counterSampleBackendReleaser interface {
+	ReleaseSampleBuffer(buffer any)
 }
 
 // CounterSet represents an MTLCounterSet (collection of related counters).
@@ -140,18 +153,31 @@ type CounterSamplingResult struct {
 	DispatchMetrics []DispatchCounterMetrics
 
 	// Summary statistics
-	TotalGPUTime     uint64  // Total GPU execution time (nanoseconds)
-	EstimatedGPUFreq float64 // Estimated GPU frequency (GHz)
-	SampleCount      int     // Total samples collected
-	EncoderCount     int     // Number of encoders sampled
-	DispatchCount    int     // Number of dispatches sampled
+	TotalGPUTime     uint64            // Total GPU execution time (nanoseconds)
+	EstimatedGPUFreq float64           // Estimated GPU frequency (GHz)
+	SampleCount      int               // Total samples collected
+	EncoderCount     int               // Number of encoders sampled
+	DispatchCount    int               // Number of dispatches sampled
+	RawData          map[string][]byte // Resolved bytes by counter set, undecoded
 }
 
-// EncoderCounterMetrics contains aggregated counter metrics for a single encoder.
+// CounterAttribution describes how counter metrics were joined to an encoder.
+type CounterAttribution string
+
+const (
+	// CounterAttributionUnknown means no capture-backed encoder join exists.
+	CounterAttributionUnknown CounterAttribution = "unknown"
+	// CounterAttributionEncoder means EncoderIndex names the measured encoder.
+	CounterAttributionEncoder CounterAttribution = "encoder"
+)
+
+// EncoderCounterMetrics contains counter metrics with their attribution.
+// EncoderIndex is -1 unless Attribution is CounterAttributionEncoder.
 type EncoderCounterMetrics struct {
 	EncoderIndex int
 	EncoderLabel string
 	EncoderType  string // "compute", "render", "blit"
+	Attribution  CounterAttribution
 
 	// Timing
 	StartTimestamp uint64 // GPU timestamp at encoder start
@@ -170,7 +196,6 @@ type EncoderCounterMetrics struct {
 
 	// Hardware metrics (if available from Apple GPU counters)
 	ALUUtilization  float64 // 0-100%
-	KernelOccupancy float64 // 0-100% (kernel occupancy percentage)
 	CacheHitRate    float64 // 0-100%
 	MemoryBandwidth uint64  // Bytes (total)
 
@@ -208,9 +233,9 @@ type EncoderCounterMetrics struct {
 
 	// Buffer L1 Cache Metrics (gputrace-66)
 	BufferL1MissRate       float64 // Buffer L1 cache miss rate percentage (0-100)
-	BufferL1ReadAccesses   float64 // Buffer L1 read accesses count
+	BufferL1ReadAccesses   float64 // Buffer L1 read accesses, percent of total L1 reads
 	BufferL1ReadBandwidth  float64 // Buffer L1 read bandwidth (GB/s)
-	BufferL1WriteAccesses  float64 // Buffer L1 write accesses count
+	BufferL1WriteAccesses  float64 // Buffer L1 write accesses, percent of total L1 writes
 	BufferL1WriteBandwidth float64 // Buffer L1 write bandwidth (GB/s)
 
 	// Shader Utilization Metrics (gputrace-67)
@@ -246,11 +271,25 @@ type DispatchCounterMetrics struct {
 	MemoryBandwidth uint64
 }
 
-// CounterSampler handles counter sample buffer creation and sampling during replay.
-// It currently fails closed until replay-time Metal counter sampling is implemented.
+// DisplayName returns the shader name used in Xcode-style reports. The counter
+// metrics carry no pipeline identity, so an unnamed dispatch falls straight
+// through to the terminal fallback DispatchInfo.DisplayName uses.
+func (m DispatchCounterMetrics) DisplayName() string {
+	if m.FunctionName != "" {
+		return m.FunctionName
+	}
+	return "(pipeline_unknown)"
+}
+
+// CounterSampler handles counter sample buffer creation and sampling during
+// replay. Without a backend it remains useful for analysis-only builds and
+// fails closed before claiming hardware data.
 type CounterSampler struct {
-	Config  *CounterSamplingConfig
-	Buffers map[string]*CounterSampleBuffer // counter set name -> buffer
+	Config         *CounterSamplingConfig
+	Buffers        map[string]*CounterSampleBuffer // counter set name -> buffer
+	Backend        CounterSampleBackend
+	BackendBuffers map[string]any
+	RawData        map[string][]byte // Resolved bytes by counter set, undecoded
 
 	// Sample tracking
 	NextSampleIndex int
@@ -259,6 +298,12 @@ type CounterSampler struct {
 
 // NewCounterSampler creates a new counter sampler with the given configuration.
 func NewCounterSampler(config *CounterSamplingConfig) *CounterSampler {
+	return NewCounterSamplerWithBackend(config, nil)
+}
+
+// NewCounterSamplerWithBackend creates a sampler backed by platform-specific
+// counter operations. A nil backend retains fail-closed analysis behavior.
+func NewCounterSamplerWithBackend(config *CounterSamplingConfig, backend CounterSampleBackend) *CounterSampler {
 	if config == nil {
 		config = DefaultCounterSamplingConfig()
 	}
@@ -266,15 +311,40 @@ func NewCounterSampler(config *CounterSamplingConfig) *CounterSampler {
 	return &CounterSampler{
 		Config:          config,
 		Buffers:         make(map[string]*CounterSampleBuffer),
+		Backend:         backend,
+		BackendBuffers:  make(map[string]any),
+		RawData:         make(map[string][]byte),
 		NextSampleIndex: 0,
 		Samples:         make([]CounterSample, 0),
 	}
 }
 
-// CreateCounterSampleBuffers validates the enabled counter sets.
-// It returns ErrMetalCounterSamplingUnavailable because real Metal bindings are
-// not yet connected.
+// CreateCounterSampleBuffers validates and allocates the enabled counter sets.
+// With no backend it retains the analysis-only fail-closed behavior.
 func (cs *CounterSampler) CreateCounterSampleBuffers(device any, maxSamples int) error {
+	if cs.Backend != nil {
+		if maxSamples <= 0 {
+			return errors.New("counter sample count must be positive")
+		}
+		for _, counterSetName := range cs.Config.EnabledCounterSets {
+			buffer, err := cs.Backend.CreateSampleBuffer(counterSetName, maxSamples)
+			if err != nil {
+				cs.Close()
+				return fmt.Errorf("create counter sample buffer %q: %w", counterSetName, err)
+			}
+			if buffer == nil {
+				cs.Close()
+				return fmt.Errorf("create counter sample buffer %q: backend returned nil", counterSetName)
+			}
+			cs.Buffers[counterSetName] = &CounterSampleBuffer{
+				Device:         device,
+				CounterSetName: counterSetName,
+				SampleCount:    maxSamples,
+			}
+			cs.BackendBuffers[counterSetName] = buffer
+		}
+		return nil
+	}
 	for _, counterSetName := range cs.Config.EnabledCounterSets {
 		counterSet := cs.getCounterSet(counterSetName)
 		if counterSet == nil {
@@ -286,9 +356,24 @@ func (cs *CounterSampler) CreateCounterSampleBuffers(device any, maxSamples int)
 }
 
 // SampleCounters records a counter sample at the current point in execution.
-// It returns ErrMetalCounterSamplingUnavailable because no Metal encoder call is
-// available yet.
+// With a backend it also inserts the platform-specific sample operation.
 func (cs *CounterSampler) SampleCounters(encoder any, samplingPoint string, encoderIndex, commandIndex int) error {
+	if cs.Backend != nil {
+		for name, buffer := range cs.BackendBuffers {
+			if err := cs.Backend.SampleCounters(encoder, buffer, cs.NextSampleIndex); err != nil {
+				return fmt.Errorf("sample counter set %q: %w", name, err)
+			}
+		}
+		cs.Samples = append(cs.Samples, CounterSample{
+			Index:         cs.NextSampleIndex,
+			Values:        make(map[string]float64),
+			EncoderIndex:  encoderIndex,
+			CommandIndex:  commandIndex,
+			SamplingPoint: samplingPoint,
+		})
+		cs.NextSampleIndex++
+		return nil
+	}
 	return ErrMetalCounterSamplingUnavailable
 }
 
@@ -330,7 +415,62 @@ func (cs *CounterSampler) SampleCounters(encoder any, samplingPoint string, enco
 //	    samples[i].Values["timestamp"] = parseUInt64(data, offset: i*8)
 //	}
 func (cs *CounterSampler) ResolveCounterSamples() error {
+	if cs.Backend != nil {
+		return errors.New("counter: resolve requires a command buffer")
+	}
 	return ErrMetalCounterSamplingUnavailable
+}
+
+// ResolveCounterSamplesWithCommandBuffer resolves all backend buffers after
+// commandBuffer has completed. The bytes are retained exactly as returned by
+// Metal; decoding is a separate hardware-specific concern.
+func (cs *CounterSampler) ResolveCounterSamplesWithCommandBuffer(commandBuffer any) error {
+	return cs.ResolveCounterSamplesWithCommandBufferRange(commandBuffer, 0, len(cs.Samples))
+}
+
+// ResolveCounterSamplesWithCommandBufferRange resolves a portion of the
+// sample buffer and appends its exact bytes to RawData.
+func (cs *CounterSampler) ResolveCounterSamplesWithCommandBufferRange(commandBuffer any, startIndex, count int) error {
+	if cs.Backend == nil {
+		return ErrMetalCounterSamplingUnavailable
+	}
+	if startIndex < 0 || count < 0 || startIndex+count > len(cs.Samples) {
+		return fmt.Errorf("counter: sample range %d:%d is outside %d samples", startIndex, startIndex+count, len(cs.Samples))
+	}
+	if count == 0 {
+		return nil
+	}
+	for name, buffer := range cs.BackendBuffers {
+		data, err := cs.Backend.ResolveCounterSamples(commandBuffer, buffer, startIndex, count)
+		if err != nil {
+			return fmt.Errorf("resolve counter set %q: %w", name, err)
+		}
+		cs.RawData[name] = append(cs.RawData[name], data...)
+	}
+	return nil
+}
+
+// Close releases backend-owned sample buffers when the backend supports it.
+func (cs *CounterSampler) Close() {
+	if cs == nil || cs.Backend == nil {
+		return
+	}
+	if releaser, ok := cs.Backend.(counterSampleBackendReleaser); ok {
+		for _, buffer := range cs.BackendBuffers {
+			releaser.ReleaseSampleBuffer(buffer)
+		}
+	}
+	cs.BackendBuffers = nil
+	cs.Buffers = nil
+}
+
+// BackendBuffer returns the backend-owned buffer for counterSet. It is used by
+// platform replay code that needs to attach a sample buffer to an encoder.
+func (cs *CounterSampler) BackendBuffer(counterSet string) any {
+	if cs == nil {
+		return nil
+	}
+	return cs.BackendBuffers[counterSet]
 }
 
 // AggregateEncoderMetrics aggregates counter samples into per-encoder metrics.
@@ -504,13 +644,15 @@ func (cs *CounterSampler) getCounterSet(name string) *CounterSet {
 	}
 }
 
-// PopulateEncoderMetricsFromBinaryParsing populates EncoderCounterMetrics from .gpuprofiler_raw parsing.
+// PopulateEncoderMetricsFromBinaryParsing parses Counters_f_*.raw and returns
+// one EncoderCounterMetrics per pipeline, not per encoder, despite the name and
+// the type. The two counts coincide on some captures; on
+// staticmask-warm-tokens2-4 it returns 18 rows for 23 encoders.
 //
-// This bridges the binary parsing approach (gputrace-44) with the replay counter sampling framework.
-// Uses validated binary parsing to extract real counter data from Xcode Instruments captures.
-//
-// Purpose: Provide REAL counter data to the CSV export and validation pipeline while waiting
-// for Metal bindings. This enables end-to-end validation: Binary parsing → EncoderMetrics → CSV → Compare with Xcode
+// The returned slice therefore must not be indexed by encoder position. No
+// encoder join for these rows is established: see
+// docs/research/XCODE_PARITY.md, which records both the timebase disagreement
+// and the refuted kick_software_id candidate.
 func PopulateEncoderMetricsFromBinaryParsing(t *trace.Trace) ([]EncoderCounterMetrics, error) {
 	// Parse performance counters from Counters_f_*.raw files
 	stats, err := ParsePerfCounters(t)
@@ -518,48 +660,31 @@ func PopulateEncoderMetricsFromBinaryParsing(t *trace.Trace) ([]EncoderCounterMe
 		return nil, err
 	}
 
-	return PopulateEncoderMetricsFromPerfCounterStats(t, stats)
+	return PopulateEncoderMetricsFromPerfCounterStats(stats)
 }
 
-// PopulateEncoderMetricsFromPerfCounterStats converts parsed performance counter
-// data into encoder-level counter metrics.
-func PopulateEncoderMetricsFromPerfCounterStats(t *trace.Trace, stats *PerfCounterStats) ([]EncoderCounterMetrics, error) {
+// PopulateEncoderMetricsFromPerfCounterStats converts parsed pipeline counter
+// rows without claiming an encoder attribution the input does not establish.
+func PopulateEncoderMetricsFromPerfCounterStats(stats *PerfCounterStats) ([]EncoderCounterMetrics, error) {
 	if stats == nil {
 		return nil, fmt.Errorf("nil performance counter stats")
 	}
 
-	var profilingMetrics []*ProfilingMetrics
-	if t != nil {
-		// Also parse Kernel Occupancy from Profiling_f_*.raw files (gputrace-78)
-		var err error
-		profilingMetrics, err = ParseProfilingFiles(t)
-		if err != nil {
-			// Profiling data is optional - if not available, continue without it
-			profilingMetrics = nil
-		}
-	}
-
-	// Create a map of encoder index to profiling metrics for easy lookup
-	profilingByEncoder := make(map[int]*ProfilingMetrics)
-	for _, pm := range profilingMetrics {
-		profilingByEncoder[pm.EncoderIndex] = pm
-	}
-
 	metrics := make([]EncoderCounterMetrics, 0, len(stats.ShaderMetrics))
 
-	// Convert ShaderHardwareMetrics to EncoderCounterMetrics
-	for i, shaderMetric := range stats.ShaderMetrics {
+	// ShaderMetrics rows are pipeline-scoped. No field in PerfCounterStats
+	// establishes which encoder, if any, owns a row.
+	for _, shaderMetric := range stats.ShaderMetrics {
 		// Start with base metrics from Counters files
 		metric := EncoderCounterMetrics{
-			EncoderIndex: i,
+			EncoderIndex: -1,
 			EncoderLabel: shaderMetric.ShaderName,
 			EncoderType:  "compute", // Most traces are compute-heavy
+			Attribution:  CounterAttributionUnknown,
 
 			// From binary parsing (gputrace-44 validated approach)
-			ALUUtilization:     shaderMetric.ALUUtilization,  // 0-100% (from Counters files - heuristic)
-			ComputeUtilization: shaderMetric.ALUUtilization,  // Use ALU as compute utilization proxy
-			CacheHitRate:       90.0,                         // Default estimate (no field extraction yet)
-			MemoryBandwidth:    shaderMetric.MemoryBandwidth, // Bytes (total)
+			ALUUtilization:  shaderMetric.ALUUtilization,
+			MemoryBandwidth: shaderMetric.MemoryBandwidth, // Bytes (total)
 
 			// Detailed memory bandwidth from gputrace-65
 			BytesReadFromDeviceMemory:      shaderMetric.BytesReadFromDeviceMemory,
@@ -614,35 +739,13 @@ func PopulateEncoderMetricsFromPerfCounterStats(t *trace.Trace, stats *PerfCount
 			// Execution counts (validated with 100% accuracy on Encoder 5)
 			DispatchCount: shaderMetric.ExecutionCount, // This is kernel invocations
 
-			// Timing (estimate from cycles if available)
 			DurationCycles: shaderMetric.TotalCycles,
-			Duration:       estimateDurationNs(shaderMetric.TotalCycles),
-		}
-
-		// Override Kernel Occupancy with real data from Profiling files if available (gputrace-78)
-		// Profiling_f_*.raw files contain accurate Kernel Occupancy using frequency-based extraction
-		if profilingData, found := profilingByEncoder[i]; found {
-			metric.KernelOccupancy = profilingData.KernelOccupancy // Already in 0-100 percentage format
-		} else {
-			// Fallback to heuristic from Counters files (less reliable)
-			metric.KernelOccupancy = shaderMetric.KernelOccupancy
 		}
 
 		metrics = append(metrics, metric)
 	}
 
 	return metrics, nil
-}
-
-// estimateDurationNs estimates duration in nanoseconds from GPU cycles.
-// Uses typical Apple GPU frequency (~1.3 GHz for M-series).
-func estimateDurationNs(cycles uint64) uint64 {
-	if cycles == 0 {
-		return 0
-	}
-	// Assume 1.3 GHz GPU frequency (typical for Apple Silicon)
-	const gpuFreqGHz = 1.3
-	return uint64(float64(cycles) / gpuFreqGHz)
 }
 
 // FormatCounterSamplingResult generates a human-readable report of counter sampling results.
@@ -711,10 +814,7 @@ func FormatCounterSamplingResult(result *CounterSamplingResult) string {
 		for i := 0; i < count; i++ {
 			metric := dispatches[i]
 			durationMs := float64(metric.Duration) / 1e6
-			funcName := metric.FunctionName
-			if funcName == "" {
-				funcName = "(unknown)"
-			}
+			funcName := metric.DisplayName()
 
 			output += fmt.Sprintf("%-5d %-40s %12.3f %9.1f%%\n",
 				metric.DispatchIndex,

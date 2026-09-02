@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -76,10 +77,34 @@ func waitForAutomation(ctx context.Context, delay time.Duration) error {
 	}
 }
 
+// appleScriptString renders s as an AppleScript string literal, including the
+// surrounding quotes. Go's %q is not a substitute: it escapes non-ASCII as
+// \uXXXX, which AppleScript reads literally rather than as an escape.
+// AppleScript recognizes only \" and \\ inside a quoted string, and accepts
+// raw UTF-8 for everything else.
+func appleScriptString(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) + 2)
+	b.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '"', '\\':
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		case '\n':
+			b.WriteString(`" & return & "`)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
 // ShowAutomationOverlay shows a notification that automation is running.
 // Uses AppleScript to show a system notification.
 func ShowAutomationOverlay(parent context.Context, message string) error {
-	script := fmt.Sprintf(`display notification %q with title "gputrace" subtitle "Press Ctrl+C to cancel"`, message)
+	script := fmt.Sprintf(`display notification %s with title "gputrace" subtitle "Press Ctrl+C to cancel"`, appleScriptString(message))
 	ctx, cancel := context.WithTimeout(parent, 2*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "osascript", "-e", script)

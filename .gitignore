@@ -52,3 +52,10 @@ gputrace_bin
 # Local watch/debug artifacts
 watch_*
 beads.svg
+brain/
+
+# Capture artifacts
+*.pprof
+*.pftrace
+*.gpucapture/
+.hermes/

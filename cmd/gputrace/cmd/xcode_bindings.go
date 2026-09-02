@@ -5,6 +5,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 
 	"github.com/spf13/cobra"
 	"github.com/tmc/gputrace/internal/xcodebindings"
@@ -22,13 +23,17 @@ func runXcodeBindings(cmd *cobra.Command, args []string, opts *xcodeBindingsOpti
 		enc.SetIndent("", "  ")
 		return enc.Encode(report)
 	}
+	return writeXcodeBindingsText(w, report)
+}
 
+func writeXcodeBindingsText(w io.Writer, report xcodebindings.Report) error {
 	fmt.Fprintf(w, "Framework: %s\n", report.FrameworkPath)
 	if report.Framework {
-		fmt.Fprintln(w, "Status: available")
+		fmt.Fprintln(w, "Framework load: available")
 	} else {
-		fmt.Fprintln(w, "Status: missing")
+		fmt.Fprintln(w, "Framework load: unavailable")
 	}
+	fmt.Fprintln(w, "Probe scope: symbol availability only; this does not prove trace decoding or metric parity.")
 	fmt.Fprintf(w, "Classes: %d present, %d missing\n",
 		report.Summary["classes_present"], report.Summary["classes_missing"])
 	fmt.Fprintf(w, "Selectors: %d present, %d missing\n\n",
@@ -40,14 +45,8 @@ func runXcodeBindings(cmd *cobra.Command, args []string, opts *xcodeBindingsOpti
 			status = "present"
 		}
 		fmt.Fprintf(w, "%s: %s\n", class.Name, status)
-		for _, sel := range class.Selectors {
-			marker := "missing"
-			if sel.Present {
-				marker = "present"
-			}
-			fmt.Fprintf(w, "  %-8s %-7s %s\n", sel.Kind, marker, sel.Name)
-		}
 	}
+	fmt.Fprintln(w, "Selector details are available with --json.")
 
 	fmt.Fprintln(w, "\nXcode parity gaps")
 	for _, gap := range report.Gaps {

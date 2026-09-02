@@ -12,17 +12,23 @@ import (
 
 type dependenciesOptions struct {
 	verbose bool
+	limit   int
+	all     bool
 }
 
-var dependenciesCmd = newDependenciesCommand(&dependenciesOptions{})
+var dependenciesCmd = newDependenciesCommand(&dependenciesOptions{limit: defaultHumanLimit})
 
 func newDependenciesCommand(opts *dependenciesOptions) *cobra.Command {
+	if opts.limit == 0 {
+		opts.limit = defaultHumanLimit
+	}
 	cmd := &cobra.Command{
 		Use:    "dependencies <trace_path>",
 		Short:  "Generate a dependency graph of operations",
 		Hidden: true,
-		Long: `Analyze buffer usage to generate a dependency graph of operations/encoders.
-The output is in Graphviz DOT format.
+		Long: `Generate a Graphviz DOT graph from decoded buffer dependency events.
+Missing record types can make the graph incomplete. Human-readable DOT output
+is bounded by default; use --all for the complete decoded graph.
 
 Example:
   gputrace dependencies trace.gputrace | dot -Tpng -o graph.png`,
@@ -32,6 +38,8 @@ Example:
 		},
 	}
 	cmd.Flags().BoolVarP(&opts.verbose, "verbose", "v", false, "Show detailed parsing information")
+	cmd.Flags().IntVar(&opts.limit, "limit", opts.limit, "Maximum nodes and edges in DOT output")
+	cmd.Flags().BoolVar(&opts.all, "all", opts.all, "Show the complete dependency graph")
 	return cmd
 }
 
@@ -74,17 +82,29 @@ func runDependencies(cmd *cobra.Command, args []string, opts *dependenciesOption
 			len(graph.Nodes), len(graph.Edges))
 	}
 
-	return writeDependencyGraphDOT(cmd.OutOrStdout(), graph)
+	limit, err := resolveHumanLimit(opts.limit, opts.all)
+	if err != nil {
+		return err
+	}
+	return writeDependencyGraphDOTLimited(cmd.OutOrStdout(), graph, limit)
 }
 
 func writeDependencyGraphDOT(w io.Writer, graph *trace.DependencyGraph) error {
+	return writeDependencyGraphDOTLimited(w, graph, -1)
+}
+
+func writeDependencyGraphDOTLimited(w io.Writer, graph *trace.DependencyGraph, limit int) error {
 	var buf bytes.Buffer
 	fmt.Fprintln(&buf, "digraph G {")
 	fmt.Fprintln(&buf, "  rankdir=LR;")
 	fmt.Fprintln(&buf, "  node [shape=box, style=filled, fontname=\"Helvetica\"];")
 	fmt.Fprintln(&buf, "  edge [fontname=\"Helvetica\", fontsize=10];")
+	fmt.Fprintln(&buf, "  // Decoded dependency events; missing record types can make this graph incomplete.")
 
-	for _, node := range graph.Nodes {
+	nodeCount := limitedCount(len(graph.Nodes), limit)
+	included := make(map[int]bool, nodeCount)
+	for _, node := range graph.Nodes[:nodeCount] {
+		included[node.ID] = true
 		label := node.Label
 		if len(label) > 50 {
 			label = label[:47] + "..."
@@ -92,9 +112,25 @@ func writeDependencyGraphDOT(w io.Writer, graph *trace.DependencyGraph) error {
 		fmt.Fprintf(&buf, "  n%d [label=%q];\n", node.ID, label)
 	}
 
+	edgeCount := 0
+	eligibleEdges := 0
 	for _, edge := range graph.Edges {
+		if !included[edge.From] || !included[edge.To] {
+			continue
+		}
+		eligibleEdges++
+		if limit >= 0 && edgeCount >= limit {
+			continue
+		}
 		label := fmt.Sprintf("%s (%s)", edge.Buffer, edge.Hazard)
 		fmt.Fprintf(&buf, "  n%d -> n%d [label=%q];\n", edge.From, edge.To, label)
+		edgeCount++
+	}
+	if nodeCount < len(graph.Nodes) {
+		fmt.Fprintf(&buf, "  // %d nodes and their incident edges omitted; use --all for the complete decoded graph.\n", len(graph.Nodes)-nodeCount)
+	}
+	if edgeCount < eligibleEdges {
+		fmt.Fprintf(&buf, "  // %d additional edges between shown nodes omitted; use --all for the complete decoded graph.\n", eligibleEdges-edgeCount)
 	}
 
 	fmt.Fprintln(&buf, "}")

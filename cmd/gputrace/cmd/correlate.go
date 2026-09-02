@@ -26,7 +26,7 @@ This command combines timing information from the trace with hardware metrics
 from the profiler data (.gpuprofiler_raw), providing a comprehensive view of
 shader performance including:
   - Execution timing (count, duration, min/max/avg, source, approximation flag)
-  - Hardware metrics (ALU utilization, kernel occupancy)
+  - Hardware metrics (ALU utilization)
   - Memory metrics (bandwidth, total cycles)
   - Derived metrics (cycles per invocation, GPU frequency)
 
@@ -70,6 +70,9 @@ func runCorrelate(cmd *cobra.Command, args []string, opts *correlateOptions) err
 	trace, err := gputrace.Open(tracePath)
 	if err != nil {
 		return fmt.Errorf("failed to open trace: %w", err)
+	}
+	if err := trace.RequireCaptureRecords(); err != nil {
+		return err
 	}
 	defer trace.Close()
 
@@ -122,7 +125,6 @@ func runCorrelate(cmd *cobra.Command, args []string, opts *correlateOptions) err
 			if shader.ALUUtilization > 0 {
 				fmt.Fprintf(out, "    Hardware:\n")
 				fmt.Fprintf(out, "      ALU Util:    %.1f%%\n", shader.ALUUtilization)
-				fmt.Fprintf(out, "      Occupancy:   %.1f%%\n", shader.KernelOccupancy)
 				fmt.Fprintf(out, "      SIMD Groups: %d\n", shader.SIMDGroups)
 				fmt.Fprintf(out, "      Registers:   %d allocated, %d spilled bytes\n",
 					shader.AllocatedRegs, shader.SpilledBytes)

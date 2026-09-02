@@ -45,7 +45,8 @@ func TestWriteEncodersText(t *testing.T) {
 	}{
 		{
 			name: "normal",
-			want: "2 encoders:\n" +
+			want: "Compute encoders: 2\n" +
+				"Observed CS labels: 2 (submission/debug labels; not encoder instances)\n" +
 				"    0: kernel_a\n" +
 				"    7: (unlabeled) 0x20\n",
 		},
@@ -56,11 +57,12 @@ func TestWriteEncodersText(t *testing.T) {
 				{index: 0, encoderCount: 1},
 				{index: 1, encoderCount: 2},
 			},
-			want: "2 encoders:\n" +
+			want: "Compute encoders: 2\n" +
+				"Observed CS labels: 2 (submission/debug labels; not encoder instances)\n" +
 				"    0: kernel_a\n" +
 				"    7: (unlabeled) 0x20\n" +
 				"\n" +
-				"2 command buffers (1.0 encoders/buffer avg)\n" +
+				"Explicit encoder markers decoded per command buffer (2 buffers):\n" +
 				"  CB 0: 1 encoders\n" +
 				"  CB 1: 2 encoders\n",
 		},
@@ -69,7 +71,7 @@ func TestWriteEncodersText(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var out bytes.Buffer
-			err := writeEncodersText(&out, testEncoders(), tt.commandBufferCount, tt.commandBuffers)
+			err := writeEncodersText(&out, 2, testEncoders(), tt.commandBufferCount, tt.commandBuffers, -1)
 			if err != nil {
 				t.Fatalf("writeEncodersText: %v", err)
 			}
@@ -84,7 +86,7 @@ func TestRunEncodersJSONUsesCommandOutput(t *testing.T) {
 	var out bytes.Buffer
 	command := &cobra.Command{}
 	command.SetOut(&out)
-	opts := &encodersOptions{json: true}
+	opts := &encodersOptions{json: true, limit: defaultHumanLimit}
 
 	stdout, err := captureStdout(t, func() error {
 		return runEncoders(command, []string{testEncodersTracePath(t)}, opts)
@@ -116,7 +118,7 @@ func TestRunEncodersTextUsesCommandOutput(t *testing.T) {
 	var out bytes.Buffer
 	command := &cobra.Command{}
 	command.SetOut(&out)
-	opts := &encodersOptions{}
+	opts := &encodersOptions{limit: defaultHumanLimit}
 
 	stdout, err := captureStdout(t, func() error {
 		return runEncoders(command, []string{testEncodersTracePath(t)}, opts)
@@ -127,7 +129,7 @@ func TestRunEncodersTextUsesCommandOutput(t *testing.T) {
 	if stdout != "" {
 		t.Fatalf("os stdout = %q, want empty", stdout)
 	}
-	if got := out.String(); !strings.Contains(got, " encoders:\n") {
+	if got := out.String(); !strings.Contains(got, "Compute encoders:") {
 		t.Fatalf("command output = %q, want encoder header", got)
 	}
 }

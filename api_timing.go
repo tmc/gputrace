@@ -21,11 +21,6 @@ func ConvertStore0ToEncoderTimings(t *Trace, store0Data *timing.Store0TimingData
 	return timing.ConvertStore0ToEncoderTimings(t, store0Data)
 }
 
-// GenerateSyntheticTiming generates synthetic timing data for t.
-func GenerateSyntheticTiming(t *Trace) []*EncoderTiming {
-	return timing.GenerateSyntheticTiming(t)
-}
-
 // NewTimingMetricsExtractor returns a timing metrics extractor for t.
 func NewTimingMetricsExtractor(t *Trace) *TimingMetricsExtractor {
 	return timing.NewTimingMetricsExtractor(t)
@@ -34,6 +29,29 @@ func NewTimingMetricsExtractor(t *Trace) *TimingMetricsExtractor {
 // FormatTimingMetrics formats timing metrics.
 func FormatTimingMetrics(metrics *TimingMetrics) string {
 	return timing.FormatTimingMetrics(metrics)
+}
+
+// LowSampleMarker follows a row measured from a single dispatch.
+const LowSampleMarker = timing.LowSampleMarker
+
+// TimingSourceUnavailable marks a trace that carries no timing measurement at
+// all, as distinct from one measured approximately.
+const TimingSourceUnavailable = timing.TimingSourceUnavailable
+
+// LowSampleFootnote explains LowSampleMarker, or returns "" when unused.
+func LowSampleFootnote(timings []*KernelTiming) string {
+	return timing.LowSampleFootnote(timings)
+}
+
+// FilterMinCalls keeps rows measured from at least min dispatches and reports
+// how many it dropped.
+func FilterMinCalls(timings []*KernelTiming, min int) ([]*KernelTiming, int) {
+	return timing.FilterMinCalls(timings, min)
+}
+
+// MinCallsNote states what a --min-calls filter removed.
+func MinCallsNote(min, dropped, total int) string {
+	return timing.MinCallsNote(min, dropped, total)
 }
 
 // ExportTimingMetricsJSON writes timing metrics as JSON.

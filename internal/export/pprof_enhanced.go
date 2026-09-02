@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -12,6 +11,7 @@ import (
 	"github.com/google/pprof/profile"
 
 	"github.com/tmc/gputrace/internal/counter"
+	"github.com/tmc/gputrace/internal/profilerraw"
 	"github.com/tmc/gputrace/internal/timing"
 	"github.com/tmc/gputrace/internal/trace"
 )
@@ -96,10 +96,11 @@ func profileBasisPoints(v float64) int64 {
 }
 
 const (
-	pprofValueCount       = 37
-	pprofExecutionCostIdx = 34
-	pprofProfilerCountIdx = 35
-	pprofUniformRegsIdx   = 36
+	pprofValueCount          = 37
+	pprofExecutionCostIdx    = 33
+	pprofProfilerCountIdx    = 34
+	pprofUniformRegsIdx      = 35
+	pprofUnattributedRowsIdx = 36
 )
 
 func applyEncoderCounterMetrics(values []int64, m *counter.EncoderCounterMetrics) {
@@ -110,124 +111,145 @@ func applyEncoderCounterMetrics(values []int64, m *counter.EncoderCounterMetrics
 		values[7] = profileBasisPoints(m.ALUUtilization)
 	}
 	if values[8] == 0 {
-		values[8] = profileBasisPoints(m.KernelOccupancy)
-	}
-	if values[9] == 0 {
 		if m.ComputeShaderUtilization > 0 {
-			values[9] = profileBasisPoints(m.ComputeShaderUtilization)
+			values[8] = profileBasisPoints(m.ComputeShaderUtilization)
 		} else {
-			values[9] = profileBasisPoints(m.ComputeUtilization)
+			values[8] = profileBasisPoints(m.ComputeUtilization)
 		}
 	}
+	if values[9] == 0 {
+		values[9] = profileBasisPoints(m.FragmentShaderUtilization)
+	}
 	if values[10] == 0 {
-		values[10] = profileBasisPoints(m.FragmentShaderUtilization)
+		values[10] = profileBasisPoints(m.VertexShaderUtilization)
 	}
 	if values[11] == 0 {
-		values[11] = profileBasisPoints(m.VertexShaderUtilization)
+		values[11] = profileBasisPoints(m.F32Utilization)
 	}
 	if values[12] == 0 {
-		values[12] = profileBasisPoints(m.F32Utilization)
+		values[12] = profileBasisPoints(m.F32Limiter)
 	}
 	if values[13] == 0 {
-		values[13] = profileBasisPoints(m.F32Limiter)
+		values[13] = profileBasisPoints(m.L1CacheLimiter)
 	}
 	if values[14] == 0 {
-		values[14] = profileBasisPoints(m.L1CacheLimiter)
+		values[14] = profileBasisPoints(m.LastLevelCacheLimiter)
 	}
 	if values[15] == 0 {
-		values[15] = profileBasisPoints(m.LastLevelCacheLimiter)
+		values[15] = profileBasisPoints(m.ControlFlowLimiter)
 	}
 	if values[16] == 0 {
-		values[16] = profileBasisPoints(m.ControlFlowLimiter)
+		values[16] = profileBasisPoints(m.BufferL1MissRate)
 	}
 	if values[17] == 0 {
-		values[17] = profileBasisPoints(m.BufferL1MissRate)
+		values[17] = profileBasisPoints(m.InstructionThroughputLimiter)
 	}
 	if values[18] == 0 {
-		values[18] = profileBasisPoints(m.InstructionThroughputLimiter)
+		values[18] = int64(m.BytesReadFromDeviceMemory)
 	}
 	if values[19] == 0 {
-		values[19] = int64(m.BytesReadFromDeviceMemory)
+		values[19] = int64(m.BytesWrittenToDeviceMemory)
 	}
 	if values[20] == 0 {
-		values[20] = int64(m.BytesWrittenToDeviceMemory)
+		values[20] = int64(m.BufferDeviceMemoryBytesRead)
 	}
 	if values[21] == 0 {
-		values[21] = int64(m.BufferDeviceMemoryBytesRead)
+		values[21] = int64(m.BufferDeviceMemoryBytesWritten)
 	}
 	if values[22] == 0 {
-		values[22] = int64(m.BufferDeviceMemoryBytesWritten)
+		values[22] = int64(m.DeviceMemoryBandwidthGBps * 1000)
 	}
 	if values[23] == 0 {
-		values[23] = int64(m.DeviceMemoryBandwidthGBps * 1000)
+		values[23] = int64(m.BufferL1ReadBandwidth * 1000)
 	}
 	if values[24] == 0 {
-		values[24] = int64(m.BufferL1ReadBandwidth * 1000)
+		values[24] = int64(m.BufferL1WriteBandwidth * 1000)
 	}
-	if values[25] == 0 {
-		values[25] = int64(m.BufferL1WriteBandwidth * 1000)
+}
+
+func appendUnattributedCounterSamples(prof *profile.Profile, metrics []counter.EncoderCounterMetrics, nextID uint64, parents ...*profile.Location) uint64 {
+	if prof == nil || len(metrics) == 0 {
+		return nextID
 	}
+	groupFn := &profile.Function{
+		ID:         nextID,
+		Name:       "Unattributed counter metrics",
+		SystemName: "unattributed_counter_metrics",
+		Filename:   "gpu_counter",
+	}
+	nextID++
+	groupLoc := &profile.Location{ID: nextID, Line: []profile.Line{{Function: groupFn}}}
+	nextID++
+	prof.Function = append(prof.Function, groupFn)
+	prof.Location = append(prof.Location, groupLoc)
+
+	for _, metric := range metrics {
+		label := metric.EncoderLabel
+		if label == "" {
+			label = "(pipeline unknown)"
+		}
+		rowFn := &profile.Function{
+			ID:         nextID,
+			Name:       "[unattributed] " + label,
+			SystemName: "unattributed_pipeline_counter",
+			Filename:   "gpu_counter",
+		}
+		nextID++
+		rowLoc := &profile.Location{ID: nextID, Line: []profile.Line{{Function: rowFn}}}
+		nextID++
+		prof.Function = append(prof.Function, rowFn)
+		prof.Location = append(prof.Location, rowLoc)
+
+		values := make([]int64, pprofValueCount)
+		applyEncoderCounterMetrics(values, &metric)
+		values[pprofUnattributedRowsIdx] = 1
+		locations := []*profile.Location{rowLoc, groupLoc}
+		locations = append(locations, parents...)
+		prof.Sample = append(prof.Sample, &profile.Sample{
+			Location: locations,
+			Value:    values,
+			Label: map[string][]string{
+				"attribution":    {string(counter.CounterAttributionUnknown)},
+				"counter_source": {"PerfCounterStats pipeline row"},
+				"metric_scope":   {"pipeline"},
+				"pipeline_label": {label},
+			},
+		})
+	}
+	return nextID
+}
+
+func splitEncoderCounterMetrics(metrics []counter.EncoderCounterMetrics) (map[int]*counter.EncoderCounterMetrics, []counter.EncoderCounterMetrics) {
+	attributed := make(map[int]*counter.EncoderCounterMetrics)
+	var unattributed []counter.EncoderCounterMetrics
+	for i := range metrics {
+		metric := &metrics[i]
+		if metric.Attribution == counter.CounterAttributionEncoder && metric.EncoderIndex >= 0 {
+			attributed[metric.EncoderIndex] = metric
+			continue
+		}
+		unattributed = append(unattributed, *metric)
+	}
+	return attributed, unattributed
 }
 
 func dispatchSIMDGroupsByIndex(t *trace.Trace, stats *counter.StreamDataStats) []int64 {
 	if t == nil || stats == nil || len(stats.Dispatches) == 0 || len(t.CaptureData) == 0 {
 		return nil
 	}
-	dispatches, err := t.ParseDispatchInRegion(t.CaptureData, 0)
-	if err != nil || len(dispatches) != len(stats.Dispatches) {
+	dispatches := t.ParseDispatchInRegion(t.CaptureData, 0)
+	if len(dispatches) != len(stats.Dispatches) {
 		return nil
 	}
 	groups := make([]int64, len(dispatches))
 	for i, d := range dispatches {
-		groups[i] = dispatchSIMDGroups(d)
+		groups[i] = int64(d.SIMDGroups())
 	}
 	return groups
 }
 
-func dispatchSIMDGroups(d trace.DispatchThreads) int64 {
-	const simdWidth uint64 = 32
-	tgX, tgY, tgZ := uint64(1), uint64(1), uint64(1)
-	if d.ThreadsPerGroupX > 0 {
-		tgX = (d.ThreadsX + d.ThreadsPerGroupX - 1) / d.ThreadsPerGroupX
-	}
-	if d.ThreadsPerGroupY > 0 {
-		tgY = (d.ThreadsY + d.ThreadsPerGroupY - 1) / d.ThreadsPerGroupY
-	}
-	if d.ThreadsPerGroupZ > 0 {
-		tgZ = (d.ThreadsZ + d.ThreadsPerGroupZ - 1) / d.ThreadsPerGroupZ
-	}
-	threadsPerGroup := d.ThreadsPerGroupX * d.ThreadsPerGroupY * d.ThreadsPerGroupZ
-	if threadsPerGroup == 0 {
-		return 0
-	}
-	totalThreads := tgX * tgY * tgZ * threadsPerGroup
-	return int64((totalThreads + simdWidth - 1) / simdWidth)
-}
-
 func findTraceProfilerDir(tracePath string) string {
-	if tracePath == "" {
-		return ""
-	}
-	if filepath.Ext(tracePath) == ".gpuprofiler_raw" {
-		if info, err := os.Stat(tracePath); err == nil && info.IsDir() {
-			return tracePath
-		}
-		return ""
-	}
-	profilerDir := tracePath + ".gpuprofiler_raw"
-	if info, err := os.Stat(profilerDir); err == nil && info.IsDir() {
-		return profilerDir
-	}
-	entries, err := os.ReadDir(tracePath)
-	if err != nil {
-		return ""
-	}
-	for _, entry := range entries {
-		if entry.IsDir() && filepath.Ext(entry.Name()) == ".gpuprofiler_raw" {
-			return filepath.Join(tracePath, entry.Name())
-		}
-	}
-	return ""
+	return profilerraw.FindDir(tracePath)
 }
 
 func applyProfilingExecutionCosts(stats *counter.StreamDataStats, tracePath string) *counter.ExecutionCostMetrics {
@@ -336,11 +358,10 @@ func appendXcodeMetricCoverageComments(prof *profile.Profile) {
 	if len(totals) == 0 {
 		return
 	}
-	counterSource := pprofHasLabel(prof, "counter_source")
+	counterSource := pprofHasLabelValue(prof, "counter_source", "Counters_f_*.raw/Profiling_f_*.raw")
 	for _, name := range []string{
 		"simd_groups",
 		"execution_cost",
-		"occupancy",
 		"alu_util",
 		"alloc_regs",
 		"uniform_regs",
@@ -353,22 +374,21 @@ func appendXcodeMetricCoverageComments(prof *profile.Profile) {
 		"device_bandwidth",
 		"instructions",
 		"profiler_samples",
+		"unattributed_counter_rows",
 	} {
 		prof.Comments = append(prof.Comments, fmt.Sprintf("gputrace xcode_metric_total %s: %d", name, totals[name]))
 	}
 	if counterSource {
 		prof.Comments = append(prof.Comments, "gputrace xcode_metric_source alu_util: Counters_f_*.raw/Profiling_f_*.raw")
-		prof.Comments = append(prof.Comments, "gputrace xcode_metric_source occupancy: Counters_f_*.raw/Profiling_f_*.raw")
 	}
 	for _, gap := range []struct {
 		name    string
 		binding string
 	}{
 		{"high_reg", "GTMioShaderBinaryData.LiveRegisterForInstructionAtIndex"},
-		{"occupancy", "XRGPUAPSDataProcessor derived counters"},
 		{"alu_util", "XRGPUAPSDataProcessor derived counters"},
 	} {
-		if counterSource && (gap.name == "alu_util" || gap.name == "occupancy") {
+		if counterSource && gap.name == "alu_util" {
 			continue
 		}
 		if totals[gap.name] == 0 {
@@ -378,13 +398,15 @@ func appendXcodeMetricCoverageComments(prof *profile.Profile) {
 	}
 }
 
-func pprofHasLabel(prof *profile.Profile, key string) bool {
+func pprofHasLabelValue(prof *profile.Profile, key, value string) bool {
 	if prof == nil {
 		return false
 	}
 	for _, sample := range prof.Sample {
-		if len(sample.Label[key]) > 0 {
-			return true
+		for _, got := range sample.Label[key] {
+			if got == value {
+				return true
+			}
 		}
 	}
 	return false
@@ -453,9 +475,8 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 			{Type: "high_reg", Unit: "count"},      // High Register
 			{Type: "spilled_bytes", Unit: "bytes"}, // Spilled Bytes
 
-			// Percentage metrics - utilization (indices 7-12).
+			// Percentage metrics - utilization (indices 7-11).
 			{Type: "alu_util", Unit: "basis_points"},
-			{Type: "occupancy", Unit: "basis_points"},
 			{Type: "compute_util", Unit: "basis_points"},
 			{Type: "fragment_util", Unit: "basis_points"},
 			{Type: "vertex_util", Unit: "basis_points"},
@@ -498,6 +519,9 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 
 			// Register footprint from streamData pipeline stats (index 36)
 			{Type: "uniform_regs", Unit: "count"}, // Uniform registers
+
+			// Rows whose raw source carries no encoder identity (index 37)
+			{Type: "unattributed_counter_rows", Unit: "count"},
 		},
 		PeriodType: &profile.ValueType{
 			Type: "gpu",
@@ -531,13 +555,24 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 		)
 	}
 	dispatchExecutionCosts := dispatchExecutionCostValues(streamStats, executionCosts)
-	encoderCounters, _ := counter.PopulateEncoderMetricsFromPerfCounterStats(t, stats)
-	encoderCounterByIndex := make(map[int]*counter.EncoderCounterMetrics)
-	for i := range encoderCounters {
-		encoderCounterByIndex[encoderCounters[i].EncoderIndex] = &encoderCounters[i]
+	var encoderCounters []counter.EncoderCounterMetrics
+	if stats != nil {
+		var err error
+		encoderCounters, err = counter.PopulateEncoderMetricsFromPerfCounterStats(stats)
+		if err != nil {
+			return nil, fmt.Errorf("populate counter attribution: %w", err)
+		}
 	}
-	if len(encoderCounters) > 0 {
-		prof.Comments = append(prof.Comments, "gputrace encoder_counters_source: Counters_f_*.raw and Profiling_f_*.raw")
+	encoderCounterByIndex, unattributedCounters := splitEncoderCounterMetrics(encoderCounters)
+	if len(encoderCounterByIndex) > 0 {
+		prof.Comments = append(prof.Comments, "gputrace encoder_counters_source: explicitly attributed counter metrics")
+	}
+	if len(unattributedCounters) > 0 {
+		prof.Comments = append(prof.Comments,
+			"gputrace counter_attribution: unknown",
+			fmt.Sprintf("gputrace unattributed_counter_rows: %d", len(unattributedCounters)),
+			"gputrace counter_attribution_reason: no capture-backed encoder identity",
+		)
 	}
 
 	// Create root node
@@ -571,6 +606,7 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 	prof.Location = []*profile.Location{gpuTraceLoc, queueLoc}
 
 	nextID := uint64(3)
+	nextID = appendUnattributedCounterSamples(prof, unattributedCounters, nextID, queueLoc, gpuTraceLoc)
 
 	// Map to track created locations/functions to avoid duplicates
 	// Key: "cbIndex" -> *profile.Location
@@ -624,7 +660,7 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 		return cbs[i].Offset < cbs[j].Offset
 	})
 
-	encoders, _ := t.ParseComputeEncoders()
+	encoders := t.ParseComputeEncoders()
 
 	// Map encoder timing by label (approximation as metrics are aggregated)
 	// We'll distribute the aggregated time across instances or just use average?
@@ -650,16 +686,7 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 	// Parse all dispatches once? No, simpler to parse per region or we need to map them.
 	// Since we need to associate dispatches with specific encoders, parsing per region [enc.Offset, nextEnc.Offset] is safer.
 
-	// Pre-calculate metrics map for O(1) lookup
-	metricsMap := make(map[uint64]*counter.ShaderHardwareMetrics)
-	if stats != nil {
-		fmt.Fprintf(os.Stderr, "Building metrics map from %d stats entries\n", len(stats.ShaderMetrics))
-		for i := range stats.ShaderMetrics {
-			m := &stats.ShaderMetrics[i]
-			metricsMap[m.PipelineState] = m
-		}
-		fmt.Fprintf(os.Stderr, "Metrics map built with %d entries\n", len(metricsMap))
-	} else {
+	if stats == nil {
 		fmt.Fprintln(os.Stderr, "No stats provided to ToPprofWithMetrics")
 	}
 
@@ -725,7 +752,7 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 		captureLen := int64(len(t.CaptureData))
 		if startOffset >= 0 && startOffset < captureLen && endOffset <= captureLen && startOffset < endOffset {
 			regionData := t.CaptureData[startOffset:endOffset]
-			dispatches, _ = t.ParseDispatchInRegion(regionData, startOffset)
+			dispatches = t.ParseDispatchInRegion(regionData, startOffset)
 		}
 
 		// Aggregate dispatch info
@@ -834,62 +861,6 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 		numLabels := make(map[string][]int64)
 		counterSource := false
 
-		// Use 1-based index to match counters sequential ID
-		lookupKey := uint64(i + 1)
-		if m, ok := metricsMap[lookupKey]; ok {
-			if !useDispatchTiming {
-				// Hardware metrics matching Xcode's view (indices 3-6)
-				// Calculate SIMD groups from kernel invocations if not set
-				// SIMD width on Apple Silicon is 32 threads
-				simdGroups := m.SIMDGroups
-				if simdGroups == 0 && m.ExecutionCount > 0 {
-					simdGroups = m.ExecutionCount / 32
-				}
-				values[3] = int64(simdGroups)      // simd_groups - Xcode "Cost" is based on this
-				values[4] = int64(m.AllocatedRegs) // alloc_regs
-				values[5] = int64(m.HighRegister)  // high_reg
-				values[6] = int64(m.SpilledBytes)  // spilled_bytes
-
-				// Utilization percentages (scale by 100 for 2 decimal precision)
-				values[7] = profileBasisPoints(m.ALUUtilization)             // alu_util
-				values[8] = profileBasisPoints(m.KernelOccupancy)            // occupancy
-				values[9] = profileBasisPoints(m.ComputeShaderUtilization)   // compute_util
-				values[10] = profileBasisPoints(m.FragmentShaderUtilization) // fragment_util
-				values[11] = profileBasisPoints(m.VertexShaderUtilization)   // vertex_util
-				values[12] = profileBasisPoints(m.F32Utilization)            // f32_util
-
-				// Limiter percentages (scale by 100)
-				values[13] = profileBasisPoints(m.F32Limiter)                   // f32_limiter
-				values[14] = profileBasisPoints(m.L1CacheLimiter)               // l1_limiter
-				values[15] = profileBasisPoints(m.LastLevelCacheLimiter)        // llc_limiter
-				values[16] = profileBasisPoints(m.ControlFlowLimiter)           // control_flow_limiter
-				values[17] = profileBasisPoints(m.BufferL1MissRate)             // buffer_l1_miss
-				values[18] = profileBasisPoints(m.InstructionThroughputLimiter) // instruction_throughput
-
-				// Byte metrics
-				values[19] = int64(m.BytesReadFromDeviceMemory)      // read_bytes
-				values[20] = int64(m.BytesWrittenToDeviceMemory)     // write_bytes
-				values[21] = int64(m.BufferDeviceMemoryBytesRead)    // buffer_read_bytes
-				values[22] = int64(m.BufferDeviceMemoryBytesWritten) // buffer_write_bytes
-
-				// Bandwidth metrics (scale by 1000 to preserve 3 decimal places, GB/s -> MB/s * 1000)
-				values[23] = int64(m.DeviceMemoryBandwidthGBps * 1000) // device_bandwidth
-				values[24] = int64(m.BufferL1ReadBandwidth * 1000)     // buffer_l1_read_bw
-				values[25] = int64(m.BufferL1WriteBandwidth * 1000)    // buffer_l1_write_bw
-
-				// Instruction counts from PipelineStats/streamData (indices 26-33)
-				values[26] = int64(m.InstructionCount)       // instructions
-				values[27] = int64(m.ALUInstructionCount)    // alu_instructions
-				values[28] = int64(m.FP32InstructionCount)   // fp32_instructions
-				values[29] = int64(m.FP16InstructionCount)   // fp16_instructions
-				values[30] = int64(m.INT32InstructionCount)  // int32_instructions
-				values[31] = int64(m.INT16InstructionCount)  // int16_instructions
-				values[32] = int64(m.BranchInstructionCount) // branch_instructions
-				values[33] = int64(m.ThreadgroupMemory)      // threadgroup_mem
-			}
-
-			matches++
-		}
 		if m := encoderCounterByIndex[i]; m != nil {
 			applyEncoderCounterMetrics(values, m)
 			counterSource = true
@@ -955,7 +926,7 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 			// Dispatch sample values available directly from capture data.
 			dispValues := make([]int64, pprofValueCount)
 			dispValues[1] = 1 // count
-			simdGroups := dispatchSIMDGroups(d)
+			simdGroups := int64(d.SIMDGroups())
 			if simdGroups > 0 {
 				dispValues[3] = simdGroups
 			}
@@ -990,6 +961,14 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 	if useDispatchTiming {
 		// Create function locations for each unique kernel from streamData dispatches
 		dispatchFuncLocs := make(map[string]*profile.Location)
+
+		// streamStats.Pipelines comes from pipelinePerformanceStatistics, an
+		// NSDictionary, so its slice order is unrelated to the pipeline index
+		// carried by gpuCommandInfoData records. Join on the pipeline ID.
+		streamPipelinesByID := make(map[int]counter.PipelineStats, len(streamStats.Pipelines))
+		for _, p := range streamStats.Pipelines {
+			streamPipelinesByID[p.PipelineID] = p
+		}
 
 		// Calculate total dispatch time for percentage calculation
 		var totalDispatchTimeUs int
@@ -1053,19 +1032,18 @@ func ToPprofWithMetrics(t *trace.Trace, mapper *ShaderSourceMapper, stats *count
 			}
 
 			// Add instruction count from pipeline if available
-			if d.PipelineIndex >= 0 && d.PipelineIndex < len(streamStats.Pipelines) {
-				p := streamStats.Pipelines[d.PipelineIndex]
+			if p, ok := streamPipelinesByID[d.PipelineID]; ok {
 				dispValues[4] = int64(p.TemporaryRegisterCount)
 				dispValues[6] = int64(p.SpilledBytes)
 				dispValues[pprofUniformRegsIdx] = int64(p.UniformRegisterCount)
-				dispValues[26] = int64(p.InstructionCount)
-				dispValues[27] = int64(p.ALUInstructionCount)
-				dispValues[28] = int64(p.FP32InstructionCount)
-				dispValues[29] = int64(p.FP16InstructionCount)
-				dispValues[30] = int64(p.INT32InstructionCount)
-				dispValues[31] = int64(p.INT16InstructionCount)
-				dispValues[32] = int64(p.BranchInstructionCount)
-				dispValues[33] = int64(p.ThreadgroupMemory)
+				dispValues[25] = int64(p.InstructionCount)
+				dispValues[26] = int64(p.ALUInstructionCount)
+				dispValues[27] = int64(p.FP32InstructionCount)
+				dispValues[28] = int64(p.FP16InstructionCount)
+				dispValues[29] = int64(p.INT32InstructionCount)
+				dispValues[30] = int64(p.INT16InstructionCount)
+				dispValues[31] = int64(p.BranchInstructionCount)
+				dispValues[32] = int64(p.ThreadgroupMemory)
 			}
 
 			costPct := 0.0

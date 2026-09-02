@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"strings"
 )
 
 // CSRecord represents a Command Submission record from the capture file.
@@ -143,6 +144,19 @@ func isPrintableASCII(s string) bool {
 		}
 	}
 	return len(s) > 0
+}
+
+// IsLibraryUUID reports whether label identifies a Metal library rather than
+// a function. Library records share the label field with function records, so
+// a caller listing kernel names has to exclude them explicitly.
+func IsLibraryUUID(label string) bool {
+	return isUUID(label)
+}
+
+// IsArchiveFunctionName reports whether name identifies a function only by the
+// shader archive it was loaded from. See scanArchiveFunctions.
+func IsArchiveFunctionName(name string) bool {
+	return strings.HasPrefix(name, ArchiveFunctionPrefix)
 }
 
 // isUUID checks if a string looks like a UUID (XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX).

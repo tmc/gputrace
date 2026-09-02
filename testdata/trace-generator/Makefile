@@ -1,11 +1,11 @@
-.PHONY: build run run-capture capture-all clean test help list
+.PHONY: build run run-capture capture-all parity-timing-capture clean test help list
 
 TRACES_DIR := ../traces
 TIMESTAMP := $(shell date +%Y%m%d-%H%M%S)
 CAPTURE_DIR ?= $(TRACES_DIR)/generated-$(TIMESTAMP)
 RUNS ?= 3
 
-SCENARIOS := 01-single-encoder 02-two-encoders 03-three-encoders 04-four-encoders 06-six-encoders known-invocations-1000 known-invocations-10000 low-alu-simple-add high-alu-complex-math low-occupancy-high-registers high-occupancy-low-registers
+SCENARIOS := 01-single-encoder 02-two-encoders 03-three-encoders 04-four-encoders 06-six-encoders known-invocations-1000 known-invocations-10000 low-alu-simple-add high-alu-complex-math low-occupancy-high-registers high-occupancy-low-registers parity-asymmetric
 
 help:
 	@echo "GPU Trace Generator"
@@ -16,6 +16,7 @@ help:
 	@echo "  run SCENARIO=...        Run scenario without capture"
 	@echo "  run-capture SCENARIO=.. Capture trace into CAPTURE_DIR"
 	@echo "  capture-all             Capture all scenarios RUNS times into CAPTURE_DIR"
+	@echo "  parity-timing-capture   Capture the small asymmetric timing instrument"
 	@echo "  test                    Test build and run single-encoder"
 	@echo "  clean                   Clean build artifacts"
 	@echo "  list                    List available scenarios"
@@ -25,6 +26,7 @@ help:
 	@echo "  make run SCENARIO=01-single-encoder"
 	@echo "  make run-capture SCENARIO=01-single-encoder"
 	@echo "  make capture-all"
+	@echo "  make parity-timing-capture"
 	@echo "  make test"
 
 build:
@@ -46,6 +48,18 @@ run-capture: build
 		echo "Run 'make list' to see available scenarios"; \
 		exit 1; \
 	fi
+
+# This compact capture is for label, timing, and signpost experiments. It does
+# not request profiler counter data, so retain repeated runs locally without
+# creating a large profiled corpus.
+parity-timing-capture: build
+	@OUTPUT_DIR="$(CAPTURE_DIR)/parity-asymmetric"; \
+	mkdir -p "$$OUTPUT_DIR"; \
+	OUTPUT_PATH="$$OUTPUT_DIR/parity-asymmetric-$(TIMESTAMP).gputrace"; \
+	TRUTH_PATH="$$OUTPUT_DIR/parity-asymmetric-$(TIMESTAMP).ground-truth.json"; \
+	echo "Capturing timing instrument: $$OUTPUT_PATH"; \
+	MTL_CAPTURE_ENABLED=1 .build/release/trace-generator parity-asymmetric "$$OUTPUT_PATH" --ground-truth "$$TRUTH_PATH"; \
+	echo "Ground truth: $$TRUTH_PATH"
 	@mkdir -p "$(CAPTURE_DIR)/$(SCENARIO)"
 	@OUTPUT_PATH="$(CAPTURE_DIR)/$(SCENARIO)/$(SCENARIO)-$(TIMESTAMP).gputrace"; \
 	echo "Capturing trace: $$OUTPUT_PATH"; \

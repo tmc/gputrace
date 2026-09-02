@@ -62,7 +62,7 @@ func TestRunBufferAccessJSONUsesCommandOutput(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("command output is invalid json: %v\n%s", err, out.String())
 	}
-	if got.BufferAccesses == nil || got.EncoderAccesses == nil {
+	if got.BufferAccesses == nil || got.BindingGroups == nil {
 		t.Fatalf("json analysis maps were nil: %+v", got)
 	}
 }
@@ -71,17 +71,17 @@ func testBufferAccessAnalysis() *gputrace.BufferAccessAnalysis {
 	return &gputrace.BufferAccessAnalysis{
 		BufferAccesses: map[uint64]*gputrace.BufferAccessInfo{
 			0x1000: {
-				Address:     0x1000,
-				AccessCount: 2,
-				EncoderIDs:  []int{1, 2},
-				FirstAccess: 4,
-				LastAccess:  8,
-				IsShared:    true,
+				Address:       0x1000,
+				AccessCount:   2,
+				GroupOrdinals: []int{1, 2},
+				FirstAccess:   4,
+				LastAccess:    8,
+				IsShared:      true,
 			},
 		},
-		EncoderAccesses: map[int]*gputrace.EncoderAccessInfo{
+		BindingGroups: map[int]*gputrace.BindingGroupInfo{
 			1: {
-				EncoderID:     1,
+				CSOrdinal:     1,
 				BufferCount:   1,
 				UniqueBuffers: []uint64{0x1000},
 				RecordIndices: []int{4},
@@ -92,9 +92,9 @@ func testBufferAccessAnalysis() *gputrace.BufferAccessAnalysis {
 		AliasingDetected: true,
 		AliasingInstances: []gputrace.BufferAlias{
 			{
-				Address:  0x1000,
-				Encoders: []int{1, 2},
-				Indices:  []int{4, 8},
+				Address: 0x1000,
+				Groups:  []int{1, 2},
+				Indices: []int{4, 8},
 			},
 		},
 	}

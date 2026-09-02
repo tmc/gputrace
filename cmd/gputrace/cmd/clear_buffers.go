@@ -21,17 +21,19 @@ var clearBuffersCmd = newClearBuffersCommand(&clearBuffersOptions{})
 func newClearBuffersCommand(opts *clearBuffersOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "clear-buffers <trace.gputrace>",
-		Short: "Zero out MTLBuffer files to reduce trace size",
+		Short: "Destructively replace captured buffer contents with zeros",
 		Long: `Zero out all MTLBuffer-* files in a GPU trace directory.
 
-This is useful for reducing trace size when buffer contents are not needed,
-such as when sharing traces or storing them for later analysis of structure
-without the actual data.
+This removes captured buffer contents when they are not needed, such as before
+sharing a trace for structural analysis. It preserves each file's logical size.
+Zero-filled files usually compress well, but this command does not itself
+shrink the bundle or reclaim filesystem blocks. The original contents cannot
+be recovered from the modified bundle.
 
 The command will:
   - Find all MTLBuffer-* files (skipping symlinks)
   - Zero out their contents while preserving file size
-  - Report total space that could be saved
+  - Report the total number of bytes overwritten
 
 Examples:
   gputrace clear-buffers trace.gputrace              # Zero all buffers (prompts for confirmation)
@@ -106,7 +108,7 @@ func runClearBuffers(cmd *cobra.Command, args []string, opts *clearBuffersOption
 	}
 
 	// Show summary and prompt for confirmation
-	fmt.Fprintf(w, "Found %d buffer files (%s total)\n", fileCount, fmtutil.FormatBytes(totalSize, 2))
+	fmt.Fprintf(w, "Found %d buffer files (%s to overwrite; logical size will be preserved)\n", fileCount, fmtutil.FormatBytes(totalSize, 2))
 	if skippedSymlinks > 0 {
 		fmt.Fprintf(w, "Will skip %d symlinks\n", skippedSymlinks)
 	}
@@ -118,7 +120,7 @@ func runClearBuffers(cmd *cobra.Command, args []string, opts *clearBuffersOption
 
 	// Prompt for confirmation unless -y flag is set
 	if !opts.yes {
-		fmt.Fprint(w, "\nZero out all buffer files? [y/N]: ")
+		fmt.Fprint(w, "\nThis permanently destroys the captured buffer contents. Continue? [y/N]: ")
 		reader := bufio.NewReader(os.Stdin)
 		response, err := reader.ReadString('\n')
 		if err != nil {

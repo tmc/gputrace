@@ -63,6 +63,9 @@ func TestWriteInsightsJSON(t *testing.T) {
 	if got.HighCount != 1 || got.TotalGPUTimeMs != 12.5 {
 		t.Fatalf("json report = %+v", got)
 	}
+	if !got.TimingApprox || len(got.TimingSources) != 1 || got.TimingSources[0] != "synthetic" {
+		t.Fatalf("json timing provenance = %q, approximate %t", got.TimingSources, got.TimingApprox)
+	}
 	if len(got.Insights) != 1 || got.Insights[0].ShaderName != "kernel_a" {
 		t.Fatalf("json insights = %+v", got.Insights)
 	}
@@ -78,7 +81,7 @@ func TestWriteInsightsTextPreservesSummaryBytes(t *testing.T) {
 
 	want := gputrace.FormatInsightsReport(report) +
 		"\n=== Summary ===\n" +
-		"⚠️  1 HIGH priority optimizations recommended\n"
+		"1 HIGH-priority optimizations recommended\n"
 	if got := out.String(); got != want {
 		t.Fatalf("text output mismatch\ngot:\n%s\nwant:\n%s", got, want)
 	}
@@ -95,9 +98,46 @@ func TestWriteInsightsTextNoInsights(t *testing.T) {
 		t.Fatalf("writeInsightsText: %v", err)
 	}
 
-	want := gputrace.FormatInsightsReport(report) + "✓ No performance issues detected!\n"
+	want := gputrace.FormatInsightsReport(report) + "No supported performance issues identified.\n"
 	if got := out.String(); got != want {
 		t.Fatalf("text output mismatch\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestWriteInsightsTextDoesNotPromoteLimitedAttributionToOptimization(t *testing.T) {
+	report := testInsightsReport()
+	report.TimingApprox = false
+	report.TimingSources = []string{"streamData gpuCommandInfoData dispatch durations"}
+
+	var out bytes.Buffer
+	if err := writeInsightsText(&out, report); err != nil {
+		t.Fatalf("writeInsightsText: %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "1 HIGH-priority attribution hypotheses") {
+		t.Fatalf("limited-attribution summary missing:\n%s", got)
+	}
+	if strings.Contains(got, "optimizations recommended") {
+		t.Fatalf("limited attribution promoted to optimization:\n%s", got)
+	}
+}
+
+func TestWriteInsightsTextApproximateDoesNotGiveCleanBill(t *testing.T) {
+	report := &gputrace.InsightsReport{
+		Insights:     []*gputrace.PerformanceInsight{},
+		TimingApprox: true,
+	}
+
+	var out bytes.Buffer
+	if err := writeInsightsText(&out, report); err != nil {
+		t.Fatalf("writeInsightsText: %v", err)
+	}
+	got := out.String()
+	if strings.Contains(got, "✓") || strings.Contains(got, "No performance issues") {
+		t.Fatalf("approximate report gives a clean bill:\n%s", got)
+	}
+	if !strings.Contains(got, "Measured timing is required") {
+		t.Fatalf("approximate report omits measurement limitation:\n%s", got)
 	}
 }
 
@@ -118,6 +158,8 @@ func testInsightsReport() *gputrace.InsightsReport {
 		},
 		HighCount:      1,
 		TotalGPUTimeMs: 12.5,
+		TimingSources:  []string{"synthetic"},
+		TimingApprox:   true,
 		TopBottlenecks: []string{"kernel_a"},
 	}
 }

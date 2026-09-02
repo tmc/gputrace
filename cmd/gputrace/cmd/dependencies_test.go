@@ -34,3 +34,29 @@ func TestWriteDependencyGraphDOTEscapesLabels(t *testing.T) {
 		}
 	}
 }
+
+func TestWriteDependencyGraphDOTLimit(t *testing.T) {
+	graph := &trace.DependencyGraph{
+		Nodes: []trace.DependencyNode{
+			{ID: 0, Label: "first"},
+			{ID: 1, Label: "second"},
+			{ID: 2, Label: "third"},
+		},
+		Edges: []trace.DependencyEdge{
+			{From: 0, To: 1, Buffer: "a", Hazard: trace.HazardRAW},
+			{From: 1, To: 2, Buffer: "b", Hazard: trace.HazardRAW},
+		},
+	}
+
+	var out bytes.Buffer
+	if err := writeDependencyGraphDOTLimited(&out, graph, 2); err != nil {
+		t.Fatalf("writeDependencyGraphDOTLimited: %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "1 nodes and their incident edges omitted") {
+		t.Fatalf("limited DOT missing omission notice:\n%s", got)
+	}
+	if strings.Contains(got, "n2 [") || strings.Contains(got, "n1 -> n2") {
+		t.Fatalf("limited DOT references omitted node:\n%s", got)
+	}
+}

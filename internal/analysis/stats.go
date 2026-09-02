@@ -26,13 +26,17 @@ type TraceStatistics struct {
 	UnusedMemoryMB    float64
 
 	// Kernels
-	UniqueKernels int
+	UniqueKernels        int // Deprecated: use ObservedKernelLabels.
+	ObservedKernelLabels int
+	DiscoveredFunctions  int
 
 	// Command buffers
 	CommandBuffers int
 
 	// Compute encoders
-	ComputeEncoders int
+	ComputeEncoders          int
+	ComputeEncodersAvailable bool
+	ComputeEncodersSource    string
 
 	// Dispatch calls
 	DispatchCalls int
@@ -90,7 +94,15 @@ func ExtractStatistics(t *trace.Trace) (*TraceStatistics, error) {
 	}
 
 	// Kernel statistics
-	stats.UniqueKernels = len(t.KernelNames)
+	stats.DiscoveredFunctions = len(t.KernelNames)
+	labels := make(map[string]bool)
+	for _, encoder := range t.ParseComputeEncoders() {
+		if encoder.Label != "" {
+			labels[encoder.Label] = true
+		}
+	}
+	stats.ObservedKernelLabels = len(labels)
+	stats.UniqueKernels = stats.ObservedKernelLabels
 
 	// Command buffer count
 	cbCount, err := t.CountCommandBuffers()
@@ -99,10 +111,10 @@ func ExtractStatistics(t *trace.Trace) (*TraceStatistics, error) {
 	}
 
 	// Compute encoder count
-	ceCount, err := t.CountComputeEncoders()
-	if err == nil {
-		stats.ComputeEncoders = ceCount
-	}
+	encoderCount := t.InspectComputeEncoderCount()
+	stats.ComputeEncoders = encoderCount.Count
+	stats.ComputeEncodersAvailable = encoderCount.Available
+	stats.ComputeEncodersSource = encoderCount.Source
 
 	// Dispatch call count
 	dispatchCount, err := t.CountDispatchCalls()
@@ -190,8 +202,8 @@ func extractMemoryUsage(t *trace.Trace) (bufferBytes uint64, uniqueBuffers int, 
 }
 
 func getFileSize(dir, name string) uint64 {
-	info, err := os.Stat(filepath.Join(dir, name))
-	if err == nil && !info.IsDir() {
+	info, err := os.Lstat(filepath.Join(dir, name))
+	if err == nil && !info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
 		return uint64(info.Size())
 	}
 	return 0

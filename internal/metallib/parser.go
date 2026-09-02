@@ -9,14 +9,25 @@ import (
 
 // Header represents the header of an MTLB file.
 type Header struct {
-	Magic          [4]byte // "MTLB"
-	Version        uint32
-	Flags          uint32
-	Reserved       uint32
-	TotalSize      uint64
-	FunctionTable  uint64 // Offset to function table
-	StringTable    uint64 // Offset to string table
-	BytecodeOffset uint64 // Offset to bytecode
+	Magic               [4]byte // "MTLB"
+	Version             uint32
+	Flags               uint32
+	Reserved            uint32
+	TotalSize           uint64
+	FunctionTable       uint64
+	FunctionTableSize   uint64
+	PublicMetadata      uint64
+	PublicMetadataSize  uint64
+	PrivateMetadata     uint64
+	PrivateMetadataSize uint64
+	ModuleList          uint64
+	ModuleListSize      uint64
+	Sources             uint64
+	SourcesSize         uint64
+	ReflectionList      uint64
+	ReflectionListSize  uint64
+	StringTable         uint64 // Legacy name for FunctionTableSize.
+	BytecodeOffset      uint64 // Legacy name for PublicMetadata.
 }
 
 // File represents a parsed Metal Library Binary file.
@@ -52,8 +63,21 @@ func Parse(data []byte) (*File, error) {
 	header.Reserved = binary.LittleEndian.Uint32(data[12:16])
 	header.TotalSize = binary.LittleEndian.Uint64(data[16:24])
 	header.FunctionTable = binary.LittleEndian.Uint64(data[24:32])
-	header.StringTable = binary.LittleEndian.Uint64(data[32:40])
-	header.BytecodeOffset = binary.LittleEndian.Uint64(data[40:48])
+	header.FunctionTableSize = binary.LittleEndian.Uint64(data[32:40])
+	header.PublicMetadata = binary.LittleEndian.Uint64(data[40:48])
+	header.StringTable = header.FunctionTableSize
+	header.BytecodeOffset = header.PublicMetadata
+	if len(data) >= 120 {
+		header.PublicMetadataSize = binary.LittleEndian.Uint64(data[48:56])
+		header.PrivateMetadata = binary.LittleEndian.Uint64(data[56:64])
+		header.PrivateMetadataSize = binary.LittleEndian.Uint64(data[64:72])
+		header.ModuleList = binary.LittleEndian.Uint64(data[72:80])
+		header.ModuleListSize = binary.LittleEndian.Uint64(data[80:88])
+		header.Sources = binary.LittleEndian.Uint64(data[88:96])
+		header.SourcesSize = binary.LittleEndian.Uint64(data[96:104])
+		header.ReflectionList = binary.LittleEndian.Uint64(data[104:112])
+		header.ReflectionListSize = binary.LittleEndian.Uint64(data[112:120])
+	}
 
 	return &File{
 		Header: header,

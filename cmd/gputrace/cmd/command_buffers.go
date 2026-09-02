@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -14,6 +15,8 @@ type commandBuffersOptions struct {
 	verbose  bool
 	detailed bool
 	json     bool
+	limit    int
+	all      bool
 }
 
 type commandBufferEncoderJSON struct {
@@ -31,9 +34,12 @@ type commandBufferJSON struct {
 	Dispatches      int                        `json:"dispatches"`
 }
 
-var commandBuffersCmd = newCommandBuffersCommand(&commandBuffersOptions{})
+var commandBuffersCmd = newCommandBuffersCommand(&commandBuffersOptions{limit: defaultHumanLimit})
 
 func newCommandBuffersCommand(opts *commandBuffersOptions) *cobra.Command {
+	if opts.limit == 0 {
+		opts.limit = defaultHumanLimit
+	}
 	cmd := &cobra.Command{
 		Use:   "command-buffers <trace.gputrace>",
 		Short: "List and analyze command buffers in a GPU trace",
@@ -57,6 +63,8 @@ Examples:
 	cmd.Flags().BoolVarP(&opts.verbose, "verbose", "v", false, "Show verbose output with encoder and API call counts")
 	cmd.Flags().BoolVarP(&opts.detailed, "detailed", "d", false, "Show detailed analysis of each command buffer")
 	cmd.Flags().BoolVar(&opts.json, "json", false, "Output in JSON format")
+	cmd.Flags().IntVar(&opts.limit, "limit", opts.limit, "Maximum human-output rows (and detail lines per buffer)")
+	cmd.Flags().BoolVar(&opts.all, "all", opts.all, "Show all human-output rows")
 	return cmd
 }
 
@@ -77,32 +85,42 @@ func runCommandBuffers(cmd *cobra.Command, args []string, opts *commandBuffersOp
 	if err != nil {
 		return fmt.Errorf("failed to open trace: %w", err)
 	}
+	if err := trace.RequireCaptureRecords(); err != nil {
+		return err
+	}
 
-	// Parse command buffers
-	commandBuffers, err := trace.ParseCommandBuffers()
+	// Parse command buffers. The capture handle keeps the file and the
+	// command-buffer index so the loops below do not reread per buffer.
+	capture, err := gputrace.OpenCapture(trace)
 	if err != nil {
 		return fmt.Errorf("failed to parse command buffers: %w", err)
 	}
+	commandBuffers := capture.CommandBuffers()
 
 	if opts.json {
-		out, err := commandBuffersJSONOutput(trace, commandBuffers)
+		out, err := commandBuffersJSONOutput(capture, commandBuffers)
 		if err != nil {
 			return err
 		}
 		return writeCommandBuffersJSON(cmd.OutOrStdout(), out)
+	}
+	limit, err := resolveHumanLimit(opts.limit, opts.all)
+	if err != nil {
+		return err
 	}
 
 	w := cmd.OutOrStdout()
 
 	// Compact one-line-per-buffer output
 	fmt.Fprintf(w, "%d command buffers:\n", len(commandBuffers))
-	for _, cb := range commandBuffers {
+	shown := limitedCount(len(commandBuffers), limit)
+	for _, cb := range commandBuffers[:shown] {
 		label := ""
 		if cb.Label != "" {
 			label = fmt.Sprintf(" label=%q", cb.Label)
 		}
 		if opts.verbose || opts.detailed {
-			dcb, err := gputrace.ParseDetailedCommandBuffer(trace, cb.Index)
+			dcb, err := capture.Detailed(cb.Index)
 			if err != nil {
 				fmt.Fprintf(w, "  %3d: offset=0x%08x%s (error: %v)\n", cb.Index, cb.Offset, label, err)
 			} else {
@@ -113,13 +131,19 @@ func runCommandBuffers(cmd *cobra.Command, args []string, opts *commandBuffersOp
 			fmt.Fprintf(w, "  %3d: offset=0x%08x%s\n", cb.Index, cb.Offset, label)
 		}
 	}
+	if shown < len(commandBuffers) {
+		fmt.Fprintf(w, "  ... %d more command buffers omitted (use --all)\n", len(commandBuffers)-shown)
+	}
 
 	// Show detailed analysis if requested
 	if opts.detailed {
 		fmt.Fprintf(w, "\n=== Detailed Analysis ===\n\n")
-		for _, cb := range commandBuffers {
-			if err := gputrace.DumpCommandBuffer(trace, w, cb.Index); err != nil {
+		for _, cb := range commandBuffers[:shown] {
+			var detail strings.Builder
+			if err := gputrace.DumpCommandBuffer(trace, &detail, cb.Index); err != nil {
 				fmt.Fprintf(w, "Error dumping command buffer #%d: %v\n", cb.Index, err)
+			} else if err := writeLimitedLines(w, detail.String(), limit, "detail lines"); err != nil {
+				return fmt.Errorf("write command buffer details: %w", err)
 			}
 		}
 	}
@@ -130,7 +154,7 @@ func runCommandBuffers(cmd *cobra.Command, args []string, opts *commandBuffersOp
 		totalAPICalls := 0
 		totalDispatches := 0
 		for _, cb := range commandBuffers {
-			dcb, err := gputrace.ParseDetailedCommandBuffer(trace, cb.Index)
+			dcb, err := capture.Detailed(cb.Index)
 			if err == nil {
 				totalEncoders += len(dcb.Encoders)
 				totalAPICalls += len(dcb.Calls)
@@ -149,7 +173,7 @@ func runCommandBuffers(cmd *cobra.Command, args []string, opts *commandBuffersOp
 	return nil
 }
 
-func commandBuffersJSONOutput(trace *gputrace.Trace, commandBuffers []*gputrace.CommandBuffer) ([]commandBufferJSON, error) {
+func commandBuffersJSONOutput(capture *gputrace.Capture, commandBuffers []*gputrace.CommandBuffer) ([]commandBufferJSON, error) {
 	out := make([]commandBufferJSON, len(commandBuffers))
 	for i, cb := range commandBuffers {
 		entry := commandBufferJSON{
@@ -157,7 +181,7 @@ func commandBuffersJSONOutput(trace *gputrace.Trace, commandBuffers []*gputrace.
 			Label:  cb.Label,
 			Offset: fmt.Sprintf("0x%08x", cb.Offset),
 		}
-		dcb, err := gputrace.ParseDetailedCommandBuffer(trace, cb.Index)
+		dcb, err := capture.Detailed(cb.Index)
 		if err == nil {
 			entry.Calls = len(dcb.Calls)
 			entry.PipelineRecords = len(dcb.Calls)

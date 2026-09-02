@@ -43,7 +43,7 @@ type (
 	// Buffer access analysis types (gputrace-93)
 	BufferAccessAnalysis = analysis.BufferAccessAnalysis
 	BufferAccessInfo     = analysis.BufferAccessInfo
-	EncoderAccessInfo    = analysis.EncoderAccessInfo
+	BindingGroupInfo     = analysis.BindingGroupInfo
 	BufferAlias          = analysis.BufferAlias
 
 	// Buffer timeline types (gputrace-94)
@@ -92,6 +92,11 @@ var (
 	ErrInvalidTrace    = trace.ErrInvalidTrace
 	ErrInvalidMagic    = trace.ErrInvalidMagic
 	ErrMissingMetadata = trace.ErrMissingMetadata
+
+	// ErrNoCaptureRecords reports that a bundle carries no Metal capture
+	// stream. Open succeeds on profiler-only bundles; ask for capture records
+	// with Trace.RequireCaptureRecords when a command needs them.
+	ErrNoCaptureRecords = trace.ErrNoCaptureRecords
 )
 
 // Re-export magic constants

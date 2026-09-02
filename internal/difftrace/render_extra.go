@@ -9,7 +9,7 @@ import (
 )
 
 // RenderQuick renders the quick triage report.
-func RenderQuick(report Report, limit int) string {
+func RenderQuick(report Report, limit int, explain bool) string {
 	if limit <= 0 {
 		limit = 10
 	}
@@ -17,12 +17,36 @@ func RenderQuick(report Report, limit int) string {
 	fmt.Fprintf(&b, "Quick Triage\n")
 	fmt.Fprintf(&b, "Trace A: %s\n", report.TraceAPath)
 	fmt.Fprintf(&b, "Trace B: %s\n", report.TraceBPath)
-	fmt.Fprintf(&b, "Total GPU delta (matched common work): %+dus\n", report.Summary.MatchedDeltaUs)
-	fmt.Fprintf(&b, "Total GPU delta (all dispatches): %+dus  (A=%dus B=%dus)\n", report.Summary.TotalDeltaUs, report.Summary.TotalGPUTimeAUs, report.Summary.TotalGPUTimeBUs)
-	fmt.Fprintf(&b, "Structural/unmatched delta: %+dus\n", report.Summary.UnmatchedDeltaUs)
-	fmt.Fprintf(&b, "Dispatch delta (A-B): %+d\n", report.Summary.DispatchCountDelta)
+	if report.Summary.TimingAvailable {
+		fmt.Fprintf(&b, "Matched cumulative-offset delta: %+dus\n", report.Summary.MatchedDeltaUs)
+		fmt.Fprintf(&b, "Dispatch span delta (all dispatches): %+dus  (A=%dus B=%dus)\n", report.Summary.TotalDeltaUs, report.Summary.DispatchSpanAUs, report.Summary.DispatchSpanBUs)
+		writeMeasuredTimingSummary(&b, report.Summary)
+		writeAttributionNotice(&b, report.Summary)
+		fmt.Fprintf(&b, "Structural/unmatched timing delta: %+dus\n", report.Summary.UnmatchedDeltaUs)
+	} else {
+		fmt.Fprintln(&b, "Timing comparison: unavailable (profiler data required for both traces)")
+	}
+	fmt.Fprintf(&b, "Dispatch count delta (A-B): %+d  (A=%d B=%d)\n", report.Summary.DispatchCountDelta, report.Summary.DispatchCountA, report.Summary.DispatchCountB)
+	if len(report.Warnings) > 0 {
+		fmt.Fprintln(&b, "Warnings:")
+		for _, warning := range report.Warnings {
+			fmt.Fprintf(&b, "  - %s\n", warning)
+		}
+	}
+	if explain {
+		if !report.Summary.TimingAvailable {
+			fmt.Fprintln(&b, "Interpretation: structural dispatch counts are comparable; timing, attribution, outliers, and spike analysis are unavailable.")
+		} else if report.Summary.AttributionLimited {
+			fmt.Fprintln(&b, "Interpretation: compare run-level span/active time; function and outlier rows are attribution hypotheses because boundary time is not separated.")
+		} else {
+			fmt.Fprintf(&b, "Interpretation: Trace A dispatch span is %+dus vs Trace B, with unmatched dispatch impact %+dus and dominant function-level shifts in the top contributors below.\n", report.Summary.TotalDeltaUs, report.Summary.UnmatchedDeltaUs)
+		}
+	}
+	if !report.Summary.TimingAvailable {
+		return b.String()
+	}
 
-	fmt.Fprintf(&b, "\nTop Function Deltas\n")
+	fmt.Fprintf(&b, "\nTop Function-Attributed Offset Deltas\n")
 	fmt.Fprintf(&b, "%-52s %8s %8s %10s\n", "function", "countA", "countB", "delta_us")
 	for i, f := range report.TopFunctionDeltas {
 		if i >= limit {
@@ -37,7 +61,7 @@ func RenderQuick(report Report, limit int) string {
 		if i >= limit {
 			break
 		}
-		fmt.Fprintf(&b, "%-7d %-7d %-7d %-8d %-8d %-40s %8d %8d %+9d\n", m.SourceIndexA, m.SourceIndexB, m.EncoderIndex, m.PipelineIDA, m.PipelineIDB, fmtutil.TruncateString(safeFunctionName(m.FunctionName), 40), m.DurationAUs, m.DurationBUs, m.DeltaUs)
+		fmt.Fprintf(&b, "%-7d %-7d %-7s %-8d %-8d %-40s %8d %8d %+9d\n", m.SourceIndexA, m.SourceIndexB, humanEncoder(m.EncoderIndex), m.PipelineIDA, m.PipelineIDB, fmtutil.TruncateString(safeFunctionName(m.FunctionName), 40), m.DurationAUs, m.DurationBUs, m.DeltaUs)
 	}
 
 	fmt.Fprintf(&b, "\nUnnamed Dispatch Summary\n")
@@ -55,7 +79,7 @@ func RenderQuick(report Report, limit int) string {
 		if i >= limit {
 			break
 		}
-		fmt.Fprintf(&b, "%-7d %-10d %-10d %-10d %-10d %+10d\n", w.EncoderIndex, w.StartSourceIndexA, w.EndSourceIndexA, w.StartSourceIndexB, w.EndSourceIndexB, w.TotalDeltaUs)
+		fmt.Fprintf(&b, "%-7s %-10d %-10d %-10d %-10d %+10d\n", humanEncoder(w.EncoderIndex), w.StartSourceIndexA, w.EndSourceIndexA, w.StartSourceIndexB, w.EndSourceIndexB, w.TotalDeltaUs)
 	}
 	return b.String()
 }
@@ -76,7 +100,7 @@ func RenderEncoderFocus(report Report, limit int) string {
 		if i >= limit {
 			break
 		}
-		fmt.Fprintf(&b, "%-10d %8d %8d %+12d %12d %+10d\n", e.EncoderIndex, e.DispatchCountA, e.DispatchCountB, e.MatchedDeltaUs, e.UnmatchedCount, e.UnmatchedDeltaUs)
+		fmt.Fprintf(&b, "%-10s %8d %8d %+12d %12d %+10d\n", humanEncoder(e.EncoderIndex), e.DispatchCountA, e.DispatchCountB, e.MatchedDeltaUs, e.UnmatchedCount, e.UnmatchedDeltaUs)
 		for j, m := range e.TopDispatches {
 			if j >= 3 {
 				break
@@ -94,7 +118,7 @@ func RenderEncoderFocus(report Report, limit int) string {
 		if share >= 60 {
 			dominance = "dominates"
 		}
-		fmt.Fprintf(&b, "\nDominant encoder: %d (%+dus matched, %.1f%% of matched encoder delta) -> %s\n", top.EncoderIndex, top.MatchedDeltaUs, share, dominance)
+		fmt.Fprintf(&b, "\nDominant encoder: %s (%+dus matched, %.1f%% of matched encoder delta) -> %s\n", humanEncoder(top.EncoderIndex), top.MatchedDeltaUs, share, dominance)
 	}
 	return b.String()
 }
@@ -140,7 +164,7 @@ func RenderMarkdown(report Report, limit int) string {
 		if i >= limit {
 			break
 		}
-		fmt.Fprintf(&b, "| %d | %d | %d | %d | %d | `%s` | %d | %d | %+d |\n", m.SourceIndexA, m.SourceIndexB, m.EncoderIndex, m.PipelineIDA, m.PipelineIDB, escapeCell(safeFunctionName(m.FunctionName)), m.DurationAUs, m.DurationBUs, m.DeltaUs)
+		fmt.Fprintf(&b, "| %d | %d | %s | %d | %d | `%s` | %d | %d | %+d |\n", m.SourceIndexA, m.SourceIndexB, humanEncoder(m.EncoderIndex), m.PipelineIDA, m.PipelineIDB, escapeCell(safeFunctionName(m.FunctionName)), m.DurationAUs, m.DurationBUs, m.DeltaUs)
 	}
 
 	fmt.Fprintf(&b, "\n## Spike Windows\n\n")
@@ -150,7 +174,7 @@ func RenderMarkdown(report Report, limit int) string {
 		if i >= limit {
 			break
 		}
-		fmt.Fprintf(&b, "| %d | %d | %d | %d | %d | %+d |\n", w.EncoderIndex, w.StartSourceIndexA, w.EndSourceIndexA, w.StartSourceIndexB, w.EndSourceIndexB, w.TotalDeltaUs)
+		fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %+d |\n", humanEncoder(w.EncoderIndex), w.StartSourceIndexA, w.EndSourceIndexA, w.StartSourceIndexB, w.EndSourceIndexB, w.TotalDeltaUs)
 	}
 
 	fmt.Fprintf(&b, "\n## Unnamed Dispatch Deltas\n\n")

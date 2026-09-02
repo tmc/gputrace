@@ -5,6 +5,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -19,6 +20,12 @@ type checkStatusOptions struct {
 // StatusOutput represents the JSON output for check-status.
 type StatusOutput struct {
 	Status                   string `json:"status"`
+	Phase                    string `json:"phase"`
+	Evidence                 string `json:"evidence"`
+	RequestedTrace           string `json:"requested_trace,omitempty"`
+	SelectedTitle            string `json:"selected_title,omitempty"`
+	SelectedDocument         string `json:"selected_document,omitempty"`
+	TargetBound              bool   `json:"target_bound"`
 	ReplayAvailable          bool   `json:"replay_available"`
 	ExportAvailable          bool   `json:"export_available"`
 	ShowPerformanceAvailable bool   `json:"show_performance_available"`
@@ -62,12 +69,14 @@ func runCheckStatus(cmd *cobra.Command, args []string, opts *checkStatusOptions)
 	if debug {
 		fmt.Fprintf(os.Stderr, "[check-status] got window: %v (title=%q)\n", windowAX, axString(windowAX, "AXTitle"))
 	}
+	selection := selectionForWindow(traceFile, windowAX)
 
 	if collectProfileOpts.json {
 		if debug {
 			fmt.Fprintln(os.Stderr, "[check-status] getting status output (JSON)...")
 		}
 		output := getStatusOutput(windowAX, debug)
+		applyStatusSelection(&output, selection)
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(output)
@@ -76,8 +85,9 @@ func runCheckStatus(cmd *cobra.Command, args []string, opts *checkStatusOptions)
 	if debug {
 		fmt.Fprintln(os.Stderr, "[check-status] getting profiling status...")
 	}
-	status := getProfilingStatusWithDebug(windowAX, debug)
-	fmt.Println(status)
+	output := getStatusOutput(windowAX, debug)
+	applyStatusSelection(&output, selection)
+	writeStatusText(os.Stdout, output)
 	return nil
 }
 
@@ -103,11 +113,74 @@ func getStatusOutput(window uintptr, debug bool) StatusOutput {
 
 	return StatusOutput{
 		Status:                   status,
+		Phase:                    profilingPhase(status),
+		Evidence:                 profilingStatusEvidence(status),
 		ReplayAvailable:          replayAvailable,
 		ExportAvailable:          exportAvailable,
 		ShowPerformanceAvailable: showPerfAvailable,
 		CurrentTab:               currentTab,
 	}
+}
+
+func applyStatusSelection(output *StatusOutput, selection xcodeWindowSelection) {
+	output.RequestedTrace = selection.RequestedTrace
+	output.SelectedTitle = selection.Title
+	output.SelectedDocument = selection.Document
+	output.TargetBound = selection.Bound
+	if selection.RequestedTrace != "" && !selection.Bound {
+		detected := output.Status
+		output.Status = "unknown"
+		output.Phase = "unbound"
+		output.Evidence = fmt.Sprintf("%s; refusing to attribute detected %q state to the requested trace", selection.Evidence, detected)
+		return
+	}
+	output.Evidence = selection.Evidence + "; " + output.Evidence
+}
+
+func profilingPhase(status string) string {
+	switch status {
+	case "initializing":
+		return "trace loading"
+	case "replay-ready":
+		return "GPU replay ready"
+	case "running":
+		return "performance profiling running"
+	case "complete":
+		return "performance data available"
+	default:
+		return "state unknown"
+	}
+}
+
+func profilingStatusEvidence(status string) string {
+	switch status {
+	case "initializing":
+		return "a replay or profile control is present but disabled"
+	case "replay-ready":
+		return "an enabled replay/profile control or performance-data-unavailable label was detected"
+	case "running":
+		return "Xcode reports GPU trace profiling in progress"
+	case "complete":
+		return "a Show Performance or performance-navigation control was detected"
+	default:
+		return "no recognized replay or performance control state was detected"
+	}
+}
+
+func writeStatusText(w io.Writer, output StatusOutput) {
+	fmt.Fprintf(w, "Status: %s\n", output.Status)
+	fmt.Fprintf(w, "Phase: %s\n", output.Phase)
+	if output.RequestedTrace != "" {
+		fmt.Fprintf(w, "Requested trace: %s\n", output.RequestedTrace)
+	}
+	if output.SelectedDocument != "" {
+		fmt.Fprintf(w, "Selected document: %s\n", output.SelectedDocument)
+	}
+	if output.SelectedTitle != "" {
+		fmt.Fprintf(w, "Selected window: %s\n", output.SelectedTitle)
+	}
+	fmt.Fprintf(w, "Target bound: %t\n", output.TargetBound)
+	fmt.Fprintf(w, "Evidence: %s\n", output.Evidence)
 }
 
 // getCurrentTab tries to determine the currently selected tab.
@@ -225,12 +298,10 @@ func getProfilingStatusWithDebug(window uintptr, debug bool) string {
 		return "running"
 	}
 
-	// Now do targeted traversal for "Show Performance"
-	if hasShowPerformanceDebug(window, debug) {
-		return "complete"
-	}
-	// Also check for "Timeline" or "Encoders" which indicate the trace is loaded and interactive
-	if findButtonByNameInsensitive(window, "Timeline") != 0 || findButtonByNameInsensitive(window, "Encoders") != 0 {
+	// "Show Performance" is present while the summary is ready to enter the
+	// Performance view. Once Xcode has already entered that view, the button
+	// is gone and its tabs are the completion signal instead.
+	if hasPerformanceDataDebug(window, debug) {
 		return "complete"
 	}
 
@@ -270,6 +341,28 @@ func getProfilingStatus(window uintptr) string {
 // Path: window > split > editor area > split > Summary > ... > Show Performance
 func hasShowPerformance(window uintptr) bool {
 	return hasShowPerformanceDebug(window, false)
+}
+
+// hasPerformanceData reports whether Xcode has completed profiling the trace.
+// Xcode exposes either the Summary view's Show Performance button or the
+// Performance view's Timeline and Encoders controls. Both states are safe to
+// advance to export, provided the caller has already bound the window to the
+// requested trace.
+func hasPerformanceData(window uintptr) bool {
+	return hasPerformanceDataDebug(window, false)
+}
+
+func hasPerformanceDataDebug(window uintptr, debug bool) bool {
+	showPerformance := hasShowPerformanceDebug(window, debug)
+	performanceControls := findButtonByNameInsensitive(window, "Timeline") != 0 || findButtonByNameInsensitive(window, "Encoders") != 0
+	if performanceControls && debug {
+		fmt.Fprintln(os.Stderr, "[DEBUG] Performance view controls found")
+	}
+	return performanceDataReady(showPerformance, performanceControls)
+}
+
+func performanceDataReady(showPerformance, performanceControls bool) bool {
+	return showPerformance || performanceControls
 }
 
 func hasShowPerformanceDebug(window uintptr, debug bool) bool {

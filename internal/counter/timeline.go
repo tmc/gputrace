@@ -53,41 +53,6 @@ const (
 	rawTimelineUnsupportedStatus = "raw Timeline_f payload not decoded; use streamData APSTimelineData for command timing"
 )
 
-// GTMioKickTrace represents a GPU kick (encoder execution) trace record.
-// Format: QQIIIIIISSS (38 bytes) - but may vary by GPU generation.
-type GTMioKickTrace struct {
-	StartTimestamp uint64 // GPU start timestamp
-	EndTimestamp   uint64 // GPU end timestamp
-	KickID         uint32 // Kick (encoder) identifier
-	EncoderIndex   uint32 // Index into encoder array
-	CommandIndex   uint32 // Command buffer index
-	PipelineIndex  uint32 // Pipeline state index
-	Flags          uint32 // Execution flags
-	Short1         uint16 // Additional flags/metadata
-	Short2         uint16 // Additional flags/metadata
-	Short3         uint16 // Additional flags/metadata
-}
-
-// GTMioDrawTrace represents a draw/dispatch trace record.
-// Format: QQIS (22 bytes)
-type GTMioDrawTrace struct {
-	StartTimestamp uint64 // GPU start timestamp
-	EndTimestamp   uint64 // GPU end timestamp
-	CommandType    uint32 // Type of draw/dispatch command
-	Flags          uint16 // Execution flags
-}
-
-// GTMioBinaryTrace represents a binary (shader) trace record.
-// Format: QQQIIS (38 bytes)
-type GTMioBinaryTrace struct {
-	Timestamp1    uint64 // Primary timestamp
-	Timestamp2    uint64 // Secondary timestamp
-	BinaryAddress uint64 // Address of the binary/shader
-	BinarySize    uint32 // Size of the binary
-	BinaryType    uint32 // Type of binary (vertex, fragment, compute, etc.)
-	Flags         uint16 // Additional flags
-}
-
 // TimelineData contains all parsed timeline information from a Timeline_f_*.raw file.
 type TimelineData struct {
 	Header          TimelineHeader
@@ -95,8 +60,6 @@ type TimelineData struct {
 	FileIndex       int    // Index from filename (e.g., 0 from Timeline_f_0.raw)
 	FileSize        int64  // Total file size
 	RawData         []byte // Raw file data for advanced parsing
-	KickTraces      []GTMioKickTrace
-	DrawTraces      []GTMioDrawTrace
 	ChunkCount      int    // Number of 256-byte sparse-index blocks before DataOffset.
 	ValidChunks     int    // Number of non-zero sparse-index blocks.
 	RawFormatStatus string // Current parser status for Timeline_f_*.raw payloads.
@@ -330,15 +293,13 @@ func ParseTimelineFilesFromDir(dir string) ([]*TimelineData, error) {
 
 // TimelineSummary provides aggregate statistics across all timeline files.
 type TimelineSummary struct {
-	FileCount      int
-	TotalSize      int64
-	TotalEntries   uint64
-	TotalChunks    int
-	ValidChunks    int
-	KickTraceCount int
-	DrawTraceCount int
-	MinTimestamp   uint64
-	MaxTimestamp   uint64
+	FileCount    int
+	TotalSize    int64
+	TotalEntries uint64
+	TotalChunks  int
+	ValidChunks  int
+	MinTimestamp uint64
+	MaxTimestamp uint64
 }
 
 // TimelineSummaryForData computes aggregate statistics from multiple timeline files.
@@ -353,8 +314,6 @@ func TimelineSummaryForData(timelines []*TimelineData) *TimelineSummary {
 		summary.TotalEntries += td.Header.EntryCount
 		summary.TotalChunks += td.ChunkCount
 		summary.ValidChunks += td.ValidChunks
-		summary.KickTraceCount += len(td.KickTraces)
-		summary.DrawTraceCount += len(td.DrawTraces)
 
 		if td.Header.GPUTimestamp > 0 && td.Header.GPUTimestamp < summary.MinTimestamp {
 			summary.MinTimestamp = td.Header.GPUTimestamp
@@ -363,14 +322,6 @@ func TimelineSummaryForData(timelines []*TimelineData) *TimelineSummary {
 			summary.MaxTimestamp = td.Header.GPUTimestamp
 		}
 
-		for _, kt := range td.KickTraces {
-			if kt.StartTimestamp < summary.MinTimestamp {
-				summary.MinTimestamp = kt.StartTimestamp
-			}
-			if kt.EndTimestamp > summary.MaxTimestamp {
-				summary.MaxTimestamp = kt.EndTimestamp
-			}
-		}
 	}
 
 	if summary.MinTimestamp == ^uint64(0) {

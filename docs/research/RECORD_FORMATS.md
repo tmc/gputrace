@@ -228,6 +228,54 @@ Example from capture:
 | **CS** | **43 53 00 00** | **Command submission (kernel/pipeline)** | **Variable** |
 | C | 43 00 00 00 | Encoder/dispatch | Variable |
 
+## CUt: a function loaded from a shader archive
+
+A function the process took from a compiled shader archive is recorded as a
+`CUt\0` record rather than a `CS\0\0` one. The trailing pair is the same -- tag
+`0x74` followed by the function address a `Ctt` record refers to -- so the
+pipeline-to-function join works identically. Two things differ:
+
+```text
++0x00   CUt\0
++0x04   object id (8)
++0x0c   archive content id, 16 hex chars, NUL-terminated   [D]
+        pad to 4
+        8 bytes, not decoded                               [?]
+        tag = 0x74 (4)
+        function address (8)
+```
+
+- The label holds the archive's 16-hex content id, **not** the function name. [D]
+  The same ids appear in the bundle's `index` (an `xdic` name table), and the
+  bundle stores MLX JIT Metal sources under 16-hex filenames.
+- The tag sits 8 bytes further on than a `CS` record's. [?] Measured on six
+  archives, in all of which every `CUt` label was 16 characters, so the offset
+  is confirmed only at that label length. `scanArchiveFunctions` checks the tag
+  and fails the record closed otherwise.
+
+The function name is not recoverable from the capture for these records. On
+`go_trace_tokens_2_to_3-perfdata.gputrace` the profiler names two such
+pipelines `rope_single_bfloat16_` and
+`sdpa_vector_bfloat16_t_256_256_nomask_qnt_nc_nosinks`; neither string appears
+anywhere in the decompressed capture or device-resources. Only streamData
+(`functionInfoData`) has them.
+
+Before the `CUt` scan, every `Ctt` naming an archive function resolved to
+nothing and all its dispatches landed in the single `unknown` row of
+`gputrace kernels`. Measured, capture path only:
+
+| trace | before | after |
+|-------|--------|-------|
+| BenchmarkInferencePerfDelta_PythonDecode_py_decode-perfdata | 2123/2483 (85.5%) | 2483/2483 |
+| go_trace_tokens_2_to_3-perfdata | 556/574 (96.9%) | 574/574 |
+| qwen3-go-layer0-debug_tokens_0_to_end_layer0 | 17/20 (85%) | 20/20 |
+
+Uniqueness of the id, measured across six traces: 29 `CUt` records, 29 distinct
+ids, 0 collisions; 12 pipelines over 12 distinct ids, strictly one pipeline per
+id. On the trace that carries both a capture and a profiler payload the two
+archive rows carry 12 and 6 dispatches, matching exactly the counts streamData
+gives `rope_single_bfloat16_` and `sdpa_vector_...`.
+
 ## Command Buffer Counting
 
 To count command buffers, search for "Culul" (0x43 0x75 0x6c 0x75 0x6c) markers in the capture file.

@@ -17,6 +17,15 @@ jobs:
           go-version-file: go.mod
           check-latest: true
 
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l $(git ls-files '*.go'))
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-formatted; run 'make fmt':"
+            echo "$unformatted"
+            exit 1
+          fi
+
       - name: Vet
         run: go vet ./...
 

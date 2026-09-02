@@ -277,14 +277,13 @@ func (t *Trace) ParseMTSPFromData(data []byte) ([]MTSPRecord, error) {
 	// Skip MTSP header if present (check magic)
 	offset := 0
 	if len(data) >= 4 && string(data[0:4]) == MagicMTSP {
-		if len(data) < 16 {
+		if len(data) < 8 {
 			return nil, fmt.Errorf("capture data too small for header")
 		}
-		_, err := ReadMTSPHeader(data)
-		if err != nil {
-			return nil, fmt.Errorf("read header: %w", err)
-		}
-		offset = 16
+		// MTSP files have an eight-byte file header: magic and version. The
+		// uint32 at offset 8 is the size of the first record, not part of the
+		// file header.
+		offset = 8
 	}
 
 	var records []MTSPRecord
@@ -378,7 +377,7 @@ func detectRecordType(data []byte) string {
 			return RecordTypeCiulul
 		}
 		// Check for CtU (Buffer Definition)
-		if i+10 <= len(data) && bytes.Equal(data[i:i+10], []byte("CtU<b>ulul")) {
+		if i+len(ctuMarker) <= len(data) && bytes.Equal(data[i:i+len(ctuMarker)], ctuMarker) {
 			return RecordTypeCtU
 		}
 		if i+6 <= len(data) && bytes.Equal(data[i:i+6], []byte("Ctulul")) {
@@ -446,31 +445,33 @@ func (r *MTSPRecord) parseCSuwuwRecord() {
 	marker := []byte("CSuwuw")
 	idx := bytes.Index(r.Data, marker)
 	if idx != -1 {
-		// Based on analysis, address seems to effectively follow the marker,
-		// possibly with alignment padding.
-		// In examined traces, address starts 9 bytes after marker start?
-		// 0x84: CSuwuw... 0x8D: Address. Difference is 9 bytes.
-		// Address is 8 bytes.
-		// String starts after address.
+		r.Address, r.Label = parseCSuwuwAt(r.Data, idx)
+	}
+}
 
-		addrStart := idx + 9
-		if addrStart+8 <= len(r.Data) {
-			r.Address = binary.LittleEndian.Uint64(r.Data[addrStart : addrStart+8])
-
-			// String likely follows address, maybe with padding/nulls
-			strStart := addrStart + 8
-			// Skip nulls
-			for strStart < len(r.Data) && r.Data[strStart] == 0 {
-				strStart++
-			}
-
-			if strStart < len(r.Data) {
-				if end := bytes.IndexByte(r.Data[strStart:], 0); end != -1 {
-					r.Label = string(r.Data[strStart : strStart+end])
-				}
-			}
+func parseCSuwuwAt(data []byte, marker int) (uint64, string) {
+	// Older sidecars put one additional padding byte before the address.
+	for _, addrStart := range []int{marker + 8, marker + 9} {
+		if addrStart+8 > len(data) {
+			continue
+		}
+		strStart := addrStart + 8
+		for strStart < len(data) && data[strStart] == 0 {
+			strStart++
+		}
+		if strStart >= len(data) {
+			continue
+		}
+		end := bytes.IndexByte(data[strStart:], 0)
+		if end <= 0 {
+			continue
+		}
+		label := string(data[strStart : strStart+end])
+		if isPrintable(label) {
+			return binary.LittleEndian.Uint64(data[addrStart : addrStart+8]), label
 		}
 	}
+	return 0, ""
 }
 
 // parseCSRecord parses a CS (Command Submission) record.
@@ -573,7 +574,6 @@ func isHexString(data []byte) bool {
 func isHex(b byte) bool {
 	return (b >= '0' && b <= '9') || (b >= 'A' && b <= 'F') || (b >= 'a' && b <= 'f')
 }
-
 
 // AnalyzeMTSPRecords provides a detailed analysis of MTSP records.
 func (t *Trace) AnalyzeMTSPRecords() (string, error) {
@@ -896,53 +896,20 @@ type CtURecord struct {
 	Name       string
 }
 
-// ParseCtURecord parses a CtU record (CtU<b>ulul).
-// Format: Marker at ~0x24/0x2C, followed by Address, then Name.
+// ParseCtURecord parses a CtU record: a buffer's address and name. See ctu.go
+// for the layout.
 func (r *MTSPRecord) ParseCtURecord() (*CtURecord, error) {
 	if r.Type != RecordTypeCtU {
 		return nil, fmt.Errorf("not a CtU record (type=%s)", r.Type)
 	}
 
-	// Find marker "CtU<b>ulul"
-	marker := []byte("CtU<b>ulul")
-	idx := bytes.Index(r.Data, marker)
+	idx := bytes.Index(r.Data, ctuMarker)
 	if idx == -1 {
 		return nil, fmt.Errorf("CtU marker not found")
 	}
-
-	// Address usually follows marker + padding?
-	// In dependencies.go logic: base = idx, Address at base+8?
-	// Let's look at dependencies.go:
-	// base := absolutePos + 12 (where absolutePos was start of marker?)
-	// No, dependencies.go finds marker, then says "Label starts at +12" for CS.
-	// For Bind (CtU): ctBindMarker := "CtU<b>ulul\x00\x00" (12 bytes)
-	// bindPos := bytes.Index(..., marker)
-	// base := bindPos + 12
-	// bufferAddr := data[base+8 : base+16] -> This implies Address is at Marker + 12 + 8 = Marker + 20?
-	// string starts at base+16 -> Marker + 12 + 16 = Marker + 28?
-
-	// Let's implement based on dependencies.go offsets relative to Marker start.
-	// Marker len is 10 bytes "CtU<b>ulul". dependencies.go uses 12 bytes with nulls.
-
-	addrOffset := idx + 20
-	if addrOffset+8 > len(r.Data) {
-		return nil, fmt.Errorf("CtU record too small for address")
-	}
-	addr := binary.LittleEndian.Uint64(r.Data[addrOffset : addrOffset+8])
-
-	nameOffset := idx + 28
-	if nameOffset >= len(r.Data) {
-		return nil, fmt.Errorf("CtU record too small for name")
-	}
-
-	// Extract null-terminated string
-	nameData := r.Data[nameOffset:]
-	end := bytes.IndexByte(nameData, 0)
-	var name string
-	if end != -1 {
-		name = string(nameData[:end])
-	} else {
-		name = string(nameData)
+	addr, name, ok := ParseCtUAt(r.Data, idx)
+	if !ok {
+		return nil, fmt.Errorf("CtU record too small")
 	}
 
 	return &CtURecord{

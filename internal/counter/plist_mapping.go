@@ -10,8 +10,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
+	"os/exec"
+	"strings"
 	"sync"
+
+	"github.com/tmc/gputrace/internal/xcodepath"
 )
 
 // CounterDataType indicates the data type for a counter value.
@@ -44,6 +47,11 @@ type CounterMetadata struct {
 type GPUCounterGraph struct {
 	Counters       map[string]CounterMetadata `json:"counters"`
 	TimelineGroups []TimelineGroup            `json:"timelineGroups"`
+
+	// Path is the file this was read from. Report it alongside any counter
+	// name taken from here: the dictionary differs between installed Xcodes,
+	// so the name alone does not say which release defined it.
+	Path string `json:"path,omitempty"`
 }
 
 // TimelineGroup represents a group of counters in the timeline view.
@@ -65,17 +73,29 @@ var (
 	userToVendorNames map[string][]string
 )
 
-// DefaultPlistPath returns the default path to GPUCounterGraph.plist in Xcode.
+// DefaultPlistPath returns the path to the GPUCounterGraph.plist that will be
+// read, or "" when no Xcode installs one.
+//
+// Which Xcode this finds matters: the bundles do not ship the same dictionary.
+// Set GPUTRACE_XCODE_APP to pin one. See
+// [github.com/tmc/gputrace/internal/xcodepath].
 func DefaultPlistPath() string {
-	return "/Applications/Xcode.app/Contents/PlugIns/GPUDebugger.ideplugin/Contents/Resources/GPUCounterGraph.plist"
+	return xcodepath.CounterGraphPath()
 }
 
 // LoadGPUCounterGraph loads and parses GPUCounterGraph.plist from Xcode.
 // Results are cached after first successful load.
 func LoadGPUCounterGraph() (*GPUCounterGraph, error) {
 	plistLoadOnce.Do(func() {
-		plistData, plistLoadErr = loadGPUCounterGraphFromPath(DefaultPlistPath())
+		path := DefaultPlistPath()
+		if path == "" {
+			plistLoadErr = fmt.Errorf("no GPUCounterGraph.plist in any of %v (set %s to pin one)",
+				xcodepath.Apps(), xcodepath.AppEnv)
+			return
+		}
+		plistData, plistLoadErr = loadGPUCounterGraphFromPath(path)
 		if plistLoadErr == nil {
+			plistData.Path = path
 			buildVendorMappings()
 		}
 	})
@@ -88,13 +108,21 @@ func LoadGPUCounterGraphFromPath(path string) (*GPUCounterGraph, error) {
 }
 
 func loadGPUCounterGraphFromPath(plistPath string) (*GPUCounterGraph, error) {
-	// Convert plist to JSON using plutil
-	tmpFile := filepath.Join(os.TempDir(), "GPUCounterGraph.json")
+	// plutil is available on all macOS systems. Exec it directly rather than
+	// through a shell: plistPath is caller-supplied on the exported path, and
+	// no quoting scheme makes it safe to paste into /bin/sh -c.
+	tmp, err := os.CreateTemp("", "GPUCounterGraph-*.json")
+	if err != nil {
+		return nil, fmt.Errorf("create temp file: %w", err)
+	}
+	tmpFile := tmp.Name()
+	tmp.Close()
 	defer os.Remove(tmpFile)
 
-	// Use plutil to convert - it's available on all macOS systems
-	cmd := fmt.Sprintf("plutil -convert json -o %q %q", tmpFile, plistPath)
-	if err := runCommand(cmd); err != nil {
+	if out, err := exec.Command("plutil", "-convert", "json", "-o", tmpFile, plistPath).CombinedOutput(); err != nil {
+		if msg := strings.TrimSpace(string(out)); msg != "" {
+			return nil, fmt.Errorf("convert plist: %v: %s", err, msg)
+		}
 		return nil, fmt.Errorf("convert plist: %w", err)
 	}
 
@@ -109,30 +137,6 @@ func loadGPUCounterGraphFromPath(plistPath string) (*GPUCounterGraph, error) {
 	}
 
 	return &graph, nil
-}
-
-func runCommand(cmd string) error {
-	// Simple shell execution for plutil
-	return runShellCommand(cmd)
-}
-
-func runShellCommand(cmd string) error {
-	// Use /bin/sh -c for shell command execution
-	proc := &os.ProcAttr{
-		Files: []*os.File{nil, nil, nil},
-	}
-	p, err := os.StartProcess("/bin/sh", []string{"/bin/sh", "-c", cmd}, proc)
-	if err != nil {
-		return err
-	}
-	state, err := p.Wait()
-	if err != nil {
-		return err
-	}
-	if !state.Success() {
-		return fmt.Errorf("command failed: %s", cmd)
-	}
-	return nil
 }
 
 func buildVendorMappings() {

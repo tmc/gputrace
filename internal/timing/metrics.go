@@ -43,7 +43,6 @@ type TimingSource string
 const (
 	TimingSourceProfiler  TimingSource = "profiler"
 	TimingSourceExtracted TimingSource = "extracted"
-	TimingSourceSynthetic TimingSource = "synthetic"
 )
 
 // IsApproximate reports whether the source is heuristic or synthetic rather than measured profiler data.
@@ -110,9 +109,11 @@ func (tme *TimingMetricsExtractor) Extract() (*TimingMetrics, error) {
 		CommandBufferTimings: make([]*CommandBufferTiming, 0),
 	}
 
-	// Extract encoder timings - try profiler timing first (most accurate), then heuristic, then synthetic
+	// Extract encoder timings - profiler timing first (measured), then the
+	// capture-derived heuristic. There is no third fallback: a trace with
+	// neither reports that timing is unavailable rather than inventing it.
 	var encoderTimings []*EncoderTiming
-	timingSource := TimingSourceSynthetic
+	timingSource := TimingSourceUnavailable
 
 	// 1. Try real profiler timing from .gpuprofiler_raw (most accurate)
 	profilerTimings, _, profilerErr := counter.ExtractEncoderTimingsFromProfiler(tme.trace)
@@ -143,9 +144,11 @@ func (tme *TimingMetricsExtractor) Extract() (*TimingMetrics, error) {
 		if err == nil && len(encoderTimings) > 0 {
 			timingSource = TimingSourceExtracted
 		} else {
-			// 3. Last resort: synthetic timing
-			encoderTimings = GenerateSyntheticTiming(tme.trace)
-			timingSource = TimingSourceSynthetic
+			// No third fallback. Guessing a duration from a kernel's name
+			// produces a table that is sorted, shared and per-kernel, which
+			// reads as measurement no matter what the header calls it.
+			encoderTimings = nil
+			timingSource = TimingSourceUnavailable
 		}
 	}
 	metrics.EncoderTimings = encoderTimings
@@ -204,7 +207,10 @@ func (tme *TimingMetricsExtractor) Extract() (*TimingMetrics, error) {
 
 	// Sort kernels by total duration (descending)
 	sort.Slice(metrics.KernelTimings, func(i, j int) bool {
-		return metrics.KernelTimings[i].TotalDuration > metrics.KernelTimings[j].TotalDuration
+		if metrics.KernelTimings[i].TotalDuration != metrics.KernelTimings[j].TotalDuration {
+			return metrics.KernelTimings[i].TotalDuration > metrics.KernelTimings[j].TotalDuration
+		}
+		return metrics.KernelTimings[i].Name < metrics.KernelTimings[j].Name
 	})
 
 	metrics.TotalDuration = totalDuration
@@ -253,16 +259,17 @@ func (kt *KernelTiming) calculatePercentiles() {
 
 // extractCommandBufferTimings extracts command buffer level timing.
 func (tme *TimingMetricsExtractor) extractCommandBufferTimings(metrics *TimingMetrics) error {
-	commandBuffers, err := tme.trace.ParseCommandBuffers()
+	capture, err := command.OpenCapture(tme.trace)
 	if err != nil {
 		return fmt.Errorf("parse command buffers: %w", err)
 	}
+	commandBuffers := capture.CommandBuffers()
 
 	metrics.TotalCommandBuffers = len(commandBuffers)
 
 	for _, cb := range commandBuffers {
 		// Parse detailed command buffer to get encoders
-		dcb, err := command.ParseDetailedCommandBuffer(tme.trace, cb.Index)
+		dcb, err := capture.Detailed(cb.Index)
 		if err != nil {
 			// Skip command buffers we can't parse
 			continue
@@ -318,8 +325,16 @@ func WriteTimingMetrics(w io.Writer, metrics *TimingMetrics) error {
 	if _, err := fmt.Fprintf(w, "Trace: %s\n", metrics.TracePath); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "Total Duration: %v (%.2f ms)\n", metrics.TotalDuration, float64(metrics.TotalDuration)/float64(time.Millisecond)); err != nil {
-		return err
+	// A span line is itself a measurement. Omit it when there is nothing
+	// measured, rather than printing a zero that reads as one.
+	if metrics.TimingSource != TimingSourceUnavailable {
+		durationLabel := "Encoder/dispatch span"
+		if metrics.TimingSource == TimingSourceProfiler {
+			durationLabel = "Dispatch span"
+		}
+		if _, err := fmt.Fprintf(w, "%s: %v (%.2f ms)\n", durationLabel, metrics.TotalDuration, float64(metrics.TotalDuration)/float64(time.Millisecond)); err != nil {
+			return err
+		}
 	}
 	if metrics.TimingSource != "" {
 		sourceKind := "measured"
@@ -336,15 +351,23 @@ func WriteTimingMetrics(w io.Writer, metrics *TimingMetrics) error {
 	if _, err := fmt.Fprintf(w, "Encoders: %d\n", metrics.TotalEncoders); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "Unique Kernels: %d\n\n", len(metrics.KernelTimings)); err != nil {
+	if _, err := fmt.Fprintf(w, "Timed Functions: %d\n\n", len(metrics.KernelTimings)); err != nil {
 		return err
 	}
 
-	if _, err := fmt.Fprint(w, "=== Top Kernels by Time ===\n\n"); err != nil {
+	// Structural counts above are real; the cost table is not available. Say
+	// so in place of the table rather than printing an empty one, which reads
+	// as "no kernels ran" rather than "this trace cannot say".
+	if metrics.TimingSource == TimingSourceUnavailable {
+		_, err := fmt.Fprint(w, unavailableTimingNote)
+		return err
+	}
+
+	if _, err := fmt.Fprint(w, "=== Functions by Attributed Span ===\n\n"); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(w, "%-40s %8s %10s %10s %10s %10s %10s %10s %8s\n",
-		"Kernel Name", "Invokes", "Total(ms)", "Avg(µs)", "Min(µs)", "Max(µs)", "P50(µs)", "P95(µs)", "% Total"); err != nil {
+		"Function", "Calls", "Span(ms)", "Avg(µs)", "Min(µs)", "Max(µs)", "P50(µs)", "P95(µs)", "Share"); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(w, "%s\n", repeatStr("-", 140)); err != nil {
@@ -364,7 +387,11 @@ func WriteTimingMetrics(w io.Writer, metrics *TimingMetrics) error {
 		p50Us := float64(kt.P50Duration) / float64(time.Microsecond)
 		p95Us := float64(kt.P95Duration) / float64(time.Microsecond)
 
-		if _, err := fmt.Fprintf(w, "%-40s %8d %10.2f %10.1f %10.1f %10.1f %10.1f %10.1f %7.1f%%\n",
+		marker := ""
+		if kt.IsLowSample() {
+			marker = LowSampleMarker
+		}
+		if _, err := fmt.Fprintf(w, "%-40s %8d %10.2f %10.1f %10.1f %10.1f %10.1f %10.1f %7.1f%%%s\n",
 			name,
 			kt.InvocationCount,
 			totalMs,
@@ -373,7 +400,14 @@ func WriteTimingMetrics(w io.Writer, metrics *TimingMetrics) error {
 			maxUs,
 			p50Us,
 			p95Us,
-			kt.PercentOfTotal); err != nil {
+			kt.PercentOfTotal,
+			marker); err != nil {
+			return err
+		}
+	}
+
+	if footnote := LowSampleFootnote(metrics.KernelTimings); footnote != "" {
+		if _, err := fmt.Fprint(w, footnote); err != nil {
 			return err
 		}
 	}

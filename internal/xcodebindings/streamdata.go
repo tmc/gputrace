@@ -4,6 +4,7 @@ package xcodebindings
 
 import (
 	"fmt"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -77,18 +78,49 @@ type ObjectSummary struct {
 // ProbeStreamData loads a streamData archive through GTShaderProfilerStreamData
 // and returns metadata that does not require walking private object graphs.
 func ProbeStreamData(path string) (StreamDataSummary, error) {
+	var summary StreamDataSummary
+	var err error
+	// Autorelease pools are thread-affine. Keep the goroutine on the OS thread
+	// for the entire push/pop pair; otherwise a goroutine migration can pop the
+	// pool on a different thread and crash in objc_autoreleasePoolPop.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	// Keep one pool for the whole probe. The archived stream retains source
+	// arrays across helper calls; nested pools can release an array returned by
+	// an enclosing selector before the next iteration uses it.
+	objc.AutoreleasePool(func() {
+		summary, err = probeStreamData(path)
+	})
+	return summary, err
+}
+
+// WithStreamData loads a profiler archive and invokes fn while its verified
+// GTShaderProfilerStreamData parent is alive. The callback runs on a locked
+// OS thread inside the archive's autorelease-pool scope; objects obtained from
+// the parent must not escape the callback.
+func WithStreamData(path string, fn func(parent objc.ID) error) error {
+	if fn == nil {
+		return fmt.Errorf("streamData callback is nil")
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	var err error
+	objc.AutoreleasePool(func() {
+		stream, loadErr := loadStreamData(path)
+		if loadErr != nil {
+			err = loadErr
+			return
+		}
+		err = fn(stream)
+	})
+	return err
+}
+
+func probeStreamData(path string) (StreamDataSummary, error) {
 	summary := StreamDataSummary{Path: path}
-	if err := loadFramework(); err != nil {
-		return summary, fmt.Errorf("load GTShaderProfiler.framework: %w", err)
-	}
-	cls := objc.GetClass("GTShaderProfilerStreamData")
-	if cls == 0 {
-		return summary, fmt.Errorf("GTShaderProfilerStreamData class not found")
-	}
-	url := foundation.NewURLFileURLWithPath(path)
-	stream := objc.Send[objc.ID](objc.ID(cls), objc.Sel("dataFromArchivedDataURL:"), url)
-	if stream == 0 {
-		return summary, fmt.Errorf("dataFromArchivedDataURL returned nil")
+	stream, err := loadStreamData(path)
+	if err != nil {
+		return summary, err
 	}
 	summary.ObjectID = fmt.Sprintf("0x%x", uintptr(stream))
 	summary.GPUGeneration = objc.Send[uint32](stream, objc.Sel("gpuGeneration"))
@@ -133,7 +165,35 @@ func ProbeStreamData(path string) (StreamDataSummary, error) {
 	return summary, nil
 }
 
+// responds reports whether id implements selector. Every selector this package
+// sends is private, so its presence is checked rather than assumed.
+func responds(id objc.ID, selector string) bool {
+	return id != 0 && objc.RespondsToSelector(id, objc.Sel(selector))
+}
+
+func loadStreamData(path string) (objc.ID, error) {
+	if err := loadFramework(); err != nil {
+		return 0, fmt.Errorf("load GTShaderProfiler.framework: %w", err)
+	}
+	cls := objc.GetClass("GTShaderProfilerStreamData")
+	if cls == 0 {
+		return 0, fmt.Errorf("GTShaderProfilerStreamData class not found")
+	}
+	if !responds(objc.ID(cls), "dataFromArchivedDataURL:") {
+		return 0, fmt.Errorf("GTShaderProfilerStreamData does not respond to dataFromArchivedDataURL:")
+	}
+	url := foundation.NewURLFileURLWithPath(path)
+	stream := objc.Send[objc.ID](objc.ID(cls), objc.Sel("dataFromArchivedDataURL:"), url)
+	if stream == 0 {
+		return 0, fmt.Errorf("dataFromArchivedDataURL returned nil")
+	}
+	return stream, nil
+}
+
 func stringProperty(id objc.ID, selector string) string {
+	if !responds(id, selector) {
+		return ""
+	}
 	value := objc.Send[objc.ID](id, objc.Sel(selector))
 	if value == 0 {
 		return ""
@@ -166,10 +226,9 @@ func objectSamples(array objc.ID, limit uint64) []ObjectSummary {
 	samples := make([]ObjectSummary, 0, limit)
 	for i := uint64(0); i < limit; i++ {
 		id := objc.Send[objc.ID](array, objc.Sel("objectAtIndex:"), uint(i))
-		if id == 0 {
-			continue
+		if id != 0 {
+			samples = append(samples, summarizeObject(id, i, 1))
 		}
-		samples = append(samples, summarizeObject(id, i, 1))
 	}
 	return samples
 }
@@ -327,7 +386,14 @@ func dictionaryKeys(id objc.ID, limit uint64) []string {
 		if key == 0 {
 			continue
 		}
-		out = append(out, objc.IDToString(key))
+		// Dictionary keys need not be strings: pipelinePerformanceStatistics is
+		// keyed by NSNumber, and sending UTF8String to one is fatal.
+		switch {
+		case objc.RespondsToSelector(key, objc.Sel("UTF8String")):
+			out = append(out, objc.IDToString(key))
+		case objc.RespondsToSelector(key, objc.Sel("stringValue")):
+			out = append(out, objc.IDToString(objc.Send[objc.ID](key, objc.Sel("stringValue"))))
+		}
 	}
 	return out
 }
@@ -407,8 +473,11 @@ func dictionaryKeyCounts(array objc.ID) []KeyCount {
 func dictionaryNumberInArray(array objc.ID, key string) (uint64, bool) {
 	count := arrayCount(array)
 	for i := uint64(0); i < count; i++ {
+		var value uint64
+		var ok bool
 		id := objc.Send[objc.ID](array, objc.Sel("objectAtIndex:"), uint(i))
-		if value, ok := dictionaryNumber(id, key); ok {
+		value, ok = dictionaryNumber(id, key)
+		if ok {
 			return value, true
 		}
 	}

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,17 +14,22 @@ import (
 type apiCallsOptions struct {
 	kernelFilter string
 	json         bool
+	limit        int
+	all          bool
 }
 
-var apiCallsCmd = newAPICallsCommand(&apiCallsOptions{})
+var apiCallsCmd = newAPICallsCommand(&apiCallsOptions{limit: defaultHumanLimit})
 
 func newAPICallsCommand(opts *apiCallsOptions) *cobra.Command {
+	if opts.limit == 0 {
+		opts.limit = defaultHumanLimit
+	}
 	cmd := &cobra.Command{
 		Use:   "api-calls <trace.gputrace>",
 		Short: "Display API call sequences from a GPU trace",
-		Long: `Display the sequence of Metal API calls captured in a GPU trace.
+		Long: `Display the decoded subset of Metal API calls captured in a GPU trace.
 
-Shows the full API call sequence including:
+Shows decoded API calls including:
 - Command buffer creation
 - Encoder creation and configuration
 - Compute pipeline state setup
@@ -31,7 +37,9 @@ Shows the full API call sequence including:
 - Dispatch calls
 - Encoder completion
 
-Each call is numbered and indented to show the command buffer hierarchy.
+Each call is numbered and indented to show the decoded command buffer hierarchy.
+Human output reports how many trace dispatches are represented; a low count
+means the decoded API list is incomplete, not that the trace did no GPU work.
 
 Examples:
   # Show all API calls
@@ -52,6 +60,8 @@ Examples:
 	}
 	cmd.Flags().StringVarP(&opts.kernelFilter, "kernel", "k", "", "Filter output to show only calls related to kernels matching this pattern (case-insensitive)")
 	cmd.Flags().BoolVar(&opts.json, "json", false, "Output in JSON format")
+	cmd.Flags().IntVar(&opts.limit, "limit", opts.limit, "Maximum calls in human output")
+	cmd.Flags().BoolVar(&opts.all, "all", opts.all, "Show all calls in human output")
 	return cmd
 }
 
@@ -69,28 +79,46 @@ func runAPICalls(cmd *cobra.Command, args []string, opts *apiCallsOptions) error
 	if err != nil {
 		return fmt.Errorf("failed to open trace: %w", err)
 	}
-
-	if opts.json {
-		apiList, err := trace.ParseAPICallList()
-		if err != nil {
-			return fmt.Errorf("parse API calls: %w", err)
-		}
-		return writeAPICallsJSON(cmd.OutOrStdout(), apiList)
+	if err := trace.RequireCaptureRecords(); err != nil {
+		return err
 	}
 
+	apiList, err := trace.ParseAPICallList()
+	if err != nil {
+		return fmt.Errorf("parse API calls: %w", err)
+	}
+	if opts.json {
+		return writeAPICallsJSON(cmd.OutOrStdout(), apiList)
+	}
+	limit, err := resolveHumanLimit(opts.limit, opts.all)
+	if err != nil {
+		return err
+	}
+
+	var rendered bytes.Buffer
 	if opts.kernelFilter != "" {
 		// Use filtered output
-		if err := formatAPICallsFiltered(cmd.OutOrStdout(), trace, opts.kernelFilter); err != nil {
+		if err := formatAPICallsFiltered(&rendered, trace, opts.kernelFilter); err != nil {
 			return fmt.Errorf("failed to format API calls: %w", err)
 		}
 	} else {
-		// Use FormatAPICallList which prints to stdout
-		if err := trace.FormatAPICallList(cmd.OutOrStdout()); err != nil {
+		if err := trace.FormatAPICallList(&rendered); err != nil {
 			return fmt.Errorf("failed to format API calls: %w", err)
 		}
 	}
 
-	return nil
+	decodedDispatches := 0
+	for _, cb := range apiList.CommandBuffers {
+		for _, call := range cb.Calls {
+			if call.Type == "dispatch" {
+				decodedDispatches++
+			}
+		}
+	}
+	traceDispatches, _ := trace.CountDispatchCalls()
+	fmt.Fprintf(cmd.OutOrStdout(), "Decoded API subset: %d of %d trace dispatches represented\n\n",
+		decodedDispatches, traceDispatches)
+	return writeLimitedLines(cmd.OutOrStdout(), rendered.String(), limit, "calls")
 }
 
 func writeAPICallsJSON(w io.Writer, apiList *gputrace.APICallList) error {

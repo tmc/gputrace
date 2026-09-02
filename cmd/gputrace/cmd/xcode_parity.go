@@ -42,12 +42,16 @@ type xcodeParityGap struct {
 }
 
 func runXcodeParity(cmd *cobra.Command, args []string, opts *xcodeParityOptions) error {
-	timeline, err := timelineForParity(args[0])
+	tracePath, err := parityTracePath(args[0])
+	if err != nil {
+		return err
+	}
+	timeline, err := timelineForParity(tracePath)
 	if err != nil {
 		return err
 	}
 	report := buildXcodeParityReport(args[0], timeline, xcodebindings.Probe())
-	if streamPath := streamDataPathForTrace(args[0]); streamPath != "" {
+	if streamPath := streamDataPathForTrace(tracePath); streamPath != "" {
 		if summary, err := xcodebindings.ProbeStreamData(streamPath); err == nil {
 			report.StreamData = &summary
 			report.applyStreamDataEvidence()
@@ -61,6 +65,9 @@ func runXcodeParity(cmd *cobra.Command, args []string, opts *xcodeParityOptions)
 	}
 
 	fmt.Fprintf(w, "Trace: %s\n", report.Trace)
+	status := xcodeParityStatus(report)
+	fmt.Fprintf(w, "Parity status: %s (%d present fields, %d absent fields)\n", status, len(report.PresentFields), len(report.AbsentFields))
+	fmt.Fprintln(w, "Scope: trace evidence and adapter coverage; binding presence alone does not prove decoded values.")
 	fmt.Fprintf(w, "Kernel events: %d\n", report.KernelEvents)
 	fmt.Fprintf(w, "Bindings: %d/%d classes, %d/%d selectors\n",
 		report.Bindings["classes_present"],
@@ -73,7 +80,7 @@ func runXcodeParity(cmd *cobra.Command, args []string, opts *xcodeParityOptions)
 		fmt.Fprintf(w, "Timing: %s\n", source)
 	}
 	if has, _ := report.Timing["has_effective_gpu_time"].(bool); !has {
-		fmt.Fprintln(w, "Effective GPU time: not archived; using reported display-duration fallback")
+		fmt.Fprintln(w, "Effective GPU time: unavailable; reported display-duration fallback is not Xcode effective GPU time")
 	}
 	if report.StreamData != nil {
 		fmt.Fprintf(w, "StreamData: %d encoders, %d GPU commands, %d pipeline states, %d functions\n",
@@ -100,6 +107,42 @@ func runXcodeParity(cmd *cobra.Command, args []string, opts *xcodeParityOptions)
 		}
 	}
 	return nil
+}
+
+func xcodeParityStatus(report xcodeParityReport) string {
+	if len(report.AbsentFields) > 0 || len(report.RemainingGaps) > 0 {
+		return "partial"
+	}
+	return "complete"
+}
+
+func parityTracePath(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil || !info.IsDir() {
+		return path, nil
+	}
+	switch filepath.Ext(path) {
+	case ".gputrace", ".gpuprofiler_raw":
+		return path, nil
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return "", fmt.Errorf("read parity trace directory: %w", err)
+	}
+	var traces []string
+	for _, entry := range entries {
+		if entry.IsDir() && filepath.Ext(entry.Name()) == ".gputrace" {
+			traces = append(traces, filepath.Join(path, entry.Name()))
+		}
+	}
+	if len(traces) == 1 {
+		return traces[0], nil
+	}
+	if len(traces) == 0 {
+		return "", fmt.Errorf("no .gputrace directory found in %s", path)
+	}
+	sort.Strings(traces)
+	return "", fmt.Errorf("multiple .gputrace directories found in %s: %v", path, traces)
 }
 
 func streamDataPathForTrace(tracePath string) string {
@@ -158,14 +201,11 @@ func buildXcodeParityReport(tracePath string, timeline *Timeline, bindings xcode
 	for _, field := range report.PresentFields {
 		present[field] = true
 	}
-	if present["occupancy_pct"] {
-		report.ClosedExamples = append(report.ClosedExamples, "occupancy_pct present on kernel events")
-	}
 	if present["alu_utilization_pct"] {
-		report.ClosedExamples = append(report.ClosedExamples, "alu_utilization_pct present on kernel events")
+		report.ClosedExamples = append(report.ClosedExamples, "alu_utilization_pct carries nonzero values on kernel events (value not compared against Xcode)")
 	}
 	if containsTrack(report.CounterTracks, "ALU Utilization") {
-		report.ClosedExamples = append(report.ClosedExamples, "ALU Utilization counter track is source-backed")
+		report.ClosedExamples = append(report.ClosedExamples, "ALU Utilization counter track carries nonzero samples")
 	}
 	if !boolFromMetrics(metrics, "has_effective_gpu_time") {
 		report.RemainingGaps = append(report.RemainingGaps, xcodeParityGap{
@@ -211,8 +251,8 @@ func (r *xcodeParityReport) applyStreamDataEvidence() {
 	}
 	if r.streamValueCount("Binaries") > 0 {
 		r.updateGap("high_register",
-			"binary blobs present in Xcode streamData; adapter missing",
-			"build a safe parent-aware GTMioShaderBinaryData adapter or offline binary decoder; the nil-parent constructor path is unsafe")
+			"binary blobs present in Xcode streamData; parent-enumeration adapter present",
+			"use the private exporter seam only with a GTMioTraceData-compatible child; this archive's stream parent does not expose the generated enumeration selector")
 	}
 	if r.streamValueCount("Derived Counter Sample Data") > 0 {
 		next := "decode Derived Counter Sample Data and map ALU utilization into dispatch timeline and pprof samples"

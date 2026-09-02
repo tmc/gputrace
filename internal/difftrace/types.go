@@ -1,15 +1,25 @@
 package difftrace
 
+import "github.com/tmc/gputrace/internal/environment"
+
 const SchemaVersion = "gputrace.diff.v2"
 
 // TraceData is parsed dispatch-level timing data for a single trace.
 type TraceData struct {
-	Path       string
-	Label      string
-	Dispatches []Dispatch
-	Encoders   []EncoderInfo
-	Pipelines  map[int]PipelineInfo
-	Warnings   []string
+	Path                  string
+	Label                 string
+	Dispatches            []Dispatch
+	Encoders              []EncoderInfo
+	Pipelines             map[int]PipelineInfo
+	EffectiveGPUTimeUs    *int
+	CommandBufferActiveUs int
+	TimingSource          string
+	TimingAvailable       bool
+	StructuralDispatches  *int
+	StructuralFunctions   map[string]int
+	AttributionLimited    bool
+	Warnings              []string
+	Environment           environment.Snapshot
 }
 
 // Dispatch is one GPU dispatch entry from streamData.
@@ -189,17 +199,27 @@ type SpikeWindow struct {
 
 // Summary is top-level diagnostics.
 type Summary struct {
-	TraceALabel        string `json:"trace_a_label"`
-	TraceBLabel        string `json:"trace_b_label"`
-	DispatchCountA     int    `json:"dispatch_count_a"`
-	DispatchCountB     int    `json:"dispatch_count_b"`
-	DispatchCountDelta int    `json:"dispatch_count_delta"`
-	TotalGPUTimeAUs    int    `json:"total_gpu_time_a_us"`
-	TotalGPUTimeBUs    int    `json:"total_gpu_time_b_us"`
-	TotalDeltaUs       int    `json:"total_delta_us"`
-	MatchedDeltaUs     int    `json:"matched_delta_us"`
-	UnmatchedDeltaUs   int    `json:"unmatched_delta_us"`
-	LikelyCause        string `json:"likely_cause"`
+	TraceALabel            string `json:"trace_a_label"`
+	TraceBLabel            string `json:"trace_b_label"`
+	DispatchCountA         int    `json:"dispatch_count_a"`
+	DispatchCountB         int    `json:"dispatch_count_b"`
+	DispatchCountDelta     int    `json:"dispatch_count_delta"`
+	TimingAvailable        bool   `json:"timing_available"`
+	TotalGPUTimeAUs        int    `json:"total_gpu_time_a_us"`
+	TotalGPUTimeBUs        int    `json:"total_gpu_time_b_us"`
+	DispatchSpanAUs        int    `json:"dispatch_span_a_us"`
+	DispatchSpanBUs        int    `json:"dispatch_span_b_us"`
+	EffectiveGPUTimeAUs    *int   `json:"effective_gpu_time_a_us,omitempty"`
+	EffectiveGPUTimeBUs    *int   `json:"effective_gpu_time_b_us,omitempty"`
+	CommandBufferActiveAUs int    `json:"command_buffer_active_a_us,omitempty"`
+	CommandBufferActiveBUs int    `json:"command_buffer_active_b_us,omitempty"`
+	TimingMetric           string `json:"timing_metric,omitempty"`
+	AttributionLimited     bool   `json:"attribution_limited,omitempty"`
+	StructuralFunctions    bool   `json:"structural_functions,omitempty"`
+	TotalDeltaUs           int    `json:"total_delta_us"`
+	MatchedDeltaUs         int    `json:"matched_delta_us"`
+	UnmatchedDeltaUs       int    `json:"unmatched_delta_us"`
+	LikelyCause            string `json:"likely_cause"`
 }
 
 // EncoderDivergence summarizes the first material encoder timing split.
@@ -228,23 +248,27 @@ type PipelinePair struct {
 
 // Report is the complete diff result with a stable JSON schema.
 type Report struct {
-	SchemaVersion         string                 `json:"schema_version"`
-	TraceAPath            string                 `json:"trace_a_path"`
-	TraceBPath            string                 `json:"trace_b_path"`
-	Summary               Summary                `json:"summary"`
-	TopFunctionDeltas     []FunctionDelta        `json:"top_function_deltas"`
-	TopDispatchOutliers   []MatchPair            `json:"top_dispatch_outliers"`
-	EncoderDeltas         []EncoderDelta         `json:"encoder_deltas"`
-	EncoderReports        []EncoderReport        `json:"encoder_reports"`
-	PipelineDeltas        []PipelineDelta        `json:"pipeline_deltas"`
-	UnnamedDispatchDeltas []UnnamedDispatchDelta `json:"unnamed_dispatch_deltas"`
-	TimelineSpikeWindows  []SpikeWindow          `json:"timeline_spike_windows"`
-	OccurrenceMatches     []OccurrenceMatch      `json:"occurrence_matches"`
-	MatchedPairs          []MatchPair            `json:"matched_pairs"`
-	Unmatched             []UnmatchedDispatch    `json:"unmatched"`
-	PipelinePairs         []PipelinePair         `json:"pipeline_pairs,omitempty"`
-	EncoderDivergence     *EncoderDivergence     `json:"encoder_divergence,omitempty"`
-	Warnings              []string               `json:"warnings,omitempty"`
+	SchemaVersion         string                  `json:"schema_version"`
+	TraceAPath            string                  `json:"trace_a_path"`
+	TraceBPath            string                  `json:"trace_b_path"`
+	Summary               Summary                 `json:"summary"`
+	TopFunctionDeltas     []FunctionDelta         `json:"top_function_deltas"`
+	TopDispatchOutliers   []MatchPair             `json:"top_dispatch_outliers"`
+	EncoderDeltas         []EncoderDelta          `json:"encoder_deltas"`
+	EncoderReports        []EncoderReport         `json:"encoder_reports"`
+	PipelineDeltas        []PipelineDelta         `json:"pipeline_deltas"`
+	UnnamedDispatchDeltas []UnnamedDispatchDelta  `json:"unnamed_dispatch_deltas"`
+	TimelineSpikeWindows  []SpikeWindow           `json:"timeline_spike_windows"`
+	OccurrenceMatches     []OccurrenceMatch       `json:"occurrence_matches"`
+	MatchedPairs          []MatchPair             `json:"matched_pairs"`
+	Unmatched             []UnmatchedDispatch     `json:"unmatched"`
+	PipelinePairs         []PipelinePair          `json:"pipeline_pairs,omitempty"`
+	EncoderDivergence     *EncoderDivergence      `json:"encoder_divergence,omitempty"`
+	Comparability         ComparabilityCheck      `json:"comparability"`
+	Environment           *environment.Comparison `json:"environment,omitempty"`
+	RenamePairs           map[string]string       `json:"rename_pairs,omitempty"`
+	AmbiguousRenames      map[string]int          `json:"ambiguous_renames,omitempty"`
+	Warnings              []string                `json:"warnings,omitempty"`
 }
 
 func safeFunctionName(name string) string {

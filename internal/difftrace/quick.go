@@ -1,16 +1,19 @@
 package difftrace
 
+import "github.com/tmc/gputrace/internal/environment"
+
 // QuickReport is the compact JSON shape for diff --quick --json.
 type QuickReport struct {
-	SchemaVersion         string                 `json:"schema_version"`
-	TraceAPath            string                 `json:"trace_a_path"`
-	TraceBPath            string                 `json:"trace_b_path"`
-	Summary               Summary                `json:"summary"`
-	TopFunctionDeltas     []FunctionDelta        `json:"top_function_deltas"`
-	TopDispatchOutliers   []MatchPair            `json:"top_dispatch_outliers"`
-	UnnamedDispatchDeltas []UnnamedDispatchDelta `json:"unnamed_dispatch_deltas"`
-	TimelineSpikeWindows  []SpikeWindow          `json:"timeline_spike_windows"`
-	Warnings              []string               `json:"warnings,omitempty"`
+	SchemaVersion         string                  `json:"schema_version"`
+	TraceAPath            string                  `json:"trace_a_path"`
+	TraceBPath            string                  `json:"trace_b_path"`
+	Summary               Summary                 `json:"summary"`
+	TopFunctionDeltas     []FunctionDelta         `json:"top_function_deltas"`
+	TopDispatchOutliers   []MatchPair             `json:"top_dispatch_outliers"`
+	UnnamedDispatchDeltas []UnnamedDispatchDelta  `json:"unnamed_dispatch_deltas"`
+	TimelineSpikeWindows  []SpikeWindow           `json:"timeline_spike_windows"`
+	Warnings              []string                `json:"warnings,omitempty"`
+	Environment           *environment.Comparison `json:"environment,omitempty"`
 }
 
 // NewQuickReport returns the compact report used by quick text output.
@@ -28,6 +31,7 @@ func NewQuickReport(report Report, limit int) QuickReport {
 		UnnamedDispatchDeltas: firstN(report.UnnamedDispatchDeltas, limit),
 		TimelineSpikeWindows:  firstN(report.TimelineSpikeWindows, limit),
 		Warnings:              report.Warnings,
+		Environment:           report.Environment,
 	}
 }
 

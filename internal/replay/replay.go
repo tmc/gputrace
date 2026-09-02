@@ -25,6 +25,7 @@ const (
 	RecordTypeCt    = "Ct"
 	RecordTypeCi    = "Ci"
 	RecordTypeCS    = "CS"
+	RecordTypeCtt   = "Ctt"
 	RecordTypeCulul = "Culul"
 	RecordTypeCU    = "CU"
 	RecordTypeCul   = "Cul"
@@ -114,6 +115,10 @@ func (re *ReplayEngine) AnalyzeReplay() (*ReplayPlan, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse MTSP records: %w", err)
 	}
+	records, err = flattenReplayRecords(re.Trace, records)
+	if err != nil {
+		return nil, fmt.Errorf("parse nested MTSP records: %w", err)
+	}
 
 	// Analyze state restoration requirements
 	stateAnalysis, err := re.State.RestoreState()
@@ -153,6 +158,25 @@ func (re *ReplayEngine) AnalyzeReplay() (*ReplayPlan, error) {
 
 			replayState.resolveDispatch(&cmd)
 
+			plan.Commands = append(plan.Commands, cmd)
+			currentEncoder.CommandCount++
+			sequenceNum++
+
+		case RecordTypeCtt:
+			ctt, err := record.ParseCttRecord()
+			if err != nil {
+				continue
+			}
+			cmd := ReplayCommand{
+				Type:           "compute_dispatch",
+				Offset:         record.Offset,
+				SequenceNum:    sequenceNum,
+				EncoderIndex:   encoderIndex,
+				PipelineAddr:   ctt.PipelineAddr,
+				FunctionAddr:   ctt.FunctionAddr,
+				BufferBindings: ctt.BufferBindings,
+			}
+			replayState.resolveDispatch(&cmd)
 			plan.Commands = append(plan.Commands, cmd)
 			currentEncoder.CommandCount++
 			sequenceNum++
@@ -227,6 +251,30 @@ func (re *ReplayEngine) AnalyzeReplay() (*ReplayPlan, error) {
 	}
 
 	return plan, nil
+}
+
+func flattenReplayRecords(t *Trace, records []trace.MTSPRecord) ([]trace.MTSPRecord, error) {
+	flattened := make([]trace.MTSPRecord, 0, len(records))
+	var visit func([]trace.MTSPRecord) error
+	visit = func(current []trace.MTSPRecord) error {
+		for _, record := range current {
+			flattened = append(flattened, record)
+			nested, err := t.ParseNestedRecords(record)
+			if err != nil {
+				return err
+			}
+			if len(nested) > 0 {
+				if err := visit(nested); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	if err := visit(records); err != nil {
+		return nil, err
+	}
+	return flattened, nil
 }
 
 type replayStateLookup struct {
@@ -693,6 +741,7 @@ func (re *ReplayEngine) AnalyzeReplayWithCounters() (*ReplayPlan, *CounterSampli
 		EncoderMetrics:  encoderMetrics,
 		DispatchMetrics: dispatchMetrics,
 		SampleCount:     len(re.CounterSampler.Samples),
+		RawData:         re.CounterSampler.RawData,
 		EncoderCount:    len(plan.Encoders),
 		DispatchCount:   plan.ComputeDispatches,
 	}
@@ -813,7 +862,8 @@ func FormatCounterSamplingSimulation(sim *CounterSamplingSimulation) string {
 	output += "  - Barrier overhead assumes ~250ns per sample\n"
 	output += "  - Actual overhead may vary based on GPU workload\n"
 	output += "  - Buffer size is conservative estimate\n"
-	output += "  - This is a simulation; actual Metal implementation required\n"
+	output += "  - Simulation does not replay GPU work or collect counters\n"
+	output += "  - Public Metal collection is a separate non-simulated mode on supported macOS builds\n"
 
 	return output
 }

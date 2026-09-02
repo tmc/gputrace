@@ -5,10 +5,16 @@ import (
 	"testing"
 )
 
-func TestReplayCountersFailsClosedBeforeOpeningTraceWithoutSimulate(t *testing.T) {
+func TestReplayCountersRejectsInvalidTraceWithoutSimulate(t *testing.T) {
 	err := runReplayCounters(nil, []string{t.TempDir()}, &replayCountersOptions{})
 	if err == nil {
-		t.Fatal("runReplayCounters succeeded without Metal bindings")
+		t.Fatal("runReplayCounters succeeded with an invalid trace path")
+	}
+	if replayCountersRealAvailable() {
+		if strings.Contains(err.Error(), "rerun with --simulate") {
+			t.Fatalf("real Metal build still reports simulation-only error: %q", err)
+		}
+		return
 	}
 	if !strings.Contains(err.Error(), "rerun with --simulate") {
 		t.Fatalf("error %q does not mention --simulate", err)
@@ -18,13 +24,13 @@ func TestReplayCountersFailsClosedBeforeOpeningTraceWithoutSimulate(t *testing.T
 	}
 }
 
-func TestReplayCountersHelpDocumentsSimulationGate(t *testing.T) {
+func TestReplayCountersHelpDocumentsModes(t *testing.T) {
 	help := replayCountersCmd.Long
 	for _, want := range []string{
 		"--simulate builds a sampling plan only",
 		"--simulate does not replay GPU work",
-		"fails closed before trace replay or GPU work",
 		"replay-counters trace.gputrace --simulate",
+		"Raw resolved bytes are retained",
 	} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("replay-counters help does not contain %q", want)

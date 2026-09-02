@@ -8,6 +8,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/tmc/gputrace/cmd/gputrace/cmd"
@@ -18,6 +19,9 @@ func main() {
 	defer cleanupMacgo()
 
 	if err := cmd.Execute(); err != nil {
-		os.Exit(1)
+		if !cmd.ErrorAlreadyReported(err) {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		}
+		os.Exit(cmd.ExitCode(err))
 	}
 }

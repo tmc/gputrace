@@ -9,8 +9,11 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/tmc/gputrace"
 	"github.com/tmc/gputrace/internal/counter"
 )
 
@@ -18,19 +21,27 @@ import (
 type ProfilerOutputStats struct {
 	*counter.StreamDataStats
 	ExecutionCost []counter.ExecutionCostByFunction `json:"execution_cost,omitempty"`
+	EncoderCost   []counter.EncoderCost             `json:"encoder_execution_cost,omitempty"`
 	// TimelineInfo is explicitly included to ensure it appears in JSON output
 	// (StreamDataStats.Timeline is already included via embedding, but this ensures visibility)
 }
 
-var profilerCmd = newProfilerCommand(new(profilerOptions))
+var profilerCmd = newProfilerCommand(&profilerOptions{limit: 20})
 
 type profilerOptions struct {
-	json     bool
-	limiters bool
-	kernels  bool
+	json        bool
+	limiters    bool
+	kernels     bool
+	limit       int
+	minCalls    int
+	benchfmt    bool
+	benchConfig benchfmtConfigFlags
 }
 
 func newProfilerCommand(opts *profilerOptions) *cobra.Command {
+	if opts.limit == 0 {
+		opts.limit = 20
+	}
 	cmd := &cobra.Command{
 		Use:   "profiler <trace.gputrace>",
 		Short: "Extract GPU profiler data (timing, dispatches, pipelines) from trace",
@@ -57,6 +68,9 @@ Example:
 	cmd.Flags().BoolVar(&opts.json, "json", opts.json, "Output in JSON format")
 	cmd.Flags().BoolVar(&opts.limiters, "limiters", opts.limiters, "Show performance limiter data from Counter files")
 	cmd.Flags().BoolVar(&opts.kernels, "kernels", opts.kernels, "Show kernel/function names and per-dispatch details")
+	cmd.Flags().IntVar(&opts.limit, "limit", opts.limit, "Maximum non-zero limiter rows to show")
+	cmd.Flags().IntVar(&opts.minCalls, "min-calls", opts.minCalls, "Only table rows for functions dispatched at least N times (off by default; reports what it drops; JSON and benchfmt are never filtered)")
+	addBenchfmtFlags(cmd, &opts.benchfmt, &opts.benchConfig)
 	return cmd
 }
 
@@ -65,22 +79,35 @@ func init() {
 }
 
 func runProfiler(cmd *cobra.Command, args []string, opts *profilerOptions) error {
+	if opts.limit <= 0 {
+		return fmt.Errorf("--limit must be > 0")
+	}
+	if opts.minCalls < 0 {
+		return fmt.Errorf("--min-calls must be >= 0")
+	}
+	if err := validateBenchfmtFlags(opts.benchfmt, opts.benchConfig); err != nil {
+		return err
+	}
+	if opts.benchfmt && opts.json {
+		return fmt.Errorf("--benchfmt and --json are mutually exclusive")
+	}
 	tracePath := args[0]
 
 	profilerDir, stats, err := loadProfilerStats(tracePath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Hint: To generate performance data, run:\n")
-		fmt.Fprintf(os.Stderr, "  gputrace xcode-profile run %s\n\n", tracePath)
 		return err
 	}
-
 	// Parse execution cost from Profiling_f_*.raw files
 	execCost := aggregateExecutionCost(profilerDir, stats)
+	if opts.benchfmt {
+		return writeProfilerBenchfmt(cmd.OutOrStdout(), tracePath, stats, execCost, opts.benchConfig)
+	}
 
 	if opts.json {
 		output := ProfilerOutputStats{
 			StreamDataStats: stats,
 			ExecutionCost:   execCost,
+			EncoderCost:     stats.CounterArchive.EncoderCosts(),
 		}
 		return writeProfilerJSON(cmd.OutOrStdout(), output)
 	}
@@ -105,28 +132,7 @@ func runProfiler(cmd *cobra.Command, args []string, opts *profilerOptions) error
 		totalDeviceStores += p.DeviceStoreCount
 	}
 
-	// Aggregate dispatches by function for counts
-	funcCounts := make(map[string]int)
-	funcTime := make(map[string]int)
-	for _, d := range stats.Dispatches {
-		name := d.DisplayName()
-		funcCounts[name]++
-		funcTime[name] += d.DurationUs
-	}
-
-	// Sort functions by time
-	type funcStat struct {
-		name  string
-		time  int
-		count int
-	}
-	var sortedFuncs []funcStat
-	for name, count := range funcCounts {
-		sortedFuncs = append(sortedFuncs, funcStat{name, funcTime[name], count})
-	}
-	sort.Slice(sortedFuncs, func(i, j int) bool {
-		return sortedFuncs[i].time > sortedFuncs[j].time
-	})
+	sortedFuncs := profilerFunctionRows(stats.Dispatches, totalDispatchTime)
 
 	// === MAIN SUMMARY OUTPUT ===
 	// One-line summary
@@ -159,46 +165,84 @@ func runProfiler(cmd *cobra.Command, args []string, opts *profilerOptions) error
 	if stats.TimingSource != "" {
 		fmt.Printf("  Timing Source:     %s\n", stats.TimingSource)
 	}
+	if stats.Metadata.NumBlitCalls != nil {
+		fmt.Printf("  Blit Calls:        %s\n", FormatCount(int(*stats.Metadata.NumBlitCalls)))
+	}
 	if totalThreadgroupMem > 0 {
 		fmt.Printf("  Threadgroup Mem:   %s (max per pipeline)\n", FormatBytes(uint64(totalThreadgroupMem)))
 	}
 	if totalDeviceLoads > 0 || totalDeviceStores > 0 {
 		fmt.Printf("  Memory Ops:        %s loads, %s stores\n", FormatCount(totalDeviceLoads), FormatCount(totalDeviceStores))
 	}
+	// The GRC counter stream is machine wide, so a capture accounts for only
+	// part of it and the rest belongs to whatever else was on the GPU. The
+	// share was computed and printed nowhere, which left the Execution Cost
+	// table below reading as if it covered the whole stream. It covers the
+	// attributed part.
+	//
+	// The encoder counts are spelled out rather than folded into one number
+	// because they are three different populations: ids carrying counter
+	// samples, ids declared in Encoder Infos, and the capture's own compute
+	// encoders printed above. On one trace those are 48, 96, and 3. A single
+	// unlabeled "encoders" here would read as a contradiction of the line
+	// above it, which is the same conflation 40a39534 removed from buffers.
+	if a := stats.CounterArchive; a != nil && a.TotalSamples > 0 {
+		fmt.Printf("  Counter Samples:   %s/%s attributed to this capture (%s), %s machine-wide\n",
+			FormatCount(a.AttributedSamples), FormatCount(a.TotalSamples),
+			FormatPercent(100*a.AttributedFraction()), FormatCount(a.MachineWideSamples))
+		fmt.Printf("  Counter Encoders:  %s with samples, %s declared in Encoder Infos (GPU-wide ids, not the compute encoders above)\n",
+			FormatCount(len(a.Encoders)), FormatCount(a.KnownEncoderIDs))
+	}
+
+	// Compilation is host-side and absent from every duration above.
+	writeCompileSummary(os.Stdout, summarizeCompilation(stats.Pipelines))
 
 	// Show function call counts (always)
 	if len(sortedFuncs) > 0 {
 		fmt.Println()
-		fmt.Println(Colorize("Function Calls", ColorBold))
-		fmt.Println(TableSeparator(80))
-		fmt.Printf("%-50s %8s %10s %8s\n", "Function", "Calls", "Span(us)", "Cost")
-		fmt.Println(TableSeparator(80))
-		for _, fs := range sortedFuncs {
-			pct := 0.0
-			if totalDispatchTime > 0 {
-				pct = float64(fs.time) / float64(totalDispatchTime) * 100
+		fmt.Print(formatProfilerFunctionCalls(sortedFuncs, opts.minCalls,
+			strings.Contains(stats.TimingSource, "gpuCommandInfoData")))
+	}
+
+	// Per-encoder execution cost, which is how Xcode groups the column.
+	if encCost := stats.CounterArchive.EncoderCosts(); len(encCost) > 0 {
+		fmt.Println()
+		fmt.Println(Colorize("Execution Cost by Encoder (from APSCounterData GRC_GPU_CYCLES)", ColorBold))
+		fmt.Println(TableSeparator(60))
+		fmt.Printf("%-10s %10s %14s %10s\n", "Encoder", "Cost", "GPU Cycles", "Reads")
+		fmt.Println(TableSeparator(60))
+		for _, c := range encCost {
+			mark := ""
+			if c.Sparse() {
+				mark = "  (few reads)"
 			}
-			fmt.Printf("%-50s %8s %10s %7s\n", fs.name, FormatCount(fs.count), FormatCount(fs.time), FormatPercent(pct))
+			fmt.Printf("%-10d %9s %14s %10d%s\n",
+				c.Ordinal, FormatPercent(c.CostPercent), FormatCount(int(c.GPUCycles)), c.EndRecords, mark)
 		}
+		fmt.Println("Differs from Xcode's Execution Cost column by 0.9 to 2.9 pp depending on the")
+		fmt.Println("capture, worst on whichever encoder dominates the trace, and these are shares")
+		fmt.Println("that sum to 100%, so understating one encoder overstates the rest. Rank by this")
+		fmt.Println("column; do not quote it. See internal/counter/encodercost.go.")
 	}
 
 	// Detailed kernel info only with --kernels flag
 	if opts.kernels {
+		functionNames := dispatchedFunctionNames(stats.Dispatches)
+		pipelines := dispatchedPipelines(stats.Pipelines, stats.Dispatches)
+
 		// Function names
 		fmt.Println()
 		fmt.Println(Colorize("Kernel Details", ColorBold))
 		fmt.Println(TableSeparator(40))
-		fmt.Printf("%d %s:\n", len(stats.FunctionNames), Pluralize(len(stats.FunctionNames), "function", "functions"))
-		for i, name := range stats.FunctionNames {
-			if name != "" {
-				fmt.Printf("  [%d] %s\n", i, name)
-			}
+		fmt.Printf("%d dispatched %s:\n", len(functionNames), Pluralize(len(functionNames), "function", "functions"))
+		for i, name := range functionNames {
+			fmt.Printf("  [%d] %s\n", i, name)
 		}
 
 		// Pipelines with addresses
-		if len(stats.Pipelines) > 0 {
-			fmt.Printf("\n%d %s:\n", len(stats.Pipelines), Pluralize(len(stats.Pipelines), "pipeline", "pipelines"))
-			for i, p := range stats.Pipelines {
+		if len(pipelines) > 0 {
+			fmt.Printf("\n%d dispatched %s:\n", len(pipelines), Pluralize(len(pipelines), "pipeline", "pipelines"))
+			for i, p := range pipelines {
 				if p.PipelineAddress != 0 {
 					fmt.Printf("  [%d] 0x%x ID=%d %s\n", i, p.PipelineAddress, p.PipelineID, p.FunctionName)
 				} else {
@@ -218,6 +262,7 @@ func runProfiler(cmd *cobra.Command, args []string, opts *profilerOptions) error
 					fmt.Printf("      Memory Ops: device(load=%d store=%d) threadgroup(load=%d store=%d)\n",
 						p.DeviceLoadCount, p.DeviceStoreCount, p.ThreadgroupLoadCount, p.ThreadgroupStoreCount)
 				}
+				writePipelineCompileDetail(os.Stdout, &p)
 			}
 		}
 
@@ -409,22 +454,150 @@ func runProfiler(cmd *cobra.Command, args []string, opts *profilerOptions) error
 	if opts.limiters {
 		limiterData := extractLimiterData(profilerDir)
 		if len(limiterData) > 0 {
+			rows, nonzero, zero := selectLimiterRows(limiterData, opts.limit)
 			fmt.Println()
-			fmt.Println(Colorize("Performance Limiters (from Counter files)", ColorBold))
-			fmt.Println(TableSeparator(95))
-			fmt.Printf("%-5s %-16s %-18s %-16s %-16s %-16s\n",
-				"Enc", "Occupancy Mgr", "Instr Throughput", "Int & Complex", "F32 Limiter", "L1 Cache")
-			fmt.Println(TableSeparator(95))
-			for _, ld := range limiterData {
-				fmt.Printf("%-5d %15s %17s %15s %15s %15s\n",
-					ld.EncoderIndex, FormatPercent(ld.OccupancyManager), FormatPercent(ld.InstructionThroughput),
+			fmt.Println(Colorize("Candidate Performance Limiters (heuristic Counter-file decoder)", ColorBold))
+			fmt.Printf("Showing %d of %d non-zero rows", len(rows), nonzero)
+			if zero > 0 {
+				fmt.Printf(" (%d zero rows omitted)", zero)
+			}
+			fmt.Println()
+			fmt.Println(TableSeparator(78))
+			fmt.Printf("%-5s %-18s %-16s %-16s %-16s\n",
+				"Record", "Instr Throughput", "Int & Complex", "F32 Limiter", "L1 Cache")
+			fmt.Println(TableSeparator(78))
+			for _, ld := range rows {
+				fmt.Printf("%-5d %17s %15s %15s %15s\n",
+					ld.EncoderIndex, FormatPercent(ld.InstructionThroughput),
 					FormatPercent(ld.IntegerComplex), FormatPercent(ld.F32Limiter), FormatPercent(ld.L1Cache))
 			}
-			fmt.Println("\nNote: Limiter percentages indicate bottleneck sources (higher = more constrained)")
+			fmt.Println("\nNote: Values are heuristic candidates, not source-backed bottleneck measurements.")
+			fmt.Println("Higher values mean more constrained only if the candidate field mapping is correct.")
+			if nonzero > len(rows) {
+				fmt.Printf("Use --limit %d or higher to show all non-zero rows.\n", nonzero)
+			}
 		}
 	}
 
 	return nil
+}
+
+// profilerFunctionRows aggregates dispatches by function name and ranks them by
+// span, descending. The rows are KernelTiming values so that this table shares
+// the low-sample marker and the --min-calls filter with the timing command
+// instead of restating either.
+func profilerFunctionRows(dispatches []counter.DispatchInfo, totalSpanUs int) []*gputrace.KernelTiming {
+	byName := make(map[string]*gputrace.KernelTiming)
+	var rows []*gputrace.KernelTiming
+	for _, d := range dispatches {
+		name := d.DisplayName()
+		kt, ok := byName[name]
+		if !ok {
+			kt = &gputrace.KernelTiming{Name: name}
+			byName[name] = kt
+			rows = append(rows, kt)
+		}
+		kt.InvocationCount++
+		kt.TotalDuration += time.Duration(d.DurationUs) * time.Microsecond
+	}
+	for _, kt := range rows {
+		if totalSpanUs > 0 {
+			kt.PercentOfTotal = float64(kt.TotalDuration.Microseconds()) / float64(totalSpanUs) * 100
+		}
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		return rows[i].TotalDuration > rows[j].TotalDuration
+	})
+	return rows
+}
+
+// formatProfilerFunctionCalls renders the cost-ranked function table. minCalls
+// filters the table only; the JSON and benchfmt outputs are built from the
+// unfiltered dispatches, because a filtered export is a partial file that reads
+// as a complete one once the flag is forgotten. Filtering never reorders: the
+// surviving rows keep their ranking, and the note says the shares no longer sum
+// to the whole.
+func formatProfilerFunctionCalls(rows []*gputrace.KernelTiming, minCalls int, cumulativeOffsets bool) string {
+	shown, dropped := gputrace.FilterMinCalls(rows, minCalls)
+
+	var out strings.Builder
+	out.WriteString(Colorize("Function Calls", ColorBold) + "\n")
+	out.WriteString(TableSeparator(80) + "\n")
+	fmt.Fprintf(&out, "%-50s %8s %10s %10s\n", "Function", "Calls", "Span(us)", "Span Share")
+	out.WriteString(TableSeparator(80) + "\n")
+	for _, kt := range shown {
+		marker := ""
+		if kt.IsLowSample() {
+			marker = gputrace.LowSampleMarker
+		}
+		fmt.Fprintf(&out, "%-50s %8s %10s %7s%s\n",
+			kt.Name,
+			FormatCount(kt.InvocationCount),
+			FormatCount(int(kt.TotalDuration.Microseconds())),
+			FormatPercent(kt.PercentOfTotal),
+			marker)
+	}
+	out.WriteString(gputrace.LowSampleFootnote(shown))
+	out.WriteString(gputrace.MinCallsNote(minCalls, dropped, len(rows)))
+	if cumulativeOffsets {
+		out.WriteString("Attribution note: span values are cumulative-offset deltas and may include boundary or gap time.\n")
+	}
+	return out.String()
+}
+
+func selectLimiterRows(all []limiterMetrics, limit int) (rows []limiterMetrics, nonzero, zero int) {
+	for _, row := range all {
+		if limiterPeak(row) < 0.05 {
+			zero++
+			continue
+		}
+		rows = append(rows, row)
+	}
+	nonzero = len(rows)
+	sort.SliceStable(rows, func(i, j int) bool {
+		return limiterPeak(rows[i]) > limiterPeak(rows[j])
+	})
+	if limit > 0 && len(rows) > limit {
+		rows = rows[:limit]
+	}
+	return rows, nonzero, zero
+}
+
+func limiterPeak(row limiterMetrics) float64 {
+	return max(row.InstructionThroughput, row.IntegerComplex, row.F32Limiter, row.L1Cache)
+}
+
+func dispatchedFunctionNames(dispatches []counter.DispatchInfo) []string {
+	seen := make(map[string]bool)
+	var names []string
+	for _, dispatch := range dispatches {
+		name := dispatch.DisplayName()
+		if !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+func dispatchedPipelines(pipelines []counter.PipelineStats, dispatches []counter.DispatchInfo) []counter.PipelineStats {
+	ids := make(map[int]bool)
+	names := make(map[string]bool)
+	for _, dispatch := range dispatches {
+		if dispatch.PipelineID != 0 {
+			ids[dispatch.PipelineID] = true
+		}
+		if dispatch.FunctionName != "" {
+			names[dispatch.FunctionName] = true
+		}
+	}
+	var dispatched []counter.PipelineStats
+	for _, pipeline := range pipelines {
+		if ids[pipeline.PipelineID] || names[pipeline.FunctionName] {
+			dispatched = append(dispatched, pipeline)
+		}
+	}
+	return dispatched
 }
 
 func writeProfilerJSON(w io.Writer, output ProfilerOutputStats) error {
@@ -436,7 +609,6 @@ func writeProfilerJSON(w io.Writer, output ProfilerOutputStats) error {
 // limiterMetrics holds extracted performance limiter values per encoder.
 type limiterMetrics struct {
 	EncoderIndex          int
-	OccupancyManager      float64
 	InstructionThroughput float64
 	IntegerComplex        float64
 	F32Limiter            float64
@@ -507,9 +679,6 @@ func extractLimiterData(profilerDir string) []limiterMetrics {
 			// Map extracted values to limiter types (heuristic based on value ranges)
 			for _, val := range limiters {
 				switch {
-				case val >= 50 && val <= 100 && ld.OccupancyManager == 0:
-					// Occupancy Manager typically 50-80%
-					ld.OccupancyManager = val
 				case val >= 0.01 && val <= 5 && ld.InstructionThroughput == 0:
 					// Instruction throughput limiter (small %)
 					ld.InstructionThroughput = val

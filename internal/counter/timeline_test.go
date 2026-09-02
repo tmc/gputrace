@@ -33,19 +33,7 @@ func TestParseTimelineFileIntegration(t *testing.T) {
 	t.Logf("  GPU timestamp: %d (profiler sampling, not CB timing)", td.Header.GPUTimestamp)
 	t.Logf("  Chunk count: %d", td.ChunkCount)
 	t.Logf("  Valid chunks: %d", td.ValidChunks)
-	t.Logf("  Kick traces found: %d", len(td.KickTraces))
-	t.Logf("  Draw traces found: %d", len(td.DrawTraces))
-
-	// Log first few kick traces if found
-	for i, kt := range td.KickTraces {
-		if i >= 5 {
-			t.Logf("  ... and %d more kick traces", len(td.KickTraces)-5)
-			break
-		}
-		t.Logf("  KickTrace[%d]: start=%d end=%d duration=%d encoder=%d pipeline=%d",
-			i, kt.StartTimestamp, kt.EndTimestamp, kt.EndTimestamp-kt.StartTimestamp,
-			kt.EncoderIndex, kt.PipelineIndex)
-	}
+	t.Logf("  Raw payload status: %s", td.RawFormatStatus)
 }
 
 func TestParseTimelineFilesFromDirIntegration(t *testing.T) {
@@ -65,14 +53,11 @@ func TestParseTimelineFilesFromDirIntegration(t *testing.T) {
 	t.Logf("  Total entries: %d", summary.TotalEntries)
 	t.Logf("  Total chunks: %d", summary.TotalChunks)
 	t.Logf("  Valid chunks: %d", summary.ValidChunks)
-	t.Logf("  Kick traces: %d", summary.KickTraceCount)
-	t.Logf("  Draw traces: %d", summary.DrawTraceCount)
 	t.Logf("  Timestamp range: %d - %d", summary.MinTimestamp, summary.MaxTimestamp)
 
 	// Log per-file details
 	for _, td := range timelines {
-		t.Logf("  File %d: %d entries, %d kicks, magic=0x%x",
-			td.FileIndex, td.Header.EntryCount, len(td.KickTraces), td.Header.Magic)
+		t.Logf("  File %d: %d entries, magic=0x%x", td.FileIndex, td.Header.EntryCount, td.Header.Magic)
 	}
 }
 
@@ -137,9 +122,6 @@ func TestParseTimelineFileCountsSparseIndexOnly(t *testing.T) {
 	if td.ValidChunks != 2 {
 		t.Fatalf("ValidChunks = %d, want 2", td.ValidChunks)
 	}
-	if len(td.KickTraces) != 0 || len(td.DrawTraces) != 0 {
-		t.Fatalf("raw chunk parser produced heuristic records: kicks=%d draws=%d", len(td.KickTraces), len(td.DrawTraces))
-	}
 	if td.RawFormatStatus == "" {
 		t.Fatal("RawFormatStatus is empty")
 	}
@@ -172,9 +154,6 @@ func TestParseTimelineFileIgnoresSparseIndexRecordMarkers(t *testing.T) {
 	}
 	if td.ValidChunks != 1 {
 		t.Fatalf("ValidChunks = %d, want 1", td.ValidChunks)
-	}
-	if len(td.KickTraces) != 0 || len(td.DrawTraces) != 0 {
-		t.Fatalf("raw chunk parser decoded sparse-index marker bytes: kicks=%d draws=%d", len(td.KickTraces), len(td.DrawTraces))
 	}
 	if !strings.Contains(td.RawFormatStatus, "data section encoding unknown") {
 		t.Fatalf("RawFormatStatus = %q, want unknown encoding detail", td.RawFormatStatus)
@@ -220,9 +199,6 @@ func TestParseTimelineFileReportsUnsupportedCompressedPayload(t *testing.T) {
 			}
 			if td.ValidChunks != 1 {
 				t.Fatalf("ValidChunks = %d, want 1", td.ValidChunks)
-			}
-			if len(td.KickTraces) != 0 || len(td.DrawTraces) != 0 {
-				t.Fatalf("raw chunk parser produced heuristic records: kicks=%d draws=%d", len(td.KickTraces), len(td.DrawTraces))
 			}
 			if !strings.Contains(td.RawFormatStatus, tt.want) {
 				t.Fatalf("RawFormatStatus = %q, want %q", td.RawFormatStatus, tt.want)
@@ -304,28 +280,4 @@ func TestParseTimelineFileInvalidDataOffsetDoesNotScanSparseIndex(t *testing.T) 
 	if !strings.Contains(td.RawFormatStatus, "invalid data offset") || !strings.Contains(td.RawFormatStatus, "beyond file size") {
 		t.Fatalf("RawFormatStatus = %q, want invalid offset detail", td.RawFormatStatus)
 	}
-}
-
-func TestGTMioKickTraceSize(t *testing.T) {
-	// GTMioKickTrace should be 38 bytes as specified
-	// Format: QQIIIIIISSS = 8+8+4+4+4+4+4+2+2+2 = 42
-	// But spec says 38, so there might be some overlap/packing
-	// Our struct is larger but we only read 38 bytes
-	expectedSize := 38
-	t.Logf("GTMioKickTrace expected read size: %d bytes", expectedSize)
-}
-
-func TestGTMioDrawTraceSize(t *testing.T) {
-	// GTMioDrawTrace should be 22 bytes as specified
-	// Format: QQIS = 8+8+4+2 = 22
-	expectedSize := 22
-	t.Logf("GTMioDrawTrace expected read size: %d bytes", expectedSize)
-}
-
-func TestGTMioBinaryTraceSize(t *testing.T) {
-	// GTMioBinaryTrace should be 38 bytes as specified
-	// Format: QQQIIS = 8+8+8+4+4+2 = 34 (not 38?)
-	// There might be padding
-	expectedSize := 38
-	t.Logf("GTMioBinaryTrace expected read size: %d bytes", expectedSize)
 }

@@ -74,3 +74,66 @@ func TestWriteProfilerJSONUsesCommandOutput(t *testing.T) {
 		t.Fatalf("profiler JSON output changed execution_cost shape:\n%s", out.String())
 	}
 }
+
+func TestSelectLimiterRowsSuppressesZerosAndHonorsLimit(t *testing.T) {
+	all := []limiterMetrics{
+		{EncoderIndex: 1},
+		{EncoderIndex: 2, F32Limiter: 0.04},
+		{EncoderIndex: 3, L1Cache: 10},
+		{EncoderIndex: 4, IntegerComplex: 20},
+		{EncoderIndex: 5, InstructionThroughput: 5},
+	}
+
+	rows, nonzero, zero := selectLimiterRows(all, 2)
+	if nonzero != 3 || zero != 2 {
+		t.Fatalf("nonzero=%d zero=%d, want 3 and 2", nonzero, zero)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows=%d, want 2", len(rows))
+	}
+	if rows[0].EncoderIndex != 4 || rows[1].EncoderIndex != 3 {
+		t.Fatalf("rows=%+v, want descending peak limiter", rows)
+	}
+}
+
+func TestProfilerLimitFlagDefaultsToTwenty(t *testing.T) {
+	opts := &profilerOptions{limit: 20}
+	cmd := newProfilerCommand(opts)
+	if got := cmd.Flag("limit").DefValue; got != "20" {
+		t.Fatalf("--limit default=%q, want 20", got)
+	}
+}
+
+func TestDispatchedFunctionNames(t *testing.T) {
+	dispatches := []counter.DispatchInfo{
+		{PipelineID: 7, FunctionName: "used"},
+		{PipelineID: 7, FunctionName: "used"},
+		{PipelineID: 9},
+	}
+	got := dispatchedFunctionNames(dispatches)
+	want := []string{"used", "(pipeline_9)"}
+	if len(got) != len(want) {
+		t.Fatalf("dispatchedFunctionNames() = %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("dispatchedFunctionNames()[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestDispatchedPipelines(t *testing.T) {
+	pipelines := []counter.PipelineStats{
+		{PipelineID: 1, FunctionName: "unused"},
+		{PipelineID: 2, FunctionName: "used_by_id"},
+		{PipelineID: 3, FunctionName: "used_by_name"},
+	}
+	dispatches := []counter.DispatchInfo{
+		{PipelineID: 2},
+		{FunctionName: "used_by_name"},
+	}
+	got := dispatchedPipelines(pipelines, dispatches)
+	if len(got) != 2 || got[0].PipelineID != 2 || got[1].PipelineID != 3 {
+		t.Fatalf("dispatchedPipelines() = %+v, want pipeline IDs 2 and 3", got)
+	}
+}

@@ -6,8 +6,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -43,6 +45,7 @@ func runSelectTab(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	selection := selectionForWindow("", windowAX)
 
 	// Find and click the tab
 	tab := findTabByName(windowAX, tabName)
@@ -51,12 +54,7 @@ func runSelectTab(cmd *cobra.Command, args []string) error {
 		if err := axAction(tab, "AXPress"); err != nil {
 			return fmt.Errorf("failed to click tab: %w", err)
 		}
-		fmt.Fprintln(status, "Done")
-		return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
-			Action: "select_tab",
-			Target: tabName,
-			Method: "tab",
-		})
+		return finishVerifiedSelection(cmd.Context(), status, windowAX, tab, tabName, "tab", selection)
 	}
 
 	// Try as an outline row (navigator items like Summary, Dependencies, etc.)
@@ -66,12 +64,7 @@ func runSelectTab(cmd *cobra.Command, args []string) error {
 		if err := axAction(row, "AXPress"); err != nil {
 			return fmt.Errorf("failed to select: %w", err)
 		}
-		fmt.Fprintln(status, "Done")
-		return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
-			Action: "select_tab",
-			Target: tabName,
-			Method: "navigator",
-		})
+		return finishVerifiedSelection(cmd.Context(), status, windowAX, row, tabName, "navigator", selection)
 	}
 
 	// Try as a button (some tabs appear as buttons)
@@ -81,15 +74,27 @@ func runSelectTab(cmd *cobra.Command, args []string) error {
 		if err := axAction(btn, "AXPress"); err != nil {
 			return fmt.Errorf("failed to click: %w", err)
 		}
-		fmt.Fprintln(status, "Done")
-		return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
-			Action: "select_tab",
-			Target: tabName,
-			Method: "button",
-		})
+		return finishVerifiedSelection(cmd.Context(), status, windowAX, btn, tabName, "button", selection)
 	}
 
 	return fmt.Errorf("tab %q not found", tabName)
+}
+
+func finishVerifiedSelection(ctx context.Context, status io.Writer, window, control uintptr, name, method string, selection xcodeWindowSelection) error {
+	if err := waitForSelectedControl(ctx, window, control, name, 2*time.Second); err != nil {
+		return err
+	}
+	fmt.Fprintf(status, "%s selected and verified\n", name)
+	return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+		Action:           "select_tab",
+		Target:           name,
+		Method:           method,
+		SelectedTitle:    selection.Title,
+		SelectedDocument: selection.Document,
+		Phase:            "view selected",
+		Evidence:         fmt.Sprintf("%s control reports selected", name),
+		TargetBound:      boolPointer(selection.Bound),
+	})
 }
 
 // runSelectNavigatorItem selects an item in the Debug navigator by name.
@@ -110,6 +115,7 @@ func runSelectNavigatorItem(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
+	selection := selectionForWindow("", windowAX)
 
 	// The navigator items have specific capitalization
 	displayName := strings.Title(name)
@@ -148,48 +154,45 @@ func runSelectNavigatorItem(ctx context.Context, name string) error {
 
 	// Try AXOpen first (double-click to open)
 	if err := axAction(targetEl, "AXOpen"); err == nil {
-		fmt.Fprintln(status, "Done")
-		return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
-			Action: "select_navigator",
-			Target: displayName,
-			Method: "AXOpen",
-		})
+		return finishVerifiedNavigatorSelection(ctx, status, windowAX, targetEl, displayName, "AXOpen", selection)
 	}
 
 	// Try AXPress
 	if err := axAction(targetEl, "AXPress"); err == nil {
-		fmt.Fprintln(status, "Done")
-		return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
-			Action: "select_navigator",
-			Target: displayName,
-			Method: "AXPress",
-		})
+		return finishVerifiedNavigatorSelection(ctx, status, windowAX, targetEl, displayName, "AXPress", selection)
 	}
 
 	// Try setting AXSelected on the element, then double-click
 	if selectElement(targetEl) {
 		// Also try double-click via CGEvent
 		if err := doubleClickElement(targetEl); err == nil {
-			fmt.Fprintln(status, "Done")
-			return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
-				Action: "select_navigator",
-				Target: displayName,
-				Method: "select_double_click",
-			})
+			return finishVerifiedNavigatorSelection(ctx, status, windowAX, targetEl, displayName, "select_double_click", selection)
 		}
 	}
 
 	// Last resort: just double-click on the element
 	if err := doubleClickElement(targetEl); err == nil {
-		fmt.Fprintln(status, "Done")
-		return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
-			Action: "select_navigator",
-			Target: displayName,
-			Method: "double_click",
-		})
+		return finishVerifiedNavigatorSelection(ctx, status, windowAX, targetEl, displayName, "double_click", selection)
 	}
 
 	return fmt.Errorf("could not select %s (element found but selection failed)", displayName)
+}
+
+func finishVerifiedNavigatorSelection(ctx context.Context, status io.Writer, window, control uintptr, name, method string, selection xcodeWindowSelection) error {
+	if err := waitForSelectedControl(ctx, window, control, name, 2*time.Second); err != nil {
+		return err
+	}
+	fmt.Fprintf(status, "%s navigator item selected and verified\n", name)
+	return writeXcodeProfileActionOutput(xcodeProfileActionOutput{
+		Action:           "select_navigator",
+		Target:           name,
+		Method:           method,
+		SelectedTitle:    selection.Title,
+		SelectedDocument: selection.Document,
+		Phase:            "navigator item selected",
+		Evidence:         fmt.Sprintf("%s control reports selected", name),
+		TargetBound:      boolPointer(selection.Bound),
+	})
 }
 
 // findCellByName finds a cell or static text element by name.
@@ -410,7 +413,7 @@ func findButtonByNameInsensitive(root uintptr, name string) uintptr {
 // are typically AXOutlineRow, AXRow, or AXCell elements.
 func findOutlineRowByName(root uintptr, name string) uintptr {
 	nameLower := strings.ToLower(name)
-	return findElement(root, func(el uintptr) bool {
+	el := findElement(root, func(el uintptr) bool {
 		role := axString(el, "AXRole")
 		// Check various row/cell types used in outline views
 		if role == "AXOutlineRow" || role == "AXRow" || role == "AXCell" || role == "AXStaticText" {
@@ -430,6 +433,16 @@ func findOutlineRowByName(root uintptr, name string) uintptr {
 		}
 		return false
 	})
+	if el == 0 {
+		return 0
+	}
+	role := axString(el, "AXRole")
+	if role == "AXStaticText" || role == "AXCell" {
+		if row := findParentOutlineRow(el); row != 0 {
+			return row
+		}
+	}
+	return el
 }
 
 // findAllTabs finds all tab elements in the tree.

@@ -124,13 +124,13 @@ func TestFormatShadersXcodeStyleDoesNotDeriveHighRegister(t *testing.T) {
 	}
 
 	fields := xcodeStyleDataFields(t, buf.String())
-	if got, want := fields[len(fields)-3], "32"; got != want {
+	if got, want := fields[xcodeStyleTempRegs], "32"; got != want {
 		t.Fatalf("register field = %q, want %q in:\n%s", got, want, buf.String())
 	}
-	if got, want := fields[len(fields)-2], "?"; got != want {
+	if got, want := fields[xcodeStyleHighReg], "?"; got != want {
 		t.Fatalf("high register field = %q, want %q in:\n%s", got, want, buf.String())
 	}
-	if got, want := fields[len(fields)-1], "16B"; got != want {
+	if got, want := fields[xcodeStyleSpilled], "16B"; got != want {
 		t.Fatalf("spilled field = %q, want %q in:\n%s", got, want, buf.String())
 	}
 }
@@ -156,10 +156,47 @@ func TestFormatShadersXcodeStyleShowsSourceBackedHighRegister(t *testing.T) {
 	}
 
 	fields := xcodeStyleDataFields(t, buf.String())
-	if got, want := fields[len(fields)-2], "19"; got != want {
+	if got, want := fields[xcodeStyleHighReg], "19"; got != want {
 		t.Fatalf("high register field = %q, want %q in:\n%s", got, want, buf.String())
 	}
 }
+
+func TestFormatShadersLabelsShareBasis(t *testing.T) {
+	tests := []struct {
+		basis string
+		want  string
+	}{
+		{basis: "simd_groups", want: "SIMD Share"},
+		{basis: "dispatch_span", want: "Span Share"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.basis, func(t *testing.T) {
+			report := &ShaderMetricsReport{
+				ShareBasis: tt.basis,
+				Shaders:    []*ShaderMetrics{{Name: "kernel", PercentOfTotal: 50}},
+			}
+			var out strings.Builder
+			if err := FormatShadersSimple(&out, report); err != nil {
+				t.Fatalf("FormatShadersSimple: %v", err)
+			}
+			if !strings.Contains(out.String(), tt.want) {
+				t.Fatalf("output missing %q:\n%s", tt.want, out.String())
+			}
+		})
+	}
+}
+
+// Field positions in a FormatShadersXcodeStyle data row. Shader names in the
+// tests are single words, so strings.Fields indexes line up with the columns.
+const (
+	xcodeStyleSIMDGroups = 4 + iota
+	xcodeStyleTempRegs
+	xcodeStyleHighReg
+	xcodeStyleSpilled
+	xcodeStyleDevLoad
+	xcodeStyleDevStore
+	xcodeStyleNumFields
+)
 
 func xcodeStyleDataFields(t *testing.T, output string) []string {
 	t.Helper()
@@ -169,8 +206,8 @@ func xcodeStyleDataFields(t *testing.T, output string) []string {
 		t.Fatalf("expected header, separator, and data row in:\n%s", output)
 	}
 	fields := strings.Fields(lines[2])
-	if len(fields) < 8 {
-		t.Fatalf("expected at least 8 data fields, got %d in row %q", len(fields), lines[2])
+	if len(fields) < xcodeStyleNumFields {
+		t.Fatalf("expected at least %d data fields, got %d in row %q", xcodeStyleNumFields, len(fields), lines[2])
 	}
 	return fields
 }
@@ -227,17 +264,25 @@ func TestPopulateFallbackTimingMetricsMarksSyntheticThreadEstimate(t *testing.T)
 
 	populateFallbackTimingMetrics(&trace.Trace{}, metricsMap)
 
+	// Durations used to be invented from the thread count at 10ns per thread
+	// with a 100us floor. A shader with no timing source now reports none.
 	metrics := metricsMap["unknown_kernel"]
-	if got, want := metrics.TotalDurationNs, uint64(200_000); got != want {
-		t.Fatalf("TotalDurationNs = %d, want %d", got, want)
+	if got := metrics.TotalDurationNs; got != 0 {
+		t.Fatalf("TotalDurationNs = %d, want 0", got)
 	}
-	if got, want := metrics.AvgDurationNs, uint64(100_000); got != want {
-		t.Fatalf("AvgDurationNs = %d, want %d", got, want)
+	if got := metrics.TimingSource; got != "" {
+		t.Fatalf("TimingSource = %q, want empty", got)
 	}
-	if got := metrics.TimingSource; got != timingSourceSyntheticThread {
-		t.Fatalf("TimingSource = %q, want %q", got, timingSourceSyntheticThread)
+}
+
+func TestMissingDispatchShapeHasNoPerformanceClassification(t *testing.T) {
+	metrics := &ShaderMetrics{InvocationCount: 1}
+	classifyShaderPerformance(metrics)
+	identifyBottlenecks(metrics)
+	if metrics.Classification != "" || metrics.ComputeRatio != 0 {
+		t.Fatalf("classification = %q, ratio = %v", metrics.Classification, metrics.ComputeRatio)
 	}
-	if !metrics.TimingApprox {
-		t.Fatal("synthetic thread estimate should be marked approximate")
+	if len(metrics.Bottlenecks) != 0 || len(metrics.OptimizationHints) != 0 {
+		t.Fatalf("missing shape produced advice: %v, %v", metrics.Bottlenecks, metrics.OptimizationHints)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"sort"
+	"strings"
 
 	"github.com/tmc/gputrace/internal/command"
 	"github.com/tmc/gputrace/internal/counter"
@@ -40,10 +41,9 @@ type ShaderMetrics struct {
 	ThreadsPerGroupZ uint64 `json:"threads_per_group_z"` // Threads per threadgroup (Z)
 
 	// Computed Thread Metrics
-	TotalThreadgroups uint64  `json:"total_threadgroups"` // Total threadgroups dispatched
-	ThreadsPerGroup   uint64  `json:"threads_per_group"`  // Total threads per threadgroup
-	TotalThreads      uint64  `json:"total_threads"`      // Total threads dispatched
-	Occupancy         float64 `json:"occupancy"`          // Estimated GPU occupancy (0.0-1.0)
+	TotalThreadgroups uint64 `json:"total_threadgroups"` // Total threadgroups dispatched
+	ThreadsPerGroup   uint64 `json:"threads_per_group"`  // Total threads per threadgroup
+	TotalThreads      uint64 `json:"total_threads"`      // Total threads dispatched
 
 	// Memory Access Patterns (estimated)
 	BufferBindings     int     `json:"buffer_bindings"`     // Number of buffer bindings
@@ -71,16 +71,32 @@ type ShaderMetrics struct {
 	INT16InstructionCount  int `json:"int16_instruction_count"`  // INT16 instruction count
 	BranchInstructionCount int `json:"branch_instruction_count"` // Branch instruction count
 	ThreadgroupMemory      int `json:"threadgroup_memory"`       // Threadgroup memory usage
-	AllocatedRegisters     int `json:"allocated_registers"`      // Allocated register count
+	AllocatedRegisters     int `json:"allocated_registers"`      // Temporary register count
 	HighRegister           int `json:"high_register"`            // Highest live register, when source-backed
 	SpilledBytes           int `json:"spilled_bytes"`            // Bytes spilled to memory
+	DeviceLoadCount        int `json:"device_load_count"`        // Device memory load instructions
+	DeviceStoreCount       int `json:"device_store_count"`       // Device memory store instructions
+
+	// HasPipelineStats reports whether the compiler statistics above were
+	// found for this shader. Without it a zero count cannot be told apart
+	// from a missing one, and every field in this block is legitimately
+	// zero for some kernels.
+	HasPipelineStats bool `json:"has_pipeline_stats"`
+
+	// CompilationTimeMs is host-side shader compilation time. It is in none
+	// of the durations above, which are GPU execution, so a run that
+	// compiled inside its measured window shows the cost only here.
+	CompilationTimeMs float64 `json:"compilation_time_ms,omitempty"`
+	// FunctionWasCached reports whether the function came from the compile
+	// cache. It is a pointer because the archive frequently records a
+	// compilation time without recording this, and false and absent mean
+	// different things: false is a cache miss, absent is no cache record.
+	FunctionWasCached *bool `json:"function_was_cached,omitempty"`
 }
 
 const (
 	timingSourceStreamDataDispatch = "streamData gpuCommandInfoData dispatch durations"
 	timingSourceCaptureHeuristic   = "capture timestamp heuristic"
-	timingSourceSyntheticKernel    = "synthetic kernel-name estimate"
-	timingSourceSyntheticThread    = "synthetic thread-count estimate"
 )
 
 // ShaderMetricsReport aggregates metrics for all shaders in a trace.
@@ -90,6 +106,7 @@ type ShaderMetricsReport struct {
 	TotalInvocations int     `json:"total_invocations"`
 	TotalGPUTimeNs   uint64  `json:"total_gpu_time_ns"`
 	TotalGPUTimeMs   float64 `json:"total_gpu_time_ms"`
+	ShareBasis       string  `json:"share_basis,omitempty"`
 
 	// Per-Shader Metrics
 	Shaders []*ShaderMetrics `json:"shaders"`
@@ -102,11 +119,7 @@ type ShaderMetricsReport struct {
 
 // ExtractShaderMetrics extracts comprehensive performance metrics for all shaders in the trace.
 func ExtractShaderMetrics(t *trace.Trace) (*ShaderMetricsReport, error) {
-	// Use ParseComputeEncoders which actually works
-	encoders, err := t.ParseComputeEncoders()
-	if err != nil {
-		return nil, fmt.Errorf("parse compute encoders: %w", err)
-	}
+	encoders := t.ParseComputeEncoders()
 
 	report := &ShaderMetricsReport{
 		Shaders: make([]*ShaderMetrics, 0),
@@ -158,9 +171,18 @@ func ExtractShaderMetrics(t *trace.Trace) (*ShaderMetricsReport, error) {
 		_ = err
 	}
 
+	// Capture-only bundles have no streamData; the same statistics are
+	// archived in the store sections. Non-fatal for the same reason.
+	if err := populateStoreInstructionCounts(t, metricsMap); err != nil {
+		_ = err
+	}
+
 	// Calculate derived metrics and classifications
 	var totalGPUTimeNs uint64
 	for _, metrics := range metricsMap {
+		if metrics.MinDurationNs == ^uint64(0) {
+			metrics.MinDurationNs = 0
+		}
 		// Calculate average duration
 		if metrics.InvocationCount > 0 {
 			metrics.AvgDurationNs = metrics.TotalDurationNs / uint64(metrics.InvocationCount)
@@ -170,9 +192,6 @@ func ExtractShaderMetrics(t *trace.Trace) (*ShaderMetricsReport, error) {
 		metrics.TotalThreadgroups = metrics.ThreadgroupsX * metrics.ThreadgroupsY * metrics.ThreadgroupsZ
 		metrics.ThreadsPerGroup = metrics.ThreadsPerGroupX * metrics.ThreadsPerGroupY * metrics.ThreadsPerGroupZ
 		metrics.TotalThreads = metrics.TotalThreadgroups * metrics.ThreadsPerGroup
-
-		// Estimate occupancy (simplified)
-		metrics.Occupancy = calculateOccupancy(metrics)
 
 		// Classify shader performance characteristics
 		classifyShaderPerformance(metrics)
@@ -203,12 +222,21 @@ func ExtractShaderMetrics(t *trace.Trace) (*ShaderMetricsReport, error) {
 		}
 	}
 
-	// Sort shaders by weighted cost if available, otherwise by duration
-	sort.Slice(report.Shaders, func(i, j int) bool {
+	// Sort shaders by weighted cost if available, otherwise by duration.
+	// Shaders arrive in map order, so equal costs break by name to keep the
+	// report identical from run to run.
+	cost := func(m *ShaderMetrics) float64 {
 		if hasWeightedCosts {
-			return report.Shaders[i].WeightedCost > report.Shaders[j].WeightedCost
+			return m.WeightedCost
 		}
-		return report.Shaders[i].TotalDurationNs > report.Shaders[j].TotalDurationNs
+		return float64(m.TotalDurationNs)
+	}
+	sort.Slice(report.Shaders, func(i, j int) bool {
+		a, b := report.Shaders[i], report.Shaders[j]
+		if cost(a) != cost(b) {
+			return cost(a) > cost(b)
+		}
+		return a.Name < b.Name
 	})
 
 	// Populate report summary
@@ -233,13 +261,14 @@ func ExtractShaderMetrics(t *trace.Trace) (*ShaderMetricsReport, error) {
 
 // populateThreadMetrics extracts thread configuration from dispatch calls.
 func populateThreadMetrics(t *trace.Trace, metricsMap map[string]*ShaderMetrics) error {
-	commandBuffers, err := t.ParseCommandBuffers()
+	capture, err := command.OpenCapture(t)
 	if err != nil {
 		return err
 	}
+	commandBuffers := capture.CommandBuffers()
 
 	for _, cb := range commandBuffers {
-		dcb, err := command.ParseDetailedCommandBuffer(t, cb.Index)
+		dcb, err := capture.Detailed(cb.Index)
 		if err != nil {
 			continue
 		}
@@ -258,10 +287,7 @@ func populateThreadMetrics(t *trace.Trace, metricsMap map[string]*ShaderMetrics)
 		}
 
 		cbData := data[cb.Offset:cbEnd]
-		dispatches, err := t.ParseDispatchInRegion(cbData, cb.Offset)
-		if err != nil {
-			continue
-		}
+		dispatches := t.ParseDispatchInRegion(cbData, cb.Offset)
 
 		// Match encoders to dispatches
 		// Note: There may be more encoder labels than actual compute dispatches
@@ -309,18 +335,9 @@ func populateThreadMetrics(t *trace.Trace, metricsMap map[string]*ShaderMetrics)
 				targetMetrics.ThreadsPerGroupY = dispatch.ThreadsPerGroupY
 				targetMetrics.ThreadsPerGroupZ = dispatch.ThreadsPerGroupZ
 
-				// Calculate actual threadgroups from dispatchThreads / threadsPerThreadgroup
-				// This gives us the number of threadgroups dispatched
-				var threadgroupsX, threadgroupsY, threadgroupsZ uint64 = 1, 1, 1
-				if dispatch.ThreadsPerGroupX > 0 {
-					threadgroupsX = (dispatch.ThreadsX + dispatch.ThreadsPerGroupX - 1) / dispatch.ThreadsPerGroupX
-				}
-				if dispatch.ThreadsPerGroupY > 0 {
-					threadgroupsY = (dispatch.ThreadsY + dispatch.ThreadsPerGroupY - 1) / dispatch.ThreadsPerGroupY
-				}
-				if dispatch.ThreadsPerGroupZ > 0 {
-					threadgroupsZ = (dispatch.ThreadsZ + dispatch.ThreadsPerGroupZ - 1) / dispatch.ThreadsPerGroupZ
-				}
+				// Threadgroups dispatched, from dispatchThreads divided by
+				// threads per threadgroup.
+				threadgroupsX, threadgroupsY, threadgroupsZ := dispatch.Threadgroups()
 
 				targetMetrics.ThreadgroupsX = threadgroupsX
 				targetMetrics.ThreadgroupsY = threadgroupsY
@@ -380,10 +397,13 @@ func applyStreamDataDispatchTiming(stats *counter.StreamDataStats, metricsMap ma
 	}
 
 	pipelinesByName := make(map[string]*counter.PipelineStats)
-	pipelinesByIndex := make(map[int]*counter.PipelineStats)
+	// stats.Pipelines comes from pipelinePerformanceStatistics, an NSDictionary,
+	// so its slice order is unrelated to the pipeline index carried by
+	// gpuCommandInfoData records. Join on the pipeline ID.
+	pipelinesByID := make(map[int]*counter.PipelineStats)
 	for i := range stats.Pipelines {
 		p := &stats.Pipelines[i]
-		pipelinesByIndex[i] = p
+		pipelinesByID[p.PipelineID] = p
 		if p.FunctionName != "" {
 			pipelinesByName[p.FunctionName] = p
 		}
@@ -406,7 +426,7 @@ func applyStreamDataDispatchTiming(stats *counter.StreamDataStats, metricsMap ma
 				pipeline: pipelinesByName[name],
 			}
 			if agg.pipeline == nil {
-				agg.pipeline = pipelinesByIndex[dispatch.PipelineIndex]
+				agg.pipeline = pipelinesByID[dispatch.PipelineID]
 			}
 			aggregates[name] = agg
 		}
@@ -477,16 +497,10 @@ func populateFallbackTimingMetrics(t *trace.Trace, metricsMap map[string]*Shader
 			metrics.MaxDurationNs = durationPerInvocation
 			metrics.TimingSource = source
 			metrics.TimingApprox = approximate
-			continue
 		}
-
-		estimatedNs := estimateShaderDuration(metrics)
-		metrics.TotalDurationNs = estimatedNs * uint64(metrics.InvocationCount)
-		metrics.AvgDurationNs = estimatedNs
-		metrics.MinDurationNs = estimatedNs
-		metrics.MaxDurationNs = estimatedNs
-		metrics.TimingSource = timingSourceSyntheticThread
-		metrics.TimingApprox = true
+		// No timing for this shader. Leave the duration fields zero and the
+		// source empty rather than inventing a number: a duration column is
+		// read as a measurement no matter what flag sits beside it.
 	}
 }
 
@@ -494,11 +508,6 @@ func extractFallbackTimings(t *trace.Trace) ([]*timing.EncoderTiming, string, bo
 	timings, err := timing.ExtractTimingData(t)
 	if err == nil && len(timings) > 0 {
 		return timings, timingSourceCaptureHeuristic, true
-	}
-
-	timings = timing.GenerateSyntheticTiming(t)
-	if len(timings) > 0 {
-		return timings, timingSourceSyntheticKernel, true
 	}
 
 	return nil, "", true
@@ -548,7 +557,11 @@ func hasNormalizedSuffix(s, suffix string) bool {
 }
 
 func applyPipelineStatsToMetrics(metrics *ShaderMetrics, p *counter.PipelineStats) {
-	metrics.Address = p.PipelineAddress
+	// Capture bundles archive these statistics without a pipeline address, so
+	// keep the address the encoder already supplied.
+	if p.PipelineAddress != 0 {
+		metrics.Address = p.PipelineAddress
+	}
 	metrics.InstructionCount = p.InstructionCount
 	metrics.ALUInstructionCount = p.ALUInstructionCount
 	metrics.FP32InstructionCount = p.FP32InstructionCount
@@ -559,32 +572,13 @@ func applyPipelineStatsToMetrics(metrics *ShaderMetrics, p *counter.PipelineStat
 	metrics.ThreadgroupMemory = p.ThreadgroupMemory
 	metrics.AllocatedRegisters = p.TemporaryRegisterCount
 	metrics.SpilledBytes = p.SpilledBytes
-}
-
-// estimateShaderDuration provides a rough duration estimate based on thread configuration.
-func estimateShaderDuration(metrics *ShaderMetrics) uint64 {
-	totalThreadgroups := metrics.ThreadgroupsX * metrics.ThreadgroupsY * metrics.ThreadgroupsZ
-	if totalThreadgroups == 0 {
-		totalThreadgroups = 1
+	metrics.DeviceLoadCount = p.DeviceLoadCount
+	metrics.DeviceStoreCount = p.DeviceStoreCount
+	metrics.HasPipelineStats = true
+	metrics.CompilationTimeMs = p.CompilationTimeMs
+	if p.CompilePerformance != nil {
+		metrics.FunctionWasCached = p.CompilePerformance.FunctionWasCached
 	}
-
-	threadsPerGroup := metrics.ThreadsPerGroupX * metrics.ThreadsPerGroupY * metrics.ThreadsPerGroupZ
-	if threadsPerGroup == 0 {
-		threadsPerGroup = 256 // Default
-	}
-
-	// More threads = more work (roughly linear)
-	totalThreads := totalThreadgroups * threadsPerGroup
-
-	// Estimate: 10ns per thread on average
-	estimatedNs := totalThreads * 10
-
-	// Minimum 100µs
-	if estimatedNs < 100_000 {
-		estimatedNs = 100_000
-	}
-
-	return estimatedNs
 }
 
 // populateInstructionCounts populates instruction counts from PipelineStats (streamData).
@@ -627,6 +621,27 @@ func populateInstructionCounts(t *trace.Trace, metricsMap map[string]*ShaderMetr
 	return nil
 }
 
+// populateStoreInstructionCounts applies the shader statistics archived in a
+// capture bundle's store sections. Metrics already carrying counts from
+// streamData are left alone, so this only fills gaps.
+func populateStoreInstructionCounts(t *trace.Trace, metricsMap map[string]*ShaderMetrics) error {
+	stats, err := counter.ExtractStoreStats(t, 0)
+	if err != nil {
+		return err
+	}
+
+	for name, metrics := range metricsMap {
+		if metrics.InstructionCount > 0 {
+			continue
+		}
+		if p := stats.PipelineForLabel(name); p != nil {
+			applyPipelineStatsToMetrics(metrics, p)
+		}
+	}
+
+	return nil
+}
+
 // applyHardwareMetrics applies hardware metrics (including instruction counts) to shader metrics.
 func applyHardwareMetrics(metrics *ShaderMetrics, hw *counter.ShaderHardwareMetrics) {
 	// Instruction counts from PipelineStats (real data from streamData)
@@ -641,6 +656,9 @@ func applyHardwareMetrics(metrics *ShaderMetrics, hw *counter.ShaderHardwareMetr
 	metrics.AllocatedRegisters = hw.AllocatedRegs
 	metrics.HighRegister = hw.HighRegister
 	metrics.SpilledBytes = hw.SpilledBytes
+	metrics.DeviceLoadCount = hw.DeviceLoadCount
+	metrics.DeviceStoreCount = hw.DeviceStoreCount
+	metrics.HasPipelineStats = hw.HasPipelineStats
 
 	// Also update ALU utilization if available
 	if hw.ALUUtilization > 0 {
@@ -648,54 +666,17 @@ func applyHardwareMetrics(metrics *ShaderMetrics, hw *counter.ShaderHardwareMetr
 	}
 }
 
-// fuzzyMatch checks if two shader names are similar (handles type suffixes).
+// fuzzyMatch reports whether one shader name contains the other, ignoring
+// case. It handles type suffixes, so "vn_copyfloat16" matches "vn_copy".
 func fuzzyMatch(name1, name2 string) bool {
-	// One contains the other
-	if len(name1) > 3 && len(name2) > 3 {
-		if len(name1) < len(name2) {
-			return containsIgnoreCase(name2, name1)
-		}
-		return containsIgnoreCase(name1, name2)
+	if len(name1) <= 3 || len(name2) <= 3 {
+		return false
 	}
-	return false
-}
-
-// containsIgnoreCase checks if s1 contains s2 (case-insensitive).
-func containsIgnoreCase(s1, s2 string) bool {
-	return len(s1) >= len(s2) && (s1 == s2 ||
-		(len(s1) > len(s2) && (s1[:len(s2)] == s2 || s1[len(s1)-len(s2):] == s2)))
-}
-
-// calculateOccupancy estimates GPU occupancy based on thread configuration.
-// Apple Silicon GPUs have different occupancy characteristics than NVIDIA/AMD.
-func calculateOccupancy(metrics *ShaderMetrics) float64 {
-	threadsPerGroup := metrics.ThreadsPerGroup
-	if threadsPerGroup == 0 {
-		return 0.0
+	name1, name2 = strings.ToLower(name1), strings.ToLower(name2)
+	if len(name1) < len(name2) {
+		name1, name2 = name2, name1
 	}
-
-	// Apple Silicon optimal threadgroup sizes:
-	// - M1/M2/M3: typically 256-1024 threads per threadgroup
-	// - Optimal: 512 threads for balanced workloads
-	optimalThreads := uint64(512)
-
-	// Calculate occupancy based on how close we are to optimal
-	occupancy := float64(threadsPerGroup) / float64(optimalThreads)
-	if occupancy > 1.0 {
-		// Large threadgroups don't necessarily mean better occupancy
-		// Diminishing returns above optimal
-		occupancy = 1.0 - (occupancy-1.0)*0.5
-	}
-
-	// Clamp to [0, 1]
-	if occupancy > 1.0 {
-		occupancy = 1.0
-	}
-	if occupancy < 0.0 {
-		occupancy = 0.0
-	}
-
-	return occupancy
+	return strings.Contains(name1, name2)
 }
 
 // classifyShaderPerformance classifies a shader as compute-bound, memory-bound, or balanced.
@@ -707,6 +688,11 @@ func classifyShaderPerformance(metrics *ShaderMetrics) {
 
 	totalThreads := metrics.TotalThreads
 	bufferCount := metrics.BufferBindings
+	if totalThreads == 0 {
+		metrics.Classification = ""
+		metrics.ComputeRatio = 0
+		return
+	}
 
 	// Calculate compute ratio (threads per buffer binding)
 	if bufferCount == 0 {
@@ -742,18 +728,17 @@ func classifyShaderPerformance(metrics *ShaderMetrics) {
 
 // identifyBottlenecks identifies potential performance bottlenecks.
 func identifyBottlenecks(metrics *ShaderMetrics) {
-	// Low occupancy
-	if metrics.Occupancy < 0.3 {
-		metrics.Bottlenecks = append(metrics.Bottlenecks, "low_gpu_occupancy")
+	// A threadgroup smaller than a few simdgroups gives the scheduler little to
+	// interleave. simdWidth is Apple-documented (32 on every Apple GPU); the
+	// threshold is a rule of thumb, not a residency calculation. gputrace has no
+	// way to compute real occupancy from a trace bundle, so this reports the
+	// dispatch shape and nothing more.
+	const simdWidth = 32
+	if tpg := metrics.ThreadsPerGroup; tpg > 0 && tpg < 4*simdWidth {
+		metrics.Bottlenecks = append(metrics.Bottlenecks, "small_threadgroup")
 		metrics.OptimizationHints = append(metrics.OptimizationHints,
-			fmt.Sprintf("Increase threadgroup size (current: %d threads, optimal: ~512)", metrics.ThreadsPerGroup))
-	}
-
-	// Very high occupancy might indicate too many threads
-	if metrics.Occupancy > 0.95 && metrics.ThreadsPerGroup > 512 {
-		metrics.Bottlenecks = append(metrics.Bottlenecks, "potential_resource_contention")
-		metrics.OptimizationHints = append(metrics.OptimizationHints,
-			"Consider reducing threadgroup size to reduce register pressure")
+			fmt.Sprintf("Threadgroup is %d threads (%d simdgroups); larger threadgroups give the scheduler more to interleave",
+				tpg, tpg/simdWidth))
 	}
 
 	// Memory-bound shaders
@@ -764,7 +749,7 @@ func identifyBottlenecks(metrics *ShaderMetrics) {
 	}
 
 	// Small dispatch sizes (underutilizing GPU)
-	if metrics.TotalThreadgroups < 10 {
+	if metrics.TotalThreadgroups > 0 && metrics.TotalThreadgroups < 10 {
 		metrics.Bottlenecks = append(metrics.Bottlenecks, "small_dispatch_size")
 		metrics.OptimizationHints = append(metrics.OptimizationHints,
 			fmt.Sprintf("Increase dispatch size (current: %d threadgroups)", metrics.TotalThreadgroups))
@@ -855,7 +840,6 @@ func formatDetailedShaderMetrics(metrics *ShaderMetrics) string {
 			metrics.ThreadsPerGroup,
 			metrics.ThreadsPerGroupX, metrics.ThreadsPerGroupY, metrics.ThreadsPerGroupZ)
 		out += fmt.Sprintf("  Total Threads:  %d\n", metrics.TotalThreads)
-		out += fmt.Sprintf("  Occupancy:      %.1f%%\n", metrics.Occupancy*100)
 	}
 
 	out += fmt.Sprintf("  Classification: %s (ratio: %.0f)\n",
@@ -893,8 +877,11 @@ func ExportShaderMetricsCSV(w io.Writer, report *ShaderMetricsReport) error {
 		"Min Duration (ns)", "Max Duration (ns)", "Percent of Total",
 		"Threadgroups X", "Threadgroups Y", "Threadgroups Z",
 		"Threads/Group X", "Threads/Group Y", "Threads/Group Z",
-		"Total Threads", "Occupancy", "Classification",
+		"Total Threads", "Classification",
 		"Estimated Bandwidth (GB/s)", "Bytes Accessed",
+		"Temporary Registers", "Spilled Bytes",
+		"Device Load Count", "Device Store Count",
+		"Compilation Time (ms)", "Function Was Cached",
 	}
 	if err := writer.Write(header); err != nil {
 		return err
@@ -917,10 +904,15 @@ func ExportShaderMetricsCSV(w io.Writer, report *ShaderMetricsReport) error {
 			fmt.Sprintf("%d", metrics.ThreadsPerGroupY),
 			fmt.Sprintf("%d", metrics.ThreadsPerGroupZ),
 			fmt.Sprintf("%d", metrics.TotalThreads),
-			fmt.Sprintf("%.4f", metrics.Occupancy),
 			metrics.Classification,
 			fmt.Sprintf("%.2f", metrics.EstimatedBandwidth),
 			fmt.Sprintf("%d", metrics.BytesAccessed),
+			pipelineStatCell(metrics.HasPipelineStats, metrics.AllocatedRegisters),
+			pipelineStatCell(metrics.HasPipelineStats, metrics.SpilledBytes),
+			pipelineStatCell(metrics.HasPipelineStats, metrics.DeviceLoadCount),
+			pipelineStatCell(metrics.HasPipelineStats, metrics.DeviceStoreCount),
+			compileTimeCell(metrics.CompilationTimeMs),
+			cachedCell(metrics.FunctionWasCached),
 		}
 		if err := writer.Write(row); err != nil {
 			return err
@@ -928,6 +920,39 @@ func ExportShaderMetricsCSV(w io.Writer, report *ShaderMetricsReport) error {
 	}
 
 	return nil
+}
+
+// pipelineStatCell renders a compiler statistic, or an empty cell when the
+// statistics were not present. A zero is a real count for some kernels, so an
+// absent statistic must not be reported as one.
+func pipelineStatCell(present bool, v int) string {
+	if !present {
+		return ""
+	}
+	return fmt.Sprintf("%d", v)
+}
+
+// compileTimeCell renders a compilation time, empty when none was recorded.
+// A shader whose compilation the archive did not time is not a shader that
+// compiled in zero milliseconds.
+func compileTimeCell(ms float64) string {
+	if ms == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%.3f", ms)
+}
+
+// cachedCell renders the compile-cache flag, empty when the trace carries no
+// cache record. An empty cell and "false" are different findings: no record
+// versus a recorded miss.
+func cachedCell(cached *bool) string {
+	if cached == nil {
+		return ""
+	}
+	if *cached {
+		return "true"
+	}
+	return "false"
 }
 
 // ExportShaderMetricsJSON exports shader metrics to JSON format.
@@ -946,10 +971,10 @@ func repeatStr(s string, n int) string {
 	return result
 }
 
-// FormatShadersSimple formats shader metrics in a simple two-column format (Cost + Name).
+// FormatShadersSimple formats shader metrics in a simple two-column format (share + name).
 func FormatShadersSimple(w io.Writer, report *ShaderMetricsReport) error {
 	// Header
-	fmt.Fprintf(w, "%-8s  %s\n", "Cost", "Name")
+	fmt.Fprintf(w, "%-12s  %s\n", shaderShareLabel(report), "Name")
 
 	for _, metrics := range report.Shaders {
 		// Skip placeholder entries like (dispatch_N) that have no real function name
@@ -961,7 +986,7 @@ func FormatShadersSimple(w io.Writer, report *ShaderMetricsReport) error {
 		cost := fmt.Sprintf("%.2f%%", metrics.PercentOfTotal)
 
 		// Print row
-		fmt.Fprintf(w, "%-8s  %s\n", cost, metrics.Name)
+		fmt.Fprintf(w, "%-12s  %s\n", cost, metrics.Name)
 	}
 
 	return nil
@@ -973,10 +998,11 @@ func FormatShadersSimple(w io.Writer, report *ShaderMetricsReport) error {
 // If showEstimates is false, uncomputed fields will show "?" instead of estimates.
 func FormatShadersXcodeStyle(w io.Writer, report *ShaderMetricsReport, trace *Trace, showEstimates bool) error {
 	// Header matching Xcode format with wider columns
-	fmt.Fprintf(w, "%-8s %-50s %-10s %-20s %15s %10s %10s %12s\n",
-		"Cost", "Name", "Type", "Pipeline State",
-		"# SIMD Groups", "Registers", "High Reg", "Spilled")
-	fmt.Fprintf(w, "%s\n", repeatStr("─", 145))
+	fmt.Fprintf(w, "%-12s %-50s %-10s %-20s %15s %10s %10s %12s %10s %10s\n",
+		shaderShareLabel(report), "Name", "Type", "Pipeline State",
+		"# SIMD Groups", "Temp Regs", "High Reg", "Spilled",
+		"Dev Load", "Dev Store")
+	fmt.Fprintf(w, "%s\n", repeatStr("─", 167))
 
 	// Sort shaders by percentage (descending) like Xcode does
 	// Already sorted by TotalDurationNs in ExtractShaderMetrics
@@ -1016,7 +1042,7 @@ func FormatShadersXcodeStyle(w io.Writer, report *ShaderMetricsReport, trace *Tr
 
 		// Register allocation and spilled bytes - use real data from metrics if available
 		var allocatedRegsStr, highRegStr, spilledBytesStr string
-		if metrics.AllocatedRegisters > 0 {
+		if metrics.HasPipelineStats || metrics.AllocatedRegisters > 0 {
 			// Use real data from PipelineStats (streamData)
 			allocatedRegsStr = fmt.Sprintf("%d", metrics.AllocatedRegisters)
 			spilledBytesStr = formatSpilledBytesShort(metrics.SpilledBytes)
@@ -1036,13 +1062,51 @@ func FormatShadersXcodeStyle(w io.Writer, report *ShaderMetricsReport, trace *Tr
 			highRegStr = "?"
 		}
 
+		// Device load/store counts are compiler statistics: zero is a real
+		// answer for a kernel that touches no device memory, so they are
+		// only printed when the statistics were actually found.
+		devLoadStr, devStoreStr := "?", "?"
+		if metrics.HasPipelineStats {
+			devLoadStr = fmt.Sprintf("%d", metrics.DeviceLoadCount)
+			devStoreStr = fmt.Sprintf("%d", metrics.DeviceStoreCount)
+		}
+
 		// Print row matching Xcode format
-		fmt.Fprintf(w, "%-8s %-50s %-10s %-20s %15s %10s %10s %12s\n",
+		fmt.Fprintf(w, "%-12s %-50s %-10s %-20s %15s %10s %10s %12s %10s %10s\n",
 			cost, name, shaderType, pipelineState,
-			simdGroups, allocatedRegsStr, highRegStr, spilledBytesStr)
+			simdGroups, allocatedRegsStr, highRegStr, spilledBytesStr,
+			devLoadStr, devStoreStr)
+	}
+
+	if missing := shadersMissingPipelineStats(report); missing > 0 {
+		fmt.Fprintf(w, "\n%d of %d shaders carry no compiler statistics in this trace; their\n"+
+			"  Temp Regs, Spilled, Dev Load and Dev Store columns read \"?\" rather than 0.\n",
+			missing, len(report.Shaders))
 	}
 
 	return nil
+}
+
+// shadersMissingPipelineStats counts shaders whose compiler statistics
+// (pipelinePerformanceStatistics) were not found.
+func shadersMissingPipelineStats(report *ShaderMetricsReport) int {
+	n := 0
+	for _, m := range report.Shaders {
+		if !m.HasPipelineStats {
+			n++
+		}
+	}
+	return n
+}
+
+func shaderShareLabel(report *ShaderMetricsReport) string {
+	if report != nil && report.ShareBasis == "simd_groups" {
+		return "SIMD Share"
+	}
+	if report != nil && report.ShareBasis == "dispatch_span" {
+		return "Span Share"
+	}
+	return "Share"
 }
 
 // formatLargeNumber formats large numbers with commas for readability.
@@ -1090,7 +1154,7 @@ func estimateAllocatedRegisters(metrics *ShaderMetrics) int {
 	}
 
 	// More threads per threadgroup often means fewer registers per thread
-	// to maximize occupancy. Apple Silicon has different characteristics
+	// per thread. Apple Silicon has different characteristics
 	// than NVIDIA/AMD GPUs.
 	//
 	// Heuristics based on common patterns:
@@ -1153,7 +1217,7 @@ func applyCounterDataToMetrics(metrics *ShaderMetrics, name string, counterData 
 		// Try substring matching (CSV label contains shader name)
 		// e.g., "encoder1simpleadd" contains "simpleadd"
 		if len(normalizedLabel) > 0 && len(normalizedName) > 0 {
-			if contains(normalizedLabel, normalizedName) {
+			if strings.Contains(normalizedLabel, normalizedName) {
 				if substringMatch == nil {
 					substringMatch = enc
 				}
@@ -1172,9 +1236,6 @@ func applyCounterDataToMetrics(metrics *ShaderMetrics, name string, counterData 
 
 	// Store counter data
 	metrics.ALUUtilization = matchedEncoder.ALUUtilization
-	if matchedEncoder.KernelOccupancy > 0 {
-		metrics.Occupancy = matchedEncoder.KernelOccupancy
-	}
 
 	// Calculate weighted cost using Kernel ALU Performance (absolute instruction count)
 	// Higher instruction count = longer execution time (direct relationship)
@@ -1196,31 +1257,6 @@ func applyCounterDataToMetrics(metrics *ShaderMetrics, name string, counterData 
 		// Fallback to base cost if no performance data
 		metrics.WeightedCost = baseCost
 	}
-}
-
-// contains checks if s contains substr (case-insensitive).
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && indexOfSubstring(s, substr) >= 0
-}
-
-// indexOfSubstring returns the index of substr in s, or -1 if not found.
-func indexOfSubstring(s, substr string) int {
-	if len(substr) == 0 {
-		return 0
-	}
-	for i := 0; i <= len(s)-len(substr); i++ {
-		match := true
-		for j := 0; j < len(substr); j++ {
-			if s[i+j] != substr[j] {
-				match = false
-				break
-			}
-		}
-		if match {
-			return i
-		}
-	}
-	return -1
 }
 
 // normalizeForMatching normalizes a shader/encoder name for fuzzy matching.

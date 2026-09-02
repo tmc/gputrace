@@ -190,9 +190,9 @@ func TestExportComparison(t *testing.T) {
 	}
 }
 
-func TestExportCountersCSVWithSummaryCountsMixedRowSources(t *testing.T) {
+func TestExportCountersCSVWithSummaryCountsRowSources(t *testing.T) {
 	tracePath, perfDir := makeTraceWithPerfDir(t)
-	if err := os.WriteFile(filepath.Join(perfDir, "Counters_f_0.raw"), syntheticCounterRaw(28416), 0o666); err != nil {
+	if err := os.WriteFile(filepath.Join(perfDir, "Counters_f_0.raw"), syntheticCounterRaw(), 0o666); err != nil {
 		t.Fatal(err)
 	}
 	tr := &trace.Trace{
@@ -210,14 +210,16 @@ func TestExportCountersCSVWithSummaryCountsMixedRowSources(t *testing.T) {
 	if summary.Rows != 3 {
 		t.Fatalf("Rows = %d, want 3", summary.Rows)
 	}
-	if summary.ParsedCounterRows != 1 {
-		t.Fatalf("ParsedCounterRows = %d, want 1", summary.ParsedCounterRows)
+	// Counters_f_*.raw no longer yields parsed rows: the only field ever read
+	// out of a sample record was Kernel Invocations at 0x0064 ÷ 27.75, and that
+	// divisor could not be sourced. Every row now comes from the fallback.
+	if summary.ParsedCounterRows != 0 {
+		t.Fatalf("ParsedCounterRows = %d, want 0", summary.ParsedCounterRows)
 	}
-	if summary.SyntheticFallbackRows != 2 {
-		t.Fatalf("SyntheticFallbackRows = %d, want 2", summary.SyntheticFallbackRows)
-	}
-	if !summary.HasSyntheticFallback() {
-		t.Fatal("HasSyntheticFallback() = false, want true")
+	// All three, for the same reason: with no parsed counter row and no
+	// invented fallback, there is nothing to publish for any encoder.
+	if summary.SkippedRows != 3 {
+		t.Fatalf("SkippedRows = %d, want 3", summary.SkippedRows)
 	}
 
 	reader := csv.NewReader(strings.NewReader(buf.String()))
@@ -256,7 +258,6 @@ func TestPopulateEncoderMetricsFromPerfCounterStats(t *testing.T) {
 		ShaderMetrics: []ShaderHardwareMetrics{{
 			ShaderName:                     "kernel0",
 			ALUUtilization:                 3.25,
-			KernelOccupancy:                0.81,
 			MemoryBandwidth:                4096,
 			ExecutionCount:                 7,
 			DeviceMemoryBandwidthGBps:      12.5,
@@ -268,7 +269,7 @@ func TestPopulateEncoderMetricsFromPerfCounterStats(t *testing.T) {
 		}},
 	}
 
-	got, err := PopulateEncoderMetricsFromPerfCounterStats(nil, stats)
+	got, err := PopulateEncoderMetricsFromPerfCounterStats(stats)
 	if err != nil {
 		t.Fatalf("PopulateEncoderMetricsFromPerfCounterStats: %v", err)
 	}
@@ -276,17 +277,16 @@ func TestPopulateEncoderMetricsFromPerfCounterStats(t *testing.T) {
 		t.Fatalf("len(metrics) = %d, want 1", len(got))
 	}
 	m := got[0]
-	if m.EncoderIndex != 0 || m.EncoderLabel != "kernel0" || m.EncoderType != "compute" {
-		t.Fatalf("encoder identity = (%d, %q, %q), want (0, kernel0, compute)", m.EncoderIndex, m.EncoderLabel, m.EncoderType)
+	if m.EncoderIndex != -1 || m.EncoderLabel != "kernel0" || m.EncoderType != "compute" || m.Attribution != CounterAttributionUnknown {
+		t.Fatalf("counter attribution = (%d, %q, %q, %q), want (-1, kernel0, compute, unknown)", m.EncoderIndex, m.EncoderLabel, m.EncoderType, m.Attribution)
 	}
 	if m.ALUUtilization != 3.25 {
 		t.Fatalf("ALUUtilization = %v, want 3.25", m.ALUUtilization)
 	}
-	if m.KernelOccupancy != 0.81 {
-		t.Fatalf("KernelOccupancy = %v, want 0.81", m.KernelOccupancy)
-	}
-	if m.ComputeUtilization != 3.25 {
-		t.Fatalf("ComputeUtilization = %v, want 3.25", m.ComputeUtilization)
+	// ComputeUtilization is a distinct Xcode counter; it used to be aliased to
+	// ALU utilization, which made an unread counter look measured.
+	if m.ComputeUtilization != 0 {
+		t.Fatalf("ComputeUtilization = %v, want 0 (not aliased to ALU utilization)", m.ComputeUtilization)
 	}
 	if m.MemoryBandwidth != 4096 || m.DeviceMemoryBandwidthGBps != 12.5 {
 		t.Fatalf("bandwidth = (%d, %v), want (4096, 12.5)", m.MemoryBandwidth, m.DeviceMemoryBandwidthGBps)
@@ -303,7 +303,7 @@ func TestPopulateEncoderMetricsFromPerfCounterStats(t *testing.T) {
 }
 
 func TestPopulateEncoderMetricsFromPerfCounterStatsNilStats(t *testing.T) {
-	if _, err := PopulateEncoderMetricsFromPerfCounterStats(nil, nil); err == nil {
-		t.Fatal("PopulateEncoderMetricsFromPerfCounterStats(nil, nil) succeeded, want error")
+	if _, err := PopulateEncoderMetricsFromPerfCounterStats(nil); err == nil {
+		t.Fatal("PopulateEncoderMetricsFromPerfCounterStats(nil) succeeded, want error")
 	}
 }

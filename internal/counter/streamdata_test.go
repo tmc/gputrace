@@ -3,10 +3,343 @@
 package counter
 
 import (
+	"strings"
 	"testing"
+
+	"github.com/tmc/apple/x/plist"
 )
 
 const streamDataIntegrationDirEnv = "GPUTRACE_COUNTER_STREAMDATA_DIR"
+
+func TestArchivedString(t *testing.T) {
+	objects := []any{
+		"$null",
+		"AGXMetalG16X",
+		map[string]any{"NS.string": "Apple M4 Max"},
+		map[string]any{"NS.string": plist.UID(1)},
+	}
+	for _, test := range []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{name: "direct", value: "G16C", want: "G16C"},
+		{name: "uid", value: plist.UID(1), want: "AGXMetalG16X"},
+		{name: "archived NSString", value: plist.UID(2), want: "Apple M4 Max"},
+		{name: "nested uid", value: plist.UID(3), want: "AGXMetalG16X"},
+		{name: "out of range", value: plist.UID(9)},
+		{name: "wrong type", value: uint64(1)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := archivedString(objects, test.value); got != test.want {
+				t.Fatalf("archivedString() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestParseStreamDataMetadataPreservesZeroAndFalse(t *testing.T) {
+	objects := []any{
+		"$null", int64(0), int64(5), "trace.gputrace", true,
+		map[string]any{"NS.data": make([]byte, 10)},
+		map[string]any{"NS.objects": []any{plist.UID(1), plist.UID(2)}},
+		map[string]any{"NS.objects": []any{}},
+	}
+	metadata := parseStreamDataMetadata(objects, map[string]any{
+		"version":                      plist.UID(2),
+		"traceName":                    plist.UID(3),
+		"profiledExecutionMode":        plist.UID(1),
+		"dataSourceHasUnusedResources": false,
+		"supportsSeparateAPSData":      plist.UID(4),
+		"numBlitCalls":                 int64(0),
+		"encoderInfoData":              plist.UID(5),
+		"encoderInfoSize":              int64(4),
+		"functionInfoData":             plist.UID(5),
+		"APSData":                      plist.UID(6),
+		"shaderProfilerData":           plist.UID(7),
+	})
+	if metadata.Version == nil || *metadata.Version != 5 || metadata.TraceName != "trace.gputrace" {
+		t.Fatalf("identity metadata = %#v", metadata)
+	}
+	if metadata.ProfiledExecutionMode == nil || *metadata.ProfiledExecutionMode != 0 {
+		t.Fatalf("profiled execution mode = %#v, want recorded zero", metadata.ProfiledExecutionMode)
+	}
+	if metadata.DataSourceHasUnusedResources == nil || *metadata.DataSourceHasUnusedResources {
+		t.Fatalf("unused resources = %#v, want recorded false", metadata.DataSourceHasUnusedResources)
+	}
+	if metadata.SupportsSeparateAPSData == nil || !*metadata.SupportsSeparateAPSData {
+		t.Fatalf("supports separate APS data = %#v, want true", metadata.SupportsSeparateAPSData)
+	}
+	if metadata.NumBlitCalls == nil || *metadata.NumBlitCalls != 0 {
+		t.Fatalf("num blit calls = %#v, want recorded zero", metadata.NumBlitCalls)
+	}
+	if metadata.ProfiledProfilerMode != nil {
+		t.Fatalf("absent profiled profiler mode = %#v, want nil", metadata.ProfiledProfilerMode)
+	}
+	if table := metadata.Tables.Encoders; table == nil || table.Bytes != 10 || table.RecordSize == nil || *table.RecordSize != 4 || table.RecordCount == nil || *table.RecordCount != 2 || table.RemainderBytes == nil || *table.RemainderBytes != 2 || table.RawBytesHex != strings.Repeat("00", 10) || table.SHA256 != "sha256:01d448afd928065458cf670b60f5a594d735af0172c8d67f22a81680132681ca" {
+		t.Fatalf("encoder table = %#v", table)
+	}
+	if table := metadata.Tables.Functions; table == nil || table.Bytes != 10 || table.RecordSize != nil || table.RecordCount != nil || table.RemainderBytes != nil || table.RawBytesHex != strings.Repeat("00", 10) || table.SHA256 != "sha256:01d448afd928065458cf670b60f5a594d735af0172c8d67f22a81680132681ca" {
+		t.Fatalf("function table without size = %#v", table)
+	}
+	if metadata.Tables.CommandBuffers != nil {
+		t.Fatalf("absent command buffer table = %#v", metadata.Tables.CommandBuffers)
+	}
+	if metadata.Families.APSData == nil || *metadata.Families.APSData != 2 {
+		t.Fatalf("APSData entries = %#v, want 2", metadata.Families.APSData)
+	}
+	if metadata.Families.ShaderProfilerData == nil || *metadata.Families.ShaderProfilerData != 0 {
+		t.Fatalf("shader profiler entries = %#v, want recorded zero", metadata.Families.ShaderProfilerData)
+	}
+	if metadata.Families.APSTimelineData != nil {
+		t.Fatalf("absent APSTimelineData entries = %#v, want nil", metadata.Families.APSTimelineData)
+	}
+}
+
+func TestParseStreamDataTableDistinguishesAbsentMalformedAndEmpty(t *testing.T) {
+	objects := []any{
+		"$null",
+		map[string]any{"NS.data": []byte{}},
+		"not data",
+	}
+	for _, test := range []struct {
+		name    string
+		root    map[string]any
+		absent  bool
+		invalid bool
+	}{
+		{name: "absent", root: map[string]any{}, absent: true},
+		{name: "malformed", root: map[string]any{"data": plist.UID(2)}, invalid: true},
+		{name: "empty", root: map[string]any{"data": plist.UID(1), "size": int64(4)}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			table := parseStreamDataTable(objects, test.root, "data", "size")
+			if test.absent {
+				if table != nil {
+					t.Fatalf("table = %#v, want nil", table)
+				}
+				return
+			}
+			if table == nil {
+				t.Fatal("table is nil")
+			}
+			if test.invalid {
+				if table.DecodeError != "archive data reference is malformed" || table.SHA256 != "" || table.RawBytesHex != "" {
+					t.Fatalf("malformed table = %#v", table)
+				}
+				return
+			}
+			if table.DecodeError != "" || table.Bytes != 0 || table.RawBytesHex != "" || table.SHA256 != "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" {
+				t.Fatalf("empty table = %#v", table)
+			}
+		})
+	}
+}
+
+func TestDecodedStreamDataFamiliesCountsOnlyNSData(t *testing.T) {
+	objects := []any{
+		"$null",
+		map[string]any{"NS.data": []byte("one")},
+		map[string]any{"NS.data": []byte("two")},
+		map[string]any{"not-data": true},
+		map[string]any{"NS.objects": []any{plist.UID(1), plist.UID(2), plist.UID(3), "not-a-uid", plist.UID(99)}},
+		map[string]any{"NS.objects": []any{}},
+	}
+	got := decodedStreamDataFamilies(objects, map[string]any{
+		"APSData":         plist.UID(4),
+		"APSTimelineData": plist.UID(5),
+		"APSCounterData":  plist.UID(3),
+	})
+	if got.APSData == nil || *got.APSData != 2 {
+		t.Fatalf("APSData decoded blobs = %#v, want 2", got.APSData)
+	}
+	if got.APSTimelineData == nil || *got.APSTimelineData != 0 {
+		t.Fatalf("APSTimelineData decoded blobs = %#v, want recorded zero", got.APSTimelineData)
+	}
+	if got.APSCounterData != nil {
+		t.Fatalf("malformed APSCounterData = %#v, want nil", got.APSCounterData)
+	}
+	if got.ShaderProfilerData != nil {
+		t.Fatalf("absent shaderProfilerData = %#v, want nil", got.ShaderProfilerData)
+	}
+}
+
+func TestSummarizeCounterArchive(t *testing.T) {
+	got := summarizeCounterArchive(&CounterArchive{
+		Encoders:           []EncoderSamples{{}, {}},
+		TotalSamples:       20,
+		AttributedSamples:  7,
+		MachineWideSamples: 11,
+		KnownEncoderIDs:    4,
+		PassColumns:        [][]string{{"a"}, {"b"}},
+		TraceIDs:           &TraceIDTable{Rows: []TraceIDInfo{{}, {}, {}}},
+		Blobs:              5,
+		StrideMismatches:   1,
+	})
+	if got == nil || got.DecodedSamples != 20 || got.AttributedSamples != 7 || got.MachineWideSamples != 11 || got.UnattributedSamples != 2 || got.EncoderAggregates != 2 || got.PassColumnGroups != 2 || got.TraceIDRows != 3 || got.GPRWCNTRBlobs != 5 || got.StrideMismatchBlobs != 1 {
+		t.Fatalf("counter decode summary = %#v", got)
+	}
+	if summarizeCounterArchive(nil) != nil {
+		t.Fatal("nil counter archive produced a summary")
+	}
+}
+
+func TestClassifyAPSDataDictionary(t *testing.T) {
+	var got APSDataInventory
+	classifyAPSDataDictionary(&got, map[string]any{
+		"Counter Info":                 true,
+		"ShaderProfilerData":           true,
+		"Post Processing Frame Marker": true,
+		"APSTraceDataFile":             true,
+		"TraceId to BatchId":           true,
+	})
+	if got.WithCounterInfo != 1 || got.WithShaderProfilerData != 1 || got.WithFrameMarker != 1 || got.WithAPSTraceDataFile != 1 || got.WithTraceIDTables != 1 {
+		t.Fatalf("APSData classification = %#v", got)
+	}
+	classifyAPSDataDictionary(&got, map[string]any{"unrecognized": true})
+	if got.WithCounterInfo != 1 || got.WithShaderProfilerData != 1 || got.WithFrameMarker != 1 || got.WithAPSTraceDataFile != 1 || got.WithTraceIDTables != 1 {
+		t.Fatalf("unrecognized dictionary changed known counts: %#v", got)
+	}
+}
+
+func TestArchivedValueKind(t *testing.T) {
+	objects := []any{
+		"$null",
+		map[string]any{"NS.data": []byte("x")},
+		map[string]any{"NS.objects": []any{}},
+		map[string]any{"NS.keys": []any{}, "NS.objects": []any{}},
+	}
+	for _, test := range []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{"data", plist.UID(1), "data"},
+		{"array", plist.UID(2), "array"},
+		{"dictionary", plist.UID(3), "dictionary"},
+		{"string", "value", "string"},
+		{"number", uint64(7), "number"},
+		{"bool", true, "bool"},
+		{"null", plist.UID(0), "null"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := archivedValueKind(test.value, objects); got != test.want {
+				t.Fatalf("archivedValueKind() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestDescribeArchivedValue(t *testing.T) {
+	objects := []any{
+		"$null",
+		map[string]any{"NS.data": []byte("abc")},
+		map[string]any{"NS.objects": []any{1, 2}},
+		map[string]any{"NS.keys": []any{1}, "NS.objects": []any{2}},
+		[]byte("def"),
+		map[string]any{"NS.data": plist.UID(4)},
+	}
+	for _, test := range []struct {
+		name  string
+		value any
+		check func(StreamDataKeyInventory) bool
+	}{
+		{"uint64", ^uint64(0), func(k StreamDataKeyInventory) bool {
+			return k.ValueKind == "number" && k.ScalarType == "uint64" && k.ScalarJSON == "18446744073709551615"
+		}},
+		{"string", "value", func(k StreamDataKeyInventory) bool {
+			return k.ValueKind == "string" && k.ScalarType == "string" && k.ScalarJSON == `"value"`
+		}},
+		{"data", plist.UID(1), func(k StreamDataKeyInventory) bool {
+			return k.ValueKind == "data" && k.DataBytes != nil && *k.DataBytes == 3 && k.DataSHA256 == "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+		}},
+		{"indirect data", plist.UID(5), func(k StreamDataKeyInventory) bool {
+			return k.ValueKind == "data" && k.DataBytes != nil && *k.DataBytes == 3 && k.DataSHA256 == "sha256:cb8379ac2098aa165029e3938a51da0bcecfc008fd6795f401178647f96c5b34"
+		}},
+		{"array", plist.UID(2), func(k StreamDataKeyInventory) bool {
+			return k.ValueKind == "array" && k.ContainerCount != nil && *k.ContainerCount == 2
+		}},
+		{"dictionary", plist.UID(3), func(k StreamDataKeyInventory) bool {
+			return k.ValueKind == "dictionary" && k.ContainerCount != nil && *k.ContainerCount == 1
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var got StreamDataKeyInventory
+			describeArchivedValue(&got, test.value, objects)
+			if !test.check(got) {
+				t.Fatalf("describeArchivedValue() = %#v", got)
+			}
+		})
+	}
+}
+
+func TestArchiveNodesPreservesPathsAndStopsCycles(t *testing.T) {
+	objects := []any{
+		"$null",
+		"a/b",
+		"til~de",
+		map[string]any{"NS.keys": []any{plist.UID(1)}, "NS.objects": []any{plist.UID(4)}},
+		map[string]any{"NS.objects": []any{plist.UID(5), plist.UID(3)}},
+		map[string]any{"NS.keys": []any{plist.UID(2)}, "NS.objects": []any{true}},
+	}
+	rootIndex := uint64(3)
+	nodes, truncated := archiveNodes(plist.UID(3), objects, &rootIndex, maximumArchiveNodes)
+	if truncated {
+		t.Fatal("archiveNodes reported truncation for a bounded cycle")
+	}
+	want := []struct {
+		path, status string
+	}{
+		{"/a~1b", "expanded"},
+		{"/a~1b/0", "expanded"},
+		{"/a~1b/0/til~0de", "leaf"},
+		{"/a~1b/1", "reference"},
+	}
+	if len(nodes) != len(want) {
+		t.Fatalf("archiveNodes returned %d nodes, want %d: %#v", len(nodes), len(want), nodes)
+	}
+	for i, node := range nodes {
+		if node.Path != want[i].path || node.ExpansionStatus != want[i].status {
+			t.Fatalf("node %d = %#v, want path %q status %q", i, node, want[i].path, want[i].status)
+		}
+	}
+	if nodes[0].Relation != "dictionary" || nodes[1].Relation != "array" || nodes[1].Ordinal != 0 || nodes[0].ObjectIndex == nil || *nodes[0].ObjectIndex != 4 {
+		t.Fatalf("node relationships = %#v", nodes[:2])
+	}
+}
+
+func TestArchiveNodesDepthLimitIsExplicit(t *testing.T) {
+	objects := []any{"$null", "next"}
+	for depth := 0; depth < maximumArchiveNodeDepth+2; depth++ {
+		next := plist.UID(len(objects) + 1)
+		objects = append(objects, map[string]any{
+			"NS.keys": []any{plist.UID(1)}, "NS.objects": []any{next},
+		})
+	}
+	objects = append(objects, "end")
+	rootIndex := uint64(2)
+	nodes, truncated := archiveNodes(plist.UID(2), objects, &rootIndex, maximumArchiveNodes)
+	if !truncated || len(nodes) != maximumArchiveNodeDepth {
+		t.Fatalf("archiveNodes = %d nodes, truncated %v, want %d and true", len(nodes), truncated, maximumArchiveNodeDepth)
+	}
+	last := nodes[len(nodes)-1]
+	if last.Depth != maximumArchiveNodeDepth || last.ExpansionStatus != "depth_limit" {
+		t.Fatalf("last node = %#v", last)
+	}
+}
+
+func TestArchiveNodesCountLimitIsExplicit(t *testing.T) {
+	objects := []any{
+		"$null", "values",
+		map[string]any{"NS.keys": []any{plist.UID(1)}, "NS.objects": []any{plist.UID(3)}},
+		map[string]any{"NS.objects": []any{1, 2, 3}},
+	}
+	rootIndex := uint64(2)
+	nodes, truncated := archiveNodes(plist.UID(2), objects, &rootIndex, 2)
+	if !truncated || len(nodes) != 2 {
+		t.Fatalf("archiveNodes = %d nodes, truncated %v, want 2 and true", len(nodes), truncated)
+	}
+}
 
 func TestParseStreamDataIntegration(t *testing.T) {
 	gpuprofDir := integrationPathFromEnv(t, streamDataIntegrationDirEnv)

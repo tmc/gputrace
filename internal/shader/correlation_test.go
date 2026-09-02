@@ -122,14 +122,12 @@ func TestCalculateCorrelationSummaryCountsMetricsIndependently(t *testing.T) {
 			{
 				ShaderName:            "kernel_a",
 				ALUUtilization:        80,
-				KernelOccupancy:       50,
 				TotalCycles:           2_000,
 				EstimatedGPUFreqGHz:   1.5,
 				CorrelationConfidence: 1,
 			},
 			{
 				ShaderName:            "kernel_b",
-				KernelOccupancy:       70,
 				TotalCycles:           3_000,
 				EstimatedGPUFreqGHz:   2.5,
 				CorrelationConfidence: 1,
@@ -144,9 +142,6 @@ func TestCalculateCorrelationSummaryCountsMetricsIndependently(t *testing.T) {
 	}
 	if got, want := report.AvgALUUtilization, 80.0; math.Abs(got-want) > 1e-9 {
 		t.Fatalf("AvgALUUtilization = %f, want %f", got, want)
-	}
-	if got, want := report.AvgKernelOccupancy, 60.0; math.Abs(got-want) > 1e-9 {
-		t.Fatalf("AvgKernelOccupancy = %f, want %f", got, want)
 	}
 	if got, want := report.EstimatedGPUFreqGHz, 2.0; math.Abs(got-want) > 1e-9 {
 		t.Fatalf("EstimatedGPUFreqGHz = %f, want %f", got, want)
@@ -166,22 +161,20 @@ func TestCalculateCorrelationSummaryCountsMetricsIndependently(t *testing.T) {
 
 func TestFormatCorrelationReportDisplaysTimingSource(t *testing.T) {
 	report := &ShaderCorrelationReport{
-		TraceSource:        "trace.gputrace",
-		ProfilerSource:     "(not available)",
-		TotalShaders:       1,
-		CorrelatedShaders:  1,
-		CorrelationRate:    100,
-		AvgALUUtilization:  50,
-		AvgKernelOccupancy: 25,
+		TraceSource:       "trace.gputrace",
+		ProfilerSource:    "(not available)",
+		TotalShaders:      1,
+		CorrelatedShaders: 0,
+		CorrelationRate:   0,
+		AvgALUUtilization: 50,
 		Shaders: []*CorrelatedShaderMetrics{
 			{
 				ShaderName:            "kernel_a",
 				ExecutionCount:        1,
 				AvgDuration:           time.Microsecond,
-				TimingSource:          timingSourceSyntheticThread,
+				TimingSource:          timingSourceCaptureHeuristic,
 				TimingApprox:          true,
 				ALUUtilization:        50,
-				KernelOccupancy:       25,
 				CorrelationMethod:     "timing-only",
 				CorrelationConfidence: 1,
 			},
@@ -189,10 +182,26 @@ func TestFormatCorrelationReportDisplaysTimingSource(t *testing.T) {
 	}
 
 	out := FormatCorrelationReport(report)
-	if !strings.Contains(out, "Timing Sources: "+timingSourceSyntheticThread+" (approximate)") {
+	if !strings.Contains(out, "Timing Sources: "+timingSourceCaptureHeuristic+" (approximate)") {
 		t.Fatalf("formatted report missing approximate timing source:\n%s", out)
 	}
 	if !strings.Contains(out, "duration-derived frequency is omitted") {
 		t.Fatalf("formatted report missing approximate timing note:\n%s", out)
+	}
+	if !strings.Contains(out, "Timing-only shaders: 1 (no hardware correlation)") {
+		t.Fatalf("formatted report conflates timing with hardware correlation:\n%s", out)
+	}
+	if !strings.Contains(out, "       —") {
+		t.Fatalf("formatted report renders unavailable metrics as numeric zero:\n%s", out)
+	}
+}
+
+func TestCreateTimingOnlyReportHasNoHardwareCorrelations(t *testing.T) {
+	report := createTimingOnlyReport([]*correlationTiming{{
+		Name:         "kernel",
+		TimingSource: timingSourceCaptureHeuristic,
+	}}, "trace.gputrace")
+	if report.CorrelatedShaders != 0 || report.CorrelationRate != 0 {
+		t.Fatalf("timing-only correlation = %d %.1f%%, want 0", report.CorrelatedShaders, report.CorrelationRate)
 	}
 }

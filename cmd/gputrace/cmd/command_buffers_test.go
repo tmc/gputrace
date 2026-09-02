@@ -69,6 +69,26 @@ func TestRunCommandBuffersJSONUsesCommandOutput(t *testing.T) {
 	}
 }
 
+func TestRunCommandBuffersTextUsesCommandOutput(t *testing.T) {
+	tracePath := testCommandBuffersTracePath(t)
+	var out bytes.Buffer
+	command := &cobra.Command{}
+	command.SetOut(&out)
+
+	stdout, err := captureStdout(t, func() error {
+		return runCommandBuffers(command, []string{tracePath}, &commandBuffersOptions{limit: 1})
+	})
+	if err != nil {
+		t.Fatalf("runCommandBuffers: %v", err)
+	}
+	if stdout != "" {
+		t.Fatalf("os stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(out.String(), "command buffers:") {
+		t.Fatalf("command output missing summary:\n%s", out.String())
+	}
+}
+
 func testCommandBuffersTracePath(t *testing.T) string {
 	t.Helper()
 

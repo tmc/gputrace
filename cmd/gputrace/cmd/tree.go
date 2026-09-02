@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -12,19 +13,30 @@ import (
 
 var treeCmd = newTreeCommand(&treeOptions{
 	groupBy: "encoder",
+	limit:   defaultHumanLimit,
 })
 
 type treeOptions struct {
 	groupBy string
+	records bool
 	verbose bool
 	json    bool
+	limit   int
+	all     bool
 }
 
 func newTreeCommand(opts *treeOptions) *cobra.Command {
+	if opts.limit == 0 {
+		opts.limit = defaultHumanLimit
+	}
 	cmd := &cobra.Command{
 		Use:   "tree <trace-path>",
 		Short: "Display execution tree grouped by pipeline state or encoder",
 		Long: `Display a hierarchical view of GPU execution.
+
+The default encoder view shows semantic execution topology: command buffers,
+compute encoders, and their kernel dispatches. Use --records to inspect the
+decoded record stream, including individual setLabel changes.
 
 Grouping modes:
   - encoder:  Group by Encoder (Command Buffer), then Commands (default)
@@ -36,8 +48,11 @@ Grouping modes:
 	}
 
 	cmd.Flags().StringVar(&opts.groupBy, "group-by", opts.groupBy, "Grouping mode: encoder, pipeline")
+	cmd.Flags().BoolVar(&opts.records, "records", opts.records, "Show decoded records instead of semantic encoder topology")
 	cmd.Flags().BoolVarP(&opts.verbose, "verbose", "v", opts.verbose, "Show detailed information")
 	cmd.Flags().BoolVar(&opts.json, "json", opts.json, "Output in JSON format")
+	cmd.Flags().IntVar(&opts.limit, "limit", opts.limit, "Maximum primary nodes in human output")
+	cmd.Flags().BoolVar(&opts.all, "all", opts.all, "Show all nodes in human output")
 	return cmd
 }
 
@@ -52,6 +67,27 @@ func runTree(cmd *cobra.Command, args []string, opts *treeOptions) error {
 		return fmt.Errorf("open trace: %w", err)
 	}
 	defer t.Close()
+	if err := t.RequireCaptureRecords(); err != nil {
+		return err
+	}
+	if opts.records && opts.groupBy != "encoder" {
+		return fmt.Errorf("--records requires --group-by encoder")
+	}
+
+	if opts.groupBy == "encoder" && !opts.records {
+		timeline, err := generateTimeline(t)
+		if err != nil {
+			return fmt.Errorf("build execution topology: %w", err)
+		}
+		if opts.json {
+			return writeTreeTopologyJSON(cmd.OutOrStdout(), timeline)
+		}
+		limit, err := resolveHumanLimit(opts.limit, opts.all)
+		if err != nil {
+			return err
+		}
+		return writeTreeTopology(cmd.OutOrStdout(), timeline, limit, opts.verbose)
+	}
 
 	// 1. Parse top-level MTSP records (preserving hierarchy)
 	records, err := t.ParseMTSPRecords()
@@ -94,16 +130,166 @@ func runTree(cmd *cobra.Command, args []string, opts *treeOptions) error {
 	if opts.json {
 		return renderTreeJSON(t, flattened, addrToName)
 	}
+	limit, err := resolveHumanLimit(opts.limit, opts.all)
+	if err != nil {
+		return err
+	}
+	opts.limit = limit
 
 	// 3. Render Tree based on grouping
 	switch opts.groupBy {
 	case "encoder":
-		return renderEncoderTree(t, flattened, addrToName, opts)
+		return renderEncoderTree(cmd.OutOrStdout(), t, flattened, addrToName, opts)
 	case "pipeline":
-		return renderPipelineTree(t, flattened, addrToName, opts)
+		return renderPipelineTree(cmd.OutOrStdout(), flattened, addrToName, opts)
 	default:
 		return fmt.Errorf("unknown group-by mode: %s", opts.groupBy)
 	}
+}
+
+func writeTreeTopology(w io.Writer, timeline *Timeline, limit int, verbose bool) error {
+	encoders := timeline.Encoders
+	if limit >= 0 && len(encoders) > limit {
+		encoders = encoders[:limit]
+	}
+	keep := make(map[int]bool, len(encoders))
+	for _, encoder := range encoders {
+		keep[encoder.Index] = true
+	}
+
+	var commandBuffers []TimelineEvent
+	for _, event := range timeline.Events {
+		if event.Category == "command_buffer" {
+			commandBuffers = append(commandBuffers, event)
+		}
+	}
+	if len(commandBuffers) == 0 {
+		commandBuffers = []TimelineEvent{{Name: "Command Buffer", Args: map[string]interface{}{"index": 0}}}
+	}
+	byCommandBuffer, unattributed := attributeEncodersToCBs(timeline, commandBuffers)
+
+	source := "capture records"
+	if timeline.Timing != nil && timeline.Timing.EncoderTimingSource != "" {
+		source = timeline.Timing.EncoderTimingSource
+		if timeline.Timing.EncoderTimingApproximate {
+			source += ", approximate timing"
+		}
+	}
+	fmt.Fprintf(w, "GPU execution tree (%s)\n", source)
+	fmt.Fprintf(w, "%d command buffers, %d encoders, %d dispatches\n\n",
+		len(commandBuffers), len(timeline.Encoders), len(timeline.Kernels))
+
+	for _, cb := range commandBuffers {
+		index, ok := timelineEventArgInt(cb.Args, "index")
+		if !ok {
+			continue
+		}
+		var shown []EncoderInfo
+		for _, encoder := range byCommandBuffer[index] {
+			if keep[encoder.Index] {
+				shown = append(shown, encoder)
+			}
+		}
+		if len(shown) == 0 {
+			continue
+		}
+		name := cb.Name
+		if name == "" {
+			name = fmt.Sprintf("Command Buffer %d", index)
+		}
+		if cb.Duration > 0 {
+			fmt.Fprintf(w, "%s [%s]\n", name, FormatDuration(int(cb.Duration)))
+		} else {
+			fmt.Fprintln(w, name)
+		}
+		writeTreeEncoders(w, timeline, shown, verbose)
+	}
+
+	var shownUnattributed []EncoderInfo
+	for _, encoder := range unattributed {
+		if keep[encoder.Index] {
+			shownUnattributed = append(shownUnattributed, encoder)
+		}
+	}
+	if len(shownUnattributed) > 0 {
+		fmt.Fprintln(w, "Unattributed encoders")
+		writeTreeEncoders(w, timeline, shownUnattributed, verbose)
+	}
+	if limit >= 0 && len(timeline.Encoders) > limit {
+		fmt.Fprintf(w, "\n... %d more encoders omitted (use --all)\n", len(timeline.Encoders)-limit)
+	}
+	return nil
+}
+
+func writeTreeEncoders(w io.Writer, timeline *Timeline, encoders []EncoderInfo, verbose bool) {
+	for i, encoder := range encoders {
+		branch, child := "├─", "│ "
+		if i == len(encoders)-1 {
+			branch, child = "└─", "  "
+		}
+		label := encoder.Label
+		if label == "" {
+			label = fmt.Sprintf("Encoder %d", encoder.Index)
+		}
+		var kernels []KernelInfo
+		for _, kernel := range timeline.Kernels {
+			if kernel.Encoder == encoder.Index {
+				kernels = append(kernels, kernel)
+			}
+		}
+		var dispatchDuration uint64
+		for _, kernel := range kernels {
+			dispatchDuration += kernel.Duration
+		}
+		if dispatchDuration > 0 {
+			fmt.Fprintf(w, "%s %s [%d dispatches, %s dispatch time]\n", branch, label, len(kernels), FormatDurationNs(dispatchDuration))
+		} else {
+			fmt.Fprintf(w, "%s %s [%d dispatches]\n", branch, label, len(kernels))
+		}
+		if verbose {
+			for j, kernel := range kernels {
+				leaf := "├─"
+				if j == len(kernels)-1 {
+					leaf = "└─"
+				}
+				fmt.Fprintf(w, "%s%s %s [%s]\n", child, leaf, kernel.Name, FormatDurationNs(kernel.Duration))
+			}
+			continue
+		}
+		type kernelSummary struct {
+			name     string
+			count    int
+			duration uint64
+		}
+		var summaries []kernelSummary
+		byName := make(map[string]int)
+		for _, kernel := range kernels {
+			pos, found := byName[kernel.Name]
+			if !found {
+				pos = len(summaries)
+				byName[kernel.Name] = pos
+				summaries = append(summaries, kernelSummary{name: kernel.Name})
+			}
+			summaries[pos].count++
+			summaries[pos].duration += kernel.Duration
+		}
+		for j, summary := range summaries {
+			leaf := "├─"
+			if j == len(summaries)-1 {
+				leaf = "└─"
+			}
+			fmt.Fprintf(w, "%s%s %s ×%d [%s]\n", child, leaf, summary.name, summary.count, FormatDurationNs(summary.duration))
+		}
+	}
+}
+
+func writeTreeTopologyJSON(w io.Writer, timeline *Timeline) error {
+	encoder := json.NewEncoder(w)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(timeline); err != nil {
+		return fmt.Errorf("encode execution topology: %w", err)
+	}
+	return nil
 }
 
 // scanForNames recursively scans records for CS/CSuwuw labels
@@ -211,8 +397,8 @@ func renderTreeJSON(t *trace.Trace, records []trace.MTSPRecord, addrToName map[u
 	return nil
 }
 
-func renderEncoderTree(t *trace.Trace, records []trace.MTSPRecord, addrToName map[uint64]string, opts *treeOptions) error {
-	fmt.Println(Colorize("GpuTrace Execution Tree (Hierarchical)", ColorBold))
+func renderEncoderTree(w io.Writer, t *trace.Trace, records []trace.MTSPRecord, addrToName map[uint64]string, opts *treeOptions) error {
+	fmt.Fprintln(w, Colorize("GPU trace record-order view (decoded subset)", ColorBold))
 
 	// Indentation state
 	indent := ""
@@ -221,6 +407,8 @@ func renderEncoderTree(t *trace.Trace, records []trace.MTSPRecord, addrToName ma
 	encoderToPipeline := make(map[uint64]uint64)
 	// Track Pipeline State: PipelineStateID -> FunctionID
 	pipelineToFunc := make(map[uint64]uint64)
+	shown := 0
+	omitted := 0
 
 	// Pre-scan for Ctt records to ensure mapping is available before processing Ct records
 	for _, rec := range records {
@@ -248,18 +436,17 @@ func renderEncoderTree(t *trace.Trace, records []trace.MTSPRecord, addrToName ma
 			// 0x...2d: Encoder Label
 
 			if flags&0xFF == 0x3d {
-				fmt.Printf("%s%s %s\n", indent, Colorize("📁", ColorBlue), Colorize(rec.Label, ColorBold))
+				fmt.Fprintf(w, "%s%s %s\n", indent, Colorize("📁", ColorBlue), Colorize(rec.Label, ColorBold))
 				indent += "  "
 			} else if flags&0xFF == 0x13 {
-				fmt.Printf("%s%s %s\n", indent, Colorize("⌘", ColorBlue), Colorize(rec.Label, ColorYellow))
-				indent += "  "
+				fmt.Fprintf(w, "%s%s %s\n", indent, Colorize("⌘", ColorBlue), Colorize(rec.Label, ColorYellow))
 			} else if flags&0xFF == 0x2d {
-				fmt.Printf("%s%s %s\n", indent, Colorize("ƒ", ColorBlue), Colorize(rec.Label, ColorPurple))
+				fmt.Fprintf(w, "%s%s %s\n", indent, Colorize("ƒ", ColorBlue), Colorize(rec.Label, ColorPurple))
 				indent += "  "
 			} else {
 				// Standard CS (Kernel Name often)
 				if rec.Label != "" {
-					fmt.Printf("%s%s  %s\n", indent, Colorize("🏷", ColorBlue), Colorize(rec.Label, ColorGreen))
+					fmt.Fprintf(w, "%s%s  %s\n", indent, Colorize("🏷", ColorBlue), Colorize(rec.Label, ColorGreen))
 				}
 			}
 
@@ -270,25 +457,25 @@ func renderEncoderTree(t *trace.Trace, records []trace.MTSPRecord, addrToName ma
 					if len(indent) >= 2 {
 						indent = indent[:len(indent)-2]
 					}
-					fmt.Printf("%s%s Pop Group\n", indent, Colorize("▲", ColorBlue))
+					fmt.Fprintf(w, "%s%s Pop Group\n", indent, Colorize("▲", ColorBlue))
 				} else if c.CommandFlags&0xFF == 0x3b {
 					if len(indent) >= 2 {
 						indent = indent[:len(indent)-2]
 					}
-					fmt.Printf("%s%s End Encoding\n", indent, Colorize("▲", ColorBlue))
+					fmt.Fprintf(w, "%s%s End Encoding\n", indent, Colorize("▲", ColorBlue))
 				} else if c.CommandFlags&0xFF == 0x17 {
 					if len(indent) >= 2 {
 						indent = indent[:len(indent)-2]
 					}
-					fmt.Printf("%s%s Commit\n", indent, Colorize("✓", ColorBlue))
+					fmt.Fprintf(w, "%s%s Commit\n", indent, Colorize("✓", ColorBlue))
 				} else if c.CommandFlags&0xFF == 0x1d {
-					fmt.Printf("%s%s Wait\n", indent, Colorize("⏸", ColorGray))
+					fmt.Fprintf(w, "%s%s Wait\n", indent, Colorize("⏸", ColorGray))
 				}
 			}
 
 		case trace.RecordTypeCtulul:
 			if ctulul, err := rec.ParseCtululRecord(); err == nil && opts.verbose {
-				fmt.Printf("%s%s Set Buffer (Pipeline: %s)\n", indent, Colorize("•", ColorGray), Colorize(fmt.Sprintf("0x%x", ctulul.PipelineAddr), ColorCyan))
+				fmt.Fprintf(w, "%s%s Set Buffer (Pipeline: %s)\n", indent, Colorize("•", ColorGray), Colorize(fmt.Sprintf("0x%x", ctulul.PipelineAddr), ColorCyan))
 			}
 
 		case trace.RecordTypeCtt:
@@ -305,13 +492,13 @@ func renderEncoderTree(t *trace.Trace, records []trace.MTSPRecord, addrToName ma
 				// Display Buffer Bindings in Encoder View
 				if len(ct.BufferBindings) > 0 && opts.verbose {
 					indentStr := indent
-					fmt.Printf("%s%s Set Bindings (Pipeline: %s)\n", indentStr, Colorize("•", ColorGray), Colorize(fmt.Sprintf("0x%x", ct.FunctionAddr), ColorCyan))
+					fmt.Fprintf(w, "%s%s Set Bindings (Pipeline: %s)\n", indentStr, Colorize("•", ColorGray), Colorize(fmt.Sprintf("0x%x", ct.FunctionAddr), ColorCyan))
 					for i, b := range ct.BufferBindings {
 						bName := addrToName[b]
 						if bName == "" {
-							fmt.Printf("%s  - Bind %d: %s\n", indentStr, i, Colorize(fmt.Sprintf("0x%x", b), ColorCyan))
+							fmt.Fprintf(w, "%s  - Bind %d: %s\n", indentStr, i, Colorize(fmt.Sprintf("0x%x", b), ColorCyan))
 						} else {
-							fmt.Printf("%s  - Bind %d: %s (%s)\n", indentStr, i, Colorize(bName, ColorGreen), Colorize(fmt.Sprintf("0x%x", b), ColorCyan))
+							fmt.Fprintf(w, "%s  - Bind %d: %s (%s)\n", indentStr, i, Colorize(bName, ColorGreen), Colorize(fmt.Sprintf("0x%x", b), ColorCyan))
 						}
 					}
 				}
@@ -319,6 +506,11 @@ func renderEncoderTree(t *trace.Trace, records []trace.MTSPRecord, addrToName ma
 
 		case trace.RecordTypeC_3ul:
 			if d, err := rec.ParseDispatchRecord(); err == nil {
+				if opts.limit >= 0 && shown >= opts.limit {
+					omitted++
+					continue
+				}
+				shown++
 				// Resolve Kernel Name via Chain: Encoder -> Pipeline -> Function -> Name
 				pipelineID := encoderToPipeline[d.EncoderID]
 				funcID := pipelineToFunc[pipelineID]
@@ -342,16 +534,16 @@ func renderEncoderTree(t *trace.Trace, records []trace.MTSPRecord, addrToName ma
 				}
 
 				if opts.verbose {
-					fmt.Printf("%s%s %s [dispatchThreads:%d,%d,%d threadsPerThreadgroup:%d,%d,%d] (Index: ?)\n",
+					fmt.Fprintf(w, "%s%s %s [dispatchThreads:%d,%d,%d threadsPerThreadgroup:%d,%d,%d] (Index: ?)\n",
 						indent,
 						Colorize("▦", ColorBlue),
 						Colorize(funcName, ColorGreen),
 						d.GridSize[0], d.GridSize[1], d.GridSize[2],
 						d.GroupSize[0], d.GroupSize[1], d.GroupSize[2])
-					fmt.Printf("%s  • Encoder: %s\n", indent, Colorize(fmt.Sprintf("0x%x", d.EncoderID), ColorCyan))
-					fmt.Printf("%s  • Function: %s\n", indent, Colorize(fmt.Sprintf("0x%x", funcID), ColorCyan))
+					fmt.Fprintf(w, "%s  • Encoder: %s\n", indent, Colorize(fmt.Sprintf("0x%x", d.EncoderID), ColorCyan))
+					fmt.Fprintf(w, "%s  • Function: %s\n", indent, Colorize(fmt.Sprintf("0x%x", funcID), ColorCyan))
 				} else {
-					fmt.Printf("%s%s %s [dispatchThreads:%d,%d,%d threadsPerThreadgroup:%d,%d,%d]\n",
+					fmt.Fprintf(w, "%s%s %s [dispatchThreads:%d,%d,%d threadsPerThreadgroup:%d,%d,%d]\n",
 						indent,
 						Colorize("▦", ColorBlue),
 						Colorize(funcName, ColorGreen),
@@ -364,32 +556,13 @@ func renderEncoderTree(t *trace.Trace, records []trace.MTSPRecord, addrToName ma
 			// Ignore others to reduce noise, or print if relevant
 		}
 	}
+	if omitted > 0 {
+		fmt.Fprintf(w, "... %d more dispatch records omitted (use --all)\n", omitted)
+	}
 	return nil
 }
 
-func renderPipelineTree(t *trace.Trace, records []trace.MTSPRecord, addrToName map[uint64]string, opts *treeOptions) error {
-	// Re-flatten for pipeline view, but respecting hierarchy for context if needed.
-	// Actually, pipeline view is temporal, so flattening is fine if we just want sequential dispatches.
-	// But we want to implement it robustly.
-
-	var flattened []trace.MTSPRecord
-	var flatten func([]trace.MTSPRecord)
-	flatten = func(recs []trace.MTSPRecord) {
-		for _, rec := range recs {
-			// Flatten CS containers
-			nested, err := t.ParseNestedRecords(rec)
-			if err == nil && len(nested) > 0 {
-				flatten(nested)
-			} else {
-				flattened = append(flattened, rec)
-			}
-		}
-	}
-	flatten(records)
-
-	// Reuse existing pipeline grouping logic on flattened records
-	// ... (We can adapt the existing logic here)
-
+func renderPipelineTree(w io.Writer, records []trace.MTSPRecord, addrToName map[uint64]string, opts *treeOptions) error {
 	type KernelNode struct {
 		FunctionAddr   uint64
 		CommandFlags   uint32
@@ -411,7 +584,7 @@ func renderPipelineTree(t *trace.Trace, records []trace.MTSPRecord, addrToName m
 	pipelineToFunc := make(map[uint64]uint64)
 
 	// Pre-scan for Ctt records to ensure mapping is available before processing Ct records
-	for _, rec := range flattened {
+	for _, rec := range records {
 		if rec.Type == trace.RecordTypeCtt {
 			if ctt, err := rec.ParseCttRecord(); err == nil {
 				pipelineToFunc[ctt.PipelineAddr] = ctt.FunctionAddr
@@ -419,7 +592,7 @@ func renderPipelineTree(t *trace.Trace, records []trace.MTSPRecord, addrToName m
 		}
 	}
 
-	for _, rec := range flattened {
+	for _, rec := range records {
 		if rec.Type == trace.RecordTypeCt {
 			ct, err := rec.ParseCtRecord()
 			if err != nil {
@@ -461,33 +634,54 @@ func renderPipelineTree(t *trace.Trace, records []trace.MTSPRecord, addrToName m
 			currentPipeline.Kernels = append(currentPipeline.Kernels, kNode)
 			currentKernel = kNode
 		}
-		// Dispatch counting logic (ul@3)
-		if bytesContains(rec.Data, []byte("ul@3")) && currentKernel != nil {
+		if rec.Type == trace.RecordTypeC_3ul && currentKernel != nil {
 			currentKernel.Dispatches++
 		}
 	}
 
-	fmt.Println(Colorize("GpuTrace Execution Tree (Grouped by Pipeline)", ColorBold))
+	fmt.Fprintln(w, Colorize("GPU trace pipeline-state records", ColorBold))
+	shown := 0
+	omitted := 0
+	inactive := 0
 	for _, p := range rootPipelines {
-		fmt.Printf("%s %s\n", Colorize("▼ Compute Pipeline", ColorBlue), Colorize(fmt.Sprintf("0x%x", p.Address), ColorCyan))
+		pipelineShown := false
 		for _, k := range p.Kernels {
+			if opts.limit >= 0 && k.Dispatches == 0 {
+				inactive++
+				continue
+			}
+			if opts.limit >= 0 && shown >= opts.limit {
+				omitted++
+				continue
+			}
+			if !pipelineShown {
+				fmt.Fprintf(w, "%s %s\n", Colorize("▼ Compute Pipeline", ColorBlue), Colorize(fmt.Sprintf("0x%x", p.Address), ColorCyan))
+				pipelineShown = true
+			}
+			shown++
 			name := addrToName[k.FunctionAddr]
 			if name == "" {
 				name = "Unknown"
 			}
-			fmt.Printf("  %s %s (%s)\n", Colorize("▼", ColorBlue), Colorize(name, ColorGreen), Colorize(fmt.Sprintf("0x%x", k.FunctionAddr), ColorCyan))
+			fmt.Fprintf(w, "  %s %s (%s)\n", Colorize("▼", ColorBlue), Colorize(name, ColorGreen), Colorize(fmt.Sprintf("0x%x", k.FunctionAddr), ColorCyan))
 			if opts.verbose {
 				for i, b := range k.BufferBindings {
 					bName := addrToName[b]
 					if bName == "" {
-						fmt.Printf("    - Buffer %d: %s\n", i, Colorize(fmt.Sprintf("0x%x", b), ColorCyan))
+						fmt.Fprintf(w, "    - Buffer %d: %s\n", i, Colorize(fmt.Sprintf("0x%x", b), ColorCyan))
 					} else {
-						fmt.Printf("    - Buffer %d: %s (%s)\n", i, Colorize(bName, ColorGreen), Colorize(fmt.Sprintf("0x%x", b), ColorCyan))
+						fmt.Fprintf(w, "    - Buffer %d: %s (%s)\n", i, Colorize(bName, ColorGreen), Colorize(fmt.Sprintf("0x%x", b), ColorCyan))
 					}
 				}
 			}
-			fmt.Printf("    %s Dispatches: %d\n", Colorize("▦", ColorBlue), k.Dispatches)
+			fmt.Fprintf(w, "    %s Dispatches: %d\n", Colorize("▦", ColorBlue), k.Dispatches)
 		}
+	}
+	if omitted > 0 {
+		fmt.Fprintf(w, "... %d more active pipeline records omitted (use --all)\n", omitted)
+	}
+	if inactive > 0 {
+		fmt.Fprintf(w, "... %d zero-dispatch pipeline records hidden (use --all)\n", inactive)
 	}
 	return nil
 }

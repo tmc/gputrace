@@ -89,7 +89,7 @@ func TestPprofCmd(t *testing.T) {
 	}
 }
 
-func TestPprofSourceLinesDisclosesSyntheticTimingFallback(t *testing.T) {
+func TestPprofSourceLinesDisclosesMissingTiming(t *testing.T) {
 	tmpDir := t.TempDir()
 	tracePath := "../../../testdata/traces/01-single-encoder/01-single-encoder-run1.gputrace"
 
@@ -111,9 +111,12 @@ func TestPprofSourceLinesDisclosesSyntheticTimingFallback(t *testing.T) {
 	if _, err := os.Stat(outputPath); os.IsNotExist(err) {
 		t.Fatal("expected source.pprof to exist")
 	}
+	// The profile is still written: its non-duration value types are compiler
+	// statistics that do not depend on timing. What used to be filled in by a
+	// synthetic fallback is now reported as absent.
 	for _, want := range []string{
-		"Timing source: synthetic fallback",
-		"no real profiler or encoder label timing found",
+		"Timing source: none",
+		"source lines are reported without durations",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout does not contain %q:\n%s", want, stdout)
@@ -247,10 +250,10 @@ func TestFormatSourceLineTimingNotice(t *testing.T) {
 			want:   "Timing source: encoder label timing data (1 encoder)\n",
 		},
 		{
-			name:   "synthetic",
-			source: sourceLineTimingSynthetic,
+			name:   "none",
+			source: "",
 			count:  0,
-			want:   "Timing source: synthetic fallback (0 encoders; no real profiler or encoder label timing found)\n",
+			want:   "Timing source: none (no profiler or encoder label timing found); source lines are reported without durations\n",
 		},
 	}
 
@@ -273,6 +276,7 @@ func resetPprofTestFlags() {
 	_ = flags.Set("stats", "false")
 	_ = flags.Set("search-path", "")
 	_ = flags.Set("source-lines", "false")
+	_ = flags.Set("dot", "")
 }
 
 func captureStdout(t *testing.T, run func() error) (string, error) {

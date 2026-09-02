@@ -143,9 +143,6 @@ func TestComprehensiveMetrics(t *testing.T) {
 		if m.ALUUtilization > 0 {
 			metricsFound["ALUUtilization"]++
 		}
-		if m.KernelOccupancy > 0 {
-			metricsFound["KernelOccupancy"]++
-		}
 
 		// Memory metrics
 		if m.BytesReadFromDeviceMemory > 0 {
@@ -192,7 +189,6 @@ func TestComprehensiveMetrics(t *testing.T) {
 	requiredMetrics := []string{
 		"ExecutionCount",
 		"ALUUtilization",
-		"KernelOccupancy",
 	}
 
 	for _, metric := range requiredMetrics {
@@ -337,10 +333,6 @@ func TestMetricValueRanges(t *testing.T) {
 		if m.ALUUtilization < 0 || m.ALUUtilization > 100 {
 			t.Errorf("Encoder %d: ALUUtilization %.2f%% out of range [0, 100]",
 				i, m.ALUUtilization)
-		}
-		if m.KernelOccupancy < 0 || m.KernelOccupancy > 100 {
-			t.Errorf("Encoder %d: KernelOccupancy %.2f%% out of range [0, 100]",
-				i, m.KernelOccupancy)
 		}
 		if m.BufferL1MissRate < 0 || m.BufferL1MissRate > 100 {
 			t.Errorf("Encoder %d: BufferL1MissRate %.2f%% out of range [0, 100]",

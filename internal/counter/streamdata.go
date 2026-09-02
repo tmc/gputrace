@@ -4,10 +4,17 @@
 package counter
 
 import (
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
 
 	"github.com/tmc/apple/x/plist"
 	"github.com/tmc/gputrace/internal/trace"
@@ -15,48 +22,94 @@ import (
 
 // PipelineStats contains shader compilation statistics from streamData.
 type PipelineStats struct {
-	PipelineID             int     `json:"pipeline_id"`
-	PipelineAddress        uint64  `json:"pipeline_address,omitempty"`           // Metal pipeline address (e.g., 0x1051ddd70)
-	FunctionName           string  `json:"function_name,omitempty"`              // Kernel function name
-	TemporaryRegisterCount int     `json:"temporary_register_count"`             // "# Allocated Registers" in Xcode
-	UniformRegisterCount   int     `json:"uniform_register_count"`               // Uniform registers
-	SpilledBytes           int     `json:"spilled_bytes"`                        // Register spill to memory
-	ThreadInvariantSpilled int     `json:"thread_invariant_spilled"`             // Thread-invariant spilled bytes
-	ThreadgroupMemory      int     `json:"threadgroup_memory"`                   // Threadgroup memory usage
-	InstructionCount       int     `json:"instruction_count"`                    // Total instructions
-	ALUInstructionCount    int     `json:"alu_instruction_count"`                // ALU instructions
-	FP32InstructionCount   int     `json:"fp32_instruction_count"`               // FP32 instructions
-	FP16InstructionCount   int     `json:"fp16_instruction_count"`               // FP16 instructions
-	INT32InstructionCount  int     `json:"int32_instruction_count"`              // INT32 instructions
-	INT16InstructionCount  int     `json:"int16_instruction_count"`              // INT16 instructions
-	BranchInstructionCount int     `json:"branch_instruction_count"`             // Branch instructions
-	DeviceLoadCount        int     `json:"device_load_instruction_count"`        // Device memory loads
-	DeviceStoreCount       int     `json:"device_store_instruction_count"`       // Device memory stores
-	DeviceAtomicCount      int     `json:"device_atomic_instruction_count"`      // Device atomics
-	TextureReadCount       int     `json:"texture_reads_instruction_count"`      // Texture reads
-	TextureWriteCount      int     `json:"texture_writes_instruction_count"`     // Texture writes
-	ThreadgroupLoadCount   int     `json:"threadgroup_load_instruction_count"`   // Threadgroup loads
-	ThreadgroupStoreCount  int     `json:"threadgroup_store_instruction_count"`  // Threadgroup stores
-	ThreadgroupAtomicCount int     `json:"threadgroup_atomic_instruction_count"` // Threadgroup atomics
-	WaitInstructionCount   int     `json:"wait_instruction_count"`               // Wait instructions
-	CompilationTimeMs      float64 `json:"compilation_time_ms"`                  // Shader compilation time
+	PipelineID                                int                         `json:"pipeline_id"`
+	PipelineAddress                           uint64                      `json:"pipeline_address,omitempty"`                    // Metal pipeline address (e.g., 0x1051ddd70)
+	FunctionName                              string                      `json:"function_name,omitempty"`                       // Kernel function name
+	TemporaryRegisterCount                    int                         `json:"temporary_register_count"`                      // "# Allocated Registers" in Xcode
+	UniformRegisterCount                      int                         `json:"uniform_register_count"`                        // Uniform registers
+	SpilledBytes                              int                         `json:"spilled_bytes"`                                 // Register spill to memory
+	ThreadInvariantSpilled                    int                         `json:"thread_invariant_spilled"`                      // Thread-invariant spilled bytes
+	ThreadgroupMemory                         int                         `json:"threadgroup_memory"`                            // Threadgroup memory usage
+	InstructionCount                          int                         `json:"instruction_count"`                             // Total instructions
+	ALUInstructionCount                       int                         `json:"alu_instruction_count"`                         // ALU instructions
+	FP32InstructionCount                      int                         `json:"fp32_instruction_count"`                        // FP32 instructions
+	FP16InstructionCount                      int                         `json:"fp16_instruction_count"`                        // FP16 instructions
+	INT32InstructionCount                     int                         `json:"int32_instruction_count"`                       // INT32 instructions
+	INT16InstructionCount                     int                         `json:"int16_instruction_count"`                       // INT16 instructions
+	BranchInstructionCount                    int                         `json:"branch_instruction_count"`                      // Branch instructions
+	DeviceLoadCount                           int                         `json:"device_load_instruction_count"`                 // Device memory loads
+	DeviceStoreCount                          int                         `json:"device_store_instruction_count"`                // Device memory stores
+	DeviceAtomicCount                         int                         `json:"device_atomic_instruction_count"`               // Device atomics
+	TextureReadCount                          int                         `json:"texture_reads_instruction_count"`               // Texture reads
+	TextureWriteCount                         int                         `json:"texture_writes_instruction_count"`              // Texture writes
+	ThreadgroupLoadCount                      int                         `json:"threadgroup_load_instruction_count"`            // Threadgroup loads
+	ThreadgroupStoreCount                     int                         `json:"threadgroup_store_instruction_count"`           // Threadgroup stores
+	ThreadgroupAtomicCount                    int                         `json:"threadgroup_atomic_instruction_count"`          // Threadgroup atomics
+	WaitInstructionCount                      int                         `json:"wait_instruction_count"`                        // Wait instructions
+	ConstantCalculationTemporaryRegisterCount int                         `json:"constant_calculation_temporary_register_count"` // Temporary registers used by constant calculation
+	ConstantCalculationPhasePresent           bool                        `json:"constant_calculation_phase_present"`            // Whether constant calculation was present
+	CompilationTimeMs                         float64                     `json:"compilation_time_ms"`                           // Shader compilation time
+	Remarks                                   *string                     `json:"remarks,omitempty"`                             // Exact compiler optimization remarks
+	CompilePerformance                        *PipelineCompilePerformance `json:"compile_performance,omitempty"`
+	RecordedStatistics                        []string                    `json:"recorded_statistics,omitempty"`
+	CompilerRemarks                           []PipelineCompilerRemark    `json:"compiler_remarks,omitempty"`
+}
+
+// DisplayName returns the shader name used in Xcode-style reports. It matches
+// DispatchInfo.DisplayName so a pipeline row and a dispatch row that name the
+// same unnamed pipeline read the same. A pipeline record carries no pipeline
+// index, so the index fallback does not apply here.
+func (p *PipelineStats) DisplayName() string {
+	if p == nil {
+		return "(pipeline_unknown)"
+	}
+	if p.FunctionName != "" {
+		return p.FunctionName
+	}
+	if p.PipelineID != 0 {
+		return fmt.Sprintf("(pipeline_%d)", p.PipelineID)
+	}
+	return "(pipeline_unknown)"
+}
+
+// HasRecordedStatistic reports whether the source dictionary contained name.
+func (p *PipelineStats) HasRecordedStatistic(name string) bool {
+	if p == nil {
+		return false
+	}
+	_, ok := slices.BinarySearch(p.RecordedStatistics, name)
+	return ok
+}
+
+// PipelineCompilePerformance contains recorded fields from the nested
+// Compile Performance dictionary. Pointers distinguish zero, false, and -1
+// sentinel values from absent fields.
+type PipelineCompilePerformance struct {
+	FunctionWasCached               *bool  `json:"function_was_cached,omitempty"`
+	CompilerBackendNanoseconds      *int64 `json:"compiler_backend_ns,omitempty"`
+	CompilerOptimizationNanoseconds *int64 `json:"compiler_optimization_ns,omitempty"`
+	CompilerTranslatorNanoseconds   *int64 `json:"compiler_translator_ns,omitempty"`
+	CompilerTotalNanoseconds        *int64 `json:"compiler_total_ns,omitempty"`
+	DriverTotalNanoseconds          *int64 `json:"driver_total_ns,omitempty"`
+	SynchronousServiceNanoseconds   *int64 `json:"synchronous_service_ns,omitempty"`
 }
 
 // DispatchInfo contains per-dispatch timing and metadata.
 type DispatchInfo struct {
-	Index            int     `json:"index"`                        // Dispatch index (0-based)
-	PipelineIndex    int     `json:"pipeline_index"`               // Index into Pipelines array
-	PipelineID       int     `json:"pipeline_id,omitempty"`        // Pipeline ID for execution cost lookup
-	FunctionName     string  `json:"function_name,omitempty"`      // Kernel function name
-	EncoderIndex     int     `json:"encoder_index"`                // Which encoder this dispatch belongs to
-	CumulativeUs     int     `json:"cumulative_us"`                // Cumulative time in microseconds
-	DurationUs       int     `json:"duration_us"`                  // Duration of this dispatch in microseconds
-	ExecutionCostPct float64 `json:"execution_cost_pct,omitempty"` // Execution cost from statistical profiling (0-100%)
+	Index                   int     `json:"index"`                                // Dispatch index (0-based)
+	PipelineIndex           int     `json:"pipeline_index"`                       // Index into Pipelines array
+	PipelineID              int     `json:"pipeline_id,omitempty"`                // Pipeline ID for execution cost lookup
+	FunctionName            string  `json:"function_name,omitempty"`              // Kernel function name
+	EncoderIndex            int     `json:"encoder_index"`                        // Which encoder this dispatch belongs to
+	CumulativeUs            int     `json:"cumulative_us"`                        // Cumulative time in microseconds
+	DurationUs              int     `json:"duration_us"`                          // Duration of this dispatch in microseconds
+	ExecutionCostPct        float64 `json:"execution_cost_pct,omitempty"`         // Cost from a validated source (0-100%)
+	ProfilingSampleSharePct float64 `json:"profiling_sample_share_pct,omitempty"` // Pipeline share of Profiling_f samples; an estimate, not Xcode Execution Cost
 	// GPRWCNTR sample correlation (populated by CorrelateDispatchSamples)
-	SampleCount     int     `json:"sample_count,omitempty"`     // Number of GPRWCNTR samples during this dispatch
-	SamplingDensity float64 `json:"sampling_density,omitempty"` // Samples per microsecond (GPU utilization proxy)
-	StartTicks      uint64  `json:"start_ticks,omitempty"`      // Absolute start timestamp in ticks
-	EndTicks        uint64  `json:"end_ticks,omitempty"`        // Absolute end timestamp in ticks
+	SampleCount     int     `json:"sample_count,omitempty"`     // GPRWCNTR samples in the estimated dispatch window
+	SamplingDensity float64 `json:"sampling_density,omitempty"` // Estimated samples per dispatch microsecond
+	StartTicks      uint64  `json:"start_ticks,omitempty"`      // Estimated dispatch-window start, in mach absolute ticks
+	EndTicks        uint64  `json:"end_ticks,omitempty"`        // Estimated dispatch-window end, in mach absolute ticks
 }
 
 // DisplayName returns the shader name used in Xcode-style reports.
@@ -117,7 +170,7 @@ type TimelineInfo struct {
 	TimebaseDenom           uint64                   `json:"timebase_denom"`             // Tick-to-ns denominator (e.g., 3)
 	AbsoluteTime            uint64                   `json:"absolute_time"`              // Capture start time in ticks
 	ContinuousTime          uint64                   `json:"continuous_time,omitempty"`
-	PState                  int                      `json:"pstate,omitempty"`
+	PState                  *int                     `json:"pstate,omitempty"`
 	ReplayerGPUTimeNs       uint64                   `json:"replayer_gpu_time_ns,omitempty"`
 	CommandBufferActiveNs   uint64                   `json:"command_buffer_active_time_ns,omitempty"`
 	CommandBufferWallNs     uint64                   `json:"command_buffer_wall_time_ns,omitempty"`
@@ -125,41 +178,45 @@ type TimelineInfo struct {
 	RestoreWallNs           uint64                   `json:"restore_wall_time_ns,omitempty"`
 }
 
-// EncoderProfile contains GPRWCNTR profiler data for a single encoder.
-// Extracted from APSTimelineData blobs 1-11 (Encoder ShaderProfilerData).
+// EncoderProfile contains GPRWCNTR profiler data for one ShaderProfilerData
+// blob of APSTimelineData.
+//
+// Despite the name, these samples are not per-encoder: every record in the
+// reference archives carries GRC_ENCODER_ID 0xFFFFFFFF, meaning the GPU counter
+// stream sampled the whole machine rather than the capture's own encoders. See
+// MachineWideSamples, and CounterArchive for the samples that do attribute.
 type EncoderProfile struct {
-	Index           int                 `json:"index"`                 // Encoder index (0-based)
-	Source          string              `json:"source,omitempty"`      // Source type (RDE_0, BMPR_RDE_0, Firmware)
-	RingBufferIndex int                 `json:"ring_buffer_index"`     // Ring buffer index
-	SampleCount     int                 `json:"sample_count"`          // Number of profiler samples
-	Timestamps      []GPRWCNTRTimestamp `json:"timestamps,omitempty"`  // Individual timestamp records
-	StartTicks      uint64              `json:"start_ticks,omitempty"` // First sample timestamp
-	EndTicks        uint64              `json:"end_ticks,omitempty"`   // Last sample timestamp
-	DurationNs      uint64              `json:"duration_ns,omitempty"` // Total duration in nanoseconds
+	Index              int              `json:"index"`                   // Blob index (0-based)
+	Source             string           `json:"source,omitempty"`        // Source type (RDE_0, BMPR_RDE_0, Firmware)
+	RingBufferIndex    int              `json:"ring_buffer_index"`       // Ring buffer index
+	SampleCount        int              `json:"sample_count"`            // Number of profiler samples
+	MachineWideSamples int              `json:"machine_wide_samples"`    // Samples belonging to no encoder in this capture
+	RecordStride       int              `json:"record_stride,omitempty"` // Bytes per record, derived from the blob
+	Samples            []GPRWCNTRSample `json:"samples,omitempty"`       // Individual records
+	StartTicks         uint64           `json:"start_ticks,omitempty"`   // First sample timestamp
+	EndTicks           uint64           `json:"end_ticks,omitempty"`     // Last sample timestamp
+	DurationNs         uint64           `json:"duration_ns,omitempty"`   // Total duration in nanoseconds
 }
 
-// GPRWCNTRTimestamp represents a single timestamp record from GPRWCNTR data.
-// Format: 168 bytes per record with GPU timestamp, size, count, and flags.
-type GPRWCNTRTimestamp struct {
-	Timestamp uint64 `json:"timestamp"`       // GPU timestamp (500B-700B range typical)
-	Size      uint64 `json:"size"`            // Size field (~10K typical)
-	Count     uint64 `json:"count"`           // Count field (e.g., 6)
-	Flags     uint32 `json:"flags,omitempty"` // Flags (often 0xFFFFFFFF)
-}
-
-const (
-	GPRWCNTRMagic      = "GPRWCNTR" // 8-byte magic for encoder profiler data
-	GPRWCNTRRecordSize = 168        // Bytes per GPRWCNTR record
-)
+// GPRWCNTRMagic is the 8-byte magic that starts every GPRWCNTR record. It is
+// per-record, not a one-time blob header; see gprwcntr.go for the layout.
+const GPRWCNTRMagic = "GPRWCNTR"
 
 // StreamDataStats contains all parsed statistics from streamData.
 type StreamDataStats struct {
+	GPUGeneration         *uint32             `json:"gpu_generation,omitempty"`
+	MetalDeviceName       string              `json:"metal_device_name,omitempty"`
+	MetalPluginName       string              `json:"metal_plugin_name,omitempty"`
+	Metadata              StreamDataMetadata  `json:"metadata"`
 	Pipelines             []PipelineStats     `json:"pipelines"`
 	Dispatches            []DispatchInfo      `json:"dispatches"`     // Per-dispatch timing and metadata
-	FunctionNames         []string            `json:"function_names"` // Unique function names from strings array
+	FunctionNames         []string            `json:"function_names"` // Ordered strings array; name retained for JSON compatibility
 	EncoderTimings        []EncoderTimingInfo `json:"encoder_timings"`
-	Timeline              *TimelineInfo       `json:"timeline,omitempty"` // CB timestamps from APSTimelineData
-	APSTimelineData       [][]byte            `json:"-"`                  // Raw APSTimelineData blobs (nested plists)
+	Timeline              *TimelineInfo       `json:"timeline,omitempty"`        // CB timestamps from APSTimelineData
+	CounterArchive        *CounterArchive     `json:"counter_archive,omitempty"` // Per-encoder counter attribution from APSCounterData
+	APSTimelineData       [][]byte            `json:"-"`                         // Raw APSTimelineData blobs (nested plists)
+	APSCounterData        [][]byte            `json:"-"`                         // Raw APSCounterData blobs (nested archives)
+	APSData               [][]byte            `json:"-"`                         // Raw APSData blobs (nested archives)
 	NumEncoders           int                 `json:"num_encoders"`
 	NumGPUCommands        int                 `json:"num_gpu_commands"`
 	NumPipelines          int                 `json:"num_pipelines"`
@@ -171,6 +228,153 @@ type StreamDataStats struct {
 	CommandBufferActiveNs uint64              `json:"command_buffer_active_time_ns,omitempty"`
 	CommandBufferWallNs   uint64              `json:"command_buffer_wall_time_ns,omitempty"`
 	TimingSource          string              `json:"timing_source"`
+}
+
+// StreamDataMetadata retains scalar provenance from the streamData archive
+// root. Enum and capture-range meanings are private and remain uninterpreted.
+// Pointer fields distinguish a recorded zero or false from an absent key.
+type StreamDataMetadata struct {
+	Version                      *int64                    `json:"version,omitempty"`
+	UnixTimestamp                *int64                    `json:"unix_timestamp,omitempty"`
+	TraceName                    string                    `json:"trace_name,omitempty"`
+	ProfiledExecutionMode        *int64                    `json:"profiled_execution_mode,omitempty"`
+	ProfiledPerformanceState     *int64                    `json:"profiled_performance_state,omitempty"`
+	ProfiledProfilerMode         *int64                    `json:"profiled_profiler_mode,omitempty"`
+	CaptureRangeLocation         *int64                    `json:"capture_range_location,omitempty"`
+	CaptureRangeLength           *int64                    `json:"capture_range_length,omitempty"`
+	DataSourceHasUnusedResources *bool                     `json:"data_source_has_unused_resources,omitempty"`
+	SupportsSeparateAPSData      *bool                     `json:"supports_separate_aps_data,omitempty"`
+	NumBlitCalls                 *int64                    `json:"num_blit_calls,omitempty"`
+	Tables                       StreamDataTables          `json:"tables"`
+	Families                     StreamDataFamilies        `json:"families"`
+	DecodedFamilies              StreamDataDecodedFamilies `json:"decoded_families"`
+	CounterDecode                *StreamDataCounterDecode  `json:"counter_decode,omitempty"`
+	APSDataInventory             *APSDataInventory         `json:"aps_data_inventory,omitempty"`
+	ArchiveBlobs                 []StreamDataBlobInventory `json:"archive_blobs,omitempty"`
+}
+
+// StreamDataFamilies reports top-level archive array entry counts. Counts are
+// inventory only; one array entry is not necessarily one decoded sample.
+type StreamDataFamilies struct {
+	APSData                     *int64 `json:"aps_data,omitempty"`
+	APSTimelineData             *int64 `json:"aps_timeline_data,omitempty"`
+	APSCounterData              *int64 `json:"aps_counter_data,omitempty"`
+	ShaderProfilerData          *int64 `json:"shader_profiler_data,omitempty"`
+	GPUTimelineData             *int64 `json:"gpu_timeline_data,omitempty"`
+	BatchIDFilteredCountersData *int64 `json:"batch_id_filtered_counters_data,omitempty"`
+}
+
+// StreamDataDecodedFamilies reports NSData payload blob counts recovered from
+// top-level archive arrays. A blob may contain many records or samples.
+type StreamDataDecodedFamilies struct {
+	APSData                     *int64 `json:"aps_data,omitempty"`
+	APSTimelineData             *int64 `json:"aps_timeline_data,omitempty"`
+	APSCounterData              *int64 `json:"aps_counter_data,omitempty"`
+	ShaderProfilerData          *int64 `json:"shader_profiler_data,omitempty"`
+	GPUTimelineData             *int64 `json:"gpu_timeline_data,omitempty"`
+	BatchIDFilteredCountersData *int64 `json:"batch_id_filtered_counters_data,omitempty"`
+}
+
+// StreamDataCounterDecode summarizes the exact output and integrity of the
+// APSCounterData decoder. Counts describe decoded records and archive tables;
+// they do not establish a timeline clock.
+type StreamDataCounterDecode struct {
+	GPRWCNTRBlobs       int `json:"gprwcntr_blobs"`
+	DecodedSamples      int `json:"decoded_samples"`
+	AttributedSamples   int `json:"attributed_samples"`
+	MachineWideSamples  int `json:"machine_wide_samples"`
+	UnattributedSamples int `json:"unattributed_samples"`
+	KnownEncoderIDs     int `json:"known_encoder_ids"`
+	EncoderAggregates   int `json:"encoder_aggregates"`
+	PassColumnGroups    int `json:"pass_column_groups"`
+	TraceIDRows         int `json:"trace_id_rows"`
+	StrideMismatchBlobs int `json:"stride_mismatch_blobs"`
+}
+
+// APSDataInventory reports the dictionary shapes recovered from APSData.
+// Key-presence counts are independent and do not interpret private payloads.
+type APSDataInventory struct {
+	Blobs                  int                    `json:"blobs"`
+	Dictionaries           int                    `json:"dictionaries"`
+	MalformedBlobs         int                    `json:"malformed_blobs"`
+	WithCounterInfo        int                    `json:"with_counter_info"`
+	WithShaderProfilerData int                    `json:"with_shader_profiler_data"`
+	WithFrameMarker        int                    `json:"with_frame_marker"`
+	WithAPSTraceDataFile   int                    `json:"with_aps_trace_data_file"`
+	WithTraceIDTables      int                    `json:"with_trace_id_tables"`
+	BlobRecords            []APSDataBlobInventory `json:"blob_records,omitempty"`
+}
+
+// StreamDataBlobInventory identifies one nested keyed-archive blob and its
+// root dictionary shape. Keys and value kinds are structural evidence only.
+type StreamDataBlobInventory struct {
+	Family         string                    `json:"family"`
+	Ordinal        int                       `json:"ordinal"`
+	Bytes          int                       `json:"bytes"`
+	SHA256         string                    `json:"sha256"`
+	Dictionary     bool                      `json:"dictionary"`
+	Keys           []StreamDataKeyInventory  `json:"keys,omitempty"`
+	Nodes          []StreamDataNodeInventory `json:"nodes,omitempty"`
+	NodesTruncated bool                      `json:"nodes_truncated,omitempty"`
+	DecodeError    string                    `json:"decode_error,omitempty"`
+}
+
+// StreamDataKeyInventory is one root dictionary key in stable lexical order.
+type StreamDataKeyInventory struct {
+	Ordinal         int    `json:"ordinal"`
+	Name            string `json:"name"`
+	ValueKind       string `json:"value_kind"`
+	ScalarType      string `json:"scalar_type,omitempty"`
+	ScalarJSON      string `json:"scalar_json,omitempty"`
+	DataBytes       *int   `json:"data_bytes,omitempty"`
+	DataSHA256      string `json:"data_sha256,omitempty"`
+	ContainerCount  *int   `json:"container_count,omitempty"`
+	DescriptorError string `json:"descriptor_error,omitempty"`
+}
+
+// StreamDataNodeInventory is one nested dictionary or array child. Path is an
+// RFC 6901 JSON pointer rooted at the archive dictionary.
+type StreamDataNodeInventory struct {
+	Path            string  `json:"path"`
+	ParentPath      string  `json:"parent_path"`
+	Depth           int     `json:"depth"`
+	Relation        string  `json:"relation"`
+	Ordinal         int     `json:"ordinal"`
+	Name            string  `json:"name,omitempty"`
+	ObjectIndex     *uint64 `json:"object_index,omitempty"`
+	ExpansionStatus string  `json:"expansion_status"`
+	ValueKind       string  `json:"value_kind"`
+	ScalarType      string  `json:"scalar_type,omitempty"`
+	ScalarJSON      string  `json:"scalar_json,omitempty"`
+	DataBytes       *int    `json:"data_bytes,omitempty"`
+	DataSHA256      string  `json:"data_sha256,omitempty"`
+	ContainerCount  *int    `json:"container_count,omitempty"`
+	DescriptorError string  `json:"descriptor_error,omitempty"`
+}
+
+type APSDataBlobInventory = StreamDataBlobInventory
+type APSDataKeyInventory = StreamDataKeyInventory
+
+// StreamDataTables reports the byte-level integrity of fixed-record archive
+// tables. A nil table means the data key is absent. A nil record size means the
+// table exists but its schema size is absent or invalid.
+type StreamDataTables struct {
+	CommandBuffers *StreamDataTable `json:"command_buffers,omitempty"`
+	Encoders       *StreamDataTable `json:"encoders,omitempty"`
+	GPUCommands    *StreamDataTable `json:"gpu_commands,omitempty"`
+	Pipelines      *StreamDataTable `json:"pipelines,omitempty"`
+	Functions      *StreamDataTable `json:"functions,omitempty"`
+}
+
+// StreamDataTable describes one fixed-record byte table.
+type StreamDataTable struct {
+	Bytes          int64  `json:"bytes"`
+	RecordSize     *int64 `json:"record_size,omitempty"`
+	RecordCount    *int64 `json:"record_count,omitempty"`
+	RemainderBytes *int64 `json:"remainder_bytes,omitempty"`
+	SHA256         string `json:"sha256"`
+	RawBytesHex    string `json:"raw_bytes_hex"`
+	DecodeError    string `json:"decode_error,omitempty"`
 }
 
 // ParseStreamData parses the streamData plist from a .gpuprofiler_raw directory.
@@ -201,6 +405,15 @@ func ParseStreamData(gpuprofilerDir string, addressToName map[uint64]string) (*S
 	// Find pipelinePerformanceStatistics in object 1
 	if len(objects) > 1 {
 		if obj1, ok := objects[1].(map[string]any); ok {
+			if _, ok := obj1["gpuGeneration"]; ok {
+				generation := uint32(plistUint64(obj1["gpuGeneration"]))
+				stats.GPUGeneration = &generation
+			}
+			stats.MetalDeviceName = archivedString(objects, obj1["metalDeviceName"])
+			stats.MetalPluginName = archivedString(objects, obj1["metalPluginName"])
+			stats.Metadata = parseStreamDataMetadata(objects, obj1)
+			stats.Metadata.DecodedFamilies = decodedStreamDataFamilies(objects, obj1)
+
 			// Extract function names from strings array
 			stats.FunctionNames = extractFunctionNames(objects, obj1)
 
@@ -208,6 +421,7 @@ func ParseStreamData(gpuprofilerDir string, addressToName map[uint64]string) (*S
 			pipelineInfos := extractPipelineInfo(objects, obj1)
 
 			if ppsUID, ok := obj1["pipelinePerformanceStatistics"].(plist.UID); ok {
+				applyCompilerNames(pipelineInfos, compilerFunctionNames(objects, int(ppsUID)))
 				stats.Pipelines = extractPipelineStats(objects, int(ppsUID))
 				stats.NumPipelines = len(stats.Pipelines)
 				attachPipelineMetadata(stats.Pipelines, pipelineInfos, addressToName)
@@ -246,17 +460,560 @@ func ParseStreamData(gpuprofilerDir string, addressToName map[uint64]string) (*S
 				}
 			}
 
+			stats.APSData = extractDataArray(objects, obj1, "APSData")
+			if len(stats.APSData) > 0 {
+				stats.Metadata.APSDataInventory = parseAPSDataInventory(stats.APSData)
+				stats.Metadata.ArchiveBlobs = append(stats.Metadata.ArchiveBlobs,
+					stats.Metadata.APSDataInventory.BlobRecords...)
+			}
+
 			// Extract APSTimelineData blobs (nested plists with CB timestamps)
 			stats.APSTimelineData = extractDataArray(objects, obj1, "APSTimelineData")
 			if len(stats.APSTimelineData) > 0 {
+				stats.Metadata.ArchiveBlobs = append(stats.Metadata.ArchiveBlobs,
+					parseStreamDataBlobInventory("aps_timeline_data", stats.APSTimelineData)...)
 				stats.Timeline = parseAPSTimelineData(stats.APSTimelineData)
 				stats.applyTimelineTiming()
+			}
+
+			// Counter samples that name an encoder live in APSCounterData, not
+			// in the ShaderProfilerData blobs above.
+			if counterBlobs := extractDataArray(objects, obj1, "APSCounterData"); len(counterBlobs) > 0 {
+				stats.APSCounterData = counterBlobs
+				stats.Metadata.ArchiveBlobs = append(stats.Metadata.ArchiveBlobs,
+					parseStreamDataBlobInventory("aps_counter_data", counterBlobs)...)
+				numer, denom := uint64(1), uint64(1)
+				if stats.Timeline != nil {
+					numer, denom = stats.Timeline.TimebaseNumer, stats.Timeline.TimebaseDenom
+				}
+				stats.CounterArchive = ParseCounterArchive(counterBlobs, numer, denom, ParseTraceIDTable(counterBlobs))
+				stats.Metadata.CounterDecode = summarizeCounterArchive(stats.CounterArchive)
 			}
 		}
 	}
 
 	stats.setTimingSource()
 	return stats, nil
+}
+
+func parseAPSDataInventory(blobs [][]byte) *APSDataInventory {
+	if len(blobs) == 0 {
+		return nil
+	}
+	inventory := &APSDataInventory{
+		Blobs: len(blobs), BlobRecords: parseStreamDataBlobInventory("aps_data", blobs),
+	}
+	for _, blob := range blobs {
+		root, objects, ok := archiveRoot(blob)
+		if !ok {
+			inventory.MalformedBlobs++
+			continue
+		}
+		dict := keyedDict(root, objects)
+		if dict == nil {
+			inventory.MalformedBlobs++
+			continue
+		}
+		inventory.Dictionaries++
+		classifyAPSDataDictionary(inventory, dict)
+	}
+	return inventory
+}
+
+func parseStreamDataBlobInventory(family string, blobs [][]byte) []StreamDataBlobInventory {
+	records := make([]StreamDataBlobInventory, 0, len(blobs))
+	nodeBudget := maximumArchiveNodes
+	for ordinal, blob := range blobs {
+		sum := sha256.Sum256(blob)
+		record := StreamDataBlobInventory{
+			Family: family, Ordinal: ordinal, Bytes: len(blob),
+			SHA256: "sha256:" + hex.EncodeToString(sum[:]),
+		}
+		root, objects, rootIndex, ok := archiveRootIndexed(blob)
+		if !ok {
+			record.DecodeError = "invalid keyed archive"
+			records = append(records, record)
+			continue
+		}
+		dict := keyedDict(root, objects)
+		if dict == nil {
+			record.DecodeError = "root is not a dictionary"
+			records = append(records, record)
+			continue
+		}
+		record.Dictionary = true
+		names := make([]string, 0, len(dict))
+		for name := range dict {
+			names = append(names, name)
+		}
+		slices.Sort(names)
+		for keyOrdinal, name := range names {
+			key := StreamDataKeyInventory{Ordinal: keyOrdinal, Name: name}
+			describeArchivedValue(&key, dict[name], objects)
+			record.Keys = append(record.Keys, key)
+		}
+		record.Nodes, record.NodesTruncated = archiveNodes(root, objects, &rootIndex, nodeBudget)
+		nodeBudget -= len(record.Nodes)
+		records = append(records, record)
+	}
+	return records
+}
+
+const (
+	maximumArchiveNodeDepth = 16
+	maximumArchiveNodes     = 1_000_000
+)
+
+func archiveNodes(root any, objects []any, rootIndex *uint64, maximum int) ([]StreamDataNodeInventory, bool) {
+	var nodes []StreamDataNodeInventory
+	seen := make(map[uint64]bool)
+	if rootIndex != nil {
+		seen[*rootIndex] = true
+	}
+	truncated := false
+	var walk func(any, string, string, int, string, int, string)
+	walk = func(raw any, path, parent string, depth int, relation string, ordinal int, name string) {
+		if len(nodes) >= maximum {
+			truncated = true
+			return
+		}
+		var key StreamDataKeyInventory
+		describeArchivedValue(&key, raw, objects)
+		node := StreamDataNodeInventory{
+			Path: path, ParentPath: parent, Depth: depth,
+			Relation: relation, Ordinal: ordinal, Name: name,
+			ExpansionStatus: "leaf", ValueKind: key.ValueKind,
+			ScalarType: key.ScalarType, ScalarJSON: key.ScalarJSON,
+			DataBytes: key.DataBytes, DataSHA256: key.DataSHA256,
+			ContainerCount: key.ContainerCount, DescriptorError: key.DescriptorError,
+		}
+		var objectIndex uint64
+		if uid, ok := raw.(plist.UID); ok {
+			objectIndex = uint64(uid)
+			node.ObjectIndex = &objectIndex
+		}
+		dict := keyedDict(raw, objects)
+		array := []any(nil)
+		if dict == nil {
+			array = nsArray(raw, objects)
+		}
+		container := dict != nil || array != nil
+		if container && depth >= maximumArchiveNodeDepth {
+			node.ExpansionStatus = "depth_limit"
+			truncated = true
+			nodes = append(nodes, node)
+			return
+		}
+		if container && node.ObjectIndex != nil {
+			if seen[*node.ObjectIndex] {
+				node.ExpansionStatus = "reference"
+				nodes = append(nodes, node)
+				return
+			}
+			seen[*node.ObjectIndex] = true
+		}
+		if container {
+			node.ExpansionStatus = "expanded"
+		}
+		nodes = append(nodes, node)
+		if dict != nil {
+			names := make([]string, 0, len(dict))
+			for name := range dict {
+				names = append(names, name)
+			}
+			slices.Sort(names)
+			for childOrdinal, childName := range names {
+				walk(dict[childName], path+"/"+escapeJSONPointer(childName), path,
+					depth+1, "dictionary", childOrdinal, childName)
+				if truncated && len(nodes) >= maximum {
+					return
+				}
+			}
+			return
+		}
+		for childOrdinal, child := range array {
+			walk(child, path+"/"+strconv.Itoa(childOrdinal), path,
+				depth+1, "array", childOrdinal, "")
+			if truncated && len(nodes) >= maximum {
+				return
+			}
+		}
+	}
+	rootDict := keyedDict(root, objects)
+	if rootDict == nil {
+		return nil, false
+	}
+	names := make([]string, 0, len(rootDict))
+	for name := range rootDict {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for ordinal, name := range names {
+		walk(rootDict[name], "/"+escapeJSONPointer(name), "", 1, "dictionary", ordinal, name)
+		if truncated && len(nodes) >= maximum {
+			break
+		}
+	}
+	return nodes, truncated
+}
+
+func escapeJSONPointer(value string) string {
+	value = strings.ReplaceAll(value, "~", "~0")
+	return strings.ReplaceAll(value, "/", "~1")
+}
+
+func describeArchivedValue(key *StreamDataKeyInventory, value any, objects []any) {
+	value = deref(objects, value)
+	key.ValueKind = archivedValueKind(value, nil)
+	if scalarType, scalarValue, ok := archivedScalar(value); ok {
+		key.ScalarType = scalarType
+		if data, err := json.Marshal(scalarValue); err == nil {
+			key.ScalarJSON = string(data)
+		}
+		return
+	}
+	if data := archivedDescriptorData(value, objects); data != nil {
+		bytes := len(data)
+		sum := sha256.Sum256(data)
+		key.DataBytes = &bytes
+		key.DataSHA256 = "sha256:" + hex.EncodeToString(sum[:])
+		return
+	}
+	if count, ok := archivedContainerCount(value); ok {
+		key.ContainerCount = &count
+		return
+	}
+	switch key.ValueKind {
+	case "data":
+		key.DescriptorError = "data payload bytes are not directly recoverable"
+	case "array", "dictionary":
+		key.DescriptorError = "container cardinality is not directly recoverable"
+	case "object", "other":
+		key.DescriptorError = "opaque archived object"
+	}
+}
+
+func archivedScalar(value any) (string, any, bool) {
+	switch value := value.(type) {
+	case string:
+		if value == "$null" {
+			return "null", nil, true
+		}
+		return "string", value, true
+	case bool:
+		return "bool", value, true
+	case int:
+		return "int", value, true
+	case int8:
+		return "int8", value, true
+	case int16:
+		return "int16", value, true
+	case int32:
+		return "int32", value, true
+	case int64:
+		return "int64", value, true
+	case uint:
+		return "uint", value, true
+	case uint8:
+		return "uint8", value, true
+	case uint16:
+		return "uint16", value, true
+	case uint32:
+		return "uint32", value, true
+	case uint64:
+		return "uint64", value, true
+	case float32:
+		return "float32", value, true
+	case float64:
+		return "float64", value, true
+	case nil:
+		return "null", nil, true
+	default:
+		return "", nil, false
+	}
+}
+
+func archivedDescriptorData(value any, objects []any) []byte {
+	switch value := value.(type) {
+	case []byte:
+		return value
+	case map[string]any:
+		data, _ := deref(objects, value["NS.data"]).([]byte)
+		return data
+	default:
+		return nil
+	}
+}
+
+func archivedContainerCount(value any) (int, bool) {
+	switch value := value.(type) {
+	case []any:
+		return len(value), true
+	case map[string]any:
+		if keys, ok := value["NS.keys"].([]any); ok {
+			return len(keys), true
+		}
+		if objects, ok := value["NS.objects"].([]any); ok {
+			return len(objects), true
+		}
+	}
+	return 0, false
+}
+
+func archivedValueKind(value any, objects []any) string {
+	switch value := deref(objects, value).(type) {
+	case []byte:
+		return "data"
+	case []any:
+		return "array"
+	case string:
+		if value == "$null" {
+			return "null"
+		}
+		return "string"
+	case bool:
+		return "bool"
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
+		return "number"
+	case map[string]any:
+		if _, ok := value["NS.data"]; ok {
+			return "data"
+		}
+		if _, ok := value["NS.keys"]; ok {
+			return "dictionary"
+		}
+		if _, ok := value["NS.objects"]; ok {
+			return "array"
+		}
+		return "object"
+	case nil:
+		return "null"
+	default:
+		return "other"
+	}
+}
+
+func classifyAPSDataDictionary(inventory *APSDataInventory, dict map[string]any) {
+	if _, ok := dict["Counter Info"]; ok {
+		inventory.WithCounterInfo++
+	}
+	if _, ok := dict["ShaderProfilerData"]; ok {
+		inventory.WithShaderProfilerData++
+	}
+	if _, ok := dict["Post Processing Frame Marker"]; ok {
+		inventory.WithFrameMarker++
+	}
+	if _, ok := dict["APSTraceDataFile"]; ok {
+		inventory.WithAPSTraceDataFile++
+	}
+	if _, ok := dict["TraceId to BatchId"]; ok {
+		inventory.WithTraceIDTables++
+	}
+}
+
+func summarizeCounterArchive(archive *CounterArchive) *StreamDataCounterDecode {
+	if archive == nil {
+		return nil
+	}
+	traceIDRows := 0
+	if archive.TraceIDs != nil {
+		traceIDRows = len(archive.TraceIDs.Rows)
+	}
+	unattributed := archive.TotalSamples - archive.AttributedSamples - archive.MachineWideSamples
+	if unattributed < 0 {
+		unattributed = 0
+	}
+	return &StreamDataCounterDecode{
+		GPRWCNTRBlobs:       archive.Blobs,
+		DecodedSamples:      archive.TotalSamples,
+		AttributedSamples:   archive.AttributedSamples,
+		MachineWideSamples:  archive.MachineWideSamples,
+		UnattributedSamples: unattributed,
+		KnownEncoderIDs:     archive.KnownEncoderIDs,
+		EncoderAggregates:   len(archive.Encoders),
+		PassColumnGroups:    len(archive.PassColumns),
+		TraceIDRows:         traceIDRows,
+		StrideMismatchBlobs: archive.StrideMismatches,
+	}
+}
+
+// decodedStreamDataFamilies reports NSData payloads that can be recovered
+// from each top-level family. These are blob counts, not records or samples.
+func decodedStreamDataFamilies(objects []any, root map[string]any) StreamDataDecodedFamilies {
+	return StreamDataDecodedFamilies{
+		APSData:                     archivedDataBlobCount(objects, root, "APSData"),
+		APSTimelineData:             archivedDataBlobCount(objects, root, "APSTimelineData"),
+		APSCounterData:              archivedDataBlobCount(objects, root, "APSCounterData"),
+		ShaderProfilerData:          archivedDataBlobCount(objects, root, "shaderProfilerData"),
+		GPUTimelineData:             archivedDataBlobCount(objects, root, "gpuTimelineData"),
+		BatchIDFilteredCountersData: archivedDataBlobCount(objects, root, "batchIdFilteredCountersData"),
+	}
+}
+
+func archivedDataBlobCount(objects []any, root map[string]any, key string) *int64 {
+	entries := archivedArrayCount(objects, root, key)
+	if entries == nil {
+		return nil
+	}
+	count := int64(len(extractDataArray(objects, root, key)))
+	return &count
+}
+
+func parseStreamDataMetadata(objects []any, root map[string]any) StreamDataMetadata {
+	return StreamDataMetadata{
+		Version:                      archivedInt64(objects, root, "version"),
+		UnixTimestamp:                archivedInt64(objects, root, "unixTimestamp"),
+		TraceName:                    archivedString(objects, root["traceName"]),
+		ProfiledExecutionMode:        archivedInt64(objects, root, "profiledExecutionMode"),
+		ProfiledPerformanceState:     archivedInt64(objects, root, "profiledPerformanceState"),
+		ProfiledProfilerMode:         archivedInt64(objects, root, "profiledProfilerMode"),
+		CaptureRangeLocation:         archivedInt64(objects, root, "captureRangeLocation"),
+		CaptureRangeLength:           archivedInt64(objects, root, "captureRangeLength"),
+		DataSourceHasUnusedResources: archivedBool(objects, root, "dataSourceHasUnusedResources"),
+		SupportsSeparateAPSData:      archivedBool(objects, root, "supportsSeparateAPSData"),
+		NumBlitCalls:                 archivedInt64(objects, root, "numBlitCalls"),
+		Tables: StreamDataTables{
+			CommandBuffers: parseStreamDataTable(objects, root, "commandBufferInfoData", "commandBufferInfoSize"),
+			Encoders:       parseStreamDataTable(objects, root, "encoderInfoData", "encoderInfoSize"),
+			GPUCommands:    parseStreamDataTable(objects, root, "gpuCommandInfoData", "gpuCommandInfoSize"),
+			Pipelines:      parseStreamDataTable(objects, root, "pipelineStateInfoData", "pipelineStateInfoSize"),
+			Functions:      parseStreamDataTable(objects, root, "functionInfoData", "functionInfoSize"),
+		},
+		Families: StreamDataFamilies{
+			APSData:                     archivedArrayCount(objects, root, "APSData"),
+			APSTimelineData:             archivedArrayCount(objects, root, "APSTimelineData"),
+			APSCounterData:              archivedArrayCount(objects, root, "APSCounterData"),
+			ShaderProfilerData:          archivedArrayCount(objects, root, "shaderProfilerData"),
+			GPUTimelineData:             archivedArrayCount(objects, root, "gpuTimelineData"),
+			BatchIDFilteredCountersData: archivedArrayCount(objects, root, "batchIdFilteredCountersData"),
+		},
+	}
+}
+
+func archivedArrayCount(objects []any, root map[string]any, key string) *int64 {
+	value, ok := root[key]
+	if !ok {
+		return nil
+	}
+	object, ok := archivedValue(objects, value).(map[string]any)
+	if !ok {
+		return nil
+	}
+	values, ok := object["NS.objects"].([]any)
+	if !ok {
+		return nil
+	}
+	count := int64(len(values))
+	return &count
+}
+
+func parseStreamDataTable(objects []any, root map[string]any, dataKey, sizeKey string) *StreamDataTable {
+	value, present := root[dataKey]
+	if !present {
+		return nil
+	}
+	data, ok := archivedData(objects, value)
+	if !ok {
+		return &StreamDataTable{DecodeError: "archive data reference is malformed"}
+	}
+	sum := sha256.Sum256(data)
+	table := &StreamDataTable{
+		Bytes:       int64(len(data)),
+		SHA256:      "sha256:" + hex.EncodeToString(sum[:]),
+		RawBytesHex: hex.EncodeToString(data),
+	}
+	size := archivedInt64(objects, root, sizeKey)
+	if size == nil || *size <= 0 {
+		return table
+	}
+	table.RecordSize = size
+	count := table.Bytes / *size
+	remainder := table.Bytes % *size
+	table.RecordCount = &count
+	table.RemainderBytes = &remainder
+	return table
+}
+
+func archivedData(objects []any, value any) ([]byte, bool) {
+	value = archivedValue(objects, value)
+	object, ok := value.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	data, ok := object["NS.data"].([]byte)
+	return data, ok
+}
+
+func archivedInt64(objects []any, root map[string]any, key string) *int64 {
+	value, ok := root[key]
+	if !ok {
+		return nil
+	}
+	value = archivedValue(objects, value)
+	var result int64
+	switch v := value.(type) {
+	case int:
+		result = int64(v)
+	case int32:
+		result = int64(v)
+	case int64:
+		result = v
+	case uint32:
+		result = int64(v)
+	case uint64:
+		if v > uint64(^uint64(0)>>1) {
+			return nil
+		}
+		result = int64(v)
+	default:
+		return nil
+	}
+	return &result
+}
+
+func archivedBool(objects []any, root map[string]any, key string) *bool {
+	value, ok := root[key]
+	if !ok {
+		return nil
+	}
+	result, ok := archivedValue(objects, value).(bool)
+	if !ok {
+		return nil
+	}
+	return &result
+}
+
+func archivedValue(objects []any, value any) any {
+	for depth := 0; depth < 4; depth++ {
+		uid, ok := value.(plist.UID)
+		if !ok {
+			return value
+		}
+		if int(uid) >= len(objects) {
+			return nil
+		}
+		value = objects[int(uid)]
+	}
+	return nil
+}
+
+func archivedString(objects []any, value any) string {
+	for depth := 0; depth < 4; depth++ {
+		switch v := value.(type) {
+		case string:
+			return v
+		case plist.UID:
+			if int(v) >= len(objects) {
+				return ""
+			}
+			value = objects[int(v)]
+		case map[string]any:
+			value = v["NS.string"]
+		default:
+			return ""
+		}
+	}
+	return ""
 }
 
 func (stats *StreamDataStats) applyTimelineTiming() {
@@ -301,7 +1058,7 @@ func extractFunctionNames(objects []any, obj1 map[string]any) []string {
 		return nil
 	}
 
-	var names []string
+	names := make([]string, 0, len(nsObjects))
 	for _, elem := range nsObjects {
 		if elemUID, ok := elem.(plist.UID); ok {
 			if str, ok := objects[int(elemUID)].(string); ok {
@@ -323,8 +1080,7 @@ type pipelineInfo struct {
 //
 // pipelineStateInfoData struct layout (40 bytes per record):
 //
-//	[0:4]   pipeline ID (internal, e.g., 27, 28, 29...)
-//	[4:8]   padding/reserved
+//	[0:8]   pipeline ID (one uint64, e.g., 446, 447, 448...)
 //	[8:16]  pipeline address (Metal pipeline pointer)
 //	[16:20] function info index
 //	[20:28] reserved
@@ -386,8 +1142,7 @@ func extractPipelineInfo(objects []any, obj1 map[string]any) []pipelineInfo {
 		off := i * pipeSize
 		rec := nsData[off : off+pipeSize]
 
-		infos[i].ID = int(binary.LittleEndian.Uint32(rec[0:4]))
-		// [8:16] is pipeline address
+		infos[i].ID = int(binary.LittleEndian.Uint64(rec[0:8]))
 		infos[i].Address = binary.LittleEndian.Uint64(rec[8:16])
 
 		// Use functionInfoData[i][@28:32] for string index (correct mapping)
@@ -408,6 +1163,85 @@ func extractPipelineInfo(objects []any, obj1 map[string]any) []pipelineInfo {
 	}
 
 	return infos
+}
+
+// compilerFunctionNames returns pipeline ID to shader compiler function name, read
+// from pipelinePerformanceStatistics[id]["Compile Performance"]["Function Name"].
+//
+// Some archives leave a function's name-string index pointing at the empty entry of
+// the strings array, so the strings table alone cannot name every pipeline. The
+// compiler statistics carry the name independently, keyed by pipeline ID.
+func compilerFunctionNames(objects []any, ppsIdx int) map[int]string {
+	if ppsIdx <= 0 || ppsIdx >= len(objects) {
+		return nil
+	}
+	ppsObj, ok := objects[ppsIdx].(map[string]any)
+	if !ok {
+		return nil
+	}
+	keys, keysOK := ppsObj["NS.keys"].([]any)
+	values, valsOK := ppsObj["NS.objects"].([]any)
+	if !keysOK || !valsOK || len(keys) != len(values) {
+		return nil
+	}
+
+	names := make(map[int]string)
+	for i, key := range keys {
+		keyUID, ok := key.(plist.UID)
+		if !ok || int(keyUID) >= len(objects) {
+			continue
+		}
+		id := int(plistUint64(objects[int(keyUID)]))
+		compile, ok := nsDictionary(objects, nsDictionary(objects, values[i])["Compile Performance"])["Function Name"].(string)
+		if ok && compile != "" {
+			names[id] = compile
+		}
+	}
+	return names
+}
+
+// applyCompilerNames fills in names the strings array could not supply.
+func applyCompilerNames(infos []pipelineInfo, names map[int]string) {
+	for i := range infos {
+		if infos[i].FunctionName == "" {
+			infos[i].FunctionName = names[infos[i].ID]
+		}
+	}
+}
+
+// nsDictionary resolves an archived NSDictionary reference to a map of its
+// string-keyed entries, with UID values dereferenced. Non-string keys are skipped.
+func nsDictionary(objects []any, ref any) map[string]any {
+	dict, ok := deref(objects, ref).(map[string]any)
+	if !ok {
+		return nil
+	}
+	keys, _ := dict["NS.keys"].([]any)
+	values, _ := dict["NS.objects"].([]any)
+	if len(keys) != len(values) {
+		return nil
+	}
+
+	out := make(map[string]any, len(keys))
+	for i, key := range keys {
+		keyUID, ok := key.(plist.UID)
+		if !ok || int(keyUID) >= len(objects) {
+			continue
+		}
+		name, ok := objects[int(keyUID)].(string)
+		if !ok {
+			continue
+		}
+		out[name] = deref(objects, values[i])
+	}
+	return out
+}
+
+func deref(objects []any, v any) any {
+	if uid, ok := v.(plist.UID); ok && int(uid) < len(objects) {
+		return objects[int(uid)]
+	}
+	return v
 }
 
 func attachPipelineMetadata(pipelines []PipelineStats, infos []pipelineInfo, addressToName map[uint64]string) {
@@ -476,7 +1310,12 @@ func extractDispatchInfoWithMap(objects []any, gpuCmdIdx, recordSize int, pipeli
 
 		pipelineIdx := int(binary.LittleEndian.Uint64(rec[8:16]) >> 32)
 		cumTime := int(binary.LittleEndian.Uint64(rec[16:24]))
-		encoderIdx := int(binary.LittleEndian.Uint32(rec[24:28]))
+		// The encoder index is at [4:8], not [24:28]. [24:28] holds the
+		// constant 2 in every record, so reading it there put every dispatch
+		// on encoder 2. Checked against encoderInfoData, whose first-command
+		// and command-count fields tile all commands exactly: [4:8] agrees
+		// with that ownership for every record.
+		encoderIdx := int(binary.LittleEndian.Uint32(rec[4:8]))
 
 		duration := cumTime
 		if i > 0 {
@@ -601,54 +1440,134 @@ func extractPipelineStats(objects []interface{}, ppsIdx int) []PipelineStats {
 		}
 
 		ps := PipelineStats{PipelineID: pipelineID}
-
-		// Extract NSDictionary values
-		statKeys, _ := statsObj["NS.keys"].([]interface{})
-		statVals, _ := statsObj["NS.objects"].([]interface{})
-
-		keyMap := make(map[string]interface{})
-		for j, sk := range statKeys {
-			if skUID, ok := sk.(plist.UID); ok && j < len(statVals) {
-				keyName := ""
-				if s, ok := objects[int(skUID)].(string); ok {
-					keyName = s
-				}
-				if valUID, ok := statVals[j].(plist.UID); ok {
-					keyMap[keyName] = objects[int(valUID)]
-				} else {
-					keyMap[keyName] = statVals[j]
-				}
-			}
-		}
-
-		// Map to struct fields
-		ps.TemporaryRegisterCount = getInt(keyMap, "Temporary register count")
-		ps.UniformRegisterCount = getInt(keyMap, "Uniform register count")
-		ps.SpilledBytes = getInt(keyMap, "Spilled bytes")
-		ps.ThreadInvariantSpilled = getInt(keyMap, "Thread invariant spilled bytes")
-		ps.ThreadgroupMemory = getInt(keyMap, "Threadgroup memory")
-		ps.InstructionCount = getInt(keyMap, "Instruction count")
-		ps.ALUInstructionCount = getInt(keyMap, "ALU instruction count")
-		ps.FP32InstructionCount = getInt(keyMap, "FP32 instruction count")
-		ps.FP16InstructionCount = getInt(keyMap, "FP16 instruction count")
-		ps.INT32InstructionCount = getInt(keyMap, "INT32 instruction count")
-		ps.INT16InstructionCount = getInt(keyMap, "INT16 instruction count")
-		ps.BranchInstructionCount = getInt(keyMap, "Branch instruction count")
-		ps.DeviceLoadCount = getInt(keyMap, "Device load instruction count")
-		ps.DeviceStoreCount = getInt(keyMap, "Device store instruction count")
-		ps.DeviceAtomicCount = getInt(keyMap, "Device atomic instruction count")
-		ps.TextureReadCount = getInt(keyMap, "Texture reads instruction count")
-		ps.TextureWriteCount = getInt(keyMap, "Texture writes instruction count")
-		ps.ThreadgroupLoadCount = getInt(keyMap, "Threadgroup load instruction count")
-		ps.ThreadgroupStoreCount = getInt(keyMap, "Threadgroup store instruction count")
-		ps.ThreadgroupAtomicCount = getInt(keyMap, "Threadgroup atomic instruction count")
-		ps.WaitInstructionCount = getInt(keyMap, "Wait instruction count")
-		ps.CompilationTimeMs = getFloat(keyMap, "Compilation time in milliseconds")
+		keyMap := resolveKeyedDictionary(objects, statsObj)
+		assignPipelineStatFields(&ps, keyMap)
+		assignPipelineCompilerDiagnostics(&ps, objects, keyMap)
 
 		pipelines = append(pipelines, ps)
 	}
 
 	return pipelines
+}
+
+// resolveKeyedDictionary flattens an NSKeyedArchiver NSDictionary into a plain
+// map, dereferencing the UIDs its keys and values hold into objects.
+func resolveKeyedDictionary(objects []interface{}, dict map[string]interface{}) map[string]interface{} {
+	keys, _ := dict["NS.keys"].([]interface{})
+	values, _ := dict["NS.objects"].([]interface{})
+
+	resolved := make(map[string]interface{}, len(keys))
+	for i, key := range keys {
+		keyUID, ok := key.(plist.UID)
+		if !ok || i >= len(values) || int(keyUID) >= len(objects) {
+			continue
+		}
+		name := ""
+		if s, ok := objects[int(keyUID)].(string); ok {
+			name = s
+		}
+		valUID, ok := values[i].(plist.UID)
+		if !ok {
+			resolved[name] = values[i]
+			continue
+		}
+		if int(valUID) < len(objects) {
+			resolved[name] = objects[int(valUID)]
+		}
+	}
+	return resolved
+}
+
+// assignPipelineStatFields copies the shader compilation statistics Xcode
+// archives under well-known names. Both .gpuprofiler_raw streamData and the
+// store sections of a capture bundle use these names.
+func assignPipelineStatFields(ps *PipelineStats, keyMap map[string]interface{}) {
+	ps.RecordedStatistics = ps.RecordedStatistics[:0]
+	for key := range keyMap {
+		ps.RecordedStatistics = append(ps.RecordedStatistics, key)
+	}
+	slices.Sort(ps.RecordedStatistics)
+	ps.TemporaryRegisterCount = getInt(keyMap, "Temporary register count")
+	ps.UniformRegisterCount = getInt(keyMap, "Uniform register count")
+	ps.SpilledBytes = getInt(keyMap, "Spilled bytes")
+	ps.ThreadInvariantSpilled = getInt(keyMap, "Thread invariant spilled bytes")
+	ps.ThreadgroupMemory = getInt(keyMap, "Threadgroup memory")
+	ps.InstructionCount = getInt(keyMap, "Instruction count")
+	ps.ALUInstructionCount = getInt(keyMap, "ALU instruction count")
+	ps.FP32InstructionCount = getInt(keyMap, "FP32 instruction count")
+	ps.FP16InstructionCount = getInt(keyMap, "FP16 instruction count")
+	ps.INT32InstructionCount = getInt(keyMap, "INT32 instruction count")
+	ps.INT16InstructionCount = getInt(keyMap, "INT16 instruction count")
+	ps.BranchInstructionCount = getInt(keyMap, "Branch instruction count")
+	ps.DeviceLoadCount = getInt(keyMap, "Device load instruction count")
+	ps.DeviceStoreCount = getInt(keyMap, "Device store instruction count")
+	ps.DeviceAtomicCount = getInt(keyMap, "Device atomic instruction count")
+	ps.TextureReadCount = getInt(keyMap, "Texture reads instruction count")
+	ps.TextureWriteCount = getInt(keyMap, "Texture writes instruction count")
+	ps.ThreadgroupLoadCount = getInt(keyMap, "Threadgroup load instruction count")
+	ps.ThreadgroupStoreCount = getInt(keyMap, "Threadgroup store instruction count")
+	ps.ThreadgroupAtomicCount = getInt(keyMap, "Threadgroup atomic instruction count")
+	ps.WaitInstructionCount = getInt(keyMap, "Wait instruction count")
+	ps.ConstantCalculationTemporaryRegisterCount = getInt(keyMap, "Constant calculation temporary register count")
+	ps.ConstantCalculationPhasePresent = getBool(keyMap, "Constant calculation phase present")
+	ps.CompilationTimeMs = getFloat(keyMap, "Compilation time in milliseconds")
+}
+
+func assignPipelineCompilerDiagnostics(ps *PipelineStats, objects []interface{}, keyMap map[string]interface{}) {
+	if remarks, ok := keyMap["Remarks"].(string); ok {
+		ps.Remarks = &remarks
+		ps.CompilerRemarks = ParseCompilerRemarks(remarks)
+	}
+	compileObject, ok := keyMap["Compile Performance"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	compile := resolveKeyedDictionary(objects, compileObject)
+	performance := &PipelineCompilePerformance{
+		FunctionWasCached:               getBoolPointer(compile, "Function was cached"),
+		CompilerBackendNanoseconds:      getInt64Pointer(compile, "Compiler backend pass time in ns"),
+		CompilerOptimizationNanoseconds: getInt64Pointer(compile, "Compiler optimization pass time in ns"),
+		CompilerTranslatorNanoseconds:   getInt64Pointer(compile, "Compiler translator pass time in ns"),
+		CompilerTotalNanoseconds:        getInt64Pointer(compile, "Compiler total time in ns"),
+		DriverTotalNanoseconds:          getInt64Pointer(compile, "Driver total compile time in ns"),
+		SynchronousServiceNanoseconds:   getInt64Pointer(compile, "Total time for synchronous compile service in ns"),
+	}
+	if performance.FunctionWasCached != nil || performance.CompilerBackendNanoseconds != nil ||
+		performance.CompilerOptimizationNanoseconds != nil || performance.CompilerTranslatorNanoseconds != nil ||
+		performance.CompilerTotalNanoseconds != nil || performance.DriverTotalNanoseconds != nil ||
+		performance.SynchronousServiceNanoseconds != nil {
+		ps.CompilePerformance = performance
+	}
+}
+
+func getInt64Pointer(m map[string]interface{}, key string) *int64 {
+	value, ok := m[key]
+	if !ok {
+		return nil
+	}
+	var result int64
+	switch value := value.(type) {
+	case int:
+		result = int64(value)
+	case int64:
+		result = value
+	case uint64:
+		if value > math.MaxInt64 {
+			return nil
+		}
+		result = int64(value)
+	default:
+		return nil
+	}
+	return &result
+}
+
+func getBoolPointer(m map[string]interface{}, key string) *bool {
+	value, ok := m[key].(bool)
+	if !ok {
+		return nil
+	}
+	return &value
 }
 
 func getInt(m map[string]interface{}, key string) int {
@@ -681,6 +1600,15 @@ func getFloat(m map[string]interface{}, key string) float64 {
 		}
 	}
 	return 0
+}
+
+func getBool(m map[string]interface{}, key string) bool {
+	if v, ok := m[key]; ok {
+		if value, ok := v.(bool); ok {
+			return value
+		}
+	}
+	return false
 }
 
 // ExtractEncoderTimingsFromProfiler extracts per-encoder timing data from the trace's
@@ -736,8 +1664,8 @@ func ExtractEncoderTimingsFromProfiler(t *trace.Trace) ([]EncoderTimingInfo, int
 	}
 
 	// Get encoder labels from trace to correlate
-	encoders, err := t.ParseComputeEncoders()
-	if err == nil && len(encoders) > 0 {
+	encoders := t.ParseComputeEncoders()
+	if len(encoders) > 0 {
 		// Correlate labels - encoders should match by index
 		for i := range stats.EncoderTimings {
 			if i < len(encoders) {
@@ -934,7 +1862,8 @@ func parseTimelineMetadataBlob(data []byte, info *TimelineInfo) bool {
 		case "Continuous Time":
 			info.ContinuousTime = plistUint64(val)
 		case "PState":
-			info.PState = int(plistUint64(val))
+			value := int(plistUint64(val))
+			info.PState = &value
 		case "ReplayerGPUTime":
 			if v, ok := val.(float64); ok && v > 0 {
 				info.ReplayerGPUTimeNs = uint64(v*1e9 + 0.5)
@@ -1089,63 +2018,40 @@ func plistUint64(v any) uint64 {
 	return 0
 }
 
-// parseGPRWCNTRBlob parses an encoder profiler blob with GPRWCNTR format.
-// These are blobs 1-11 in APSTimelineData (Encoder ShaderProfilerData).
+// parseGPRWCNTRBlob parses a ShaderProfilerData blob in GPRWCNTR format.
 //
-// Format:
-//   - [0:8] Magic "GPRWCNTR"
-//   - [8:...] 168-byte records with:
-//   - [0:8] timestamp (GPU ticks)
-//   - [8:16] size
-//   - [16:24] count
-//   - [24:28] flags
+// The record stride comes from the blob itself rather than a constant: the
+// magic starts every record, so the distance to the second magic is the
+// stride. See gprwcntr.go. A blob whose stride does not divide its length is
+// rejected outright — the earlier fixed-size parse accepted such blobs and
+// produced plausible garbage.
 func parseGPRWCNTRBlob(data []byte, encoderIndex int, timebaseNumer, timebaseDenom uint64) *EncoderProfile {
-	if len(data) < 8 {
-		return nil
-	}
-
-	// Check magic
-	if string(data[0:8]) != GPRWCNTRMagic {
+	samples, stride, err := ParseGPRWCNTR(data)
+	if err != nil {
 		return nil
 	}
 
 	profile := &EncoderProfile{
-		Index: encoderIndex,
+		Index:        encoderIndex,
+		RecordStride: stride,
+		SampleCount:  len(samples),
+		Samples:      samples,
 	}
-
-	// Parse records after the magic
-	recordData := data[8:]
-	numRecords := len(recordData) / GPRWCNTRRecordSize
-	profile.SampleCount = numRecords
-
-	if numRecords == 0 {
+	if len(samples) == 0 {
 		return profile
 	}
 
 	var minTS, maxTS uint64 = ^uint64(0), 0
-	for i := 0; i < numRecords; i++ {
-		offset := i * GPRWCNTRRecordSize
-		if offset+32 > len(recordData) {
-			break
+	for _, s := range samples {
+		if s.MachineWide() {
+			profile.MachineWideSamples++
 		}
-
-		rec := recordData[offset:]
-		ts := GPRWCNTRTimestamp{
-			Timestamp: binary.LittleEndian.Uint64(rec[0:8]),
-			Size:      binary.LittleEndian.Uint64(rec[8:16]),
-			Count:     binary.LittleEndian.Uint64(rec[16:24]),
-			Flags:     binary.LittleEndian.Uint32(rec[24:28]),
+		if s.Timestamp > 0 && s.Timestamp < minTS {
+			minTS = s.Timestamp
 		}
-
-		// Track timestamp range
-		if ts.Timestamp > 0 && ts.Timestamp < minTS {
-			minTS = ts.Timestamp
+		if s.Timestamp > maxTS {
+			maxTS = s.Timestamp
 		}
-		if ts.Timestamp > maxTS {
-			maxTS = ts.Timestamp
-		}
-
-		profile.Timestamps = append(profile.Timestamps, ts)
 	}
 
 	// Set start/end ticks and compute duration
@@ -1288,8 +2194,12 @@ func extractEncoderBlobData(data []byte) (source string, ringIdx int, spd []byte
 //
 // The function modifies dispatches in place, populating:
 //   - SampleCount: number of GPRWCNTR samples during this dispatch
-//   - SamplingDensity: samples per microsecond
-//   - StartTicks/EndTicks: absolute timestamps
+//   - SamplingDensity: samples per dispatch microsecond in the estimated window
+//   - StartTicks/EndTicks: estimated bounds in mach absolute ticks
+//
+// The archive does not join cumulative dispatch offsets to the absolute sample
+// clock. This routine scales dispatch offsets across the first command-buffer
+// interval, so its attribution is an estimate rather than measured timing.
 func CorrelateDispatchSamples(stats *StreamDataStats) {
 	if stats == nil || stats.Timeline == nil || len(stats.Dispatches) == 0 {
 		return
@@ -1303,8 +2213,8 @@ func CorrelateDispatchSamples(stats *StreamDataStats) {
 	// Collect all unique GPRWCNTR sample timestamps
 	tsMap := make(map[uint64]bool)
 	for _, ep := range ti.EncoderProfiles {
-		for _, ts := range ep.Timestamps {
-			tsMap[ts.Timestamp] = true
+		for _, s := range ep.Samples {
+			tsMap[s.Timestamp] = true
 		}
 	}
 

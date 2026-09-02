@@ -20,8 +20,3 @@ func toLowerSimple(s string) string {
 	}
 	return string(b)
 }
-
-// containsSubstring checks if s contains substr (simple implementation).
-func containsSubstring(s, substr string) bool {
-	return strings.Contains(s, substr)
-}

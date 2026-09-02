@@ -93,9 +93,37 @@ When enabled, traces include a `.gpuprofiler_raw` directory containing:
 | File | Format | Description |
 |------|--------|-------------|
 | `streamData` | NSKeyedArchiver plist | Pipeline metadata, dispatch timing, encoder timing |
-| `Counters_f_*.raw` | Binary | GPU counter samples (464-byte records) |
+| `Counters_f_*.raw` | Binary | Marker-scanned GPU counter data; marker-gap lengths vary and do not establish sample semantics |
 | `Profiling_f_*.raw` | Binary | Statistical profiling samples (Execution Cost) |
 | `Timeline_f_*.raw` | Binary | Timeline visualization event data |
+
+### Retraction: 464-byte sample records
+
+[V] The original 464-byte claim came from one capture: 87 of 262 gaps between
+the byte marker `4e 00 00 00` had length 464, and one file size, 121,104 bytes,
+was divisible by 464. Commits `5cf5616` and `c8ebbe8` promoted those arithmetic
+observations to a record and sample classification without an authenticated
+framing or semantic decode.
+
+[V] Commit `c3c972c` withdrew the classification after scanning the first five
+counter files in
+`qwen25-05b-staticmask-warm-tokens2-4-rep1-perfdata3.gputrace`: among roughly
+30,000 marker-delimited gaps it found no 464-byte gap, with 1742, 612, 671, and
+8192 among the common lengths. That original temporary capture is no longer
+present, so the exact scan cannot be rerun from the current checkout.
+
+[V] A scan using the current `internal/profilerraw.Records` marker algorithm on
+the disposable
+`counter-oracle-source-20260809-1020.gpuprofiler_raw` fixture found 8,783 gaps
+across 40 counter files, including 3,020 gaps of length 464 and 437 distinct
+lengths.
+
+[D] The occurrence and frequency of a 464-byte marker gap are capture-dependent.
+Neither its presence nor its absence proves that the gap is one GPU hardware
+sample, and marker scanning can split on the same byte sequence inside a
+payload. Consumers must not infer record or sample semantics from length alone.
+An authenticated framing definition or capture-matched semantic decode would
+falsify this boundary.
 
 ### streamData
 
@@ -115,6 +143,35 @@ Xcode's shader table combines timing and sampling metrics:
 1. **Dispatch Duration**: streamData dispatch duration or cumulative offset delta (from gpuCommandInfoData)
 2. **Kernel Duration**: Aggregated dispatch time per pipeline
 3. **Execution Cost**: Statistical GPU sampling percentage (from Profiling_f_*.raw)
+
+### Execution Cost per encoder
+
+Xcode's Execution Cost column is keyed per encoder, not per pipeline, and is
+absent from the Counters.csv export. It is rebuilt from `APSCounterData`:
+
+- Each pass reads the hardware counters twice per encoder, `GRC_SAMPLE_TYPE` 4
+  at the start and 5 at the end. The end record's `GRC_GPU_CYCLES` is the
+  cycles spent between them. [D] derived: every attributed sample in the
+  reference archive is one of these two types, they pair by encoder id within a
+  blob, and the begin records' counter columns are uniformly zero.
+- Encoders are identified by **ordinal**, not by id. The capture is replayed
+  once per Encoder Infos group, so an encoder gets a fresh `GRC_ENCODER_ID` in
+  each group and only its position is stable. [D]
+- Cost is the encoder's share of summed `GRC_GPU_CYCLES`.
+
+Measured against Xcode's own export of the same capture
+(`testdata/xcode-oracle/compute-kernel-encoders.txt`, 23 encoders): max
+residual **0.911 pp**, rms **0.278 pp**. The figure is close but not Xcode's
+number, and no aggregation tried reproduced it exactly - see
+`internal/counter/encodercost.go` for the variants ruled out. [D]
+
+Sample **counts** are not a cost proxy: the counter reads are scheduled, so 20
+of 23 encoders have exactly 304 samples and 3 have exactly 112 regardless of
+cost. [V]
+
+Not attributed: cost per individual `dispatchThreads` command inside an
+encoder, which Xcode also shows. The counter archive reads counters at encoder
+boundaries only, so nothing finer is archived there.
 
 Timeline and summary views use APSTimelineData when available for Effective GPU Time and
 command-buffer active/wall spans. Non-profiled traces may use approximate extracted or

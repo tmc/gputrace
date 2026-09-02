@@ -13,6 +13,8 @@ import (
 type encodersOptions struct {
 	verbose bool
 	json    bool
+	limit   int
+	all     bool
 }
 
 var encodersCmd = newEncodersCommand(&encodersOptions{})
@@ -20,12 +22,12 @@ var encodersCmd = newEncodersCommand(&encodersOptions{})
 func newEncodersCommand(opts *encodersOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "encoders <trace.gputrace>",
-		Short: "List compute command encoders in a GPU trace",
-		Long: `List all Metal compute command encoders found in a GPU trace.
+		Short: "Report compute-encoder counts and observed CS labels",
+		Long: `Report the best available compute-encoder count and list observed CS labels.
 
-This command parses Cul records to identify compute command encoder
-creation and usage. Compute encoders are used to encode compute
-commands (kernel dispatches) into command buffers.
+The count uses decoded compute-encoder records and available profiler metadata.
+The listed CS records are submission/debug labels; they often name kernels and
+must not be interpreted as one compute encoder per row.
 
 Examples:
   gputrace encoders trace.gputrace
@@ -37,6 +39,8 @@ Examples:
 	}
 	cmd.Flags().BoolVarP(&opts.verbose, "verbose", "v", false, "Show verbose output with encoder details")
 	cmd.Flags().BoolVar(&opts.json, "json", false, "Output in JSON format")
+	cmd.Flags().IntVar(&opts.limit, "limit", defaultHumanLimit, "Maximum CS-label rows in human output")
+	cmd.Flags().BoolVar(&opts.all, "all", false, "Show every CS-label row in human output")
 	return cmd
 }
 
@@ -62,25 +66,35 @@ func runEncoders(cmd *cobra.Command, args []string, opts *encodersOptions) error
 	if err != nil {
 		return fmt.Errorf("failed to open trace: %w", err)
 	}
+	if err := trace.RequireCaptureRecords(); err != nil {
+		return err
+	}
 
 	// Parse compute encoders
-	encoders, err := trace.ParseComputeEncoders()
-	if err != nil {
-		return fmt.Errorf("failed to parse compute encoders: %w", err)
-	}
+	encoders := trace.ParseComputeEncoders()
 
 	if opts.json {
 		return writeEncodersJSON(cmd.OutOrStdout(), encoders)
 	}
+	limit, err := resolveHumanLimit(opts.limit, opts.all)
+	if err != nil {
+		return err
+	}
+	statistics, err := gputrace.ExtractStatistics(trace)
+	if err != nil {
+		return fmt.Errorf("extract encoder statistics: %w", err)
+	}
+	computeEncoderCount := statistics.ComputeEncoders
 
 	commandBufferCount := 0
 	var commandBuffers []encodersCommandBufferSummary
 	if opts.verbose {
-		cbs, err := trace.ParseCommandBuffers()
-		if err == nil && len(cbs) > 0 {
+		capture, err := gputrace.OpenCapture(trace)
+		if err == nil && len(capture.CommandBuffers()) > 0 {
+			cbs := capture.CommandBuffers()
 			commandBufferCount = len(cbs)
 			for _, cb := range cbs {
-				dcb, err := gputrace.ParseDetailedCommandBuffer(trace, cb.Index)
+				dcb, err := capture.Detailed(cb.Index)
 				if err != nil {
 					continue
 				}
@@ -92,7 +106,7 @@ func runEncoders(cmd *cobra.Command, args []string, opts *encodersOptions) error
 		}
 	}
 
-	return writeEncodersText(cmd.OutOrStdout(), encoders, commandBufferCount, commandBuffers)
+	return writeEncodersText(cmd.OutOrStdout(), computeEncoderCount, encoders, commandBufferCount, commandBuffers, limit)
 }
 
 func writeEncodersJSON(w io.Writer, encoders []*gputrace.ComputeEncoder) error {
@@ -119,11 +133,15 @@ func writeEncodersJSON(w io.Writer, encoders []*gputrace.ComputeEncoder) error {
 	return nil
 }
 
-func writeEncodersText(w io.Writer, encoders []*gputrace.ComputeEncoder, commandBufferCount int, commandBuffers []encodersCommandBufferSummary) error {
-	if _, err := fmt.Fprintf(w, "%d encoders:\n", len(encoders)); err != nil {
+func writeEncodersText(w io.Writer, computeEncoderCount int, encoders []*gputrace.ComputeEncoder, commandBufferCount int, commandBuffers []encodersCommandBufferSummary, limit int) error {
+	if _, err := fmt.Fprintf(w, "Compute encoders: %d\n", computeEncoderCount); err != nil {
 		return fmt.Errorf("write encoders: %w", err)
 	}
-	for _, encoder := range encoders {
+	if _, err := fmt.Fprintf(w, "Observed CS labels: %d (submission/debug labels; not encoder instances)\n", len(encoders)); err != nil {
+		return fmt.Errorf("write encoders: %w", err)
+	}
+	shown := limitedCount(len(encoders), limit)
+	for _, encoder := range encoders[:shown] {
 		var err error
 		if encoder.Label != "" {
 			_, err = fmt.Fprintf(w, "  %3d: %s\n", encoder.Index, encoder.Label)
@@ -134,10 +152,15 @@ func writeEncodersText(w io.Writer, encoders []*gputrace.ComputeEncoder, command
 			return fmt.Errorf("write encoders: %w", err)
 		}
 	}
+	if shown < len(encoders) {
+		if _, err := fmt.Fprintf(w, "... %d more CS labels omitted (use --all)\n", len(encoders)-shown); err != nil {
+			return fmt.Errorf("write encoders: %w", err)
+		}
+	}
 
 	if commandBufferCount > 0 {
-		if _, err := fmt.Fprintf(w, "\n%d command buffers (%.1f encoders/buffer avg)\n",
-			commandBufferCount, float64(len(encoders))/float64(commandBufferCount)); err != nil {
+		if _, err := fmt.Fprintf(w, "\nExplicit encoder markers decoded per command buffer (%d buffers):\n",
+			commandBufferCount); err != nil {
 			return fmt.Errorf("write encoders: %w", err)
 		}
 		for _, cb := range commandBuffers {

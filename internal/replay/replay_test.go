@@ -3,8 +3,12 @@ package replay
 import (
 	"encoding/binary"
 	"errors"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/tmc/gputrace/internal/trace"
 )
 
 func TestValidateReplayRejectsICBExecutions(t *testing.T) {
@@ -85,6 +89,38 @@ func TestAnalyzeReplayResolvesDispatchFromPipeline(t *testing.T) {
 	}
 }
 
+func TestAnalyzeReplayFlattensNestedCttRecords(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Metal replay analysis is darwin-only")
+	}
+	path := filepath.Join("..", "..", "testdata", "traces", "06-six-encoders", "06-six-encoders-run1.gputrace")
+	trace, err := trace.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer trace.Close()
+
+	plan, err := NewReplayEngine(trace).AnalyzeReplay()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Commands) == 0 {
+		t.Fatal("nested Ctt records produced no replay commands")
+	}
+	// Every flattened command must be accounted for as a dispatch or an ICB
+	// execution. The fixture yielded only dispatches when this test was
+	// written; parsing records after the MTSP header (9abafa87) surfaced
+	// three Ci records as well, so the invariant is full accounting rather
+	// than dispatches-only.
+	if plan.ComputeDispatches+plan.ICBExecutions != len(plan.Commands) {
+		t.Fatalf("compute dispatches = %d, icb executions = %d, commands = %d",
+			plan.ComputeDispatches, plan.ICBExecutions, len(plan.Commands))
+	}
+	if plan.ComputeDispatches == 0 {
+		t.Fatal("nested Ctt records produced no compute dispatches")
+	}
+}
+
 func TestUnsupportedICBExecutionErrorWrapsSentinel(t *testing.T) {
 	err := unsupportedICBExecutionError(ReplayCommand{
 		Type:         "execute_icb",
@@ -120,6 +156,36 @@ func TestFormatReplayValidationShowsICBError(t *testing.T) {
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("formatted validation missing %q in:\n%s", want, output)
+		}
+	}
+}
+
+func BenchmarkAnalyzeReplay1000Dispatches(b *testing.B) {
+	capture := make([]byte, 0, 1000*64)
+	for i := 0; i < 1000; i++ {
+		capture = append(capture, ctDispatchRecord(0x2000, 0x1000)...)
+	}
+	trace := &Trace{
+		Path:        b.TempDir(),
+		CaptureData: mtspData(capture),
+		DeviceResources: map[string][]byte{
+			"0xabc": mtspData(
+				csRecord(0x1000, "vector_add"),
+				cttRecord(0x1000, 0x2000),
+			),
+		},
+		FunctionToName: make(map[uint64]string),
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		engine := NewReplayEngine(trace)
+		plan, err := engine.AnalyzeReplay()
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(plan.Commands) != 1000 {
+			b.Fatalf("commands = %d, want 1000", len(plan.Commands))
 		}
 	}
 }

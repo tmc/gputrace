@@ -6,7 +6,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/tmc/gputrace"
-	"github.com/tmc/gputrace/internal/counter"
 )
 
 var exportCountersCmd = newExportCountersCommand(&exportCountersOptions{})
@@ -22,8 +21,9 @@ func newExportCountersCommand(opts *exportCountersOptions) *cobra.Command {
 		Hidden: true,
 		Long: `Export performance counter data in Xcode Instruments Counters.csv format.
 
-Generates a 246-column CSV file matching the exact format used by Xcode
-Instruments when exporting GPU performance counter data. This includes:
+Generates a 246-column CSV with the same column schema used by an Xcode
+Instruments counter export. Schema compatibility does not mean that every row
+contains source-backed Xcode measurements. This includes:
 
 Metadata Columns (1-5):
   - Index: Sequential row number
@@ -34,7 +34,7 @@ Metadata Columns (1-5):
 
 Performance Metrics (6-246):
   241 performance counter metrics including:
-  - ALU Utilization, Kernel Occupancy
+  - ALU Utilization
   - Memory bandwidth (Buffer/Texture Device Memory Bytes)
   - Cache miss rates (L1, Texture Cache)
   - Shader-specific metrics (VS/FS/Compute)
@@ -42,16 +42,16 @@ Performance Metrics (6-246):
   - Invocation counts and statistics
 
 Data Source:
-  Exports parsed counter rows from .gpuprofiler_raw data when available.
-  Any encoder row without parsed metrics is emitted with SYNTHETIC FALLBACK
-  values. The command reports the row source counts on stderr, so stdout
-  remains valid CSV when exporting there.
+  This exporter writes encoder identity and leaves metric columns blank. Parsed
+  .gpuprofiler_raw counter rows are pipeline-scoped, not encoder-scoped, and
+  are withheld until a stable join exists. The command reports that source
+  state on stderr, so stdout remains valid CSV when exporting there.
 
-  As Metal replay support with MTLCounterSampleBuffer matures, replay-collected
-  rows can replace remaining fallback rows with hardware measurements.
+  A capture-backed encoder join or replay-collected measurements can populate
+  the metric columns in a future export.
 
 Output Format:
-  Standard CSV with quoted strings, matching Xcode's export format exactly.
+  Standard CSV with quoted strings and an Xcode-compatible column schema.
   Can be imported into spreadsheet tools or compared with Xcode's output.
 
 Examples:
@@ -126,46 +126,26 @@ func runExportCounters(cmd *cobra.Command, args []string, opts *exportCountersOp
 
 	// Print success message to stderr (not stdout which has CSV data)
 	if opts.output != "" {
-		fmt.Fprintf(cmd.ErrOrStderr(), "✓ Exported counters to: %s\n", opts.output)
+		fmt.Fprintf(cmd.ErrOrStderr(), "Counter CSV written: %s\n", opts.output)
 	}
 
 	return nil
 }
 
 type exportCounterSourceSummary struct {
-	totalRows             int
-	parsedCounterRows     int
-	syntheticFallbackRows int
-	perfCountersPresent   bool
+	totalRows           int
+	metadataOnlyRows    int
+	perfCountersPresent bool
 }
 
 func summarizeExportCounterSources(trace *gputrace.Trace) (exportCounterSourceSummary, error) {
-	encoders, err := trace.ParseComputeEncoders()
-	if err != nil {
-		return exportCounterSourceSummary{}, err
-	}
+	encoders := trace.ParseComputeEncoders()
 
 	summary := exportCounterSourceSummary{
-		totalRows:             len(encoders),
-		syntheticFallbackRows: len(encoders),
-		perfCountersPresent:   trace.HasPerfCounters(),
+		totalRows:           len(encoders),
+		metadataOnlyRows:    len(encoders),
+		perfCountersPresent: trace.HasPerfCounters(),
 	}
-
-	if !summary.perfCountersPresent {
-		return summary, nil
-	}
-
-	metrics, err := counter.PopulateEncoderMetricsFromBinaryParsing(trace)
-	if err != nil || len(metrics) == 0 {
-		return summary, nil
-	}
-
-	summary.parsedCounterRows = len(metrics)
-	if summary.parsedCounterRows > summary.totalRows {
-		summary.parsedCounterRows = summary.totalRows
-	}
-	summary.syntheticFallbackRows = summary.totalRows - summary.parsedCounterRows
-
 	return summary, nil
 }
 
@@ -173,16 +153,10 @@ func formatExportCounterSourceNotice(summary exportCounterSourceSummary) string 
 	switch {
 	case summary.totalRows == 0:
 		return "counter export data source: no encoder rows exported\n"
-	case summary.syntheticFallbackRows == 0:
-		return fmt.Sprintf("counter export data source: parsed counter data (%s)\n", formatRows(summary.parsedCounterRows))
-	case summary.parsedCounterRows == 0 && summary.perfCountersPresent:
-		return fmt.Sprintf("counter export data source: synthetic fallback (%s); performance counter files were present but no parsed row metrics were available\n", formatRows(summary.syntheticFallbackRows))
-	case summary.parsedCounterRows == 0:
-		return fmt.Sprintf("counter export data source: synthetic fallback (%s); no parsed .gpuprofiler_raw counter data found\n", formatRows(summary.syntheticFallbackRows))
+	case summary.perfCountersPresent:
+		return fmt.Sprintf("counter export data source: metadata only (%s); performance-counter rows are pipeline-scoped and lack an encoder join\n", formatRows(summary.metadataOnlyRows))
 	default:
-		return fmt.Sprintf("counter export data source: parsed counter data (%s), synthetic fallback (%s)\n",
-			formatRows(summary.parsedCounterRows),
-			formatRows(summary.syntheticFallbackRows))
+		return fmt.Sprintf("counter export data source: metadata only (%s); no parsed .gpuprofiler_raw counter data found\n", formatRows(summary.metadataOnlyRows))
 	}
 }
 

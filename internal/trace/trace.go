@@ -18,6 +18,7 @@ import (
 
 	"github.com/tmc/apple/x/plist"
 	"github.com/tmc/gputrace/internal/metallib"
+	"github.com/tmc/gputrace/internal/profilerraw"
 )
 
 // DebugGroupLabel represents a hierarchical debug group label with its position in the capture.
@@ -42,6 +43,29 @@ type Trace struct {
 	DeviceLabels       map[uint64]string // Maps device resource address to label (e.g. "fences")
 	FunctionToName     map[uint64]string // Maps Ct function addresses to kernel names (computed from dispatch order)
 	MTLBLibraries      []*metallib.File  // Parsed Metal libraries found in the bundle
+
+	// ProfilerOnly reports that the bundle has no Metal capture stream but does
+	// carry a .gpuprofiler_raw payload. CaptureData is nil and every
+	// capture-derived field above is empty. Callers that need capture records
+	// should say so with RequireCaptureRecords rather than reporting nothing.
+	ProfilerOnly bool
+}
+
+// ErrNoCaptureRecords reports that a bundle carries no Metal capture stream.
+// Profiler-only bundles — those with a .gpuprofiler_raw payload but no capture
+// or unsorted-capture file — open successfully and return this from
+// RequireCaptureRecords.
+var ErrNoCaptureRecords = errors.New("trace has no capture records")
+
+// RequireCaptureRecords reports an error when the bundle has no capture stream,
+// naming what is missing. Commands that read buffer bindings, argument tables,
+// grid sizes, or anything else that only exists in the encoded Metal command
+// stream should call it right after Open.
+func (t *Trace) RequireCaptureRecords() error {
+	if len(t.CaptureData) > 0 {
+		return nil
+	}
+	return fmt.Errorf("%w: %s is profiler-only (.gpuprofiler_raw without capture or unsorted-capture); this data is only in the Metal command stream", ErrNoCaptureRecords, t.Path)
 }
 
 // Metadata contains information from the metadata plist file.
@@ -114,9 +138,15 @@ func Open(path string) (*Trace, error) {
 		return nil, fmt.Errorf("parse metadata: %w", err)
 	}
 
-	// Load capture data
+	// Load capture data. A bundle exported by the GPU profiler may have no
+	// capture stream at all; open it anyway when the profiler payload is there,
+	// so commands with a profiler-backed source can serve it. Callers that need
+	// capture records ask for them with RequireCaptureRecords.
 	if err := trace.loadCaptureData(); err != nil {
-		return nil, fmt.Errorf("load capture: %w", err)
+		if !errors.Is(err, os.ErrNotExist) || profilerraw.FindDirWithStreamData(path) == "" {
+			return nil, fmt.Errorf("load capture: %w", err)
+		}
+		trace.ProfilerOnly = true
 	}
 
 	// Load device resources
@@ -140,6 +170,15 @@ func Open(path string) (*Trace, error) {
 	trace.buildFunctionToName()
 
 	return trace, nil
+}
+
+// ReadMetadata reads bundle metadata without loading captured resources.
+func ReadMetadata(path string) (*Metadata, error) {
+	t := &Trace{Path: path}
+	if err := t.parseMetadata(); err != nil {
+		return nil, err
+	}
+	return t.Metadata, nil
 }
 
 // parseMetadata reads and parses the metadata plist file.
@@ -727,6 +766,49 @@ func (t *Trace) DecompressStore(storeNum int) ([]byte, error) {
 	return io.ReadAll(reader)
 }
 
+// DecompressStoreSections decompresses every zlib stream in a store file.
+//
+// Store files hold a sequence of independently compressed sections rather than
+// a single stream, so DecompressStore only reports the first one. Sections
+// after a stream that fails to decompress are skipped, and a store whose first
+// section is unreadable reports an error.
+func (t *Trace) DecompressStoreSections(storeNum int) ([][]byte, error) {
+	storePath := filepath.Join(t.Path, fmt.Sprintf("store%d", storeNum))
+	compressed, err := os.ReadFile(storePath)
+	if err != nil {
+		return nil, err
+	}
+
+	var sections [][]byte
+	for offset := 0; offset < len(compressed); {
+		// bytes.Reader is an io.ByteReader, so flate consumes exactly the
+		// bytes of one stream and the unread remainder locates the next.
+		rest := bytes.NewReader(compressed[offset:])
+		reader, err := zlib.NewReader(rest)
+		if err != nil {
+			if len(sections) == 0 {
+				return nil, fmt.Errorf("zlib reader: %w", err)
+			}
+			break
+		}
+		section, err := io.ReadAll(reader)
+		reader.Close()
+		if err != nil {
+			if len(sections) == 0 {
+				return nil, fmt.Errorf("read store section: %w", err)
+			}
+			break
+		}
+		sections = append(sections, section)
+		consumed := len(compressed) - offset - rest.Len()
+		if consumed <= 0 {
+			break
+		}
+		offset += consumed
+	}
+	return sections, nil
+}
+
 // MTSPHeader represents the header of an MTSP file.
 type MTSPHeader struct {
 	Magic   [4]byte
@@ -912,23 +994,7 @@ func (t *Trace) Close() error {
 
 // HasPerfCounters returns true if the trace has performance counter data.
 func (t *Trace) HasPerfCounters() bool {
-	// Check for .gpuprofiler_raw directory adjacent to trace
-	perfDir := t.Path + ".gpuprofiler_raw"
-	if info, err := os.Stat(perfDir); err == nil && info.IsDir() {
-		return true
-	}
-
-	// Check for .gpuprofiler_raw directory inside trace bundle
-	entries, err := os.ReadDir(t.Path)
-	if err != nil {
-		return false
-	}
-	for _, entry := range entries {
-		if entry.IsDir() && strings.HasSuffix(entry.Name(), ".gpuprofiler_raw") {
-			return true
-		}
-	}
-	return false
+	return profilerraw.FindDir(t.Path) != ""
 }
 
 // PipelineFunctionMap maps pipeline state addresses to kernel function names.
@@ -945,42 +1011,159 @@ type PipelineFunctionMap map[uint64]string
 func (t *Trace) BuildPipelineFunctionMap() PipelineFunctionMap {
 	result := make(PipelineFunctionMap)
 
-	// Build label map from both capture data and device-resources
-	labelMap := make(map[uint64]string)
-
-	// Parse CS records from capture data
-	// Using ParseMTSPRecords to get all records, including CS with valid addresses
-	records, _ := t.ParseMTSPRecords()
-	for _, rec := range records {
-		if rec.Type == RecordTypeCS && rec.Label != "" && rec.Address != 0 {
-			labelMap[rec.Address] = rec.Label
-		}
-	}
-
-	// Also parse CS records from device resources
+	// A CS record's address field identifies the Metal object, not the shader
+	// function, so keying by that address cannot answer the question Ctt asks.
+	// The function address is stored after the label.
+	funcNames := make(map[uint64]string)
+	scanFunctionNames(t.CaptureData, funcNames)
+	scanArchiveFunctions(t.CaptureData, funcNames)
 	for _, data := range t.DeviceResources {
-		// Create a temporary trace with just this data to use ParseMTSPRecords
-		tempTrace := &Trace{CaptureData: data}
-		if resRecords, err := tempTrace.ParseMTSPRecords(); err == nil {
-			for _, rec := range resRecords {
-				if rec.Type == RecordTypeCS && rec.Label != "" && rec.Address != 0 {
-					labelMap[rec.Address] = rec.Label
-				}
-			}
-		}
+		scanFunctionNames(data, funcNames)
+		scanArchiveFunctions(data, funcNames)
 	}
 
 	// Parse Ctt records from both capture and device-resources
-	t.parseCttRecords(t.CaptureData, labelMap, result)
+	t.parseCttRecords(t.CaptureData, funcNames, result)
 	for _, data := range t.DeviceResources {
-		t.parseCttRecords(data, labelMap, result)
+		t.parseCttRecords(data, funcNames, result)
 	}
 
 	return result
 }
 
+// csTagFunction marks a CS record that describes a shader function. The other
+// tags seen in practice describe a command encoder (0x04) and a library UUID
+// (0x34); both store something other than a function address in the same
+// field, so reading them would map a pipeline to a name that is not a kernel.
+const csTagFunction = 0x74
+
+// scanFunctionNames records the function address of every CS record that
+// describes a shader function. The record is laid out as
+//
+//	"CS\0\0" | object address (8) | label (NUL-terminated) | pad to 4 |
+//	tag (4) | function address (8)
+//
+// The function address is what a Ctt record refers to, so this is the map that
+// turns a pipeline state into a kernel name.
+func scanFunctionNames(data []byte, into map[uint64]string) {
+	marker := []byte("CS\x00\x00")
+	offset := 0
+	for {
+		pos := bytes.Index(data[offset:], marker)
+		if pos == -1 {
+			return
+		}
+		start := offset + pos
+		offset = start + 4
+		if start+12 > len(data) {
+			return
+		}
+
+		labelStart := start + 12
+		labelEnd := labelStart
+		for labelEnd < len(data) && data[labelEnd] != 0 {
+			labelEnd++
+		}
+		if labelEnd >= len(data) || labelEnd == labelStart {
+			continue
+		}
+
+		tagPos := labelEnd + 1
+		if pad := (tagPos - start) % 4; pad != 0 {
+			tagPos += 4 - pad
+		}
+		if tagPos+12 > len(data) {
+			continue
+		}
+		if binary.LittleEndian.Uint32(data[tagPos:tagPos+4]) != csTagFunction {
+			continue
+		}
+		if funcAddr := binary.LittleEndian.Uint64(data[tagPos+4 : tagPos+12]); funcAddr != 0 {
+			into[funcAddr] = string(data[labelStart:labelEnd])
+		}
+	}
+}
+
+// ArchiveFunctionPrefix marks a name that is a shader-archive content id
+// rather than a kernel function name. See scanArchiveFunctions.
+const ArchiveFunctionPrefix = "archive:"
+
+// scanArchiveFunctions records the function address of every CUt record.
+//
+// A function the process took from a compiled shader archive, rather than from
+// a MTLLibrary the capture describes, is written as a "CUt\0" record instead of
+// a "CS\0\0" one. The trailing pair is the same -- tag 0x74 followed by the
+// function address a Ctt record refers to -- but two things differ:
+//
+//   - the label holds the archive's 16-hex content id, not the function name;
+//   - the tag sits 8 bytes further on than a CS record's, after two fields
+//     this decoder does not read. [?] measured on two archives, in which every
+//     CUt label was 16 characters, so the offset is confirmed only for that
+//     label length; the tag check below fails the record closed otherwise.
+//
+// The function name is not recoverable from the capture for these records. For
+// a trace where the profiler names the pipeline rope_single_bfloat16_, that
+// string appears nowhere in the decompressed capture or device-resources; only
+// streamData has it. The archive id is therefore the most specific identity a
+// capture-only trace can give such a function.
+//
+// Recording it is still worth doing. Without it every Ctt naming an archive
+// function resolves to nothing and every one of its dispatches lands in the
+// single "unknown" row, merging kernels that ran different code different
+// numbers of times. With it each archive function keeps its own row and its
+// own count.
+func scanArchiveFunctions(data []byte, into map[uint64]string) {
+	marker := []byte("CUt\x00")
+	offset := 0
+	for {
+		pos := bytes.Index(data[offset:], marker)
+		if pos == -1 {
+			return
+		}
+		start := offset + pos
+		offset = start + 4
+		if start+12 > len(data) {
+			return
+		}
+
+		labelStart := start + 12
+		labelEnd := labelStart
+		for labelEnd < len(data) && data[labelEnd] != 0 {
+			labelEnd++
+		}
+		if labelEnd >= len(data) || labelEnd == labelStart {
+			continue
+		}
+
+		tagPos := labelEnd + 1
+		if pad := (tagPos - start) % 4; pad != 0 {
+			tagPos += 4 - pad
+		}
+		tagPos += archiveFunctionTagSkip
+		if tagPos+12 > len(data) {
+			continue
+		}
+		if binary.LittleEndian.Uint32(data[tagPos:tagPos+4]) != csTagFunction {
+			continue
+		}
+		funcAddr := binary.LittleEndian.Uint64(data[tagPos+4 : tagPos+12])
+		if funcAddr == 0 {
+			continue
+		}
+		// A name from a CS record is a real function name and always wins.
+		if _, ok := into[funcAddr]; ok {
+			continue
+		}
+		into[funcAddr] = ArchiveFunctionPrefix + string(data[labelStart:labelEnd])
+	}
+}
+
+// archiveFunctionTagSkip is the extra distance from the padded end of a CUt
+// record's label to its tag, relative to where a CS record puts it.
+const archiveFunctionTagSkip = 8
+
 // parseCttRecords parses Ctt records from data and adds pipeline→function mappings to result.
-func (t *Trace) parseCttRecords(data []byte, labelMap map[uint64]string, result PipelineFunctionMap) {
+func (t *Trace) parseCttRecords(data []byte, funcNames map[uint64]string, result PipelineFunctionMap) {
 	// Ctt record structure:
 	// +0x00: "Ctt\x00" (4 bytes)
 	// +0x04: device address (8 bytes)
@@ -1003,7 +1186,7 @@ func (t *Trace) parseCttRecords(data []byte, labelMap map[uint64]string, result 
 
 			if pipelineAddr != 0 {
 				// Look up function name
-				if funcName, exists := labelMap[funcAddr]; exists {
+				if funcName, exists := funcNames[funcAddr]; exists {
 					result[pipelineAddr] = funcName
 				}
 			}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/tmc/gputrace"
 	"github.com/tmc/gputrace/internal/counter"
+	"github.com/tmc/gputrace/internal/profilerraw"
 )
 
 var shadersCmd = newShadersCommand(&shadersOptions{
@@ -18,10 +19,11 @@ var shadersCmd = newShadersCommand(&shadersOptions{
 })
 
 type shadersOptions struct {
-	verbose  bool
-	estimate bool
-	format   string
-	all      bool
+	verbose   bool
+	estimate  bool
+	format    string
+	all       bool
+	xcodeCost bool
 }
 
 func newShadersCommand(opts *shadersOptions) *cobra.Command {
@@ -31,21 +33,39 @@ func newShadersCommand(opts *shadersOptions) *cobra.Command {
 		Long: `Display shader/kernel performance statistics.
 
 By default shows a simple two-column output:
-  - Cost % (percentage of total GPU time)
+  - Share % (SIMD-group share for full traces; dispatch-span share for profiler-only traces)
   - Shader name
+
+Use --xcode-cost to run Xcode's private stream-data processor and show the
+pipeline compute-time share from its All Shaders table. This is slower than the
+default parser and requires the matching Xcode framework and GTLLVMHelper.
 
 Use --all for full Xcode Instruments format with additional columns:
   - Type (Compute)
   - Pipeline State address
   - # SIMD Groups (SIMD wavefronts dispatched)
-  - # Allocated Registers
+  - Temp Regs (temporary register count)
   - High Register, shown only when source-backed
   - Spilled Bytes (register spills to memory)
+  - Dev Load / Dev Store (device memory load and store instruction counts)
+
+Temp Regs, Spilled, Dev Load and Dev Store come from the shader compiler's
+pipelinePerformanceStatistics and are available for profiler-only traces too.
+They read "?" when the trace carries no statistics for that shader; zero is a
+real count and is printed as 0.
+
+The csv and json formats also carry per-shader host-side compilation time and
+the compile-cache flag. They are absent from the --all table because that table
+reproduces Xcode's All Shaders columns and these are not among them; for a
+whole-capture compilation total see "gputrace profiler". Both cells are empty
+when the trace recorded nothing, which is not the same as a zero compile time
+or a cache miss.
 
 Examples:
   gputrace shaders trace.gputrace                    # Simple cost + name output
   gputrace shaders trace.gputrace --all              # Full Xcode format
   gputrace shaders trace.gputrace --estimate         # Show estimates for unknown fields
+  gputrace shaders trace.gputrace --xcode-cost       # Match Xcode's All Shaders Cost
   gputrace shaders trace.gputrace --format csv       # Export as CSV
   gputrace shaders trace.gputrace --format json      # Export as JSON`,
 		Args: cobra.ExactArgs(1),
@@ -58,6 +78,7 @@ Examples:
 	cmd.Flags().BoolVarP(&opts.estimate, "estimate", "e", opts.estimate, "Show estimated values for uncomputed fields")
 	cmd.Flags().StringVarP(&opts.format, "format", "f", opts.format, "Output format: text, csv, or json")
 	cmd.Flags().BoolVarP(&opts.all, "all", "a", opts.all, "Show all columns (full Xcode Instruments format)")
+	cmd.Flags().BoolVar(&opts.xcodeCost, "xcode-cost", opts.xcodeCost, "Use Xcode's processed pipeline timing for Cost")
 	return cmd
 }
 
@@ -93,9 +114,12 @@ func runShaders(cmd *cobra.Command, args []string, opts *shadersOptions) error {
 		fmt.Fprintf(os.Stderr, "  gputrace xp run %s -o profiled.gputrace\n\n", tracePath)
 		return fmt.Errorf("profiler data required for shader timing")
 	}
+	if opts.xcodeCost {
+		return runShadersXcodeCost(cmd, tracePath, opts)
+	}
 
 	if hasUnsortedCapture {
-		// Full trace with profiler: use SIMD-based cost (matches Xcode)
+		// Full trace with profiler: use SIMD-based share.
 		return runShadersFromFullTrace(tracePath, opts)
 	}
 
@@ -127,6 +151,7 @@ func checkUnsortedCapture(tracePath string) bool {
 
 // runShadersNoCost shows shader names without cost percentages (no profiler data).
 func runShadersNoCost(tracePath string, opts *shadersOptions) error {
+	fmt.Fprint(os.Stderr, profileReplayHint(tracePath))
 	trace, err := gputrace.Open(tracePath)
 	if err != nil {
 		return fmt.Errorf("open trace: %w", err)
@@ -142,7 +167,7 @@ func runShadersNoCost(tracePath string, opts *shadersOptions) error {
 }
 
 func writeShadersNoCost(report *gputrace.ShaderMetricsReport, tracePath string, opts *shadersOptions) error {
-	fmt.Fprintf(os.Stderr, "No profiler data. To get Cost %%, run:\n")
+	fmt.Fprintf(os.Stderr, "No profiler data. To get a measured shader share, run:\n")
 	fmt.Fprintf(os.Stderr, "  gputrace xp run %s -o profiled.gputrace\n\n", tracePath)
 
 	switch opts.format {
@@ -158,15 +183,16 @@ func writeShadersNoCost(report *gputrace.ShaderMetricsReport, tracePath string, 
 }
 
 func formatShadersNoCostText(w io.Writer, report *gputrace.ShaderMetricsReport) error {
-	fmt.Fprintf(w, "Cost      Name\n")
+	libraries := splitShaderLibraryRows(report)
+	fmt.Fprintf(w, "Share     Name\n")
 	for _, shader := range report.Shaders {
 		fmt.Fprintf(w, "    ?     %s\n", shader.Name)
 	}
+	writeShaderInventoryNotes(w, report.Shaders, libraries)
 	return nil
 }
 
-// runShadersFromFullTrace uses full trace parsing for SIMD-based cost calculation.
-// This matches Xcode's Cost % = SIMD Groups / Total SIMD Groups × 100
+// runShadersFromFullTrace uses full trace parsing for SIMD-based share.
 func runShadersFromFullTrace(tracePath string, opts *shadersOptions) error {
 	// Open trace for full parsing
 	trace, err := gputrace.Open(tracePath)
@@ -180,6 +206,8 @@ func runShadersFromFullTrace(tracePath string, opts *shadersOptions) error {
 		// Use combined approach: capture file dispatches + profiler function names
 		report, err := extractSIMDBasedMetrics(trace, profilerDir)
 		if err == nil && len(report.Shaders) > 0 {
+			report.ShareBasis = "simd_groups"
+			writeShaderShareBasis(opts.format, "SIMD groups")
 			// Output based on format
 			switch opts.format {
 			case "csv":
@@ -187,10 +215,7 @@ func runShadersFromFullTrace(tracePath string, opts *shadersOptions) error {
 			case "json":
 				return gputrace.ExportShaderMetricsJSON(os.Stdout, report)
 			case "text":
-				if opts.all {
-					return gputrace.FormatShadersXcodeStyle(os.Stdout, report, trace, opts.estimate)
-				}
-				return gputrace.FormatShadersSimple(os.Stdout, report)
+				return writeShadersText(os.Stdout, report, trace, opts)
 			default:
 				return invalidShadersFormatError(opts.format)
 			}
@@ -204,7 +229,7 @@ func runShadersFromFullTrace(tracePath string, opts *shadersOptions) error {
 		return fmt.Errorf("extract shader metrics: %w", err)
 	}
 
-	// Recalculate Cost % based on SIMD Groups (TotalThreadgroups) to match Xcode
+	// Recalculate share based on SIMD Groups (TotalThreadgroups).
 	var totalSIMDGroups uint64
 	for _, shader := range report.Shaders {
 		totalSIMDGroups += shader.TotalThreadgroups
@@ -215,10 +240,15 @@ func runShadersFromFullTrace(tracePath string, opts *shadersOptions) error {
 			shader.PercentOfTotal = float64(shader.TotalThreadgroups) / float64(totalSIMDGroups) * 100.0
 		}
 	}
+	report.ShareBasis = "simd_groups"
+	writeShaderShareBasis(opts.format, "SIMD groups")
 
 	// Re-sort by SIMD-based cost
 	sort.Slice(report.Shaders, func(i, j int) bool {
-		return report.Shaders[i].PercentOfTotal > report.Shaders[j].PercentOfTotal
+		if report.Shaders[i].PercentOfTotal != report.Shaders[j].PercentOfTotal {
+			return report.Shaders[i].PercentOfTotal > report.Shaders[j].PercentOfTotal
+		}
+		return report.Shaders[i].Name < report.Shaders[j].Name
 	})
 
 	// Output based on format
@@ -232,10 +262,8 @@ func runShadersFromFullTrace(tracePath string, opts *shadersOptions) error {
 			return fmt.Errorf("failed to export JSON: %w", err)
 		}
 	case "text":
-		if opts.all {
-			gputrace.FormatShadersXcodeStyle(os.Stdout, report, trace, opts.estimate)
-		} else {
-			gputrace.FormatShadersSimple(os.Stdout, report)
+		if err := writeShadersText(os.Stdout, report, trace, opts); err != nil {
+			return fmt.Errorf("format shaders: %w", err)
 		}
 	default:
 		return invalidShadersFormatError(opts.format)
@@ -248,10 +276,7 @@ func runShadersFromFullTrace(tracePath string, opts *shadersOptions) error {
 // by joining dispatch threadgroup data from capture file with function names from profiler.
 func extractSIMDBasedMetrics(trace *gputrace.Trace, profilerDir string) (*gputrace.ShaderMetricsReport, error) {
 	// Parse dispatch markers from capture data to get threadgroup dimensions
-	dispatches, err := trace.ParseDispatchInRegion(trace.CaptureData, 0)
-	if err != nil {
-		return nil, fmt.Errorf("parse dispatch markers: %w", err)
-	}
+	dispatches := trace.ParseDispatchInRegion(trace.CaptureData, 0)
 
 	// Parse profiler streamData to get function names per dispatch index
 	stats, err := counter.ParseStreamData(profilerDir, nil)
@@ -280,36 +305,14 @@ func extractSIMDBasedMetrics(trace *gputrace.Trace, profilerDir string) (*gputra
 		}
 	}
 
-	const simdWidth uint64 = 32 // Apple Silicon SIMD width is 32 threads
-
 	for i, dispatch := range dispatches {
-		// Calculate threadgroups for this dispatch
-		var tgX, tgY, tgZ uint64 = 1, 1, 1
-		if dispatch.ThreadsPerGroupX > 0 {
-			tgX = (dispatch.ThreadsX + dispatch.ThreadsPerGroupX - 1) / dispatch.ThreadsPerGroupX
-		}
-		if dispatch.ThreadsPerGroupY > 0 {
-			tgY = (dispatch.ThreadsY + dispatch.ThreadsPerGroupY - 1) / dispatch.ThreadsPerGroupY
-		}
-		if dispatch.ThreadsPerGroupZ > 0 {
-			tgZ = (dispatch.ThreadsZ + dispatch.ThreadsPerGroupZ - 1) / dispatch.ThreadsPerGroupZ
-		}
-		threadgroups := tgX * tgY * tgZ
-
-		// Calculate SIMD groups (wavefronts)
-		// Xcode's "# SIMD Groups" = Total Threads / SIMD Width (32)
-		threadsPerGroup := dispatch.ThreadsPerGroupX * dispatch.ThreadsPerGroupY * dispatch.ThreadsPerGroupZ
-		totalThreads := threadgroups * threadsPerGroup
-		simdGroups := (totalThreads + simdWidth - 1) / simdWidth // Round up
+		simdGroups := dispatch.SIMDGroups()
 
 		// Get function name from profiler data
-		funcName := ""
+		funcName := "(pipeline_unknown)"
 		if i < len(stats.Dispatches) {
-			funcName = stats.Dispatches[i].FunctionName
+			funcName = stats.Dispatches[i].DisplayName()
 			funcDurations[funcName] += uint64(stats.Dispatches[i].DurationUs) * 1000 // Convert to ns
-		}
-		if funcName == "" {
-			funcName = fmt.Sprintf("(dispatch_%d)", i)
 		}
 
 		funcSIMDGroups[funcName] += simdGroups
@@ -336,7 +339,7 @@ func extractSIMDBasedMetrics(trace *gputrace.Trace, profilerDir string) (*gputra
 			TotalDurationNs:   funcDurations[funcName],
 		}
 
-		// Calculate SIMD-based cost percentage (matches Xcode)
+		// Calculate SIMD-based share percentage.
 		if totalSIMDGroups > 0 {
 			m.PercentOfTotal = float64(simdGroups) / float64(totalSIMDGroups) * 100.0
 		}
@@ -354,6 +357,13 @@ func extractSIMDBasedMetrics(trace *gputrace.Trace, profilerDir string) (*gputra
 			m.ThreadgroupMemory = ps.ThreadgroupMemory
 			m.AllocatedRegisters = ps.TemporaryRegisterCount
 			m.SpilledBytes = ps.SpilledBytes
+			m.DeviceLoadCount = ps.DeviceLoadCount
+			m.DeviceStoreCount = ps.DeviceStoreCount
+			m.HasPipelineStats = true
+			m.CompilationTimeMs = ps.CompilationTimeMs
+			if ps.CompilePerformance != nil {
+				m.FunctionWasCached = ps.CompilePerformance.FunctionWasCached
+			}
 		}
 
 		report.Shaders = append(report.Shaders, m)
@@ -361,7 +371,10 @@ func extractSIMDBasedMetrics(trace *gputrace.Trace, profilerDir string) (*gputra
 
 	// Sort by SIMD-based cost (highest first)
 	sort.Slice(report.Shaders, func(i, j int) bool {
-		return report.Shaders[i].PercentOfTotal > report.Shaders[j].PercentOfTotal
+		if report.Shaders[i].PercentOfTotal != report.Shaders[j].PercentOfTotal {
+			return report.Shaders[i].PercentOfTotal > report.Shaders[j].PercentOfTotal
+		}
+		return report.Shaders[i].Name < report.Shaders[j].Name
 	})
 
 	report.TotalShaders = len(report.Shaders)
@@ -370,59 +383,21 @@ func extractSIMDBasedMetrics(trace *gputrace.Trace, profilerDir string) (*gputra
 }
 
 // findProfilerDir finds the .gpuprofiler_raw directory if it exists.
+// Shader metrics come from streamData, so a directory without it is absent.
 func findProfilerDir(tracePath string) string {
-	// Check if it's directly a .gpuprofiler_raw directory
-	if filepath.Ext(tracePath) == ".gpuprofiler_raw" {
-		if _, err := os.Stat(filepath.Join(tracePath, "streamData")); err == nil {
-			return tracePath
-		}
-	}
-	// Look inside for .gpuprofiler_raw
-	entries, err := os.ReadDir(tracePath)
-	if err != nil {
-		return ""
-	}
-	for _, e := range entries {
-		if e.IsDir() && filepath.Ext(e.Name()) == ".gpuprofiler_raw" {
-			dir := filepath.Join(tracePath, e.Name())
-			if _, err := os.Stat(filepath.Join(dir, "streamData")); err == nil {
-				return dir
-			}
-		}
-	}
-	return ""
+	return profilerraw.FindDirWithStreamData(tracePath)
 }
 
 // runShadersFromProfiler extracts shader info from .gpuprofiler_raw when unsorted-capture is missing.
-// Note: This uses dispatch duration for Cost %, NOT SIMD groups (Xcode uses SIMD groups).
-// For Xcode-matching Cost %, use a full trace with unsorted-capture directory.
+// Note: This uses dispatch duration for Share %, not Xcode pipeline timing.
 func runShadersFromProfiler(tracePath string, opts *shadersOptions) error {
-	fmt.Fprintln(os.Stderr, "Note: Using dispatch duration for Cost % (profiler-only trace).")
-	fmt.Fprintln(os.Stderr, "      Xcode uses SIMD Groups for Cost %. For matching values, use a full trace.")
+	fmt.Fprintln(os.Stderr, "Note: Share is based on cumulative dispatch span for this profiler-only trace.")
+	fmt.Fprintln(os.Stderr, "      Use --xcode-cost for Xcode's processed pipeline timing.")
 	fmt.Fprintln(os.Stderr, "")
-	// Find .gpuprofiler_raw directory
-	profilerDir := ""
-
-	// Check if it's directly a .gpuprofiler_raw directory
-	if filepath.Ext(tracePath) == ".gpuprofiler_raw" {
-		profilerDir = tracePath
-	} else {
-		// Look inside for .gpuprofiler_raw
-		entries, err := os.ReadDir(tracePath)
-		if err != nil {
-			return fmt.Errorf("read directory: %w", err)
-		}
-		for _, e := range entries {
-			if e.IsDir() && filepath.Ext(e.Name()) == ".gpuprofiler_raw" {
-				profilerDir = filepath.Join(tracePath, e.Name())
-				break
-			}
-		}
-	}
+	profilerDir := profilerraw.FindDir(tracePath)
 
 	if profilerDir == "" {
-		fmt.Fprintf(os.Stderr, "Hint: To generate performance data, run:\n")
-		fmt.Fprintf(os.Stderr, "  gputrace xcode-profile run %s\n\n", tracePath)
+		fmt.Fprint(os.Stderr, profileReplayHint(tracePath))
 		return fmt.Errorf("no .gpuprofiler_raw directory found in %s (and unsorted-capture is missing)", tracePath)
 	}
 
@@ -436,6 +411,10 @@ func runShadersFromProfiler(tracePath string, opts *shadersOptions) error {
 	// Note: Uses dispatch duration for Cost %. Statistical sampling from Profiling_f_*.raw
 	// has a complex format that needs further reverse engineering to match Xcode exactly.
 	report := convertPipelineStatsToShaderReport(stats, nil)
+	report.ShareBasis = "dispatch_span"
+	if err := applySourceBackedShaderMetrics(filepath.Join(profilerDir, "streamData"), stats, report); err != nil {
+		fmt.Fprintf(os.Stderr, "Note: source-backed high-register metrics unavailable: %v\n", err)
+	}
 
 	// Output based on format
 	switch opts.format {
@@ -448,11 +427,9 @@ func runShadersFromProfiler(tracePath string, opts *shadersOptions) error {
 			return fmt.Errorf("failed to export JSON: %w", err)
 		}
 	case "text":
-		if opts.all {
-			// Format as Xcode Instruments style output (no trace available)
-			gputrace.FormatShadersXcodeStyle(os.Stdout, report, nil, opts.estimate)
-		} else {
-			gputrace.FormatShadersSimple(os.Stdout, report)
+		writeShaderShareBasis(opts.format, "dispatch cumulative-offset span")
+		if err := writeShadersText(os.Stdout, report, nil, opts); err != nil {
+			return fmt.Errorf("format shaders: %w", err)
 		}
 	default:
 		return invalidShadersFormatError(opts.format)
@@ -461,8 +438,75 @@ func runShadersFromProfiler(tracePath string, opts *shadersOptions) error {
 	return nil
 }
 
+// splitShaderLibraryRows removes the library-UUID rows from report and
+// returns them. Library records share the name field with function records,
+// so a shaders table that keeps them lists a library UUID as if a shader by
+// that name ran. kernels already separates them; this makes shaders say the
+// same thing.
+func splitShaderLibraryRows(report *gputrace.ShaderMetricsReport) []*gputrace.ShaderMetrics {
+	var libraries []*gputrace.ShaderMetrics
+	kept := report.Shaders[:0]
+	for _, s := range report.Shaders {
+		if gputrace.IsLibraryUUID(s.Name) {
+			libraries = append(libraries, s)
+			continue
+		}
+		kept = append(kept, s)
+	}
+	report.Shaders = kept
+	report.TotalShaders = len(kept)
+	return libraries
+}
+
+// writeShaderInventoryNotes says what the rows that are not shader names are,
+// in the same terms kernels uses.
+func writeShaderInventoryNotes(w io.Writer, shaders, libraries []*gputrace.ShaderMetrics) {
+	n := 0
+	for _, s := range shaders {
+		if gputrace.IsArchiveFunctionName(s.Name) {
+			n++
+		}
+	}
+	if n > 0 {
+		fmt.Fprintf(w, "\n%d %s named only by shader archive id (archive:...): the capture records\n"+
+			"which archive the function came from, not its name. Run 'gputrace profile-replay'\n"+
+			"on this trace to get the names.\n",
+			n, Pluralize(n, "shader", "shaders"))
+	}
+	if len(libraries) > 0 {
+		fmt.Fprintf(w, "\n%d library %s (not shader names):\n",
+			len(libraries), Pluralize(len(libraries), "UUID", "UUIDs"))
+		for _, s := range libraries {
+			fmt.Fprintf(w, "  %s\n", s.Name)
+		}
+	}
+}
+
+// writeShadersText renders the shader table and the inventory notes that say
+// which rows are not shader names.
+func writeShadersText(w io.Writer, report *gputrace.ShaderMetricsReport, t *gputrace.Trace, opts *shadersOptions) error {
+	libraries := splitShaderLibraryRows(report)
+	var err error
+	if opts.all {
+		err = gputrace.FormatShadersXcodeStyle(w, report, t, opts.estimate)
+	} else {
+		err = gputrace.FormatShadersSimple(w, report)
+	}
+	if err != nil {
+		return err
+	}
+	writeShaderInventoryNotes(w, report.Shaders, libraries)
+	return nil
+}
+
+func writeShaderShareBasis(format, basis string) {
+	if format == "text" {
+		fmt.Fprintf(os.Stdout, "Share basis: %s\n", basis)
+	}
+}
+
 // convertPipelineStatsToShaderReport converts PipelineStats from streamData to ShaderMetricsReport.
-// If execCosts is provided, uses statistical sampling cost for PercentOfTotal (matches Xcode).
+// If execCosts is provided, uses statistical sampling cost for PercentOfTotal.
 // Otherwise falls back to dispatch duration-based cost.
 func convertPipelineStatsToShaderReport(stats *counter.StreamDataStats, execCosts *counter.ExecutionCostMetrics) *gputrace.ShaderMetricsReport {
 	report := &gputrace.ShaderMetricsReport{
@@ -483,29 +527,21 @@ func convertPipelineStatsToShaderReport(stats *counter.StreamDataStats, execCost
 	funcCounts := make(map[string]int)    // function name -> invocation count
 	funcPipeIDs := make(map[string][]int) // function name -> pipeline IDs
 	for _, d := range stats.Dispatches {
-		name := d.FunctionName
-		if name == "" {
-			name = fmt.Sprintf("(pipeline_%d)", d.PipelineIndex)
-		}
+		name := d.DisplayName()
 		funcTotals[name] += d.DurationUs
 		funcCounts[name]++
 	}
 
 	// Map function names to pipeline IDs for execution cost lookup
 	for _, p := range stats.Pipelines {
-		name := p.FunctionName
-		if name == "" {
-			continue
-		}
-		funcPipeIDs[name] = append(funcPipeIDs[name], p.PipelineID)
+		funcPipeIDs[p.DisplayName()] = append(funcPipeIDs[p.DisplayName()], p.PipelineID)
 	}
 
-	// Convert pipelines to shader metrics
+	// Convert pipelines to shader metrics. An unnamed pipeline still gets a
+	// row: its time is already in the share denominator, so dropping it hid
+	// cost the percentages continued to count.
 	for _, p := range stats.Pipelines {
-		name := p.FunctionName
-		if name == "" {
-			continue
-		}
+		name := p.DisplayName()
 
 		m := &gputrace.ShaderMetrics{
 			Name:                   name,
@@ -523,15 +559,22 @@ func convertPipelineStatsToShaderReport(stats *counter.StreamDataStats, execCost
 			ThreadgroupMemory:      p.ThreadgroupMemory,
 			AllocatedRegisters:     p.TemporaryRegisterCount,
 			SpilledBytes:           p.SpilledBytes,
+			DeviceLoadCount:        p.DeviceLoadCount,
+			DeviceStoreCount:       p.DeviceStoreCount,
+			HasPipelineStats:       true,
+			CompilationTimeMs:      p.CompilationTimeMs,
 			Bottlenecks:            make([]string, 0),
 			OptimizationHints:      make([]string, 0),
+		}
+		if p.CompilePerformance != nil {
+			m.FunctionWasCached = p.CompilePerformance.FunctionWasCached
 		}
 
 		if m.InvocationCount > 0 {
 			m.AvgDurationNs = m.TotalDurationNs / uint64(m.InvocationCount)
 		}
 
-		// Use execution cost from statistical sampling if available (matches Xcode)
+		// Use execution cost from statistical sampling if available.
 		if execCosts != nil {
 			// Sum cost across all pipeline IDs for this function
 			var totalCost float64
@@ -549,7 +592,10 @@ func convertPipelineStatsToShaderReport(stats *counter.StreamDataStats, execCost
 
 	// Sort by cost (highest first) like Xcode does
 	sort.Slice(report.Shaders, func(i, j int) bool {
-		return report.Shaders[i].PercentOfTotal > report.Shaders[j].PercentOfTotal
+		if report.Shaders[i].PercentOfTotal != report.Shaders[j].PercentOfTotal {
+			return report.Shaders[i].PercentOfTotal > report.Shaders[j].PercentOfTotal
+		}
+		return report.Shaders[i].Name < report.Shaders[j].Name
 	})
 
 	report.TotalShaders = len(report.Shaders)

@@ -6,10 +6,26 @@ source lookup behavior:
 
 | Variable | Effect |
 | --- | --- |
-| `GPUTRACE_DEBUG` | Enables extra debug logging from shader metrics helpers. |
-| `GPUTRACE_SHADER_SEARCH_PATHS` | Adds platform-specific path-list entries to shader source lookup before the built-in MLX search paths. |
-| `GPUTRACE_SKIP_MACGO` | Skips macgo app-bundle setup for capture and Xcode profiler automation, using the current process identity instead. |
-| `GPUTRACE_XCODE_APP` | Selects the app name passed to `open -a` when opening traces in Xcode automation. |
+| `APPLE_GTSHADERPROFILER_FRAMEWORK_PATH` | Overrides generated `GTShaderProfiler` loading before process initialization. Accepts an OS path-list of binaries, framework bundles, or directories containing `GTShaderProfiler.framework`. |
+| `DEVELOPER_DIR` | Selects the Xcode tools directory used for private-framework lookup before falling back to `xcode-select`. |
+| `GPUTRACE_APS_PRELOAD_BUNDLE` | Preloads `AGXGPURawCounterBundle` before APS source-group discovery, so a discovery failure reports the real reason. |
+| `GPUTRACE_APP_EVENTS` | Set by `gputrace capture` on the target process: path of a JSONL sidecar where the target may append span/instant records (`{"kind":"span","name",...,"start_ns","end_ns","labels":{...}}`). Records are merged into the bundle at capture close; stamp timestamps with the CUPTI clock, or stamp `CLOCK_REALTIME` and declare `"clock":"unix"` — the decoder translates via the capture's `clock_sync` record. Absent file is fine — declaring nothing is normal. |
+| `GPUTRACE_CAPTURE_API` | Set by `gputrace capture --api` on the target process: enables host-side runtime/driver API call records in the shim. |
+| `GPUTRACE_CAPTURE_FLUSH_MS` | Interval in milliseconds at which the shim's flush thread calls `cuptiActivityFlushAll` (default 10; 0 disables the thread). The interval bounds what a target that exits without synchronizing loses, because nothing recovers records still unflushed at exit — a Go target exits through `exit_group` and runs no destructor. Measured on MLX decode against an invariant of 129 argmax launches: 100ms recorded 106, 50ms 122, 25ms 123, 10ms 127. Cost is below the run-to-run spread. |
+| `GPUTRACE_CAPTURE_NVTX` | Set by `gputrace capture --nvtx` on the target process: arms `CUPTI_ACTIVITY_KIND_MARKER`, so NVTX ranges from the target or the libraries it links become marker records that pair into spans at decode. |
+| `NVTX_INJECTION64_PATH` | Set by `gputrace capture --nvtx` to the resolved `libcupti.so`: a target that loads NVTX dynamically only emits into the profiler named here. Absent libcupti is not fatal — statically linked NVTX still routes through the armed activity API. |
+| `GPUTRACE_CAPTURE_OUT` | Set by `gputrace capture` on the target process: output path for the shim's activity JSONL. The shim appends `.<pid>.jsonl`, and a bundle may hold more than one `capture_meta`/`clock_sync` pair for a single pid: `execve` keeps the pid, so wrapping the target in `env` (as the capture examples do) arms the shim once in `env` and again in the target. The first pair then comes from a process that never created a CUDA context, roughly 4 ms early. Readers should take the **last** `clock_sync`, not the first. |
+| `GPUTRACE_CAPTURE_DEBUG` | Enables extra debug logging from the capture shim. |
+| `GPUTRACE_MIO_MCA` | Enables MCA register readback for pipelines in `streamData` model integration. |
+| `GPUTRACE_MIO_SETUP_DATA_PATH` | Enables `_setupDataPath` on `GTShaderProfilerStreamData`, resolving sibling `.gpuprofiler_raw` files for scalar cost totals. |
+| `GPUTRACE_MIO_TIMELINE_DATA` | Enables serialized `costTimeline` reconstruction via `GTMioKVDataStore` and `GTMioTraceTimelineData`, including automatic sibling-data setup. |
+| `GPUTRACE_MIO_TRACE_TRACKS` | Enables top-level track model generation via `GTMioTraceDataHelper`, including automatic sibling-data setup. |
+| `GPUTRACE_MIO_USC_CLIQUES` | Enables USC clique summary readback, including automatic sibling-data setup. |
+| `GPUTRACE_PROCESS_STREAMDATA` | Specifies a `.gpuprofiler_raw/streamData` file for opt-in streamData model integration tests. |
+| `GPUTRACE_SHADER_SEARCH_PATHS` | Adds platform-specific path-list entries to shader source lookup before built-in search paths. |
+| `GPUTRACE_SKIP_MACGO` | Skips macgo app-bundle setup for capture and Xcode profiler automation, using current process identity instead. |
+| `GPUTRACE_XCODE_APP` | Selects the Xcode bundle used by automation, counter catalogs, and `shaders --xcode-cost`. The cost command restarts itself so the matching private framework loads before package initialization. |
+| `GPUTRACE_XCODE_DEVELOPER_DIR` | Specifies an explicit `Xcode.app/Contents/Developer` override for private `GTShaderProfiler.framework` and its matching `GTLLVMHelper`. |
 
 Test-only environment variables are documented in
 [`TESTING.md`](./TESTING.md).

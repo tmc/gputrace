@@ -1,0 +1,12 @@
+Thumbnails	Name	Execution Cost	Vertices	Vertices Reused	Pixels per Vertex	
+-	545 Compute Encoder 0 0xa43040fa0	6.858%	0 	0.00%	0.00 	
+-	1501 Compute Encoder 0 0xa43041540	9.253%	0 	0.00%	0.00 	
+-	2455 Compute Encoder 0 0xa43041680	7.572%	0 	0.00%	0.00 	
+-	3435 Compute Encoder 0 0xa43041720	10.206%	0 	0.00%	0.00 	
+-	4600 Compute Encoder 0 0xa430417c0	9.329%	0 	0.00%	0.00 	
+-	5833 Compute Encoder 0 0xa430419a0	8.536%	0 	0.00%	0.00 	
+-	7043 Compute Encoder 0 0xa43041d60	7.910%	0 	0.00%	0.00 	
+-	8276 Compute Encoder 0 0xa43042080	10.078%	0 	0.00%	0.00 	
+-	9516 Compute Encoder 0 0xa43042440	8.491%	0 	0.00%	0.00 	
+-	10478 Compute Encoder 0 0xa43042800	20.582%	0 	0.00%	0.00 	
+-	10837 Compute Encoder 0 0xa43042bc0	1.186%	0 	0.00%	0.00 	

@@ -171,6 +171,15 @@ func TestDiffOptionsValidate(t *testing.T) {
 			}(),
 		},
 		{
+			name: "quick explain allowed",
+			opts: func() diffOptions {
+				o := base
+				o.Quick = true
+				o.Explain = true
+				return o
+			}(),
+		},
+		{
 			name: "divergence with encoder by allowed",
 			opts: func() diffOptions {
 				o := base
@@ -206,7 +215,7 @@ func TestDiffOptionsValidate(t *testing.T) {
 				o.ShowUnmatched = true
 				return o
 			}(),
-			wantErr: "--quick cannot be combined with --show-matches/--show-unmatched/--show-occurrences/--explain",
+			wantErr: "--quick cannot be combined with --show-matches/--show-unmatched/--show-occurrences",
 		},
 		{
 			name: "by encoder with by rejected",

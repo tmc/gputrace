@@ -6,6 +6,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/tmc/gputrace"
 	"github.com/tmc/gputrace/internal/fmtutil"
+	tracepkg "github.com/tmc/gputrace/internal/trace"
 )
 
 var buffersCmd = newBuffersCommand(&buffersCommandOptions{
@@ -22,6 +24,7 @@ var buffersCmd = newBuffersCommand(&buffersCommandOptions{
 	format:        "table",
 	inspectBytes:  256,
 	inspectFormat: "hex",
+	limit:         defaultHumanLimit,
 })
 
 type buffersCommandOptions struct {
@@ -33,9 +36,14 @@ type buffersCommandOptions struct {
 	inspectBytes  int
 	inspectFormat string
 	resources     bool
+	limit         int
+	all           bool
 }
 
 func newBuffersCommand(opts *buffersCommandOptions) *cobra.Command {
+	if opts.limit == 0 {
+		opts.limit = defaultHumanLimit
+	}
 	cmd := &cobra.Command{
 		Use:   "buffers <trace.gputrace>",
 		Short: "List buffers in a GPU trace",
@@ -46,7 +54,7 @@ This command shows:
   - Buffer sizes
   - Buffer usage (total/unique)
   - Aliasing information (symlinks)
-  - Buffer bindings to encoders (with --verbose)
+  - Buffer bindings to encoders (with --bindings)
 
 The output can be sorted by size, ID, or name, and filtered by minimum size.
 
@@ -69,6 +77,8 @@ Examples:
 	cmd.Flags().IntVar(&opts.inspectBytes, "bytes", opts.inspectBytes, "Number of bytes to show in inspection")
 	cmd.Flags().StringVar(&opts.inspectFormat, "inspect-format", opts.inspectFormat, "Inspection format: hex, float32, int32, uint32, float16")
 	cmd.Flags().BoolVar(&opts.resources, "resources", opts.resources, "Show device-resource buffer inventory")
+	cmd.Flags().IntVar(&opts.limit, "limit", opts.limit, "Maximum buffers in human table output")
+	cmd.Flags().BoolVar(&opts.all, "all", opts.all, "Show all buffers in human table output")
 	return cmd
 }
 
@@ -94,13 +104,16 @@ func runBuffers(cmd *cobra.Command, args []string, cmdOpts *buffersCommandOption
 	if err != nil {
 		return fmt.Errorf("failed to open trace: %w", err)
 	}
+	if err := trace.RequireCaptureRecords(); err != nil {
+		return err
+	}
 
 	// If --inspect is specified, handle buffer inspection
 	if cmdOpts.inspect != "" {
 		return inspectBuffer(tracePath, cmdOpts.inspect, opts.inspectBytes, opts.inspectFormat)
 	}
 	if cmdOpts.resources {
-		return formatBufferResourceInventory(tracePath, opts.format, trace)
+		return formatBufferResourceInventory(cmd.OutOrStdout(), tracePath, opts.format, trace)
 	}
 
 	// Extract buffer information
@@ -126,11 +139,15 @@ func runBuffers(cmd *cobra.Command, args []string, cmdOpts *buffersCommandOption
 	// Format and display
 	switch opts.format {
 	case "json":
-		return formatBuffersJSON(buffers)
+		return formatBuffersJSON(cmd.OutOrStdout(), buffers)
 	case "csv":
-		return formatBuffersCSV(buffers)
+		return formatBuffersCSV(cmd.OutOrStdout(), buffers)
 	default:
-		return formatBuffersTable(buffers, trace)
+		limit, err := resolveHumanLimit(cmdOpts.limit, cmdOpts.all)
+		if err != nil {
+			return err
+		}
+		return formatBuffersTable(cmd.OutOrStdout(), buffers, trace, limit)
 	}
 }
 
@@ -378,43 +395,11 @@ func extractBufferBindings(trace *gputrace.Trace, bufferMap map[string]*BufferIn
 		return fmt.Errorf("read capture: %w", err)
 	}
 
-	// Parse CtU<b>ulul records from capture
-	// Marker: CtU<b>ulul = 43 74 55 3c 62 3e 75 6c 75 6c
-	marker := []byte{0x43, 0x74, 0x55, 0x3c, 0x62, 0x3e, 0x75, 0x6c, 0x75, 0x6c}
-	offset := 0
-	matchCount := 0
-	for {
-		pos := bytes.Index(captureData[offset:], marker)
-		if pos == -1 {
-			break
+	// Only Metal's own resource names resolve to a file in the bundle.
+	for bufAddr, name := range tracepkg.ScanBufferNames(captureData) {
+		if strings.HasPrefix(name, "MTLBuffer-") || strings.HasPrefix(name, "MTLHeap-") {
+			addrToName[bufAddr] = name
 		}
-		matchCount++
-		absolutePos := offset + pos
-
-		// Structure based on hexdump analysis:
-		// +0x00: "CtU<b>ulul" (10 bytes)
-		// +0x0a: padding (2 bytes of 0x00)
-		// +0x0c: first address (8 bytes, little-endian)
-		// +0x14: buffer address (8 bytes, little-endian)
-		// +0x1c: buffer name "MTLBuffer-XX-Y" or "MTLHeap-X-Y"
-
-		// Read buffer address at +0x14 (corrected offset)
-		if absolutePos+0x24 <= len(captureData) {
-			bufAddr := binary.LittleEndian.Uint64(captureData[absolutePos+0x14 : absolutePos+0x1c])
-
-			// Read buffer name at +0x1c (corrected offset)
-			nameStart := absolutePos + 0x1c
-			if bytes.HasPrefix(captureData[nameStart:], []byte("MTLBuffer-")) ||
-				bytes.HasPrefix(captureData[nameStart:], []byte("MTLHeap-")) {
-				nameEnd := bytes.IndexByte(captureData[nameStart:], 0)
-				if nameEnd > 0 && nameEnd < 100 {
-					name := string(captureData[nameStart : nameStart+nameEnd])
-					addrToName[bufAddr] = name
-				}
-			}
-		}
-
-		offset += pos + 10
 	}
 
 	// Build map from buffer name to BufferInfo
@@ -471,7 +456,7 @@ func extractBufferBindings(trace *gputrace.Trace, bufferMap map[string]*BufferIn
 		}
 
 		// Count encoders in this command buffer (number of dispatch calls)
-		dispatches, _ := trace.ParseDispatchInRegion(cbData, cb.Offset)
+		dispatches := trace.ParseDispatchInRegion(cbData, cb.Offset)
 		numEncoders := len(dispatches)
 		if numEncoders == 0 {
 			numEncoders = 1
@@ -583,8 +568,13 @@ type CommandBufferBinding struct {
 func sortBuffers(buffers []BufferInfo, sortBy string) {
 	switch sortBy {
 	case "size":
+		// Buffers of equal size break by ID, so the listing does not
+		// reshuffle between runs on the same trace.
 		sort.Slice(buffers, func(i, j int) bool {
-			return buffers[i].Size > buffers[j].Size // Descending
+			if buffers[i].Size != buffers[j].Size {
+				return buffers[i].Size > buffers[j].Size // Descending
+			}
+			return buffers[i].ID < buffers[j].ID
 		})
 	case "id":
 		sort.Slice(buffers, func(i, j int) bool {
@@ -598,7 +588,7 @@ func sortBuffers(buffers []BufferInfo, sortBy string) {
 }
 
 // formatBuffersTable formats buffers as a human-readable table.
-func formatBuffersTable(buffers []BufferInfo, trace *gputrace.Trace) error {
+func formatBuffersTable(w io.Writer, buffers []BufferInfo, trace *gputrace.Trace, limit int) error {
 	// Calculate totals
 	var totalSize uint64
 	totalAliases := 0
@@ -608,21 +598,27 @@ func formatBuffersTable(buffers []BufferInfo, trace *gputrace.Trace) error {
 	}
 
 	// Print summary line
-	fmt.Printf("%d %s, %s", len(buffers), Pluralize(len(buffers), "buffer", "buffers"), FormatBytes(totalSize))
+	fmt.Fprintf(w, "%d %s, %s", len(buffers), Pluralize(len(buffers), "buffer", "buffers"), FormatBytes(totalSize))
 	if totalAliases > 0 {
-		fmt.Printf(", %d %s", totalAliases, Pluralize(totalAliases, "alias", "aliases"))
+		fmt.Fprintf(w, ", %d %s", totalAliases, Pluralize(totalAliases, "alias", "aliases"))
 	}
-	fmt.Println()
-	fmt.Println()
+	fmt.Fprintln(w)
+	// "gputrace residency" also prints a buffer count, from creation records
+	// rather than from distinct resources, and is roughly 10x larger on the
+	// same capture with reconciling bytes. Both are right about different
+	// populations; the word "buffers" is what collides.
+	fmt.Fprintln(w, "(distinct resources; \"gputrace residency\" counts creation records instead)")
+	fmt.Fprintln(w)
 
 	// Print table header
-	fmt.Println(Colorize("Buffers", ColorBold))
-	fmt.Println(TableSeparator(80))
-	fmt.Printf("%-8s %-25s %12s %s\n", "ID", "Filename", "Size", "Aliases")
-	fmt.Println(TableSeparator(80))
+	fmt.Fprintln(w, Colorize("Buffers", ColorBold))
+	fmt.Fprintln(w, TableSeparator(80))
+	fmt.Fprintf(w, "%-8s %-25s %12s %s\n", "ID", "Filename", "Size", "Aliases")
+	fmt.Fprintln(w, TableSeparator(80))
 
 	// Print each buffer
-	for _, buf := range buffers {
+	shown := limitedCount(len(buffers), limit)
+	for _, buf := range buffers[:shown] {
 		aliasInfo := ""
 		if len(buf.Aliases) > 0 {
 			if len(buf.Aliases) == 1 {
@@ -632,7 +628,7 @@ func formatBuffersTable(buffers []BufferInfo, trace *gputrace.Trace) error {
 			}
 		}
 
-		fmt.Printf("%-8s %-25s %12s %s\n",
+		fmt.Fprintf(w, "%-8s %-25s %12s %s\n",
 			buf.ID,
 			buf.Filename,
 			FormatBytes(buf.Size),
@@ -642,27 +638,30 @@ func formatBuffersTable(buffers []BufferInfo, trace *gputrace.Trace) error {
 		// Show all aliases if more than 1
 		if len(buf.Aliases) > 1 {
 			for _, alias := range buf.Aliases {
-				fmt.Printf("%-8s   → %s\n", "", alias)
+				fmt.Fprintf(w, "%-8s   → %s\n", "", alias)
 			}
 		}
 
 		// Show buffer bindings if present
 		if len(buf.Bindings) > 0 {
-			fmt.Printf("%-8s   Used by:\n", "")
+			fmt.Fprintf(w, "%-8s   Used by:\n", "")
 			for _, binding := range buf.Bindings {
-				fmt.Printf("%-8s     - %s (index %d", "", binding.EncoderLabel, binding.Index)
+				fmt.Fprintf(w, "%-8s     - %s (index %d", "", binding.EncoderLabel, binding.Index)
 				if binding.Offset > 0 {
-					fmt.Printf(", offset %d", binding.Offset)
+					fmt.Fprintf(w, ", offset %d", binding.Offset)
 				}
-				fmt.Printf(")\n")
+				fmt.Fprintln(w, ")")
 			}
 		}
+	}
+	if shown < len(buffers) {
+		fmt.Fprintf(w, "... %d more buffers omitted (use --all)\n", len(buffers)-shown)
 	}
 
 	return nil
 }
 
-func formatBufferResourceInventory(tracePath, format string, trace *gputrace.Trace) error {
+func formatBufferResourceInventory(w io.Writer, tracePath, format string, trace *gputrace.Trace) error {
 	inventory, err := extractBufferResourceInventory(tracePath, trace)
 	if err != nil {
 		return err
@@ -670,13 +669,13 @@ func formatBufferResourceInventory(tracePath, format string, trace *gputrace.Tra
 
 	switch format {
 	case "json":
-		enc := json.NewEncoder(os.Stdout)
+		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
 		return enc.Encode(inventory)
 	case "csv":
-		fmt.Println("Filename,Kind,Records,FinalNameRecords,SizeMatched,SizeBad,NoFinalFile")
+		fmt.Fprintln(w, "Filename,Kind,Records,FinalNameRecords,SizeMatched,SizeBad,NoFinalFile")
 		for _, file := range inventory.Files {
-			fmt.Printf("%s,%s,%d,%d,%d,%d,%d\n",
+			fmt.Fprintf(w, "%s,%s,%d,%d,%d,%d,%d\n",
 				file.Filename,
 				file.Kind,
 				file.Records,
@@ -688,18 +687,18 @@ func formatBufferResourceInventory(tracePath, format string, trace *gputrace.Tra
 		}
 		return nil
 	default:
-		fmt.Printf("%d final %s, %s\n\n",
+		fmt.Fprintf(w, "%d final %s, %s\n\n",
 			inventory.FinalBuffers,
 			Pluralize(inventory.FinalBuffers, "buffer", "buffers"),
 			FormatBytes(inventory.FinalBytes),
 		)
-		fmt.Println(Colorize("Device Resource Buffers", ColorBold))
-		fmt.Println(TableSeparator(110))
-		fmt.Printf("%-36s %-10s %8s %12s %12s %8s %12s\n",
+		fmt.Fprintln(w, Colorize("Device Resource Buffers", ColorBold))
+		fmt.Fprintln(w, TableSeparator(110))
+		fmt.Fprintf(w, "%-36s %-10s %8s %12s %12s %8s %12s\n",
 			"File", "Kind", "Records", "FinalNames", "SizeMatched", "SizeBad", "NoFinalFile")
-		fmt.Println(TableSeparator(110))
+		fmt.Fprintln(w, TableSeparator(110))
 		for _, file := range inventory.Files {
-			fmt.Printf("%-36s %-10s %8d %12d %12d %8d %12d\n",
+			fmt.Fprintf(w, "%-36s %-10s %8d %12d %12d %8d %12d\n",
 				file.Filename,
 				file.Kind,
 				file.Records,
@@ -709,12 +708,12 @@ func formatBufferResourceInventory(tracePath, format string, trace *gputrace.Tra
 				file.NoFinalFile,
 			)
 		}
-		printBufferResourceSizeBins(inventory.Files)
+		printBufferResourceSizeBins(w, inventory.Files)
 		return nil
 	}
 }
 
-func printBufferResourceSizeBins(files []BufferResourceFile) {
+func printBufferResourceSizeBins(w io.Writer, files []BufferResourceFile) {
 	type row struct {
 		filename string
 		kind     string
@@ -746,15 +745,15 @@ func printBufferResourceSizeBins(files []BufferResourceFile) {
 	if len(rows) < limit {
 		limit = len(rows)
 	}
-	fmt.Println()
-	fmt.Println(Colorize("Top Matched Resource Size Bins", ColorBold))
-	fmt.Println(TableSeparator(100))
-	fmt.Printf("%-36s %-10s %12s %8s %7s %8s %8s %12s %8s %10s %8s\n",
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, Colorize("Top Matched Resource Size Bins", ColorBold))
+	fmt.Fprintln(w, TableSeparator(100))
+	fmt.Fprintf(w, "%-36s %-10s %12s %8s %7s %8s %8s %12s %8s %10s %8s\n",
 		"File", "Kind", "Size", "Records", "Names", "First", "Last", "Bytes", "CmdNames", "CmdRecords", "CmdEnc")
-	fmt.Println(TableSeparator(100))
+	fmt.Fprintln(w, TableSeparator(100))
 	for i := 0; i < limit; i++ {
 		row := rows[i]
-		fmt.Printf("%-36s %-10s %12d %8d %7d %8d %8d %12s %8d %10d %8d\n",
+		fmt.Fprintf(w, "%-36s %-10s %12d %8d %7d %8d %8d %12s %8d %10d %8d\n",
 			row.filename,
 			row.kind,
 			row.bin.Size,
@@ -978,7 +977,7 @@ func resourceRecordMarkerAt(data []byte, nameStart int) (string, int) {
 	window := data[windowStart:nameStart]
 	markers := []string{
 		"CU<b>ulul",
-		"CtU<b>ulul",
+		tracepkg.CtUMarker,
 		"Cuw",
 	}
 	bestMarker := ""
@@ -1075,7 +1074,7 @@ func extractBufferCommandUses(trace *gputrace.Trace, finalSizes map[string]uint6
 		if err != nil {
 			continue
 		}
-		dispatches, _ := trace.ParseDispatchInRegion(cbData, cb.Offset)
+		dispatches := trace.ParseDispatchInRegion(cbData, cb.Offset)
 		numEncoders := len(dispatches)
 		if numEncoders == 0 {
 			numEncoders = 1
@@ -1117,27 +1116,14 @@ func extractBufferCommandUses(trace *gputrace.Trace, finalSizes map[string]uint6
 	return uses, nil
 }
 
+// extractBufferAddressNames maps buffer addresses to the buffer files they
+// name. Only MTLBuffer- names resolve to a file in the bundle.
 func extractBufferAddressNames(captureData []byte) map[uint64]string {
 	addrToName := make(map[uint64]string)
-	marker := []byte{0x43, 0x74, 0x55, 0x3c, 0x62, 0x3e, 0x75, 0x6c, 0x75, 0x6c}
-	offset := 0
-	for {
-		pos := bytes.Index(captureData[offset:], marker)
-		if pos == -1 {
-			break
+	for addr, name := range tracepkg.ScanBufferNames(captureData) {
+		if strings.HasPrefix(name, "MTLBuffer-") {
+			addrToName[addr] = name
 		}
-		absolutePos := offset + pos
-		if absolutePos+0x24 <= len(captureData) {
-			bufAddr := binary.LittleEndian.Uint64(captureData[absolutePos+0x14 : absolutePos+0x1c])
-			nameStart := absolutePos + 0x1c
-			if bytes.HasPrefix(captureData[nameStart:], []byte("MTLBuffer-")) {
-				nameEnd := bytes.IndexByte(captureData[nameStart:], 0)
-				if nameEnd > 0 && nameEnd < 100 {
-					addrToName[bufAddr] = string(captureData[nameStart : nameStart+nameEnd])
-				}
-			}
-		}
-		offset += pos + len(marker)
 	}
 	return addrToName
 }
@@ -1171,7 +1157,7 @@ func resourceRecordSizeOffset(data []byte, nameEnd int, want uint64) int {
 }
 
 // formatBuffersJSON formats buffers as JSON.
-func formatBuffersJSON(buffers []BufferInfo) error {
+func formatBuffersJSON(w io.Writer, buffers []BufferInfo) error {
 	output := make([]bufferJSONInfo, 0, len(buffers))
 	for _, buf := range buffers {
 		output = append(output, bufferJSONInfo{
@@ -1181,7 +1167,7 @@ func formatBuffersJSON(buffers []BufferInfo) error {
 			Aliases:  len(buf.Aliases),
 		})
 	}
-	enc := json.NewEncoder(os.Stdout)
+	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(output)
 }
@@ -1194,8 +1180,8 @@ type bufferJSONInfo struct {
 }
 
 // formatBuffersCSV formats buffers as CSV.
-func formatBuffersCSV(buffers []BufferInfo) error {
-	w := csv.NewWriter(os.Stdout)
+func formatBuffersCSV(out io.Writer, buffers []BufferInfo) error {
+	w := csv.NewWriter(out)
 	if err := w.Write([]string{"ID", "Filename", "Size", "Aliases"}); err != nil {
 		return fmt.Errorf("write csv header: %w", err)
 	}

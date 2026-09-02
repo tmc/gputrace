@@ -81,9 +81,9 @@ func (t *Trace) BuildDependencyGraph() (*DependencyGraph, error) {
 	graph := &DependencyGraph{}
 
 	// Track buffer state
-	lastWriter := make(map[uint64]int)            // Address -> Last Writer Node ID
-	lastReaders := make(map[uint64]map[int]bool)  // Address -> Set of Reader Node IDs since last write
-	bufferNames := make(map[uint64]string)        // Address -> Name
+	lastWriter := make(map[uint64]int)           // Address -> Last Writer Node ID
+	lastReaders := make(map[uint64]map[int]bool) // Address -> Set of Reader Node IDs since last write
+	bufferNames := make(map[uint64]string)       // Address -> Name
 
 	currentNodeID := -1
 
@@ -211,38 +211,15 @@ func (t *Trace) ParseDependencyEvents() ([]DependencyEvent, error) {
 	}
 
 	// Markers for different record types
-	ctMarker := []byte("Ct\x00\x00")        // Compute dispatch with function addr + buffer bindings
-	ctBindMarker := []byte("CtU<b>ulul")    // Buffer definition with name
-	ctUseMarker := []byte("Ctulul\x00")     // Buffer usage in dispatch
+	ctMarker := []byte("Ct\x00\x00")    // Compute dispatch with function addr + buffer bindings
+	ctUseMarker := []byte("Ctulul\x00") // Buffer usage in dispatch
 
 	// First pass: build buffer name map from CtU<b>ulul records
-	bufferNames := make(map[uint64]string)
-	offset := 0
-	for offset < len(data)-40 {
-		pos := bytes.Index(data[offset:], ctBindMarker)
-		if pos == -1 {
-			break
-		}
-		absolutePos := offset + pos
-		base := absolutePos + 12 // After "CtU<b>ulul\x00\x00"
-
-		if base+16 <= len(data) {
-			bufferAddr := binary.LittleEndian.Uint64(data[base+8 : base+16])
-			strStart := base + 16
-			strEnd := strStart
-			for strEnd < len(data) && data[strEnd] != 0 && strEnd-strStart < 64 {
-				strEnd++
-			}
-			if strEnd > strStart {
-				bufferNames[bufferAddr] = string(data[strStart:strEnd])
-			}
-		}
-		offset = absolutePos + len(ctBindMarker)
-	}
+	bufferNames := ScanBufferNames(data)
 
 	// Second pass: parse Ct records (compute dispatches) to get kernel names and bindings
 	// Ct records contain: function address (resolves to kernel name) + buffer binding array
-	offset = 0
+	offset := 0
 	for offset < len(data)-64 {
 		pos := bytes.Index(data[offset:], ctMarker)
 		if pos == -1 {

@@ -21,20 +21,18 @@ func newBufferAccessCommand(opts *bufferAccessOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "buffer-access <trace.gputrace>",
 		Short: "Analyze buffer access patterns",
-		Long: `Analyze buffer access patterns to identify optimization opportunities.
+		Long: `Analyze decoded buffer references and report attribution coverage.
 
-This command analyzes Ct and Cul records to track:
+This command currently analyzes structured Ct records to track:
 - Which encoders access which buffers
 - Buffer reuse frequency across encoders
 - Memory aliasing (multiple buffer names for same address)
 - Unused buffers (allocated but never accessed)
 - Read-only vs read-write buffers (future enhancement)
 
-The analysis helps identify:
-- Buffers that could be reused to reduce memory usage
-- Unused buffers that waste memory
-- Memory aliasing issues that could cause bugs
-- Access patterns for optimization
+Cul and other resource records are not yet attributed. Human and JSON output
+report this limitation; optimization advice is withheld while attribution is
+incomplete.
 
 Examples:
   # Analyze buffer access patterns
@@ -68,6 +66,9 @@ func runBufferAccess(cmd *cobra.Command, args []string, opts *bufferAccessOption
 	trace, err := gputrace.Open(tracePath)
 	if err != nil {
 		return fmt.Errorf("failed to open trace: %w", err)
+	}
+	if err := trace.RequireCaptureRecords(); err != nil {
+		return err
 	}
 
 	// Analyze buffer access patterns

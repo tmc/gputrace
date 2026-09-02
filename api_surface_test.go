@@ -19,7 +19,6 @@ var (
 	_ func(*gputrace.Trace) ([]*gputrace.EncoderTiming, error)                                                  = gputrace.ExtractTimingData
 	_ func(*gputrace.Trace) (*timing.Store0TimingData, error)                                                   = gputrace.ExtractStore0Timing
 	_ func(*gputrace.Trace, *timing.Store0TimingData) []*gputrace.EncoderTiming                                 = gputrace.ConvertStore0ToEncoderTimings
-	_ func(*gputrace.Trace) []*gputrace.EncoderTiming                                                           = gputrace.GenerateSyntheticTiming
 	_ func(*gputrace.Trace) (*gputrace.ShaderMetricsReport, error)                                              = gputrace.ExtractShaderMetrics
 	_ func(...string) *gputrace.ShaderSourceMapper                                                              = gputrace.NewShaderSourceMapper
 	_ func(io.Writer, *gputrace.ShaderMetricsReport) error                                                      = gputrace.FormatShadersSimple
@@ -70,9 +69,6 @@ func TestFacadeCalls(t *testing.T) {
 	}
 	if _, err := gputrace.ExtractStatistics(trace); err != nil {
 		t.Fatalf("ExtractStatistics: %v", err)
-	}
-	if timings := gputrace.GenerateSyntheticTiming(trace); len(timings) == 0 {
-		t.Fatal("GenerateSyntheticTiming returned no timings")
 	}
 	if extractor := gputrace.NewTimingMetricsExtractor(trace); extractor == nil {
 		t.Fatal("NewTimingMetricsExtractor returned nil")

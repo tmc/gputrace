@@ -50,3 +50,57 @@ func TestCreateCounterSampleBuffersRejectsUnknownCounterSet(t *testing.T) {
 		t.Fatalf("len(Buffers) = %d, want 0", len(cs.Buffers))
 	}
 }
+
+type sampleBackend struct {
+	created  map[string]int
+	samples  []int
+	resolved map[string][]byte
+}
+
+func (b *sampleBackend) CreateSampleBuffer(name string, count int) (any, error) {
+	if b.created == nil {
+		b.created = make(map[string]int)
+	}
+	b.created[name] = count
+	return name, nil
+}
+
+func (b *sampleBackend) SampleCounters(_, _ any, index int) error {
+	b.samples = append(b.samples, index)
+	return nil
+}
+
+func (b *sampleBackend) ResolveCounterSamples(_, buffer any, _, _ int) ([]byte, error) {
+	name := buffer.(string)
+	return b.resolved[name], nil
+}
+
+func TestCounterSamplerBackendRetainsRawData(t *testing.T) {
+	backend := &sampleBackend{resolved: map[string][]byte{
+		"timestamp": {1, 2, 3},
+	}}
+	cs := NewCounterSamplerWithBackend(&CounterSamplingConfig{
+		EnabledCounterSets: []string{"timestamp"},
+	}, backend)
+	if err := cs.CreateCounterSampleBuffers(struct{}{}, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := cs.SampleCounters(struct{}{}, "encoder_start", 0, -1); err != nil {
+		t.Fatal(err)
+	}
+	if err := cs.SampleCounters(struct{}{}, "encoder_end", 0, -1); err != nil {
+		t.Fatal(err)
+	}
+	if err := cs.ResolveCounterSamplesWithCommandBuffer(struct{}{}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(backend.samples), 2; got != want {
+		t.Fatalf("sample calls = %d, want %d", got, want)
+	}
+	if got := string(cs.RawData["timestamp"]); got != string([]byte{1, 2, 3}) {
+		t.Fatalf("raw data = %q, want raw bytes", got)
+	}
+	if got, want := cs.NextSampleIndex, 2; got != want {
+		t.Fatalf("NextSampleIndex = %d, want %d", got, want)
+	}
+}

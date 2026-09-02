@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/tmc/gputrace"
+	"github.com/tmc/gputrace/internal/cupticapture"
 	"github.com/tmc/gputrace/internal/export"
 	"github.com/tmc/gputrace/internal/mlxprof"
 	"github.com/tmc/gputrace/internal/timing"
@@ -24,6 +25,7 @@ type pprofOptions struct {
 	showStats   bool
 	searchPaths []string
 	sourceLines bool
+	dot         string
 }
 
 func newPprofCommand(opts *pprofOptions) *cobra.Command {
@@ -60,7 +62,58 @@ The pprof profile shows GPU time organized hierarchically:
         └─ Encoder
             └─ Kernel (shader)
 
-This makes it easy to identify which shaders are consuming the most GPU time.`,
+This makes it easy to identify which shaders are consuming the most GPU time.
+
+CUDA captures (a .gpucapture bundle or an activity .jsonl) take a different
+path: one sample per kernel launch, with four value types.
+
+  gpu_time      nanoseconds   kernel end - start
+  launch_count  count         1 per kernel record
+  queue_delay   nanoseconds   queued until device start
+  idle_after    nanoseconds   device time on this kernel's stream before the
+                              next activity starts
+
+queue_delay has a structural ceiling: CUDA-graph replays carry no queue
+timestamps at all, so on a graph-heavy decode it can only ever describe the
+eager remainder — often a few dozen launches out of tens of thousands. The
+export prints the coverage per run. Low coverage there is the workload's
+shape, not a capture failure.
+
+Every export also states whether the capture kept every record the run
+produced. A capture that dropped activity records loses them uniformly
+across kernel names and sizes, so it renders, diffs, and reads as a real
+result; the totals from one are a share of the run and not comparable
+against anything.
+
+The last two are what make a comparison conclusive. Diffing two captures at
+-sample_index=gpu_time and again at -sample_index=idle_after answers whether
+one side's extra time is inside kernels or between them:
+
+  gputrace pprof py.gpucapture -o py.pb.gz
+  gputrace pprof go.gpucapture -o go.pb.gz
+  go tool pprof -top -diff_base=py.pb.gz go.pb.gz
+  go tool pprof -top -sample_index=idle_after -diff_base=py.pb.gz go.pb.gz
+
+A diff needs both profiles to carry identical sample type lists, so pass
+--dot to both sides or to neither.
+
+Stacks come from the application spans in the capture (the ones a target
+writes to GPUTRACE_APP_EVENTS, or NVTX ranges), innermost span last and the
+kernel name as the leaf. Span frames are the span name, so every decode step
+aggregates into one frame; the step number rides along as the eval_seq
+label, sliceable with -tagfocus. A kernel no span encloses is stacked under
+an "unattributed" root rather than dropped.
+
+gpu_time is the SUM of kernel durations, not wall time. Kernels on different
+streams overlap, so the total can exceed the capture's wall span, and it is
+not rescaled to fit. Sum-of-durations is the right answer to "which kernel
+costs most"; a flame graph built from it is not a timeline. For wall span and
+occupancy, use gputrace summary — they are deliberately not folded in here.
+
+  --dot <dir>   join CUDA-graph structure from MLX_SAVE_CUDA_GRAPHS_DOT_FILE
+                dumps into the same profile, adding kernel_count and
+                graph_commits joined on kernel name. That turns "+56 kernels"
+                into "+56 kernels worth X ms". See gputrace dot-pprof.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runPprof(cmd, args, opts)
@@ -75,6 +128,7 @@ This makes it easy to identify which shaders are consuming the most GPU time.`,
 	cmd.Flags().BoolVar(&opts.showStats, "stats", opts.showStats, "Show trace statistics only")
 	cmd.Flags().StringSliceVar(&opts.searchPaths, "search-path", opts.searchPaths, "Search paths for shader source files")
 	cmd.Flags().BoolVar(&opts.sourceLines, "source-lines", opts.sourceLines, "Generate pprof with per-source-line samples (enables go tool pprof -list)")
+	cmd.Flags().StringVar(&opts.dot, "dot", opts.dot, "CUDA-graph DOT dump directory to join into the profile (CUDA captures only)")
 	return cmd
 }
 
@@ -84,6 +138,16 @@ func init() {
 
 func runPprof(cmd *cobra.Command, args []string, opts *pprofOptions) error {
 	tracePath := args[0]
+
+	// CUDA captures (.gpucapture bundles or activity JSONL) take the
+	// cuptiprofile path: per-launch kernel samples instead of Metal
+	// shader timing. Everything else keeps the Metal flow.
+	if cupticapture.IsBundle(tracePath) || filepath.Ext(tracePath) == ".jsonl" {
+		return runCuptiPprof(cmd, args, opts)
+	}
+	if opts.dot != "" {
+		return fmt.Errorf("--dot joins CUDA-graph dumps into a CUDA capture profile; %s is a Metal trace", tracePath)
+	}
 
 	// Verify trace file exists
 	if err := checkTraceFile(tracePath); err != nil {
@@ -169,7 +233,7 @@ func runPprof(cmd *cobra.Command, args []string, opts *pprofOptions) error {
 			return fmt.Errorf("failed to write profiles: %w", err)
 		}
 
-		fmt.Printf("✅ Generated profiles:\n")
+		fmt.Printf("Generated profiles:\n")
 		fmt.Printf("   %s.gpu.pprof       - Hierarchical GPU profile\n", outputPrefix)
 		fmt.Printf("   %s.gpu-flat.pprof  - Flat GPU profile\n", outputPrefix)
 		fmt.Printf("   %s.combined.pprof  - Combined multi-view profile\n", outputPrefix)
@@ -188,7 +252,7 @@ func runPprof(cmd *cobra.Command, args []string, opts *pprofOptions) error {
 			return fmt.Errorf("failed to write text report: %w", err)
 		}
 
-		fmt.Fprintf(pprofStatusWriter(outputPath), "✅ Text report written to: %s\n", outputPath)
+		fmt.Fprintf(pprofStatusWriter(outputPath), "Text report written: %s\n", outputPath)
 
 	} else {
 		// Generate single pprof file
@@ -206,7 +270,7 @@ func runPprof(cmd *cobra.Command, args []string, opts *pprofOptions) error {
 			return fmt.Errorf("failed to write pprof: %w", err)
 		}
 
-		fmt.Fprintf(status, "✅ GPU profile written to: %s\n", outputPath)
+		fmt.Fprintf(status, "GPU profile written: %s\n", outputPath)
 		fmt.Fprintf(status, "\nView with: go tool pprof -top %s\n", outputPath)
 		fmt.Fprintf(status, "Or:        go tool pprof -http=:8080 %s\n", outputPath)
 	}
@@ -259,6 +323,7 @@ func generateSourceLinesPprof(tracePath string, opts *pprofOptions) error {
 
 	timingSelection := selectSourceLineTimings(trace)
 	fmt.Fprint(status, formatSourceLineTimingNotice(timingSelection.source, len(timingSelection.timings)))
+	fmt.Fprint(status, sourceLineGranularityNotice)
 	timings := timingSelection.timings
 	timings = appendSourceMappedEncoderTimings(trace, timings, mapper)
 
@@ -283,8 +348,8 @@ func generateSourceLinesPprof(tracePath string, opts *pprofOptions) error {
 		return fmt.Errorf("failed to write pprof: %w", err)
 	}
 
-	fmt.Fprintf(status, "✅ Source-lines pprof written to: %s\n", outputPath)
-	fmt.Fprintf(status, "\nView per-line costs with:\n")
+	fmt.Fprintf(status, "Source-lines pprof written: %s\n", outputPath)
+	fmt.Fprintf(status, "\nLocate a kernel in its source with:\n")
 	fmt.Fprintf(status, "  go tool pprof -list <kernel_name> %s\n", outputPath)
 	fmt.Fprintf(status, "\nOr interactive mode:\n")
 	fmt.Fprintf(status, "  go tool pprof %s\n", outputPath)
@@ -298,7 +363,6 @@ type sourceLineTimingSource string
 const (
 	sourceLineTimingProfiler      sourceLineTimingSource = "profiler"
 	sourceLineTimingEncoderLabels sourceLineTimingSource = "encoder_labels"
-	sourceLineTimingSynthetic     sourceLineTimingSource = "synthetic"
 )
 
 type sourceLineTimingSelection struct {
@@ -323,10 +387,9 @@ func selectSourceLineTimings(trace *gputrace.Trace) sourceLineTimingSelection {
 		}
 	}
 
-	return sourceLineTimingSelection{
-		timings: timing.GenerateSyntheticTiming(trace),
-		source:  sourceLineTimingSynthetic,
-	}
+	// No timing source available. Source-line attribution without durations is
+	// still useful; invented durations are not.
+	return sourceLineTimingSelection{}
 }
 
 func sourceLineProfilerTimings(profilerTimings []gputrace.EncoderTimingInfo) []*export.EncoderTiming {
@@ -348,16 +411,27 @@ func sourceLineProfilerTimings(profilerTimings []gputrace.EncoderTimingInfo) []*
 	return timings
 }
 
+// sourceLineGranularityNotice states the granularity of --source-lines output.
+//
+// A kernel's whole duration lands on the one line where the kernel is
+// declared, because that is the only line the mapper can identify. Nothing in
+// the trace says how the cost is spread across the kernel body: the archived
+// MTLLibrary carries no debug-info section, and no counter record carries a
+// program counter or a source line. Without this notice a `pprof -list`
+// listing reads as a per-line measurement, which it is not.
+//
+// See docs/research/SOURCE_LEVEL_COST.md for the evidence.
+const sourceLineGranularityNotice = "Granularity: per kernel, not per line. Each kernel's cost is reported at its\n" +
+	"declaration line; the trace carries no cost breakdown within a kernel body.\n"
+
 func formatSourceLineTimingNotice(source sourceLineTimingSource, count int) string {
 	switch source {
 	case sourceLineTimingProfiler:
 		return fmt.Sprintf("Timing source: profiler .gpuprofiler_raw data (%s)\n", formatTimingRows(count))
 	case sourceLineTimingEncoderLabels:
 		return fmt.Sprintf("Timing source: encoder label timing data (%s)\n", formatTimingRows(count))
-	case sourceLineTimingSynthetic:
-		return fmt.Sprintf("Timing source: synthetic fallback (%s; no real profiler or encoder label timing found)\n", formatTimingRows(count))
 	default:
-		return fmt.Sprintf("Timing source: unknown (%s)\n", formatTimingRows(count))
+		return "Timing source: none (no profiler or encoder label timing found); source lines are reported without durations\n"
 	}
 }
 
@@ -383,11 +457,7 @@ func appendSourceMappedEncoderTimings(trace *gputrace.Trace, timings []*export.E
 	if maxEnd == 0 {
 		maxEnd = 1000000000000000
 	}
-	encoders, err := trace.ParseComputeEncoders()
-	if err != nil {
-		return timings
-	}
-	for _, enc := range encoders {
+	for _, enc := range trace.ParseComputeEncoders() {
 		if enc.Label == "" || seen[enc.Label] {
 			continue
 		}

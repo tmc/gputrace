@@ -36,6 +36,17 @@ Use this generator to recreate the broader analysis corpus locally when you need
 
 **Purpose:** Identify occupancy field by comparing register pressure patterns
 
+### Controlled parity instrument
+
+- `parity-asymmetric` — four labelled command buffers, three labelled compute
+  encoders, and dispatch counts **1/3/7**. The fourth command buffer is empty.
+
+This scenario is deliberately asymmetric: neither command-buffer count nor
+dispatch count can support a positional join by accident. Its labels are stable
+content-bearing strings, not ordinal names. It writes a ground-truth JSON file
+with each command buffer's label, optional encoder label and kernel, dispatch
+count, CPU encode/commit/complete timestamps, and Metal GPU/kernel timestamps.
+
 ## Building
 
 ```bash
@@ -131,6 +142,71 @@ The automated targets set `MTL_CAPTURE_ENABLED=1` and pass an output `.gputrace`
 path to the generator. They create `.gputrace` packages; use Instruments when
 you also need to export GPU counter CSV files.
 
+### Controlled parity capture
+
+Use the compact timing-only capture for repeated label, timestamp, and
+signpost experiments. It produces a `.gputrace` and a sibling ground-truth
+JSON file, but does not request a large profiler-counter replay.
+
+```bash
+make parity-timing-capture CAPTURE_DIR=~/tmp/gputrace-parity/$(date +%Y%m%d-%H%M%S)
+```
+
+For a profiled counter experiment, profile that exact bundle and keep the
+ground-truth JSON beside the profiled output:
+
+```bash
+TRACE=~/tmp/gputrace-parity/.../parity-asymmetric-....gputrace
+gputrace xcode-profile run "$TRACE" -o "${TRACE%.gputrace}-perfdata.gputrace"
+```
+
+#### Collect host signposts concurrently
+
+The program emits `os_signpost` records with subsystem
+`com.tmc.gputrace.parity`, category `trace-generator`:
+
+- `Encode` interval for command-buffer creation and encoder work;
+- `CommitToComplete` interval from `commit()` through Metal completion; and
+- `Complete` event at the completion callback.
+
+`MTL_CAPTURE_ENABLED=1` and `MTLCaptureManager` do not collect these host
+signposts. Use this concurrent `log stream` as a capture-side control, then
+stop it after the program exits:
+
+```bash
+LOG=~/tmp/gputrace-parity/signposts-$(date +%Y%m%d-%H%M%S).jsonl
+mkdir -p "${LOG%/*}"
+log stream --style json \
+  --predicate 'subsystem == "com.tmc.gputrace.parity"' >"$LOG" &
+LOG_PID=$!
+
+make parity-timing-capture CAPTURE_DIR=~/tmp/gputrace-parity/$(date +%Y%m%d-%H%M%S)
+kill "$LOG_PID"
+wait "$LOG_PID" 2>/dev/null || true
+```
+
+Keep the trace, its `*.ground-truth.json`, and the concurrent signpost log as
+one experiment. The log uses CPU time and is not by itself a GPU clock bridge.
+
+On the current host, this default command is a **negative control**: it
+produced no records for the custom subsystem both without and with
+`MTLCaptureManager` capture. Do not interpret an empty log as proof that the
+signpost calls did not run, and do not claim External Process support from it.
+Xcode's `Logging` template does capture the same custom intervals and messages:
+
+```bash
+xcrun xctrace record --template Logging \
+  --output ~/tmp/gputrace-parity/signposts.trace \
+  --launch -- .build/release/trace-generator parity-asymmetric \
+  --ground-truth ~/tmp/gputrace-parity/signposts.ground-truth.json
+```
+
+Keep that `.trace` and its ground truth as the host-annotation artifact. It is
+a separate time domain from a GPU trace, so it does not itself establish an
+External Process-to-command-buffer join. A combined Xcode collection must
+retain the same labelled signpost payload and expose an explicit GPU identity
+before gputrace can emit an External Process lane.
+
 ## Expected Output
 
 ### Single Encoder Example
@@ -185,6 +261,7 @@ testdata/
     ├── low-alu-simple-add/
     ├── high-alu-complex-math/
     ├── low-occupancy-high-registers/
+    ├── parity-asymmetric/        # Local controlled parity experiments
     └── high-occupancy-low-registers/
 ```
 

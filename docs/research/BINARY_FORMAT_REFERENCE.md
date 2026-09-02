@@ -574,10 +574,9 @@ func formatUint64(v uint64) string {
 
 See also:
 - [STREAMDATA_FORMAT.md](../STREAMDATA_FORMAT.md) - streamData plist parsing for dispatch timing
-- [PERFCOUNTER_FIELD_OFFSET_MAP.md](./PERFCOUNTER_FIELD_OFFSET_MAP.md) - Detailed field offset discoveries
-- [PERFCOUNTERS_STATUS.md](./PERFCOUNTERS_STATUS.md) - Implementation status
+- [PERFCOUNTERS_REFERENCE.md](./PERFCOUNTERS_REFERENCE.md) - Field offsets, metric catalog, implementation status
 - [RECORD_FORMATS.md](./RECORD_FORMATS.md) - Overall trace file formats
-- [TRACE_FORMAT.md](./TRACE_FORMAT.md) - Main capture file format
+- [XDIC_INDEX_FORMAT.md](./XDIC_INDEX_FORMAT.md) - Main capture file format
 
 ---
 

@@ -18,7 +18,7 @@ func BuildReport(a, b *TraceData, aligned AlignmentResult, opts ReportOptions) R
 		TraceAPath:    a.Path,
 		TraceBPath:    b.Path,
 		MatchedPairs:  append([]MatchPair(nil), aligned.Matches...),
-		Warnings:      append(append([]string(nil), a.Warnings...), b.Warnings...),
+		Warnings:      uniqueStrings(append(append([]string(nil), a.Warnings...), b.Warnings...)),
 	}
 
 	totalA := totalDuration(aligned.TraceA)
@@ -28,21 +28,46 @@ func BuildReport(a, b *TraceData, aligned AlignmentResult, opts ReportOptions) R
 		matchedDelta += m.DeltaUs
 	}
 	unmatchedDelta := totalDuration(aligned.UnmatchedA) - totalDuration(aligned.UnmatchedB)
+	dispatchCountA := len(aligned.TraceA)
+	dispatchCountB := len(aligned.TraceB)
+	if !a.TimingAvailable && a.StructuralDispatches != nil {
+		dispatchCountA = *a.StructuralDispatches
+	}
+	if !b.TimingAvailable && b.StructuralDispatches != nil {
+		dispatchCountB = *b.StructuralDispatches
+	}
+	timingAvailable := (a.TimingAvailable || len(a.Dispatches) > 0) &&
+		(b.TimingAvailable || len(b.Dispatches) > 0)
 
 	report.Summary = Summary{
-		TraceALabel:        a.Label,
-		TraceBLabel:        b.Label,
-		DispatchCountA:     len(aligned.TraceA),
-		DispatchCountB:     len(aligned.TraceB),
-		DispatchCountDelta: len(aligned.TraceA) - len(aligned.TraceB),
-		TotalGPUTimeAUs:    totalA,
-		TotalGPUTimeBUs:    totalB,
-		TotalDeltaUs:       totalA - totalB,
-		MatchedDeltaUs:     matchedDelta,
-		UnmatchedDeltaUs:   unmatchedDelta,
+		TraceALabel:            a.Label,
+		TraceBLabel:            b.Label,
+		DispatchCountA:         dispatchCountA,
+		DispatchCountB:         dispatchCountB,
+		DispatchCountDelta:     dispatchCountA - dispatchCountB,
+		TimingAvailable:        timingAvailable,
+		TotalGPUTimeAUs:        totalA,
+		TotalGPUTimeBUs:        totalB,
+		DispatchSpanAUs:        totalA,
+		DispatchSpanBUs:        totalB,
+		EffectiveGPUTimeAUs:    a.EffectiveGPUTimeUs,
+		EffectiveGPUTimeBUs:    b.EffectiveGPUTimeUs,
+		CommandBufferActiveAUs: a.CommandBufferActiveUs,
+		CommandBufferActiveBUs: b.CommandBufferActiveUs,
+		TimingMetric:           timingMetric(timingAvailable),
+		AttributionLimited:     a.AttributionLimited || b.AttributionLimited,
+		TotalDeltaUs:           totalA - totalB,
+		MatchedDeltaUs:         matchedDelta,
+		UnmatchedDeltaUs:       unmatchedDelta,
 	}
 
 	report.TopFunctionDeltas = buildFunctionDeltas(aligned)
+	if !timingAvailable {
+		// Neither side has profiler dispatches to align, but the capture
+		// records still say which kernels ran and how often.
+		report.TopFunctionDeltas = StructuralFunctionDeltas(a.StructuralFunctions, b.StructuralFunctions)
+		report.Summary.StructuralFunctions = len(report.TopFunctionDeltas) > 0
+	}
 	report.EncoderDeltas = buildEncoderDeltas(aligned)
 	report.EncoderReports = buildEncoderReports(aligned, opts.Limit)
 	report.PipelineDeltas = buildPipelineDeltas(aligned)
@@ -64,6 +89,16 @@ func BuildReport(a, b *TraceData, aligned AlignmentResult, opts ReportOptions) R
 	report.MatchedPairs = nonNilMatches(report.MatchedPairs)
 	report.Unmatched = nonNilUnmatched(report.Unmatched)
 
+	// Check comparability against every function delta, before the limit
+	// below discards the tail. The rows that carry the signal are the
+	// smallest in the table, so a cost-ordered top-N is precisely what drops
+	// them.
+	report.RenamePairs, report.AmbiguousRenames = renamePairing(report.TopFunctionDeltas)
+	report.Comparability = CheckComparability(report.TopFunctionDeltas, report.RenamePairs)
+	if warning := report.Comparability.Warning(); warning != "" {
+		report.Warnings = append(report.Warnings, warning)
+	}
+
 	if len(report.TopFunctionDeltas) > opts.Limit {
 		report.TopFunctionDeltas = report.TopFunctionDeltas[:opts.Limit]
 	}
@@ -83,6 +118,26 @@ func BuildReport(a, b *TraceData, aligned AlignmentResult, opts ReportOptions) R
 		report.Unmatched = report.Unmatched[:opts.Limit*4]
 	}
 	return report
+}
+
+func timingMetric(available bool) string {
+	if available {
+		return "cumulative_offset_delta"
+	}
+	return "unavailable"
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]bool)
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
 }
 
 func totalDuration(dispatches []Dispatch) int {
@@ -553,6 +608,12 @@ func buildUnmatched(aligned AlignmentResult) []UnmatchedDispatch {
 }
 
 func inferLikelyCause(r Report) string {
+	if !r.Summary.TimingAvailable {
+		if r.Summary.DispatchCountDelta != 0 {
+			return "structural dispatch count difference; timing unavailable"
+		}
+		return "timing unavailable"
+	}
 	totalDeltaAbs := absInt(r.Summary.TotalDeltaUs)
 	if totalDeltaAbs == 0 {
 		return "no measurable delta"

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -38,7 +39,7 @@ Features:
   - Multiple output formats (text, HTML, JSON)
 
 The analysis uses:
-  - Shader performance metrics from trace (timing, invocations, occupancy)
+  - Shader performance metrics from trace (timing, invocations)
   - Metal shader source files (.metal) from indexed locations
   - Static analysis to estimate relative cost of each line
   - Heuristics to classify instruction types
@@ -126,9 +127,19 @@ func runShaderSource(cmd *cobra.Command, args []string, opts *shaderSourceOption
 	switch format {
 	case "text":
 		output = gputrace.FormatShaderSourceAttribution(attribution, opts.hints)
+		source := ""
+		approximate := false
+		if attribution.Metrics == nil || attribution.Metrics.TimingSource == "" {
+			source = ""
+		} else {
+			source = attribution.Metrics.TimingSource
+			approximate = attribution.Metrics.TimingApprox
+		}
+		output = formatShaderSourceProvenance(source, approximate) + output
 
 	case "html":
 		output = gputrace.FormatShaderSourceAttributionHTML(attribution)
+		output = strings.Replace(output, "<body>", "<body>\n<p><strong>Attribution method:</strong> static per-line cost heuristic; percentages are estimates, not line-level measurements.</p>", 1)
 
 	case "json":
 		data = attribution
@@ -154,10 +165,22 @@ func runShaderSource(cmd *cobra.Command, args []string, opts *shaderSourceOption
 		}
 	}
 	if opts.output != "" {
-		fmt.Fprintf(cmd.ErrOrStderr(), "✓ Written to: %s\n", opts.output)
+		fmt.Fprintf(cmd.ErrOrStderr(), "Written: %s\n", opts.output)
 	}
 
 	return nil
+}
+
+func formatShaderSourceProvenance(source string, approximate bool) string {
+	note := "Attribution Method: static per-line cost heuristic (estimated, not measured per line)\n"
+	if source == "" {
+		return note + "Aggregate Timing Source: unavailable\n\n"
+	}
+	kind := "measured"
+	if approximate {
+		kind = "approximate"
+	}
+	return fmt.Sprintf("%sAggregate Timing Source: %s (%s)\n\n", note, source, kind)
 }
 
 func validateShaderSourceFormat(format string) (string, error) {

@@ -6,13 +6,21 @@ package xcodebindings
 
 import (
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 
 	"github.com/ebitengine/purego"
 	"github.com/tmc/apple/objc"
 	"github.com/tmc/apple/objectivec"
+	"github.com/tmc/gputrace/internal/xcodepath"
 )
 
-const frameworkPath = "/Applications/Xcode.app/Contents/PlugIns/GPUDebugger.ideplugin/Contents/Frameworks/GTShaderProfiler.framework/Versions/A/GTShaderProfiler"
+const defaultFrameworkPath = "/Applications/Xcode.app/Contents/PlugIns/GPUDebugger.ideplugin/Contents/Frameworks/GTShaderProfiler.framework/Versions/A/GTShaderProfiler"
+
+// FrameworkPathEnv is the generated binding's process-start framework
+// override. It must be set before importing programs initialize.
+const FrameworkPathEnv = "APPLE_GTSHADERPROFILER_FRAMEWORK_PATH"
 
 // Report describes the GTShaderProfiler Objective-C surface gputrace needs for
 // Xcode parity.
@@ -53,9 +61,10 @@ type Gap struct {
 // RTLD_GLOBAL so Objective-C classes become visible, but does not instantiate
 // any GTShaderProfiler class.
 func Probe() Report {
+	path := resolvedFrameworkPath()
 	report := Report{
-		FrameworkPath: frameworkPath,
-		Framework:     fileExists(frameworkPath),
+		FrameworkPath: path,
+		Framework:     fileExists(path),
 		Summary: map[string]int{
 			"classes_present":   0,
 			"classes_missing":   0,
@@ -96,6 +105,10 @@ func Probe() Report {
 			selectors: []Selector{
 				{Name: "initWithGPUGeneration:variant:rev:config:options:", Kind: "instance"},
 				{Name: "parseData", Kind: "instance"},
+				{Name: "addBufferAtUSCIndex:buffer:length:", Kind: "instance"},
+				{Name: "addBufferAtRDESourceIndex:rdeBufferIndex:buffer:length:", Kind: "instance"},
+				{Name: "getBufferAtUSCIndex:buffer:length:", Kind: "instance"},
+				{Name: "getBufferAtRDESourceIndex:rdeBufferIndex:buffer:length:", Kind: "instance"},
 				{Name: "loadCounters:", Kind: "instance"},
 				{Name: "loadAPSCounters:counterSet:", Kind: "instance"},
 				{Name: "loadRDECounters:", Kind: "instance"},
@@ -114,6 +127,9 @@ func Probe() Report {
 			selectors: []Selector{
 				{Name: "name", Kind: "instance"},
 				{Name: "counterIndex", Kind: "instance"},
+				{Name: "dataType", Kind: "instance"},
+				{Name: "maxValue", Kind: "instance"},
+				{Name: "minValue", Kind: "instance"},
 				{Name: "sampleCount", Kind: "instance"},
 				{Name: "sampleInterval", Kind: "instance"},
 				{Name: "scope", Kind: "instance"},
@@ -126,6 +142,7 @@ func Probe() Report {
 		{
 			name: "GTMioShaderBinaryData",
 			selectors: []Selector{
+				{Name: "initWithBinaryData:parent:index:", Kind: "instance"},
 				{Name: "cost", Kind: "instance"},
 				{Name: "duration", Kind: "instance"},
 				{Name: "instructionInfoCount", Kind: "instance"},
@@ -158,31 +175,34 @@ func Probe() Report {
 	}
 	report.Gaps = []Gap{
 		{
-			Metric:  "high_register",
-			Binding: "GTMioShaderBinaryData.liveRegisterForInstructionAtIndex:",
-			Status:  gapStatus(report, "GTMioShaderBinaryData", "liveRegisterForInstructionAtIndex:"),
-			Next:    "map streamData pipeline or shader binary records to kernel events, then compute max live register per kernel",
+			Metric:    "high_register",
+			Binding:   "GTMioShaderBinaryData.liveRegisterForInstructionAtIndex:",
+			Status:    "stream-parent enumeration is capture-validated; live register counts are available per shader binary, but are not a source-level cost attribution",
+			Next:      "join the owning shader binary to an exported pipeline only where the parent collection supplies a stable identity",
+			Signature: "instructionInfoCount bounds liveRegisterForInstructionAtIndex:; target capture reported 801 binaries, 44,900 instructions, and high register 122",
 		},
 		{
-			Metric:    "occupancy_pct",
-			Binding:   "XRGPUAPSDataProcessor derived counters",
-			Status:    gapStatus(report, "XRGPUAPSDataProcessor", "getAPSDerivedCounterData:timestamps:sampleCount:counterIndex:count:"),
-			Next:      "wrap derived counter buffers with typed storage and attach values to encoder or dispatch samples",
+			Metric:  "occupancy_pct",
+			Binding: "XRGPUAPSDataProcessor derived counters",
+			// The binding exists, but no adapter can help: the source data is
+			// not in the archive at all.
+			Status:    "derived-counter selector present; source data absent from the archive",
+			Next:      "requires GPU counter sampling at capture time; occupancy is not archived in streamData, and on Apple9 registers and threadgroup memory are allocated dynamically from L1 so no static residency model can supply a denominator",
 			Signature: "counter buffer methods need caller-owned numeric buffers and count validation",
 		},
 		{
 			Metric:    "alu_utilization_pct",
 			Binding:   "XRGPUAPSDataProcessor derived counters",
-			Status:    gapStatus(report, "XRGPUAPSDataProcessor", "getAPSDerivedCounterData:timestamps:sampleCount:counterIndex:count:"),
+			Status:    "caller-owned buffer adapter present; counter mapping missing",
 			Next:      "resolve the Xcode counter type for ALU utilization and feed it through timeline and pprof exporters",
 			Signature: "counter buffer methods need caller-owned numeric buffers and count validation",
 		},
 		{
 			Metric:    "counter_values",
 			Binding:   "GTMioCounterData.values",
-			Status:    gapStatus(report, "GTMioCounterData", "values"),
-			Next:      "replace generated []objc.ID use with a typed numeric slice wrapper based on sampleCount and valueType",
-			Signature: "generated Values method is not safe for numeric counter storage",
+			Status:    "values and timestamps are verified 8-byte arrays and are copied while their owner is live; metric units, scope semantics, clock, ownership, and an Xcode-metric join are unproven",
+			Next:      "validate one named series' clock and ownership against the same capture's Xcode export before publishing it",
+			Signature: "values is ^d and timestamps is ^Q; both slices deep-copy SampleCount elements after capture-backed allocation-extent validation",
 		},
 	}
 	if !report.Framework {
@@ -192,11 +212,93 @@ func Probe() Report {
 }
 
 func loadFramework() error {
-	if _, err := os.Stat(frameworkPath); err != nil {
+	path := resolvedFrameworkPath()
+	if _, err := os.Stat(path); err != nil {
 		return err
 	}
-	_, err := purego.Dlopen(frameworkPath, purego.RTLD_LAZY|purego.RTLD_GLOBAL)
+	_, err := purego.Dlopen(path, purego.RTLD_LAZY|purego.RTLD_GLOBAL)
 	return err
+}
+
+func resolvedFrameworkPath() string {
+	for _, path := range frameworkCandidates() {
+		if fileExists(path) {
+			return path
+		}
+	}
+	return defaultFrameworkPath
+}
+
+// FrameworkPath returns the GTShaderProfiler binary selected for this process.
+func FrameworkPath() string {
+	return resolvedFrameworkPath()
+}
+
+func frameworkCandidates() []string {
+	var candidates []string
+	for _, path := range filepath.SplitList(os.Getenv(FrameworkPathEnv)) {
+		candidates = append(candidates, frameworkOverridePaths(path)...)
+	}
+	if developerDir := os.Getenv("GPUTRACE_XCODE_DEVELOPER_DIR"); developerDir != "" {
+		candidates = append(candidates, frameworkPathsForDeveloperDir(developerDir)...)
+	}
+	// GPUTRACE_XCODE_APP pins the bundle the counter catalog is read from.
+	// Honouring it here too is what stops this package from loading one
+	// release's framework while internal/parity names its counters from
+	// another. GPUTRACE_XCODE_DEVELOPER_DIR still wins: it is the more
+	// specific of the two, and it names a framework directly.
+	if os.Getenv(xcodepath.AppEnv) != "" {
+		candidates = append(candidates, xcodepath.FrameworkPaths()...)
+	}
+	if developerDir := os.Getenv("DEVELOPER_DIR"); developerDir != "" {
+		candidates = append(candidates, frameworkPathsForDeveloperDir(developerDir)...)
+	}
+	if output, err := exec.Command("xcode-select", "-p").Output(); err == nil {
+		if developerDir := strings.TrimSpace(string(output)); developerDir != "" {
+			candidates = append(candidates, frameworkPathsForDeveloperDir(developerDir)...)
+		}
+	}
+	candidates = append(candidates, xcodepath.FrameworkPaths()...)
+	candidates = append(candidates, defaultFrameworkPath)
+	return candidates
+}
+
+func frameworkPathForDeveloperDir(developerDir string) string {
+	return frameworkPathsForDeveloperDir(developerDir)[0]
+}
+
+func frameworkPathsForDeveloperDir(developerDir string) []string {
+	developerDir = filepath.Clean(developerDir)
+	contentsDir := developerDir
+	if filepath.Base(developerDir) == "Developer" {
+		contentsDir = filepath.Dir(developerDir)
+	}
+	return []string{
+		filepath.Join(contentsDir, "PlugIns", "GPUDebugger.ideplugin", "Contents", "Frameworks", "GTShaderProfiler.framework", "Versions", "A", "GTShaderProfiler"),
+		filepath.Join(developerDir, "PlugIns", "GPUDebugger.ideplugin", "Contents", "Frameworks", "GTShaderProfiler.framework", "Versions", "A", "GTShaderProfiler"),
+	}
+}
+
+func frameworkOverridePaths(path string) []string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil
+	}
+	info, err := os.Stat(path)
+	if err != nil || !info.IsDir() {
+		return []string{path}
+	}
+	if strings.HasSuffix(path, ".framework") {
+		return []string{
+			filepath.Join(path, "Versions", "A", "GTShaderProfiler"),
+			filepath.Join(path, "GTShaderProfiler"),
+		}
+	}
+	bundle := filepath.Join(path, "GTShaderProfiler.framework")
+	return []string{
+		filepath.Join(bundle, "Versions", "A", "GTShaderProfiler"),
+		filepath.Join(bundle, "GTShaderProfiler"),
+	}
 }
 
 func fileExists(path string) bool {
@@ -220,19 +322,4 @@ func selectorPresent(cls objc.Class, kind, name string) (present bool) {
 	default:
 		return objectivec.Class_getInstanceMethod(cls, sel) != 0
 	}
-}
-
-func gapStatus(report Report, className, selector string) string {
-	for _, class := range report.Classes {
-		if class.Name != className || !class.Present {
-			continue
-		}
-		for _, sel := range class.Selectors {
-			if sel.Name == selector && sel.Present {
-				return "binding present; adapter missing"
-			}
-		}
-		return "selector missing"
-	}
-	return "class missing"
 }

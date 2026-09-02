@@ -21,6 +21,7 @@ type xcodeCountersOptions struct {
 	format string
 	metric string
 	top    int
+	csv    string
 }
 
 func newXcodeCountersCommand(opts *xcodeCountersOptions) *cobra.Command {
@@ -60,6 +61,7 @@ Examples:
 	cmd.Flags().StringVar(&opts.format, "format", opts.format, "Output format: summary, detailed, metrics, json")
 	cmd.Flags().StringVar(&opts.metric, "metric", opts.metric, "Filter/sort by specific metric (e.g., 'ALU Utilization')")
 	cmd.Flags().IntVar(&opts.top, "top", opts.top, "Show only top N encoders by metric value")
+	cmd.Flags().StringVar(&opts.csv, "csv", opts.csv, "Read an explicit Xcode Counters.csv file")
 	return cmd
 }
 
@@ -71,6 +73,9 @@ func runXcodeCounters(cmd *cobra.Command, args []string, opts *xcodeCountersOpti
 	if err := validateXcodeCountersOptions(opts.format, opts.top); err != nil {
 		return err
 	}
+	if opts.top > 0 && opts.metric == "" {
+		return errors.New("--top requires --metric")
+	}
 
 	tracePath := args[0]
 
@@ -81,24 +86,39 @@ func runXcodeCounters(cmd *cobra.Command, args []string, opts *xcodeCountersOpti
 	}
 
 	// Parse Xcode Counters.csv
-	csvData, err := gputrace.ParseXcodeCountersCSV(trace, "")
+	csvData, err := gputrace.ParseXcodeCountersCSV(trace, opts.csv)
 	if err != nil {
-		return fmt.Errorf("failed to parse Xcode Counters.csv: %w", err)
+		return fmt.Errorf("import Xcode Counters.csv: %w; export one from Xcode or pass --csv PATH", err)
+	}
+	if opts.metric != "" && !containsXcodeMetric(csvData.Metrics, opts.metric) {
+		return fmt.Errorf("metric %q not found; use --format metrics to list imported metrics", opts.metric)
 	}
 
 	out := cmd.OutOrStdout()
 	switch opts.format {
 	case "summary":
+		fmt.Fprintln(out, "Data source: imported Xcode Counters.csv (source-backed values)")
 		return printXcodeSummary(out, csvData, opts)
 	case "detailed":
+		fmt.Fprintln(out, "Data source: imported Xcode Counters.csv (source-backed values)")
 		return printXcodeDetailed(out, csvData, opts)
 	case "metrics":
+		fmt.Fprintln(out, "Data source: imported Xcode Counters.csv (source-backed values)")
 		return printXcodeMetrics(out, csvData)
 	case "json":
 		return printXcodeJSON(out, csvData)
 	default:
 		return fmt.Errorf("unknown format: %s (use summary, detailed, metrics, or json)", opts.format)
 	}
+}
+
+func containsXcodeMetric(metrics []string, want string) bool {
+	for _, metric := range metrics {
+		if metric == want {
+			return true
+		}
+	}
+	return false
 }
 
 func validateXcodeCountersOptions(format string, top int) error {
